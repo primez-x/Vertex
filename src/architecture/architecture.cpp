@@ -23,6 +23,7 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopExp_Explorer.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax1.hxx>
@@ -1116,6 +1117,65 @@ TopoDS_Shape make_roof_join(const RoofJoin& join, std::span<const TopoDS_Shape> 
         return result;
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Roof join geometry failed: ") + error.what());
+    }
+}
+
+RoofJoinPartition make_roof_join_partition(const RoofJoin& join,
+                                          std::span<const TopoDS_Shape> roofs) {
+    RoofJoinPartition partition;
+    partition.shape = make_roof_join(join, roofs);
+    partition.fused_volume = solid_volume(partition.shape);
+    partition.regions.reserve(roofs.size());
+    try {
+        TopoDS_Shape earlier;
+        double total = 0.0;
+        for (std::size_t index = 0; index < roofs.size(); ++index) {
+            const auto gross = solid_volume(roofs[index]);
+            auto region = roofs[index];
+            double overlap = 0.0;
+            if (!earlier.IsNull()) {
+                BRepAlgoAPI_Common common(roofs[index], earlier);
+                common.Build();
+                if (!common.IsDone() || common.HasErrors() ||
+                    (!common.Shape().IsNull() && !BRepCheck_Analyzer(common.Shape()).IsValid()))
+                    throw std::invalid_argument("Roof material overlap calculation failed");
+                overlap = solid_volume(common.Shape());
+                BRepAlgoAPI_Cut cut(roofs[index], earlier);
+                cut.Build();
+                if (!cut.IsDone() || cut.HasErrors() ||
+                    (!cut.Shape().IsNull() && !BRepCheck_Analyzer(cut.Shape()).IsValid()))
+                    throw std::invalid_argument("Roof material partition subtraction failed");
+                // Discard any lower-dimensional boolean remnants. Every
+                // nonempty region is a real solid or compound of real solids.
+                BRep_Builder builder;
+                TopoDS_Compound solids;
+                builder.MakeCompound(solids);
+                std::size_t count = 0;
+                for (TopExp_Explorer solid(cut.Shape(), TopAbs_SOLID); solid.More(); solid.Next()) {
+                    builder.Add(solids, solid.Current());
+                    ++count;
+                }
+                region = count == 0 ? TopoDS_Shape{} : TopoDS_Shape{solids};
+            }
+            const auto net = solid_volume(region);
+            const auto limit = 1e-8 * std::max({1.0, gross, partition.fused_volume});
+            if (!std::isfinite(net) || net < 0.0 || net > gross + limit ||
+                std::abs(gross - overlap - net) > limit ||
+                (!region.IsNull() && !BRepCheck_Analyzer(region).IsValid()))
+                throw std::invalid_argument("Roof material partition volume is inconsistent");
+            if (!earlier.IsNull() && !region.IsNull() && common_volume(region, earlier) > limit)
+                throw std::invalid_argument("Roof material regions share positive volume");
+            partition.regions.push_back({join.roof_ids[index], region, gross, net});
+            total += net;
+            earlier = earlier.IsNull() ? roofs[index] : fuse_shapes(earlier, roofs[index],
+                "Roof material prefix union failed");
+        }
+        if (!std::isfinite(total) || std::abs(total - partition.fused_volume) >
+            1e-8 * std::max(1.0, partition.fused_volume))
+            throw std::invalid_argument("Roof material regions do not conserve fused volume");
+        return partition;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Roof material partition failed: ") + error.what());
     }
 }
 

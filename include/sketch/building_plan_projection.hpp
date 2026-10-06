@@ -2,6 +2,7 @@
 
 #include "sketch/building_entity.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/assembly_model.hpp"
 
 namespace sketch {
 
@@ -24,5 +25,10 @@ namespace sketch {
 [[nodiscard]] Boundary project_building_plan(
     const BuildingObject& object,
     const std::map<std::string, Entity, std::less<>>& entities);
+
+// Projects the complete transformed profile compound using hidden-line removal.
+// An expansion without actual profiles is rejected. Semantic declarations never
+// become inferred geometry. Use project_assembly_view for individual source paths.
+[[nodiscard]] Boundary project_assembly_plan(const AssemblyExpansion& expansion);
 
 }  // namespace sketch

@@ -2,6 +2,7 @@
 
 #include "sketch/building_entity.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/assembly_model.hpp"
 
 #include <TopoDS_Shape.hxx>
 
@@ -42,6 +43,29 @@ struct BuildingViewDepth {
 };
 
 enum class BuildingViewKind { plan, elevation, section };
+
+struct AssemblyProjectedProfile {
+    std::vector<std::string> part_path;
+    std::string type_id;
+    std::string profile_id;
+    std::optional<std::string> material_id;
+    // Exact edges of this profile in isolation; they bind associative sources,
+    // rather than claiming visibility through other profiles. Section misses
+    // retain identity with an empty boundary. Invalid geometry always throws.
+    Boundary boundary;
+};
+struct AssemblyViewProjection {
+    // Visible edges of the complete compound; this is the displayed linework.
+    Boundary boundary;
+    std::vector<AssemblyProjectedProfile> profiles;
+};
+
+// Source identity and exact line/arc geometry share one semantic expansion.
+// Resolve document phase/organization visibility and world placement before
+// calling. No document snapshot or source geometry is mutated or cached here.
+[[nodiscard]] AssemblyViewProjection project_assembly_view(
+    const AssemblyExpansion& expansion, BuildingViewKind kind,
+    const BuildingViewFrame& frame = {});
 
 // Derive visible line and analytic arc geometry for one supported building
 // object in the requested frame. Plan and elevation use hidden-line removal;

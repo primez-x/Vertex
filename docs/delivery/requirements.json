@@ -48053,7 +48053,7 @@
       "acceptance_status": "not_accepted"
     }
   ],
-  "product_source_fingerprint": "94ea4ad712e5f84682d66848a51079d0b7dc9e0c01dc947136eae750c4eb9e6b",
+  "product_source_fingerprint": "74259869925eb90f5c76dabb5c8ddccaf37b1b4044312cce4ccd68fc86cf819a",
   "current_build_binding": "f7abb108576eae9c089b8b469cc1730d8397a02b9a635269b9715d16950c60ce",
   "coverage_counts": {
     "apex_requirements": 130,

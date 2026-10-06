@@ -30,6 +30,7 @@
 #include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <exception>
@@ -292,19 +293,56 @@ void reporting_and_declaration_lifecycle() {
     const auto property_id = details.propertyId().toStdString();
     const auto before_reporting = window.document().snapshot();
     const auto reporting = [&] { child<QPushButton>(window, "appraisalDetailsReporting").click(); };
+    QString primary_unit_id;
     dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
+        auto& units = child<QTableWidget>(value, "appraisalReportingUnits");
+        require(units.rowCount() == 0, "legacy reporting starts without inferred living units");
+        child<QPushButton>(value, "appraisalReportingAddUnit").click();
+        require(units.rowCount() == 1, "Add unit creates an editable registry row");
+        units.item(0, 0)->setText("Main dwelling");
+        primary_unit_id = units.item(0, 0)->data(Qt::UserRole).toString();
+        require(!primary_unit_id.isEmpty(), "unit identifier has a separate stable technical identity");
+        auto* primary_role = qobject_cast<QComboBox*>(units.cellWidget(0, 1));
+        require(primary_role && primary_role->currentData().toInt() == static_cast<int>(sketch::DwellingIdentity::primary),
+            "first unit defaults to the primary dwelling role");
+        child<QPushButton>(value, "appraisalReportingAddUnit").click();
+        units.item(1, 0)->setText("Unused ADU");
+        auto* adu_role = qobject_cast<QComboBox*>(units.cellWidget(1, 1));
+        require(adu_role && adu_role->currentData().toInt() == static_cast<int>(sketch::DwellingIdentity::attached_adu),
+            "subsequent units default to attached ADU");
+        adu_role->setCurrentIndex(adu_role->findData(static_cast<int>(sketch::DwellingIdentity::detached_adu)));
+        require(adu_role->currentData().toInt() == static_cast<int>(sketch::DwellingIdentity::detached_adu),
+            "unit dwelling role is editable");
+        units.setCurrentCell(1, 0);
+        child<QPushButton>(value, "appraisalReportingRemoveUnit").click();
+        require(units.rowCount() == 1 && units.item(0, 0)->data(Qt::UserRole).toString() == primary_unit_id,
+            "Remove unit preserves the remaining unit's technical identity");
+        auto& unit = child<QComboBox>(value, "appraisalReportingUnit");
+        const auto unit_index = unit.findData(primary_unit_id);
+        require(unit_index >= 0 && unit.itemText(unit_index) == "Main dwelling", "area assignment offers the named unit");
+        unit.setCurrentIndex(unit_index);
+        child<QSpinBox>(value, "appraisalReportingLevelNumber").setValue(1);
+        choose(value, "appraisalReportingLevelGrade", "above_grade");
         child<QCheckBox>(value, "appraisalReportingComplete").setChecked(true);
         child<QCheckBox>(value, "appraisalReportingReconfirm").setChecked(true);
         auto& rooms = child<QTableWidget>(value, "appraisalReportingRooms");
         for (const auto& [id, use] : std::vector<std::pair<const char*, sketch::AppraisalRoomUse>>{
-            {"bedroom-1", sketch::AppraisalRoomUse::bedroom}, {"bathroom-1", sketch::AppraisalRoomUse::bathroom_full}}) {
+            {"bedroom-1", sketch::AppraisalRoomUse::bedroom}, {"bathroom-1", sketch::AppraisalRoomUse::bathroom_full},
+            {"kitchen-1", sketch::AppraisalRoomUse::kitchen}, {"music-room-1", sketch::AppraisalRoomUse::other}}) {
             child<QPushButton>(value, "appraisalReportingAddRoom").click();
             const auto row = rooms.rowCount() - 1; rooms.item(row, 0)->setText(QString::fromLatin1(id));
             auto* kind = qobject_cast<QComboBox*>(rooms.cellWidget(row, 1)); require(kind, "room use is editable");
+            require(kind->count() == 19, "actual V2 room menu exposes all nineteen original room types");
             kind->setCurrentIndex(kind->findData(static_cast<int>(use)));
             auto* total = qobject_cast<QComboBox*>(rooms.cellWidget(row, 2)); require(total, "legacy room membership is editable");
             total->setCurrentIndex(total->findData(use == sketch::AppraisalRoomUse::bedroom ? 1 : 0));
+            auto* description = qobject_cast<QLineEdit*>(rooms.cellWidget(row, 3));
+            require(description && description->isEnabled() == (use == sketch::AppraisalRoomUse::other),
+                "Other description control is enabled only for the Other original room type");
+            if (use == sketch::AppraisalRoomUse::other) description->setText("Music room");
         }
+        require(rooms.columnCount() == 4 && rooms.isColumnHidden(2) && !rooms.isColumnHidden(3),
+            "UAD 3.6 hides legacy membership while exposing the explicit Other description column");
         const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         if (!captures.isEmpty()) {
             QApplication::processEvents();
@@ -321,6 +359,20 @@ void reporting_and_declaration_lifecycle() {
     require(report.qualified && report.reporting && report.reporting->room_counts_available &&
         report.reporting->primary_counts.bedrooms == 1 && report.reporting->primary_counts.bathrooms_full == 1,
         "actual reporting editor produces current explicit primary counts");
+    require(report.reporting->individual_units_available && report.reporting->living_units.size() == 1,
+        "confirmed assignment produces one independently available named unit");
+    const auto& primary_unit = report.reporting->living_units.front();
+    require(primary_unit.living_unit.unit_id == primary_unit_id.toStdString() &&
+        primary_unit.living_unit.identifier == "Main dwelling" && primary_unit.area_fields_available &&
+        primary_unit.room_counts_available && primary_unit.counts.bedrooms == 1 && primary_unit.counts.bathrooms_full == 1 &&
+        primary_unit.levels.size() == 1 && primary_unit.levels.front().form_fields_available &&
+        primary_unit.levels.front().declaration && primary_unit.levels.front().declaration->level_number == 1 &&
+        primary_unit.levels.front().declaration->grade_level_type == "above_grade",
+        "saved unit projection retains its declared counts and source-bound Level 1 fields");
+    const auto area_reporting = sketch::parse_appraisal_area_reporting_facts(
+        reported.entities().at(area.toStdString()).properties.at("appraisal_reporting"));
+    require(area_reporting.version == 2 && area_reporting.living_unit_id == primary_unit_id.toStdString(),
+        "measured area stores the V2 assignment by technical identity");
     require(child<QLabel>(details, "appraisalDetailsTotals").text().contains("1 bedrooms; 1 full / 0 half bathrooms"),
         "Details shows the same entered room fields");
     const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
@@ -331,16 +383,143 @@ void reporting_and_declaration_lifecycle() {
     }
     require(window.undoCommand() && window.document().snapshot().entities() == before_reporting.entities() &&
         window.redoCommand() && window.document().snapshot().entities() == reported.entities(), "reporting transaction is reversibly atomic");
+    dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
+        auto& unit = child<QComboBox>(value, "appraisalReportingUnit");
+        require(unit.currentData().toString() == primary_unit_id &&
+            child<QSpinBox>(value, "appraisalReportingLevelNumber").value() == 1 &&
+            child<QComboBox>(value, "appraisalReportingLevelGrade").currentData().toString() == "above_grade",
+            "reopening the editor restores the saved unit assignment and explicit level");
+        unit.setCurrentIndex(0);
+        child<QCheckBox>(value, "appraisalReportingReconfirm").setChecked(true);
+        child<QPushButton>(value, "appraisalReportingSave").click();
+        require(value.result() == QDialog::Accepted, "unknown area assignment may be recorded explicitly");
+    });
+    const auto unassigned_report = sketch::build_appraisal_document_report(window.document().snapshot(), property_id);
+    require(unassigned_report.qualified && unassigned_report.calculation && unassigned_report.reporting &&
+        unassigned_report.reporting->room_counts_available && unassigned_report.reporting->primary_counts.bedrooms == 1 &&
+        !unassigned_report.reporting->individual_units_available,
+        "unknown unit assignment withholds individual fields while preserving qualified legacy totals");
+    require(window.undoCommand() && window.document().snapshot().entities() == reported.entities(),
+        "undo of unknown unit assignment restores the complete named-unit declaration");
     const auto before_cancel = window.document().snapshot();
+    dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
+        auto& units = child<QTableWidget>(value, "appraisalReportingUnits");
+        child<QPushButton>(value, "appraisalReportingAddUnit").click();
+        units.item(1, 0)->setText("Main dwelling");
+        child<QPushButton>(value, "appraisalReportingSave").click();
+        require(value.result() != QDialog::Accepted && !child<QLabel>(value, "appraisalReportingError").text().isEmpty() &&
+            window.document().snapshot().entities() == before_cancel.entities() &&
+            window.document().revision() == before_cancel.revision(),
+            "duplicate unit identifier refuses Save without changing authoritative entities or history");
+    });
     dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
         auto& contract = child<QComboBox>(value, "appraisalReportingContract");
         contract.setCurrentIndex(contract.findData(static_cast<int>(sketch::AppraisalReportingContract::legacy_uad_2_6)));
+        child<QTableWidget>(value, "appraisalReportingUnits").item(0, 0)->setText("Cancelled rename");
+        child<QSpinBox>(value, "appraisalReportingLevelNumber").setValue(2);
         value.reject();
     });
     require(window.document().snapshot().entities() == before_cancel.entities() && window.document().revision() == before_cancel.revision(),
         "cancelled report contract does not change facts or history");
+    const auto create_adu = [&](double x, const char* identity) {
+        const sketch::Boundary boundary{{{x,0},{x+3.048,0},0},{{x+3.048,0},{x+3.048,3.048},0},
+            {{x+3.048,3.048},{x,3.048},0},{{x,3.048},{x,0},0}};
+        const auto id = window.createBoundary(boundary);
+        require(!id.isEmpty() && window.selectEntity(id), "independent nonoverlapping ADU measurement is authored and selected");
+        dialog(window, "appraisalFactsDialog", [&] { window.showAppraisalFacts(); }, [&](QDialog& value) {
+            choose(value, "ansiAnyPartBelowGrade", "no"); choose(value, "finish", "finished");
+            choose(value, "access", "direct_interior"); choose(value, "area_use", "dwelling");
+            choose(value, "boundary_role", "measured_area"); choose(value, "ansiYearRoundSuitable", "yes");
+            choose(value, "ansiFinishMatchesDwelling", "yes"); choose(value, "ansiDwellingIdentity", identity);
+            choose(value, "ansiCeilingKind", "flat"); child<QLineEdit>(value, "ansiMinimumHeight").setText("8 ft");
+            child<QDialogButtonBox>(value, "appraisalFactsButtons").button(QDialogButtonBox::Save)->click();
+            require(value.result() == QDialog::Accepted, "actual Facts dialog saves each ADU dwelling identity");
+        });
+        return id;
+    };
+    const auto attached_area = create_adu(5, "attached_adu");
+    const auto detached_area = create_adu(10, "detached_adu");
+    const auto before_multiunit = window.document().snapshot();
+    QString attached_unit_id, detached_unit_id;
+    dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
+        auto& units = child<QTableWidget>(value, "appraisalReportingUnits");
+        const auto add_unit = [&](const char* identifier, sketch::DwellingIdentity role) {
+            child<QPushButton>(value, "appraisalReportingAddUnit").click();
+            const auto row = units.rowCount() - 1;
+            units.item(row, 0)->setText(QString::fromLatin1(identifier));
+            auto* roles = qobject_cast<QComboBox*>(units.cellWidget(row, 1));
+            require(roles, "each named ADU has an editable dwelling role");
+            roles->setCurrentIndex(roles->findData(static_cast<int>(role)));
+            return units.item(row, 0)->data(Qt::UserRole).toString();
+        };
+        attached_unit_id = add_unit("Garden suite", sketch::DwellingIdentity::attached_adu);
+        detached_unit_id = add_unit("Coach house", sketch::DwellingIdentity::detached_adu);
+        require(primary_unit_id != attached_unit_id && attached_unit_id != detached_unit_id &&
+            primary_unit_id != detached_unit_id, "three named units retain distinct technical identities");
+        auto& areas = child<QComboBox>(value, "appraisalReportingArea");
+        auto& assignments = child<QComboBox>(value, "appraisalReportingUnit");
+        const auto assign = [&](const QString& boundary_id, const QString& unit_id) {
+            const auto area_index = areas.findData(boundary_id);
+            require(area_index >= 0, "reporting editor offers each actual measured area by stable identity");
+            areas.setCurrentIndex(area_index);
+            const auto unit_index = assignments.findData(unit_id);
+            require(unit_index >= 0, "reporting editor offers each named unit by technical identity");
+            assignments.setCurrentIndex(unit_index);
+            child<QSpinBox>(value, "appraisalReportingLevelNumber").setValue(1);
+            choose(value, "appraisalReportingLevelGrade", "above_grade");
+            child<QCheckBox>(value, "appraisalReportingReconfirm").setChecked(true);
+        };
+        const auto add_room = [&](const char* identifier, sketch::AppraisalRoomUse use) {
+            auto& rooms = child<QTableWidget>(value, "appraisalReportingRooms");
+            child<QPushButton>(value, "appraisalReportingAddRoom").click();
+            const auto row = rooms.rowCount() - 1;
+            rooms.item(row, 0)->setText(QString::fromLatin1(identifier));
+            auto* types = qobject_cast<QComboBox*>(rooms.cellWidget(row, 1));
+            require(types, "ADU original room type is editable");
+            types->setCurrentIndex(types->findData(static_cast<int>(use)));
+        };
+        // Confirm before changing area: each switch retains the current declaration.
+        assign(area, primary_unit_id);
+        assign(attached_area, attached_unit_id);
+        add_room("garden-bedroom-1", sketch::AppraisalRoomUse::bedroom);
+        add_room("garden-bedroom-2", sketch::AppraisalRoomUse::bedroom);
+        add_room("garden-half-bath", sketch::AppraisalRoomUse::bathroom_half);
+        assign(detached_area, detached_unit_id);
+        add_room("coach-full-bath-1", sketch::AppraisalRoomUse::bathroom_full);
+        add_room("coach-full-bath-2", sketch::AppraisalRoomUse::bathroom_full);
+        child<QCheckBox>(value, "appraisalReportingComplete").setChecked(true);
+        child<QPushButton>(value, "appraisalReportingSave").click();
+        require(value.result() == QDialog::Accepted, "one actual reporting Save commits three independent unit declarations");
+    });
+    const auto multiunit = window.document().snapshot();
+    require(multiunit.revision() == before_multiunit.revision() + 1 &&
+        multiunit.history().size() == before_multiunit.history().size() + 1,
+        "three-unit registry and area declarations commit as one history command");
+    const auto multiunit_report = sketch::build_appraisal_document_report(multiunit, property_id);
+    require(multiunit_report.qualified && multiunit_report.reporting &&
+        multiunit_report.reporting->individual_units_available && multiunit_report.reporting->living_units.size() == 3,
+        "three measured dwelling units produce independently available projections");
+    const auto check_unit = [&](const QString& id, const char* identifier, sketch::DwellingIdentity role,
+                                const QString& boundary_id, unsigned bedrooms, unsigned full, unsigned half) {
+        const auto& projected = multiunit_report.reporting->living_units;
+        const auto found = std::find_if(projected.begin(), projected.end(),
+            [&](const auto& unit) { return unit.living_unit.unit_id == id.toStdString(); });
+        require(found != projected.end() && found->living_unit.identifier == identifier && found->living_unit.role == role &&
+            found->area_fields_available && found->room_counts_available && found->counts.bedrooms == bedrooms &&
+            found->counts.bathrooms_full == full && found->counts.bathrooms_half == half &&
+            found->boundary_ids == std::vector<std::string>{boundary_id.toStdString()} && found->levels.size() == 1 &&
+            found->levels.front().form_fields_available && found->levels.front().declaration &&
+            found->levels.front().declaration->level_number == 1,
+            "named unit retains only its assigned measurements, room counts, role and confirmed Level 1");
+    };
+    check_unit(primary_unit_id, "Main dwelling", sketch::DwellingIdentity::primary, area, 1, 1, 0);
+    check_unit(attached_unit_id, "Garden suite", sketch::DwellingIdentity::attached_adu, attached_area, 2, 0, 1);
+    check_unit(detached_unit_id, "Coach house", sketch::DwellingIdentity::detached_adu, detached_area, 0, 2, 0);
+    require(window.undoCommand() && window.document().snapshot().entities() == before_multiunit.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == multiunit.entities(),
+        "three-unit reporting Save is atomically reversible");
     const auto project = fixture.filePath("reporting.bldproj");
-    require(window.saveProjectAs(project) && window.openProject(project) && window.document().snapshot().entities() == reported.entities(),
+    require(window.saveProjectAs(project) && window.openProject(project) && window.document().snapshot().entities() == multiunit.entities(),
         "actual native save/reopen preserves form contract and source-bound room facts");
     const auto pdf = fixture.filePath("reporting.pdf");
     require(window.exportAppraisalReportPdf(pdf), "actual reopened report exports to PDF");
@@ -348,6 +527,18 @@ void reporting_and_declaration_lifecycle() {
     QString contents; for (int page = 0; page < document.pageCount(); ++page) contents += document.getAllText(page).text();
     require(contents.contains("1 bedrooms") && contents.contains("1 full") && contents.contains("UAD 3.6"),
         "reopened printed report includes entered contract and room counts");
+    require(contents.contains("Main dwelling") && contents.contains("Level 1") &&
+        contents.contains("Unit bedroom / bathroom counts") && contents.contains("Measured level finished"),
+        "reopened PDF includes the named unit and explicit level fields");
+    require(contents.contains("Kitchen") && contents.contains("Music room"),
+        "reopened PDF preserves actual menu-selected Kitchen and explicitly described Other room");
+    const auto printed = contents.simplified();
+    const auto garden_start = printed.indexOf("Garden suite");
+    const auto coach_start = printed.indexOf("Coach house", garden_start + 1);
+    require(garden_start >= 0 && coach_start > garden_start &&
+        printed.mid(garden_start, coach_start - garden_start).contains("2 bedrooms; 0 full / 1 half bathrooms") &&
+        printed.mid(coach_start).contains("0 bedrooms; 2 full / 0 half bathrooms"),
+        "reopened PDF reports each ADU's independent entered bedroom and bathroom counts under its name");
     dialog(window, "appraisalSetupDialog", setup, [&](QDialog& value) {
         choose(value, "appraisalSetupMeasurementBasis", "plans");
         require(!child<QPlainTextEdit>(value, "ansiPlansDeclaration").isHidden(), "plans condition exposes its declaration field");

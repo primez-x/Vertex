@@ -83,6 +83,24 @@ struct OpeningAssemblyGeometry {
 // coordinated-view union.
 [[nodiscard]] TopoDS_Shape make_roof_join(const RoofJoin& join,
                                           std::span<const TopoDS_Shape> roofs);
+// roof_ids and source shapes have the same authored order. Earlier members
+// own shared material. Gross volumes include each source's own openings;
+// net regions subtract all earlier members, with no waste allowance.
+struct RoofJoinRegion {
+    std::string source_roof_id;
+    TopoDS_Shape shape; // null only for a completely occluded, zero-volume member
+    double gross_volume{};
+    double net_volume{};
+};
+struct RoofJoinPartition {
+    TopoDS_Shape shape; // authoritative fused geometry, independent of appearance
+    double fused_volume{};
+    std::vector<RoofJoinRegion> regions;
+};
+// Returns a complete validated partition or throws; never publishes partial
+// regions. Preserves the connected positive-mass compound join contract.
+[[nodiscard]] RoofJoinPartition make_roof_join_partition(
+    const RoofJoin& join, std::span<const TopoDS_Shape> roofs);
 [[nodiscard]] TopoDS_Shape make_slab(const Slab& slab);
 [[nodiscard]] TopoDS_Shape make_room_volume(const RoomVolume& room);
 // Build a derived triangulated terrain surface from the validated local TIN

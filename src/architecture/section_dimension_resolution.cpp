@@ -1,4 +1,6 @@
 #include "sketch/section_dimension_resolution.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
@@ -91,6 +93,10 @@ TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input) {
         // Replaceable frames and an open door leaf do not redefine this void.
         return make_wall(Wall{input.id, span, host.thickness, opening->height,
             host.elevation + opening->sill, {}});
+    }
+    if (input.type == "assembly_instance") {
+        AssemblyExpansionBudget budget;
+        return make_assembly_geometry(expand_document_assembly_instance(input, source.entities(), budget)).shape;
     }
     if (input.type == "wall_join") {
         const auto join = parse_wall_join(input.properties, input.id);

@@ -55,8 +55,92 @@ void setup(PlanCanvas& canvas, double angle=0) {
     canvas.setOverviewMapEnabled(false); canvas.setEntities({entity(angle)});
     canvas.setSelectionTransformEnabled(true,true); canvas.setSelectionAxisResizeEnabled(true);
 }
+void compound_presentation_previews() {
+    PlanCanvas canvas; setup(canvas);
+    std::vector<CanvasEntity> profiles;
+    for (int i=0;i<2;++i) {
+        auto profile=entity();
+        profile.id="assembly"; profile.presentation_key=i==0?"left":"right";
+        const double x=i==0?-1.0:1.0;
+        profile.segments={{{x-.3,-.3},{x+.3,-.3},0},{{x+.3,-.3},{x+.3,.3},0},
+                          {{x+.3,.3},{x-.3,.3},0},{{x-.3,.3},{x-.3,-.3},0}};
+        profile.filled=true; profile.fill_color=i==0?QColor(240,20,20):QColor(20,20,240);
+        profile.type="assembly_instance"; profile.hatch_pattern="solid";
+        profile.fill_opacity=1.0;
+        profile.resize_frame=CanvasSelectionFrame{{0,0},0,2.6,.6};
+        profiles.push_back(profile);
+    }
+    canvas.setEntities(profiles);
+    const auto original=render(canvas), output=render(canvas,true);
+    const auto colors=[&](const QImage& image,Vec2 a,Vec2 b,const char* phase) {
+        const auto red=image.pixelColor(screen(a).toPoint());
+        const auto blue=image.pixelColor(screen(b).toPoint());
+        if(!(red.red()>red.blue()+80 && blue.blue()>blue.red()+80))
+            throw std::runtime_error(QStringLiteral("%1: distinct assembly profile colors at expected positions were %2 and %3")
+                .arg(QString::fromLatin1(phase),red.name(),blue.name()).toStdString());
+    };
+    capture(canvas,"compound-original.png");
+    colors(original,{-1,0},{1,0},"original");
+    int moves=0,rotations=0,starts=0;
+    canvas.setEntitiesMoveRequested([&](QStringList ids,Vec2) {
+        require(ids==QStringList{"assembly"},"compound move commits one semantic root");++moves;return false;
+    });
+    canvas.setEntitiesMovePreviewRequested([&](QStringList ids,Vec2 delta,std::uint64_t) {
+        require(ids==QStringList{"assembly"},"compound preview retains one semantic root");
+        auto proposed=profiles;
+        for(auto& p:proposed) {
+            for(auto& s:p.segments) {s.start={s.start.x+delta.x,s.start.y+delta.y};s.end={s.end.x+delta.x,s.end.y+delta.y};}
+            p.resize_frame->center={p.resize_frame->center.x+delta.x,p.resize_frame->center.y+delta.y};
+        }
+        return std::optional<std::vector<CanvasEntity>>{proposed};
+    });
+    mouse(canvas,QEvent::MouseButtonPress,screen({0,0}));
+    mouse(canvas,QEvent::MouseMove,screen({0,.8}));
+    capture(canvas,"compound-move-preview.png");
+    colors(render(canvas),{-1,.8},{1,.8},"move preview");
+    require(render(canvas,true)==output,"compound move preview stays out of output");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(&canvas,&escape);
+    mouse(canvas,QEvent::MouseButtonRelease,screen({0,.8}));
+    require(moves==0 && render(canvas)==original,"cancelled compound move preserves scene");
+    mouse(canvas,QEvent::MouseButtonPress,screen({0,0}));
+    mouse(canvas,QEvent::MouseMove,screen({0,.8}));
+    mouse(canvas,QEvent::MouseButtonRelease,screen({0,.8}));
+    require(moves==1 && render(canvas)==original,"rejected compound move restores both profiles");
+    canvas.setEntityTransformStarted([&](QString id){require(id=="assembly","transform start is semantic");++starts;});
+    canvas.setEntityTransformRequested([&](QString id,double,double) {
+        require(id=="assembly","compound rotation commits one semantic root");++rotations;return false;
+    });
+    canvas.setEntityTransformPreviewRequested([&](QString,double scale,double angle,Vec2 pivot,std::uint64_t) {
+        auto proposed=profiles;
+        for(auto& p:proposed) {
+            const auto transform=[&](Vec2 point){auto q=oriented((point.x-pivot.x)*scale,(point.y-pivot.y)*scale,angle);return Vec2{q.x+pivot.x,q.y+pivot.y};};
+            for(auto& s:p.segments){s.start=transform(s.start);s.end=transform(s.end);}
+            p.resize_frame->rotation_radians=angle;
+        }
+        return std::optional<std::vector<CanvasEntity>>{proposed};
+    });
+    const auto pin=canvas.selectionRotationHandlePosition();require(pin.has_value(),"compound rotation handle exists");
+    const auto destination=QPointF(320-(240-pin->y()),240);
+    mouse(canvas,QEvent::MouseButtonPress,*pin);
+    mouse(canvas,QEvent::MouseMove,destination);
+    capture(canvas,"compound-rotation-preview.png");
+    colors(render(canvas),{0,-1},{0,1},"rotation preview");
+    require(render(canvas,true)==output,"compound rotation preview stays out of output");
+    QApplication::sendEvent(&canvas,&escape);
+    mouse(canvas,QEvent::MouseButtonRelease,destination);
+    require(rotations==0 && starts==1 && render(canvas)==original,"cancelled compound rotation preserves scene");
+    mouse(canvas,QEvent::MouseButtonPress,*pin);
+    mouse(canvas,QEvent::MouseMove,destination);
+    mouse(canvas,QEvent::MouseButtonRelease,destination);
+    require(rotations==1 && render(canvas)==original,"rejected compound rotation restores both profiles");
+}
 void axis_gestures() {
     PlanCanvas canvas; setup(canvas);
+    int starts=0;
+    canvas.setEntityTransformStarted([&](QString id) {
+        require(id=="object","axis press captures semantic source");++starts;
+    });
     int count=0; double sx=0,sy=0; Vec2 anchor;
     canvas.setEntityAxisResizeRequested([&](QString id,double x,double y,Vec2 fixed) {
         require(id=="object","axis resize must preserve identity");
@@ -66,6 +150,7 @@ void axis_gestures() {
     const auto right=QPointF(407.5,240);
     mouse(canvas,QEvent::MouseButtonPress,right);
     mouse(canvas,QEvent::MouseMove,right+QPointF(80,0));
+    require(starts==1,"axis source capture must precede first preview");
     require(count==0,"axis preview must not commit");
     require(render(canvas)!=original,"axis resize must preview before release");
     require(render(canvas,true)==output,"axis preview and labels must not enter output");
@@ -370,7 +455,7 @@ int main(int argc,char**argv) {
         const auto families=QFontDatabase::applicationFontFamilies(font_id);
         require(!families.isEmpty(),"bundled canvas font must expose its family");
         app.setFont(QFont(families.front(),10));
-        axis_gestures();rotated_symbol_and_rotation();vector_frame_survives_projection_refresh();
+        compound_presentation_previews();axis_gestures();rotated_symbol_and_rotation();vector_frame_survives_projection_refresh();
         common_angle_snapping_and_cancelled_rotation();
         dimensions_are_physical_and_screen_only();label_and_reference_rotation_preview();exact_presentation_move_admission();
         std::cout<<"Axis canvas controls tests passed\n";return 0;

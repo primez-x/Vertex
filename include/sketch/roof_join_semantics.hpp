@@ -10,14 +10,25 @@
 namespace sketch {
 
 // A roof join is a document relationship between source roof entities.  The
-// v1 fused style keeps each source roof's semantic identity and openings while
-// allowing coordinated views to present one derived union.
+// fused style keeps each source roof's semantic identity and openings while
+// allowing coordinated views to present one derived union. V1 retains the
+// original closed three-field record. V2 optionally binds one material override
+// using the established closed version-1 assignment record.
 enum class RoofJoinStyle { fused };
+
+struct RoofJoinMaterialAssignment {
+    std::string catalog_id;
+    std::string material_id;
+    bool operator==(const RoofJoinMaterialAssignment&) const = default;
+};
 
 struct RoofJoin {
     std::string id;
     std::vector<std::string> roof_ids;
     RoofJoinStyle style{RoofJoinStyle::fused};
+    // Authored roof_ids order determines overlap ownership: earlier roofs own
+    // shared volume. V2 assignment intentionally overrides all region bindings.
+    std::optional<RoofJoinMaterialAssignment> material_assignment;
 
     bool operator==(const RoofJoin&) const = default;
 };

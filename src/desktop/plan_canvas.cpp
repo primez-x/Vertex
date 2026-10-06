@@ -16,6 +16,7 @@
 #include <QMimeData>
 #include <QFontMetrics>
 #include <QFontMetricsF>
+#include <QHash>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
@@ -23,6 +24,7 @@
 #include <QPainterPath>
 #include <QSvgRenderer>
 #include <QPainterPathStroker>
+#include <QSet>
 #include <QPaintEvent>
 #include <QTabletEvent>
 #include <QTouchEvent>
@@ -143,6 +145,29 @@ struct LabelLayout {
     QFont font;
     QRectF bounds;
 };
+
+bool same_entity_presentation(const CanvasEntity& left, const CanvasEntity& right) {
+    return left.id == right.id && left.presentation_key == right.presentation_key;
+}
+
+bool unambiguous_entity_presentations(const std::vector<CanvasEntity>& entities,
+                                      const std::vector<CanvasEntity>& retained) {
+    QSet<QString> keyed_roots;
+    for (const auto& source : retained)
+        if (!source.presentation_key.isEmpty()) keyed_roots.insert(source.id);
+    QHash<QString,QSet<QString>> seen;
+    for (const auto& entity : entities) {
+        auto& keys = seen[entity.id];
+        if (entity.presentation_key.isEmpty()) {
+            if (keyed_roots.contains(entity.id) ||
+                (!keys.isEmpty() && !keys.contains(QString{}))) return false;
+        } else {
+            if (keys.contains(QString{}) || keys.contains(entity.presentation_key)) return false;
+        }
+        keys.insert(entity.presentation_key);
+    }
+    return true;
+}
 
 bool same_label_presentation(const CanvasLabel& left, const CanvasLabel& right) {
     return left.id == right.id && left.callout_role == right.callout_role;
@@ -1200,6 +1225,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     painted_entities.reserve(scene_entities.size());
     for (const auto& entity : scene_entities) painted_entities.push_back(&entity);
     if (interactive && ((m_vertex_move_handle && m_boundary_vertex_preview_valid) ||
+                    (m_opening_width_handle && m_opening_width_preview_valid) ||
                     m_move_preview_valid ||
                     m_transform_preview_valid)) {
         // Candidate model owners can enter a crop/depth slice while another
@@ -1216,10 +1242,11 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             return 15;
         };
         const auto& proposals = m_transform_preview_valid ? m_transform_entities_preview :
-            m_move_preview_exact ? m_move_entities_preview : m_boundary_vertex_entities_preview;
+            m_move_preview_exact ? m_move_entities_preview :
+            m_opening_width_preview_valid ? m_opening_width_entities_preview : m_boundary_vertex_entities_preview;
         for (const auto& preview : proposals) {
             if (std::any_of(m_entities.begin(),m_entities.end(),
-                [&](const auto& entity) { return entity.id==preview.id; })) continue;
+                [&](const auto& entity) { return same_entity_presentation(entity, preview); })) continue;
             const auto next=std::find_if(painted_entities.begin(),painted_entities.end(),
                 [&](const auto* entity) { return layer(*entity)>layer(preview); });
             painted_entities.insert(next,&preview);
@@ -1785,7 +1812,7 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     m_move_preview_exact = true;
     m_move_entities_preview = result.value_or(std::vector<CanvasEntity>{});
     m_move_labels_preview = std::move(labels);
-    m_move_preview_valid=result && std::all_of(m_move_ids.begin(),m_move_ids.end(),[&](const auto& id) {
+    m_move_preview_valid=result && unambiguous_entity_presentations(m_move_entities_preview, m_entities) && std::all_of(m_move_ids.begin(),m_move_ids.end(),[&](const auto& id) {
         return std::any_of(m_move_entities_preview.begin(),m_move_entities_preview.end(),
             [&](const auto& entity) { return entity.id==id; }) ||
             std::any_of(m_move_labels_preview.begin(),m_move_labels_preview.end(),
@@ -2221,6 +2248,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         if (const auto jamb = openingWidthHandleAt(position, QRectF(rect()))) {
             m_left_gesture = LeftGesture::opening_width_resize;
             m_opening_width_handle = *jamb;
+            if (m_entity_edit_gesture_started) m_entity_edit_gesture_started(jamb->entity_id);
             m_opening_width_jamb_preview = jamb->keep_start_jamb
                 ? jamb->source.end_jamb : jamb->source.start_jamb;
             m_opening_width_scale_preview = 1.0;
@@ -2246,6 +2274,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         if (const auto vertex = vertexHandleAt(position, QRectF(rect()))) {
             m_left_gesture = LeftGesture::vertex_move;
             m_vertex_move_handle = *vertex;
+            if (m_entity_edit_gesture_started) m_entity_edit_gesture_started(vertex->entity_id);
             m_vertex_move_preview = vertex->source_position;
             setCursor(Qt::SizeAllCursor);
             return;
@@ -2281,7 +2310,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                              axes->center.y - sign * direction.y * m_axis_extent * .5};
         }
         if (m_left_gesture == LeftGesture::selection_resize ||
-            m_left_gesture == LeftGesture::selection_rotate) {
+            m_left_gesture == LeftGesture::selection_rotate ||
+            m_left_gesture == LeftGesture::selection_axis_resize) {
             m_transform_source_id = m_move_ids.size() == 1 ? m_move_ids.front() : QString{};
             m_transform_pivot = toModel(m_transform_center, rect());
             if (!m_transform_source_id.isEmpty() && m_entity_transform_started)
@@ -2881,6 +2911,29 @@ std::optional<CanvasSelectionFrame> PlanCanvas::entitySelectionAxes(const Canvas
 
 std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
     if (selectedIds().size() != 1) return std::nullopt;
+    // A compound producer supplies the whole assembly's oriented frame.
+    // Without one, combine all profiles of the sole semantic selection.
+    std::optional<CanvasSelectionFrame> compound;
+    int selected_profiles=0;
+    for (const auto& retained : m_entities) {
+        if (!retained.selected || retained.presentation_key.isEmpty()) continue;
+        ++selected_profiles;
+        const auto& entity=interactiveEntity(retained);
+        if (entity.resize_frame) return entitySelectionAxes(entity);
+        if (const auto frame=entitySelectionAxes(entity)) {
+            // Rotated artwork retains its established single-profile frame.
+            if (!compound) compound=frame;
+            else try {
+                const auto bounds=boundary_bounds(entity.segments);
+                const double left=std::min(compound->center.x-compound->width_metres*.5,bounds.minimum.x);
+                const double right=std::max(compound->center.x+compound->width_metres*.5,bounds.maximum.x);
+                const double bottom=std::min(compound->center.y-compound->depth_metres*.5,bounds.minimum.y);
+                const double top=std::max(compound->center.y+compound->depth_metres*.5,bounds.maximum.y);
+                compound=CanvasSelectionFrame{{(left+right)*.5,(bottom+top)*.5},0,right-left,top-bottom};
+            } catch (const std::invalid_argument&) {}
+        }
+    }
+    if (selected_profiles>1 && compound) return compound;
     for (const auto& entity : m_entities)
         if (entity.selected) return entitySelectionAxes(interactiveEntity(entity));
     for (const auto& reference : m_references) {
@@ -3401,19 +3454,19 @@ const CanvasEntity* PlanCanvas::selectedOpening() const {
 const CanvasEntity& PlanCanvas::interactiveEntity(const CanvasEntity& entity) const {
     if (m_transform_preview_valid) {
         for (const auto& preview : m_transform_entities_preview)
-            if (preview.id == entity.id) return preview;
+            if (same_entity_presentation(preview, entity)) return preview;
     }
     if (m_move_preview_valid) {
         for (const auto& preview : m_move_entities_preview)
-            if (preview.id == entity.id) return preview;
+            if (same_entity_presentation(preview, entity)) return preview;
     }
     if (m_vertex_move_handle && m_boundary_vertex_preview_valid) {
         for (const auto& preview : m_boundary_vertex_entities_preview)
-            if (preview.id == entity.id) return preview;
+            if (same_entity_presentation(preview, entity)) return preview;
     }
     if (m_opening_width_handle && m_opening_width_preview_valid) {
         for (const auto& preview : m_opening_width_entities_preview)
-            if (preview.id == entity.id) return preview;
+            if (same_entity_presentation(preview, entity)) return preview;
     }
     return entity;
 }
@@ -3526,14 +3579,14 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
     m_opening_width_entities_preview.clear();
     // Exact projection must contain the captured opening. Further geometry
     // constraints belong to the document projection and final resize command.
-    if (!result || std::none_of(result->begin(), result->end(),
+    if (!result || !unambiguous_entity_presentations(*result, m_entities) || std::none_of(result->begin(), result->end(),
         [&](const CanvasEntity& entity) { return entity.id == m_opening_width_handle->entity_id; })) {
         update();
         return true;
     }
     for (auto& entity : *result) {
         const auto original = std::find_if(m_entities.begin(), m_entities.end(),
-            [&](const CanvasEntity& item) { return item.id == entity.id; });
+            [&](const CanvasEntity& item) { return same_entity_presentation(item, entity); });
         if (original != m_entities.end()) entity.selected = original->selected;
     }
     m_opening_width_entities_preview = std::move(*result);
@@ -3652,7 +3705,7 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     const bool invalid_metrics = metrics &&
         (!std::isfinite(metrics->area_square_metres) || metrics->area_square_metres < 0 ||
          !std::isfinite(metrics->perimeter_metres) || metrics->perimeter_metres < 0);
-    if (invalid_metrics || !result || std::none_of(result->begin(), result->end(),
+    if (invalid_metrics || !result || !unambiguous_entity_presentations(*result, m_entities) || std::none_of(result->begin(), result->end(),
         [&](const CanvasEntity& entity) { return entity.id == m_vertex_move_handle->entity_id; })) {
         update();
         if (m_vertex_release_pending) QTimer::singleShot(0,this,[this,serial]{finishBoundaryVertexPreview(serial);});
@@ -3660,7 +3713,7 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     }
     for (auto& entity : *result) {
         const auto original = std::find_if(m_entities.begin(), m_entities.end(),
-            [&](const CanvasEntity& item) { return item.id == entity.id; });
+            [&](const CanvasEntity& item) { return same_entity_presentation(item, entity); });
         if (original != m_entities.end()) entity.selected = original->selected;
     }
     for (auto& label : labels) {
@@ -4051,11 +4104,16 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                        : dark ? QColor(223,235,255) : QColor(29,78,216));
         painter.drawText(panel,Qt::AlignCenter,text);
     };
+    QSet<QString> measured_entities;
     for (const auto& entity : m_entities) {
         // A dimension guide is presentation geometry. Its selection extent is
         // not another building measurement and must not masquerade as one.
-        if (entity.selected && entity.type != QStringLiteral("dimension_line")) {
-            if (const auto axes = entitySelectionAxes(interactiveEntity(entity)))
+        if (entity.selected && entity.type != QStringLiteral("dimension_line") &&
+            !measured_entities.contains(entity.id)) {
+            measured_entities.insert(entity.id);
+            const auto axes = !entity.presentation_key.isEmpty() && selectedIds().size()==1
+                ? selectionAxes() : entitySelectionAxes(interactiveEntity(entity));
+            if (axes)
                 draw(*axes,entity.id,false,entity.opening_width_controls);
         }
     }
@@ -5063,6 +5121,10 @@ void PlanCanvas::setEntityTransformRequested(
     m_entity_transform_requested = std::move(callback);
 }
 
+void PlanCanvas::setEntityEditGestureStarted(std::function<void(QString)> callback) {
+    m_entity_edit_gesture_started = std::move(callback);
+}
+
 void PlanCanvas::setEntityTransformStarted(std::function<void(QString)> callback) {
     resetGesture();
     m_entity_transform_started = std::move(callback);
@@ -5121,7 +5183,7 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
          m_left_gesture != LeftGesture::selection_rotate)) return false;
     m_transform_preview_pending = false;
     m_transform_preview_exact = true;
-    m_transform_preview_valid = result && std::any_of(result->begin(), result->end(),
+    m_transform_preview_valid = result && unambiguous_entity_presentations(*result, m_entities) && std::any_of(result->begin(), result->end(),
         [&](const auto& entity) { return entity.id == m_transform_source_id; });
     m_transform_entities_preview = m_transform_preview_valid
         ? std::move(*result) : std::vector<CanvasEntity>{};

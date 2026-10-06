@@ -28,6 +28,9 @@
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/building_view_projection.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
+#include "sketch/desktop/assembly_authoring_dialog.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/physical_wall_room_review_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
@@ -430,6 +433,15 @@ void remap_entity_references(Entity& entity,
         if (found != object.end()) remap_clipboard_json(*found, remap);
     };
     auto& properties = entity.properties;
+    if (entity.type == "assembly_instance") {
+        // Document IDs and catalog-local type/part/profile IDs have distinct
+        // namespaces. Decode the instance rather than recursively rewriting it.
+        auto instance = decode_assembly_instance(properties.at("instance"));
+        instance.id = entity.id;
+        reference(properties, "assembly_catalog_id");
+        properties["instance"] = encode_assembly_instance(instance);
+        (void)decode_document_assembly_instance(entity);
+    }
     if (entity.type == "measurement_linework") {
         const auto decoded = decode_measurement_linework_model(properties.at("model"));
         if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
@@ -681,7 +693,7 @@ std::optional<std::string> assembly_host_for_child(const DocumentSnapshot& snaps
             const auto instance_id = std::string(child_id.substr(prefix.size()));
             const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
                 [&](const auto& candidate) { return candidate.id == instance_id; });
-            if (instance != model.instances().end() && instance->placement)
+            if (instance != model.instances().end() && instance->placement && model.expand(instance_id).profiles.empty())
                 return instance->placement->host_entity_id;
         } catch (const std::exception&) {
             // A malformed catalog remains diagnosable through normal document
@@ -689,6 +701,40 @@ std::optional<std::string> assembly_host_for_child(const DocumentSnapshot& snaps
         }
     }
     return std::nullopt;
+}
+
+// Embedded roots are derived selectable identities owned by their catalog;
+// they are never inserted as synthetic entities in the active document.
+std::optional<AssemblyDocumentInstance> geometric_assembly_for_child(const DocumentSnapshot& snapshot,
+                                                                   std::string_view child_id) {
+    for (const auto& [catalog_id, entity] : snapshot.entities()) {
+        if (entity.type != "assembly_model" || !entity.properties.contains("model")) continue;
+        const std::string prefix = catalog_id + ":instance:";
+        if (!child_id.starts_with(prefix)) continue;
+        try {
+            const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+            for (const auto& instance : model.instances()) {
+                if (instance.id == child_id.substr(prefix.size()) &&
+                    !model.expand(instance.id).profiles.empty()) return AssemblyDocumentInstance{catalog_id, instance};
+            }
+        } catch (const std::exception&) { }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> assembly_root_catalog_for_child(const DocumentSnapshot& snapshot,
+                                                          std::string_view child_id) {
+    if (const auto value = geometric_assembly_for_child(snapshot, child_id)) return value->assembly_catalog_id;
+    return std::nullopt;
+}
+
+AssemblyTransform embedded_assembly_transform(const AssemblyInstance& instance) {
+    if (instance.root_transform) return *instance.root_transform;
+    if (instance.placement) {
+        const auto& p = *instance.placement;
+        return {{p.translation_m.x, p.translation_m.y, 0}, p.rotation_radians, p.scale};
+    }
+    return {};
 }
 
 Entity annotation_child_subset(const Entity& original,
@@ -778,9 +824,9 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
     }
     const auto root = snapshot.entities().find(root_id);
     if (root == snapshot.entities().end()) return {};
-    static constexpr std::array<std::string_view, 14> supported{
+    static constexpr std::array<std::string_view, 15> supported{
         "boundary", "measurement_boundary", "measurement_linework", "room_boundary", "wall", "opening", "room",
-        "slab", "roof", "stair", "railing", "column", "beam", "annotation_state"};
+        "slab", "roof", "stair", "railing", "column", "beam", "annotation_state", "assembly_instance"};
     if (std::find(supported.begin(), supported.end(), root->second.type) == supported.end()) {
         return {};
     }
@@ -2962,7 +3008,7 @@ bool is_phase_model_entity(std::string_view type) {
     return type == "building" || type == "floor" || type == "wall" || type == "opening" ||
            type == "room" || type == "room_boundary" || type == "measurement_boundary" ||
            type == "boundary" || type == "slab" || type == "roof" || type == "stair" || type == "railing" ||
-           type == "column" || type == "beam" || type == "assembly_model" ||
+           type == "column" || type == "beam" || type == "assembly_model" || type == "assembly_instance" ||
            type == "terrain_surface";
 }
 
@@ -3042,9 +3088,9 @@ std::optional<RoomRelationshipRecord> decode_room_relationships(
 }
 
 std::optional<AssemblyModelRecord> decode_assembly_model(
-    const DocumentSnapshot& snapshot) {
+    const DocumentSnapshot& snapshot, const std::string& catalog_id) {
     for (const auto& [id, entity] : snapshot.entities()) {
-        if (entity.type != "assembly_model") continue;
+        if (id != catalog_id || entity.type != "assembly_model") continue;
         if (!entity.properties.contains("model")) {
             throw std::invalid_argument("The assembly catalog has no model payload.");
         }
@@ -4296,6 +4342,19 @@ std::string building_plan_source_key(const DocumentSnapshot& snapshot, const Ent
     return key;
 }
 
+TopoDS_Shape document_roof_join_shape(const DocumentSnapshot& snapshot, const Entity& entity) {
+    const auto join = parse_roof_join(entity.properties, entity.id);
+    std::vector<TopoDS_Shape> roofs;
+    roofs.reserve(join.roof_ids.size());
+    for (const auto& id : join.roof_ids) {
+        const auto& roof = snapshot.entities().at(id);
+        if (roof.type != "roof") throw std::invalid_argument("Joined roof member has the wrong type.");
+        roofs.push_back(make_building_shape(decode_building_entity(
+            effective_building_geometry_entity(snapshot, roof)), snapshot.entities()));
+    }
+    return make_roof_join(join, roofs);
+}
+
 }  // namespace
 
 class MainWindow::Impl {
@@ -5315,7 +5374,7 @@ public:
 
     static bool supportsObjectAppearance(std::string_view type) {
         return type == "wall" || type == "opening" || type == "slab" || type == "room" ||
-            can_recognize_building_entity_type(type);
+            type == "assembly_instance" || type == "roof_join" || can_recognize_building_entity_type(type);
     }
 
     void showAreaAppearance() { showSelectedAppearance(false); }
@@ -5788,16 +5847,9 @@ public:
         }
     }
 
-    std::pair<ArchitecturalTransaction, std::string>
-    makeArchitecturalObjectTransformTransaction(
-        const DocumentSnapshot& source, const Entity& original,
-        const QString& rotation_degrees, const QString& offset_x,
-        const QString& offset_y, const QString& offset_z,
-        const QString& uniform_scale, bool clone) const {
-        if (!can_transform_architectural_entity_type(original.type)) {
-            throw std::invalid_argument(
-                "Select an editable architectural object before transforming it.");
-        }
+    ArchitecturalTransform parseArchitecturalTransform(const QString& rotation_degrees,
+        const QString& offset_x, const QString& offset_y, const QString& offset_z,
+        const QString& uniform_scale) const {
         const auto parse_degrees = [](const QString& text) {
             if (text.trimmed().isEmpty()) return 0.0;
             bool ok = false;
@@ -5829,6 +5881,63 @@ public:
             !std::isfinite(transform.z)) {
             throw std::invalid_argument("Architectural translation must be finite.");
         }
+        return transform;
+    }
+
+    std::pair<Command, std::string> embeddedAssemblyTransformCommand(const DocumentSnapshot& source,
+        const std::string& child_id, const ArchitecturalTransform& gesture, bool clone) const {
+        validate_document_assembly_instances(source.entities());
+        const auto binding = geometric_assembly_for_child(source, child_id);
+        if (!binding) throw std::invalid_argument("The embedded geometric assembly is unavailable.");
+        const auto& original = source.entities().at(binding->assembly_catalog_id);
+        const auto model = AssemblyModel::from_json(original.properties.at("model"));
+        auto instance = binding->instance;
+        const AssemblyTransform delta{{gesture.x, gesture.y, gesture.z}, gesture.rotation_z_radians, gesture.scale};
+        const auto transform = compose_assembly_transform(delta, embedded_assembly_transform(instance));
+        if (!clone && gesture.x == 0 && gesture.y == 0 && gesture.z == 0 &&
+            gesture.rotation_z_radians == 0 && gesture.scale == 1)
+            return {ApplyEntityChanges{source.revision(), {}, {}, "Transform embedded assembly"}, child_id};
+        if (clone) {
+            do { instance.id = new_id("assembly"); } while (std::any_of(model.instances().begin(), model.instances().end(),
+                [&](const auto& value) { return value.id == instance.id; }));
+        }
+        instance.placement.reset();
+        instance.root_transform = transform;
+        auto instances = model.instances();
+        if (clone) instances.push_back(instance);
+        else for (auto& value : instances) if (value.id == instance.id) value = instance;
+        auto catalog = original;
+        catalog.properties["model"] = AssemblyModel::create(model.materials(), model.types(), std::move(instances)).to_json();
+        auto candidate = source.entities(); candidate.insert_or_assign(catalog.id, catalog);
+        validate_document_assembly_instances(candidate);
+        const auto target = catalog.id + ":instance:" + instance.id;
+        std::vector<EntityChange> changes{EntityChange::upsert(std::move(catalog))};
+        if (clone) for (const auto& [id, annotation] : source.entities()) {
+            (void)id;
+            if (annotation.type != kAnnotationEntityType) continue;
+            auto copy = annotation;
+            auto& records = copy.properties.at("state").at("overrides");
+            for (const auto& record : annotation.properties.at("state").at("overrides")) {
+                if (record.at("target_id") != child_id) continue;
+                auto cloned = record; cloned["target_id"] = target; records.push_back(std::move(cloned));
+            }
+            if (copy != annotation) { validate_annotation_entity(copy); changes.push_back(EntityChange::upsert(std::move(copy))); }
+        }
+        return {ApplyEntityChanges{source.revision(), std::move(changes), {},
+            clone ? "Clone embedded assembly" : "Transform embedded assembly"}, target};
+    }
+
+    std::pair<ArchitecturalTransaction, std::string>
+    makeArchitecturalObjectTransformTransaction(
+        const DocumentSnapshot& source, const Entity& original,
+        const QString& rotation_degrees, const QString& offset_x,
+        const QString& offset_y, const QString& offset_z,
+        const QString& uniform_scale, bool clone) const {
+        if (!can_transform_architectural_entity_type(original.type)) {
+            throw std::invalid_argument(
+                "Select an editable architectural object before transforming it.");
+        }
+        const auto transform = parseArchitecturalTransform(rotation_degrees, offset_x, offset_y, offset_z, uniform_scale);
         const auto target_id = clone ? new_id(original.type) : original.id;
         std::vector<ArchitecturalOperation> operations;
         if (clone) {
@@ -5861,6 +5970,16 @@ public:
                     "Finish or cancel the active boundary before transforming an architectural object.");
             }
             const auto source = authoringSnapshot();
+            if (geometric_assembly_for_child(source, m_selected_id.toStdString())) {
+                auto [command, root] = embeddedAssemblyTransformCommand(source, m_selected_id.toStdString(),
+                    parseArchitecturalTransform(rotation_degrees, offset_x, offset_y, offset_z, uniform_scale), clone);
+                if (const auto* changes = std::get_if<ApplyEntityChanges>(&command); changes && changes->entity_changes.empty()) {
+                    clearError(); return true;
+                }
+                (void)Document::preview_command(source, command);
+                applyAuthoredCommand(command); m_selected_id = id_from(root); m_selected_ids = {m_selected_id};
+                clearError(); refresh(); return true;
+            }
             const auto found = source.entities().find(m_selected_id.toStdString());
             if (found == source.entities().end()) {
                 throw std::invalid_argument("Select an editable architectural object first.");
@@ -9182,11 +9301,85 @@ public:
         dialog.exec();
     }
 
+    bool editEmbeddedAssemblyFromDialog() {
+        const auto source = authoringSnapshot();
+        const auto binding = geometric_assembly_for_child(source, m_selected_id.toStdString());
+        if (!binding) return false;
+        const auto context = captureModalContext();
+        const auto digest = document_snapshot_digest(source);
+        const auto selection = m_selected_ids;
+        const auto& original = source.entities().at(binding->assembly_catalog_id);
+        const auto model = AssemblyModel::from_json(original.properties.at("model"));
+        const auto resolved = model.resolve(binding->instance.id);
+        const auto placement = embedded_assembly_transform(binding->instance);
+        QDialog dialog(owner); styleDialog(dialog); dialog.setObjectName(QStringLiteral("embeddedAssemblyPropertiesDialog"));
+        dialog.setWindowTitle(QStringLiteral("Embedded assembly properties")); dialog.resize(520, 500);
+        auto* layout = new QVBoxLayout(&dialog);
+        const auto type = std::find_if(model.types().begin(), model.types().end(), [&](const auto& value) { return value.id == binding->instance.type_id; });
+        layout->addWidget(new QLabel(QString::fromStdString(type->name + " · " + binding->instance.id), &dialog));
+        auto* form = new QFormLayout;
+        const auto field = [&](const char* name, const QString& label, double value, bool length) {
+            auto* edit = new QLineEdit(length ? format_length(value, m_metric_units) : QString::number(value, 'g', 17), &dialog);
+            edit->setObjectName(QString::fromLatin1(name)); form->addRow(label, edit); return edit;
+        };
+        auto* x = field("embeddedAssemblyX", "X", placement.translation_m.x, true);
+        auto* y = field("embeddedAssemblyY", "Y", placement.translation_m.y, true);
+        auto* z = field("embeddedAssemblyZ", "Z", placement.translation_m.z, true);
+        auto* yaw = field("embeddedAssemblyYaw", "Yaw (degrees)", placement.rotation_radians*180/std::numbers::pi, false);
+        auto* scale = field("embeddedAssemblyScale", "Uniform scale", placement.scale, false);
+        const std::array<QString,5> initial{x->text(), y->text(), z->text(), yaw->text(), scale->text()};
+        layout->addLayout(form);
+        auto* properties = new QTableWidget(static_cast<int>(resolved.properties.size()), 2, &dialog);
+        properties->setObjectName(QStringLiteral("embeddedAssemblyProperties")); properties->setHorizontalHeaderLabels({"Property", "Value"});
+        int row = 0;
+        for (const auto& [key, value] : resolved.properties) {
+            auto* item = new QTableWidgetItem(QString::fromStdString(key)); item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+            properties->setItem(row, 0, item); properties->setItem(row++, 1, new QTableWidgetItem(QString::fromStdString(value)));
+        }
+        layout->addWidget(properties);
+        auto* error = new QLabel(&dialog); error->setWordWrap(true); layout->addWidget(error);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("embeddedAssemblyButtons")); layout->addWidget(buttons);
+        buttons->button(QDialogButtonBox::Save)->setEnabled(source.is_editable());
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            try {
+                if (!modalContextUnchanged(context) || m_selected_ids != selection ||
+                    document_snapshot_digest(authoringSnapshot()) != digest)
+                    throw std::invalid_argument("The embedded assembly source changed. Reopen properties.");
+                auto instance = binding->instance;
+                if (x->text()!=initial[0] || y->text()!=initial[1] || z->text()!=initial[2] || yaw->text()!=initial[3] || scale->text()!=initial[4]) {
+                    const auto entered = parseArchitecturalTransform(yaw->text(), x->text(), y->text(), z->text(), scale->text());
+                    auto updated = placement;
+                    if (x->text()!=initial[0]) updated.translation_m.x=entered.x;
+                    if (y->text()!=initial[1]) updated.translation_m.y=entered.y;
+                    if (z->text()!=initial[2]) updated.translation_m.z=entered.z;
+                    if (yaw->text()!=initial[3]) updated.rotation_radians=entered.rotation_z_radians;
+                    if (scale->text()!=initial[4]) updated.scale=entered.scale;
+                    instance.placement.reset(); instance.root_transform = updated;
+                }
+                for (int r = 0; r < properties->rowCount(); ++r) {
+                    const auto key = properties->item(r,0)->text().toStdString(); const auto value = properties->item(r,1)->text().toStdString();
+                    if (value != resolved.properties.at(key)) instance.property_overrides[key] = value;
+                }
+                if (instance != binding->instance) {
+                    auto catalog = original; catalog.properties["model"] = model.with_instance(std::move(instance)).to_json();
+                    auto candidate = source.entities(); candidate.insert_or_assign(catalog.id, catalog); validate_document_assembly_instances(candidate);
+                    const Command command = ApplyEntityChanges{source.revision(), {EntityChange::upsert(std::move(catalog))}, {}, "Edit embedded assembly"};
+                    (void)Document::preview_command(source, command); applyAuthoredCommand(command); refresh();
+                }
+                clearError(); dialog.accept();
+            } catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); }
+        });
+        dialog.exec(); return true;
+    }
+
     void showArchitecturalObjectTransformEditor() {
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
         const auto original = selectedEntity();
-        if (!original || !can_transform_architectural_entity_type(original->type)) {
+        const auto embedded = geometric_assembly_for_child(source, m_selected_id.toStdString());
+        if (!embedded && (!original || !can_transform_architectural_entity_type(original->type))) {
             setError(QStringLiteral("Select an editable architectural object first."));
             return;
         }
@@ -9243,19 +9436,23 @@ public:
             try {
                 if (!m_document->is_editable())
                     throw std::invalid_argument("This document is read-only.");
-                if (!modalContextUnchanged(context))
-                    throw std::invalid_argument(lastError().toStdString());
-                const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
-                    source, *original, rotation->text(), offset_x->text(), offset_y->text(),
-                    offset_z->text(), scale->text(), clone->isChecked());
-                auto command = augmentAuthoredCommand(
-                    architecturalObjectTransformCommand(source,*original,transaction), source);
-                const auto preview = Document::preview_command(source, command);
-                const auto preview_entity = preview.entities().find(root);
-                if (preview_entity == preview.entities().end())
-                    throw std::invalid_argument("The transform preview did not produce its target object.");
-                (void)decode_building_entity(preview_entity->second);
-                candidate_command = std::pair{std::move(command), root};
+                if (!modalContextUnchanged(context) || document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot()))
+                    throw std::invalid_argument("The project or selection changed. Reopen the transform editor.");
+                if (embedded) {
+                    candidate_command = embeddedAssemblyTransformCommand(source, m_selected_id.toStdString(),
+                        parseArchitecturalTransform(rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()), clone->isChecked());
+                    (void)Document::preview_command(source, candidate_command->first);
+                } else {
+                    const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
+                        source, *original, rotation->text(), offset_x->text(), offset_y->text(),
+                        offset_z->text(), scale->text(), clone->isChecked());
+                    auto command = augmentAuthoredCommand(architecturalObjectTransformCommand(source,*original,transaction), source);
+                    const auto preview = Document::preview_command(source, command);
+                    const auto preview_entity = preview.entities().find(root);
+                    if (preview_entity == preview.entities().end()) throw std::invalid_argument("The transform preview did not produce its target object.");
+                    if (preview_entity->second.type != "assembly_instance") (void)decode_building_entity(preview_entity->second);
+                    candidate_command = std::pair{std::move(command), root};
+                }
                 status->setText(QStringLiteral("Preview ready at model revision %1. Apply to commit %2.")
                                     .arg(source.revision())
                                     .arg(clone->isChecked() ? QStringLiteral("a transformed copy")
@@ -9273,7 +9470,7 @@ public:
         QObject::connect(clone, &QCheckBox::toggled, &dialog,
                          [&update_preview](bool) { update_preview(); });
         QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
-            if (!modalContextUnchanged(context)) {
+            if (!modalContextUnchanged(context) || document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot())) {
                 update_preview();
                 return;
             }
@@ -11496,39 +11693,58 @@ public:
         }
     }
 
-    bool ensureAssemblyModelRecord() {
-        try {
-            const auto source = authoringSnapshot();
-            if (decode_assembly_model(source).has_value()) return true;
-            const auto model = AssemblyModel::create({}, {}, {});
-            auto entity = Entity::create("assembly_model", {{"model", model.to_json()}});
-            entity.id = new_id("assemblies");
-            const ApplyEntityChanges command{
-                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
-                "Create assembly catalog"};
-            (void)Document::preview_command(source, Command{command});
-            applyDocumentCommand(Command{command});
-            clearError();
-            refresh();
-            return true;
-        } catch (const std::exception& error) {
-            setError(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
-            return false;
+    std::optional<std::string> chooseAssemblyCatalog(const std::string& preferred = {}) {
+        const auto source = authoringSnapshot();
+        if (!preferred.empty()) {
+            if (!decode_assembly_model(source, preferred))
+                throw std::invalid_argument("The selected assembly catalog is unavailable.");
+            return preferred;
         }
+        std::vector<std::string> catalogs;
+        for (const auto& [id, entity] : source.entities())
+            if (entity.type == "assembly_model") catalogs.push_back(id);
+        if (catalogs.empty()) return new_id("assemblies");
+        if (catalogs.size() == 1) return catalogs.front();
+        const auto context = captureModalContext();
+        const auto workspace = m_workspace;
+        QDialog dialog(owner); styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("assemblyCatalogChoiceDialog"));
+        dialog.setWindowTitle(QStringLiteral("Choose assembly catalog"));
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* choices = new QComboBox(&dialog);
+        choices->setObjectName(QStringLiteral("assemblyCatalogChoice"));
+        for (const auto& id : catalogs) {
+            const auto& entity = source.entities().at(id);
+            choices->addItem(QStringLiteral("%1 · %2").arg(QString::fromStdString(
+                entity.properties.value("name", std::string{"Assembly catalog"})),
+                QString::fromStdString(id)), QString::fromStdString(id));
+        }
+        layout->addWidget(choices);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("assemblyCatalogChoiceButtons"));
+        layout->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context) ||
+            !assemblyDraftSourceUnchanged(source, workspace)) return std::nullopt;
+        return choices->currentData().toString().toStdString();
     }
 
-    bool applyAssemblyModel(const AssemblyModel& model, const QString& message) {
+    bool applyAssemblyModel(const AssemblyModel& model, const std::string& catalog_id,
+                            const DocumentSnapshot& source, const QString& message) {
         try {
             if (!m_document->is_editable()) {
                 throw std::invalid_argument("This document is read-only.");
             }
-            const auto source = authoringSnapshot();
-            const auto record = decode_assembly_model(source);
-            if (!record) {
-                throw std::invalid_argument("The assembly catalog is unavailable.");
-            }
-            auto entity = source.entities().at(record->entity_id);
+            if (document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot()))
+                throw std::invalid_argument("The project changed while the assembly catalog was open.");
+            const auto found = source.entities().find(catalog_id);
+            auto entity = found == source.entities().end()
+                ? Entity{catalog_id, "assembly_model", {{"model", AssemblyModel::create({}, {}, {}).to_json()}}}
+                : found->second;
+            if (entity.type != "assembly_model") throw std::invalid_argument("The assembly catalog is unavailable.");
             entity.properties["model"] = model.to_json();
+            if (found != source.entities().end() && entity == found->second) { clearError(); return true; }
             const ApplyEntityChanges command{
                 source.revision(), {EntityChange::upsert(std::move(entity))}, {},
                 message.toStdString()};
@@ -12357,13 +12573,230 @@ public:
         }
     }
 
+    bool assemblyDraftSourceUnchanged(const DocumentSnapshot& source, Workspace workspace) {
+        if (!m_document->is_editable() || workspace != m_workspace ||
+            document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot())) {
+            setError(QStringLiteral("The project or workspace changed. Reopen the assembly editor to review the current source."));
+            return false;
+        }
+        return true;
+    }
+
+    bool editAssemblyType(const std::string& catalog_id, std::optional<std::string> type_id = std::nullopt) {
+        try {
+            const auto source = authoringSnapshot();
+            const auto context = captureModalContext();
+            const auto workspace = m_workspace;
+            const auto found_catalog = source.entities().find(catalog_id);
+            if (type_id && found_catalog == source.entities().end())
+                throw std::invalid_argument("The assembly catalog is unavailable.");
+            const auto catalog_source = found_catalog == source.entities().end()
+                ? Entity{catalog_id, "assembly_model", {{"model", AssemblyModel::create({}, {}, {}).to_json()}}}
+                : found_catalog->second;
+            const auto model = AssemblyModel::from_json(catalog_source.properties.at("model"));
+            // An empty catalog exists only in the detached dialog snapshot.
+            // Cancel or merely browsing the library never dirties the project.
+            const auto dialog_source = found_catalog == source.entities().end()
+                ? Document::preview_command(source, Command{ApplyEntityChanges{source.revision(),
+                    {EntityChange::upsert(catalog_source)}, {}, "Draft assembly catalog"}})
+                : source;
+            std::optional<AssemblyType> original;
+            if (type_id) {
+                const auto found = std::find_if(model.types().begin(), model.types().end(),
+                    [&](const auto& type) { return type.id == *type_id; });
+                if (found == model.types().end()) throw std::invalid_argument("The selected assembly type is unavailable.");
+                original = *found;
+            }
+            AssemblyTypeDialog dialog(dialog_source, catalog_id, original, m_metric_units, owner);
+            styleDialog(dialog);
+            if (dialog.exec() != QDialog::Accepted) return false;
+            const auto draft = dialog.candidate();
+            if (!draft || !modalContextUnchanged(context) || !assemblyDraftSourceUnchanged(source, workspace)) return false;
+            if (original && draft->replacement == *original) { clearError(); return true; }
+            ApplyEntityChanges command;
+            if (original) {
+                command = independent_assembly_type_update_command(source, catalog_id, draft->replacement, source.revision());
+            } else {
+                auto types = model.types(); types.push_back(draft->replacement);
+                auto catalog = catalog_source;
+                catalog.properties["model"] = AssemblyModel::create(model.materials(), std::move(types), model.instances()).to_json();
+                command = {source.revision(), {EntityChange::upsert(std::move(catalog))}, {}, "Create reusable assembly type"};
+            }
+            (void)Document::preview_command(source, command);
+            applyAuthoredCommand(Command{command}); clearError(); refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Assembly type: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool editIndependentAssembly(const std::optional<std::string>& instance_id = std::nullopt,
+                                 const std::string& preferred_catalog = {}) {
+        try {
+            const auto source = authoringSnapshot();
+            const auto context = captureModalContext();
+            const auto workspace = m_workspace;
+            std::optional<Entity> original;
+            if (instance_id) original = source.entities().at(*instance_id);
+            AssemblyInstanceDialog dialog(source, original, preferred_catalog, m_metric_units, owner);
+            styleDialog(dialog);
+            if (dialog.exec() != QDialog::Accepted) return false;
+            const auto draft = dialog.candidate();
+            if (!draft || !modalContextUnchanged(context) || !assemblyDraftSourceUnchanged(source, workspace)) return false;
+            Entity candidate = original.value_or(Entity{draft->value.instance.id, "assembly_instance", json::object()});
+            candidate.properties["name"] = draft->name;
+            if (!original && !assignDrawingContext(candidate.properties)) return false;
+            candidate = encode_document_assembly_instance(candidate, draft->value);
+            if (original && candidate == *original) { clearError(); return true; }
+            const ApplyEntityChanges command{source.revision(), {EntityChange::upsert(candidate)}, {},
+                original ? "Edit placed assembly" : "Place assembly"};
+            (void)Document::preview_command(source, command);
+            applyAuthoredCommand(Command{command});
+            m_selected_id = id_from(candidate.id); m_selected_ids = {m_selected_id};
+            clearError(); refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Placed assembly: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     void showAssemblies() {
+        if (!m_document->is_editable()) { setError(QStringLiteral("This document is read-only.")); return; }
+        QDialog dialog(owner); styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("assemblyWorkspaceDialog"));
+        dialog.setWindowTitle(QStringLiteral("Reusable assemblies")); dialog.resize(650, 500);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* tabs = new QTabWidget(&dialog); layout->addWidget(tabs, 1);
+        auto* type_page = new QWidget(tabs); auto* type_layout = new QVBoxLayout(type_page);
+        auto* types = new QListWidget(type_page); types->setObjectName(QStringLiteral("assemblyAuthoredTypeList"));
+        type_layout->addWidget(types, 1); auto* type_actions = new QHBoxLayout;
+        const auto button = [&](QHBoxLayout* row, const char* text, const char* name) {
+            auto* item = new QPushButton(QString::fromUtf8(text), &dialog);
+            item->setObjectName(QString::fromUtf8(name)); row->addWidget(item); return item;
+        };
+        auto* create = button(type_actions, "Create type…", "createGeometricAssemblyType");
+        auto* edit_type = button(type_actions, "Edit type…", "editGeometricAssemblyType");
+        auto* remove_type = button(type_actions, "Remove type", "removeGeometricAssemblyType");
+        type_layout->addLayout(type_actions); tabs->addTab(type_page, QStringLiteral("Types"));
+        auto* instance_page = new QWidget(tabs); auto* instance_layout = new QVBoxLayout(instance_page);
+        auto* instances = new QListWidget(instance_page); instances->setObjectName(QStringLiteral("independentAssemblyList"));
+        instance_layout->addWidget(instances, 1); auto* instance_actions = new QHBoxLayout;
+        auto* place = button(instance_actions, "Place…", "placeIndependentAssembly");
+        auto* edit_instance = button(instance_actions, "Edit…", "editIndependentAssembly");
+        auto* remove_instance = button(instance_actions, "Remove", "removeIndependentAssembly");
+        instance_layout->addLayout(instance_actions); tabs->addTab(instance_page, QStringLiteral("Placed"));
+        auto* status = new QLabel(&dialog); status->setWordWrap(true); layout->addWidget(status);
+        auto* footer = new QHBoxLayout;
+        auto* materials = button(footer, "Materials and catalog…", "assemblyCatalogMetadata");
+        footer->addStretch(); auto* close = button(footer, "Close", "closeAssemblyWorkspace"); layout->addLayout(footer);
+        const auto populate = [&] {
+            const auto type_key = types->currentItem() ? types->currentItem()->data(Qt::UserRole).toString() : QString{};
+            const auto instance_key = instances->currentItem() ? instances->currentItem()->data(Qt::UserRole).toString() : QString{};
+            types->clear(); instances->clear();
+            const auto source = authoringSnapshot();
+            for (const auto& [catalog_id, entity] : source.entities()) {
+                if (entity.type == "assembly_model") {
+                    const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+                    for (const auto& type : model.types()) {
+                        const auto catalog_name = QString::fromStdString(
+                            entity.properties.value("name", std::string{"Assembly catalog"}));
+                        auto* item = new QListWidgetItem(QStringLiteral("%1 — %2")
+                            .arg(QString::fromStdString(type.name), catalog_name), types);
+                        const auto key = QString::fromStdString(json::array({catalog_id, type.id}).dump());
+                        item->setData(Qt::UserRole, key);
+                        item->setToolTip(QStringLiteral("%1 solids · %2 nested parts").arg(type.profiles.size()).arg(type.parts.size()));
+                        if (key == type_key) types->setCurrentItem(item);
+                    }
+                } else if (entity.type == "assembly_instance") {
+                    auto* item = new QListWidgetItem(QString::fromStdString(
+                        entity.properties.value("name", std::string{"Assembly"})), instances);
+                    item->setData(Qt::UserRole, id_from(entity.id));
+                    if (id_from(entity.id) == instance_key) instances->setCurrentItem(item);
+                }
+            }
+            edit_type->setEnabled(types->currentItem()); remove_type->setEnabled(types->currentItem());
+            edit_instance->setEnabled(instances->currentItem()); remove_instance->setEnabled(instances->currentItem());
+        };
+        const auto type_selection = [&] {
+            if (!types->currentItem()) throw std::invalid_argument("Choose a reusable assembly type.");
+            return json::parse(types->currentItem()->data(Qt::UserRole).toString().toStdString());
+        };
+        const auto catalog_selection = [&]() -> std::optional<std::string> {
+            if (tabs->currentWidget() == type_page && types->currentItem())
+                return chooseAssemblyCatalog(type_selection().at(0).get<std::string>());
+            const auto source = authoringSnapshot();
+            const auto selected = tabs->currentWidget() == instance_page && instances->currentItem()
+                ? instances->currentItem()->data(Qt::UserRole).toString() : m_selected_id;
+            const auto found = source.entities().find(selected.toStdString());
+            if (found != source.entities().end() && found->second.type == "assembly_instance")
+                return chooseAssemblyCatalog(decode_document_assembly_instance(found->second).assembly_catalog_id);
+            return chooseAssemblyCatalog();
+        };
+        const auto finish = [&](bool succeeded) { status->setText(succeeded ? QString{} : lastError()); populate(); };
+        QObject::connect(create, &QPushButton::clicked, &dialog, [&] {
+            try {
+                if (const auto catalog = catalog_selection()) finish(editAssemblyType(*catalog));
+            }
+            catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(edit_type, &QPushButton::clicked, &dialog, [&] {
+            try { const auto chosen=type_selection(); finish(editAssemblyType(chosen.at(0).get<std::string>(), chosen.at(1).get<std::string>())); }
+            catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(remove_type, &QPushButton::clicked, &dialog, [&] {
+            try {
+                const auto chosen=type_selection(); const auto source=authoringSnapshot();
+                const auto command=independent_assembly_type_remove_command(source, chosen.at(0).get<std::string>(), chosen.at(1).get<std::string>(), source.revision());
+                applyAuthoredCommand(Command{command}); clearError(); refresh(); populate();
+            } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(place, &QPushButton::clicked, &dialog, [&] {
+            try { if (const auto catalog = catalog_selection()) finish(editIndependentAssembly(std::nullopt, *catalog)); }
+            catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(edit_instance, &QPushButton::clicked, &dialog, [&] {
+            if (instances->currentItem()) finish(editIndependentAssembly(instances->currentItem()->data(Qt::UserRole).toString().toStdString()));
+        });
+        QObject::connect(remove_instance, &QPushButton::clicked, &dialog, [&] {
+            try {
+                if (!instances->currentItem()) return;
+                const auto source=authoringSnapshot();
+                const auto command=assembly_instance_remove_command(source, instances->currentItem()->data(Qt::UserRole).toString().toStdString(), source.revision());
+                applyAuthoredCommand(Command{command}); clearError(); refresh(); populate();
+            } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(types, &QListWidget::itemSelectionChanged, &dialog, [&] {
+            edit_type->setEnabled(types->currentItem()); remove_type->setEnabled(types->currentItem());
+        });
+        QObject::connect(instances, &QListWidget::itemSelectionChanged, &dialog, [&] {
+            edit_instance->setEnabled(instances->currentItem()); remove_instance->setEnabled(instances->currentItem());
+        });
+        QObject::connect(types, &QListWidget::itemDoubleClicked, &dialog, [&] { edit_type->click(); });
+        QObject::connect(instances, &QListWidget::itemDoubleClicked, &dialog, [&] { edit_instance->click(); });
+        QObject::connect(materials, &QPushButton::clicked, &dialog, [&] {
+            try { if (const auto catalog = catalog_selection()) { showAssemblyCatalogMetadata(*catalog); populate(); } }
+            catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+        populate(); dialog.exec();
+    }
+
+    void showAssemblyCatalogMetadata(const std::string& preferred_catalog = {}) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return;
         }
-        if (!ensureAssemblyModelRecord()) return;
         try {
+            const auto catalog = preferred_catalog.empty() ? chooseAssemblyCatalog()
+                : std::optional<std::string>{preferred_catalog};
+            if (!catalog) return;
+            auto record_source = authoringSnapshot();
+            auto record_context = captureModalContext();
+            const auto record_workspace = m_workspace;
+            // A new catalog stays detached until the first actual Apply.
+            // Subsequent Applies advance only this dialog's captured source.
             QDialog dialog(owner);
             styleDialog(dialog);
             dialog.setObjectName(QStringLiteral("assemblyCatalogDialog"));
@@ -12616,7 +13049,6 @@ public:
             layout->addLayout(footer);
 
             std::optional<AssemblyModelRecord> record;
-            Revision record_revision{};
             const auto refresh_materials = [&] {
                 const auto selected_id = materials->currentItem()
                     ? materials->currentItem()->data(Qt::UserRole).toString() : QString{};
@@ -12754,10 +13186,8 @@ public:
                 }
             };
             const auto populate = [&] {
-                const auto snapshot = authoringSnapshot();
-                record = decode_assembly_model(snapshot);
-                if (!record) return;
-                record_revision = snapshot.revision();
+                record = decode_assembly_model(record_source, *catalog);
+                if (!record) record = AssemblyModelRecord{*catalog, AssemblyModel::create({}, {}, {})};
                 const auto selected_type_id = types->currentItem()
                     ? types->currentItem()->data(Qt::UserRole).toString()
                     : type_id->text().trimmed();
@@ -12768,6 +13198,7 @@ public:
                 const QSignalBlocker instance_blocker(instances);
                 const QSignalBlocker combo_blocker(instance_type);
                 types->clear();
+                instances->clear();
                 instance_type->clear();
                 for (const auto& type : record->model.types()) {
                     auto* item = new QListWidgetItem(
@@ -12911,13 +13342,21 @@ public:
 
             const auto current_record = [&]() -> std::optional<AssemblyModelRecord> {
                 if (!record) return std::nullopt;
-                if (authoringSnapshot().revision() != record_revision) {
-                    populate();
-                    status->setText(QStringLiteral(
-                        "The project changed while the assembly catalog was open. Review the refreshed list."));
+                if (!modalContextUnchanged(record_context) ||
+                    !assemblyDraftSourceUnchanged(record_source, record_workspace)) {
+                    status->setText(lastError());
                     return std::nullopt;
                 }
                 return record;
+            };
+            const auto apply_model = [&](const AssemblyModel& updated, const QString& message) {
+                if (!current_record() || !applyAssemblyModel(updated, *catalog, record_source, message)) {
+                    status->setText(lastError());
+                    return false;
+                }
+                record_source = authoringSnapshot();
+                record_context = captureModalContext();
+                return true;
             };
 
             const auto selected_type_id = [&]() -> std::string {
@@ -12956,7 +13395,7 @@ public:
                     else *found = std::move(replacement);
                     const auto updated = AssemblyModel::create(
                         std::move(material_copy), current->model.types(), current->model.instances());
-                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly material"))) {
+                    if (apply_model(updated, QStringLiteral("Save assembly material"))) {
                         populate();
                         data_tabs->setCurrentWidget(material_page);
                         status->setText(QStringLiteral("Material saved."));
@@ -12978,7 +13417,7 @@ public:
                         [&](const auto& candidate) { return candidate.id == id; }), material_copy.end());
                     const auto updated = AssemblyModel::create(
                         std::move(material_copy), current->model.types(), current->model.instances());
-                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly material"))) {
+                    if (apply_model(updated, QStringLiteral("Remove assembly material"))) {
                         populate();
                         data_tabs->setCurrentWidget(material_page);
                         status->setText(QStringLiteral("Material removed through document history."));
@@ -13010,7 +13449,7 @@ public:
                         replacement.quantities[key] = read_quantity(type_entry_value, type_entry_unit);
                     }
                     const auto updated = current->model.with_type(std::move(replacement));
-                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly type entry"))) {
+                    if (apply_model(updated, QStringLiteral("Save assembly type entry"))) {
                         populate();
                         data_tabs->setCurrentWidget(type_data_page);
                         status->setText(QStringLiteral("Type schema entry saved through document history."));
@@ -13037,7 +13476,7 @@ public:
                     else if (kind == QStringLiteral("material")) replacement.materials.erase(key);
                     else replacement.quantities.erase(key);
                     const auto updated = current->model.with_type(std::move(replacement));
-                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly type entry"))) {
+                    if (apply_model(updated, QStringLiteral("Remove assembly type entry"))) {
                         populate();
                         data_tabs->setCurrentWidget(type_data_page);
                         status->setText(QStringLiteral("Type schema entry removed through document history."));
@@ -13069,7 +13508,7 @@ public:
                         replacement.quantity_overrides[key] = read_quantity(override_value, override_unit);
                     }
                     const auto updated = current->model.with_instance(std::move(replacement));
-                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly instance override"))) {
+                    if (apply_model(updated, QStringLiteral("Save assembly instance override"))) {
                         populate();
                         data_tabs->setCurrentWidget(override_page);
                         status->setText(QStringLiteral("Instance override saved through document history."));
@@ -13096,7 +13535,7 @@ public:
                     else if (kind == QStringLiteral("material")) replacement.material_overrides.erase(key);
                     else replacement.quantity_overrides.erase(key);
                     const auto updated = current->model.with_instance(std::move(replacement));
-                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly instance override"))) {
+                    if (apply_model(updated, QStringLiteral("Remove assembly instance override"))) {
                         populate();
                         data_tabs->setCurrentWidget(override_page);
                         status->setText(QStringLiteral("Instance override removed through document history."));
@@ -13119,7 +13558,7 @@ public:
                     const auto updated = AssemblyModel::create(
                         current->model.materials(), std::move(types_copy),
                         current->model.instances());
-                    if (applyAssemblyModel(updated, QStringLiteral("Add assembly type"))) {
+                    if (apply_model(updated, QStringLiteral("Add assembly type"))) {
                         populate();
                         status->setText(QStringLiteral("Reusable type added through document history."));
                     }
@@ -13142,7 +13581,7 @@ public:
                         [&](const auto& candidate) { return candidate.id == id; });
                     replacement.name = name;
                     const auto updated = current->model.with_type(std::move(replacement));
-                    if (applyAssemblyModel(updated, QStringLiteral("Rename assembly type"))) {
+                    if (apply_model(updated, QStringLiteral("Rename assembly type"))) {
                         populate();
                         status->setText(QStringLiteral("Type name updated through document history."));
                     }
@@ -13170,7 +13609,7 @@ public:
                     const auto updated = AssemblyModel::create(
                         current->model.materials(), std::move(types_copy),
                         current->model.instances());
-                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly type"))) {
+                    if (apply_model(updated, QStringLiteral("Remove assembly type"))) {
                         populate();
                         status->setText(QStringLiteral("Type removed through document history."));
                     }
@@ -13192,7 +13631,7 @@ public:
                     const auto updated = AssemblyModel::create(
                         current->model.materials(), current->model.types(),
                         std::move(instances_copy));
-                    if (applyAssemblyModel(updated, QStringLiteral("Add assembly instance"))) {
+                    if (apply_model(updated, QStringLiteral("Add assembly instance"))) {
                         instance_id->clear();
                         populate();
                         status->setText(QStringLiteral("Instance added through document history."));
@@ -13215,7 +13654,7 @@ public:
                     const auto updated = AssemblyModel::create(
                         current->model.materials(), current->model.types(),
                         std::move(instances_copy));
-                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly instance"))) {
+                    if (apply_model(updated, QStringLiteral("Remove assembly instance"))) {
                         populate();
                         status->setText(QStringLiteral("Instance removed through document history."));
                     }
@@ -13249,7 +13688,7 @@ public:
                         [&](const auto& candidate) { return candidate.id == id; });
                     replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale};
                     const auto updated = current->model.with_instance(std::move(replacement));
-                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly placement"))) {
+                    if (apply_model(updated, QStringLiteral("Save assembly placement"))) {
                         populate();
                         data_tabs->setCurrentWidget(override_page);
                         status->setText(QStringLiteral("Assembly placement saved through document history."));
@@ -13270,7 +13709,7 @@ public:
                         [&](const auto& candidate) { return candidate.id == id; });
                     replacement.placement.reset();
                     const auto updated = current->model.with_instance(std::move(replacement));
-                    if (applyAssemblyModel(updated, QStringLiteral("Clear assembly placement"))) {
+                    if (apply_model(updated, QStringLiteral("Clear assembly placement"))) {
                         populate();
                         data_tabs->setCurrentWidget(override_page);
                         status->setText(QStringLiteral("Assembly placement cleared through document history."));
@@ -18085,6 +18524,7 @@ public:
         }
         const auto snapshot = m_document->snapshot();
         QString selection_id = entity_id;
+        const auto assembly_catalog = assembly_root_catalog_for_child(snapshot, entity_id.toStdString());
         bool annotation_child = false;
         std::string annotation_layer;
         if (!has_entity(*m_document, selection_id)) {
@@ -18118,7 +18558,7 @@ public:
                 selection_id = id_from(*host);
             }
         }
-        if (!has_entity(*m_document, selection_id) && !annotation_child) {
+        if (!has_entity(*m_document, selection_id) && !annotation_child && !assembly_catalog) {
             setError(QStringLiteral("No entity named %1 exists in this document.").arg(entity_id));
             return false;
         }
@@ -18132,6 +18572,12 @@ public:
         m_selected_ids.push_back(selection_id);
         m_selected_id = selection_id;
         const auto organization = organize_project(snapshot);
+        if (assembly_catalog) {
+            if (const auto context = organization.drawing_context(*assembly_catalog))
+                m_active_layer_id = id_from(context->layer_id);
+            refresh();
+            return true;
+        }
         if (annotation_child) {
             if (!annotation_layer.empty() && organization.drawing_context(annotation_layer))
                 m_active_layer_id = id_from(annotation_layer);
@@ -18178,6 +18624,20 @@ public:
             const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
             model_delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
         }
+
+        auto embedded_source = source;
+        std::map<std::string, Entity, std::less<>> changed_catalogs;
+        for (const auto& id : ids) {
+            if (!geometric_assembly_for_child(embedded_source, id.toStdString())) continue;
+            auto [command, target] = embeddedAssemblyTransformCommand(embedded_source, id.toStdString(),
+                {model_delta.x, model_delta.y, 0, 0, 1}, false);
+            (void)target;
+            embedded_source = Document::preview_command(embedded_source, command);
+            for (const auto& change : std::get<ApplyEntityChanges>(command).entity_changes)
+                changed_catalogs.insert_or_assign(change.entity.id, change.entity);
+            model_ids.removeAll(id);
+        }
+        for (auto& [id, catalog] : changed_catalogs) { (void)id; presentation_changes.push_back(EntityChange::upsert(std::move(catalog))); }
 
         for (const auto& [owner_id, annotation_owner] : source.entities()) {
             if (annotation_owner.type != kAnnotationEntityType) continue;
@@ -19169,6 +19629,45 @@ public:
     std::optional<std::vector<CanvasEntity>> previewEntityTransformFromCanvas(
         PlanCanvas* canvas,const QString& id,double scale,double radians,Vec2 canvas_pivot,std::uint64_t serial) {
         if (!canvas || !m_entity_transform_source) return std::nullopt;
+        if (geometric_assembly_for_child(*m_entity_transform_source, id.toStdString())) {
+            m_entity_transform_ready = false; m_entity_transform_command.reset();
+            try {
+                if (!m_document->is_editable() || !entityTransformContextUnchanged() ||
+                    m_entity_transform_canvas != canvas || m_entity_transform_id != id ||
+                    !std::isfinite(scale) || scale <= 0 || !std::isfinite(radians))
+                    throw std::invalid_argument("The assembly transform source or view changed.");
+                auto pivot = canvas_pivot;
+                const auto frame = canvasTransformPlanFrame(*m_entity_transform_source);
+                if (frame) { pivot = unproject_plan_point(pivot, *frame); radians *= -frame->direction.z; }
+                const auto c = std::cos(radians), s = std::sin(radians);
+                auto [command, target] = embeddedAssemblyTransformCommand(*m_entity_transform_source, id.toStdString(),
+                    {pivot.x-scale*(c*pivot.x-s*pivot.y), pivot.y-scale*(s*pivot.x+c*pivot.y), 0, radians, scale}, false);
+                (void)target;
+                const auto candidate = Document::preview_command(*m_entity_transform_source, command);
+                SnapshotPlanSceneOptions options; options.visibility = m_view_filter; options.selected_id = id;
+                options.active_context = organize_project(candidate).drawing_context(m_active_layer_id.toStdString());
+                options.label_font = canvas->font(); options.label_device = canvas;
+                PlanSceneCaches caches;
+                auto scene = projectSnapshotPlanScene(candidate, options, caches);
+                if (!scene.diagnostics.isEmpty()) throw std::invalid_argument(scene.diagnostics.toStdString());
+                std::vector<CanvasEntity> result;
+                for (auto entity : scene.geometry) if (entity.id == id) {
+                    if (frame) {
+                        entity.segments = project_plan_path(std::move(entity.segments), *frame);
+                        for (auto& hole : entity.holes) hole = project_plan_path(std::move(hole), *frame);
+                    }
+                    result.push_back(std::move(entity));
+                }
+                m_entity_transform_command = std::move(command); m_entity_transform_serial = serial;
+                m_entity_transform_scale = scale;
+                m_entity_transform_radians = frame ? radians * -frame->direction.z : radians;
+                m_entity_transform_ready = true;
+                return result;
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Transform: %1").arg(QString::fromUtf8(error.what())));
+                return std::vector<CanvasEntity>{};
+            }
+        }
         const auto found=m_entity_transform_source->entities().find(id.toStdString());
         if (found==m_entity_transform_source->entities().end() ||
             (!is_closed_boundary_entity(found->second.type) && found->second.type!="measurement_linework") ||
@@ -19220,6 +19719,36 @@ public:
         PlanCanvas* canvas, const QStringList& ids, Vec2 delta, std::uint64_t serial) {
         if (!canvas || ids.isEmpty() || !m_document->is_editable() || m_boundary_session ||
             m_pending_wall_start || !m_pending_symbol_id.isEmpty()) return std::nullopt;
+        if (m_wall_move_source && std::all_of(ids.begin(), ids.end(), [&](const auto& id) {
+            return geometric_assembly_for_child(*m_wall_move_source, id.toStdString()).has_value();
+        })) {
+            try {
+                if (m_wall_move_document != m_document || m_wall_move_canvas != canvas ||
+                    document_snapshot_digest(*m_wall_move_source) != document_snapshot_digest(authoringSnapshot()))
+                    throw std::invalid_argument("The assembly drag source changed.");
+                auto parts = prepareSelectionTranslation(*m_wall_move_source, ids, delta, canvas);
+                const Command command = ApplyEntityChanges{m_wall_move_source->revision(), std::move(parts.presentation_changes), {}, "Preview embedded assembly move"};
+                const auto candidate = Document::preview_command(*m_wall_move_source, command);
+                SnapshotPlanSceneOptions options; options.visibility = m_view_filter;
+                options.label_font = canvas->font(); options.label_device = canvas;
+                options.active_context = organize_project(candidate).drawing_context(m_active_layer_id.toStdString());
+                PlanSceneCaches caches; auto scene = projectSnapshotPlanScene(candidate, options, caches);
+                if (!scene.diagnostics.isEmpty()) throw std::invalid_argument(scene.diagnostics.toStdString());
+                const auto frame = canvasTransformPlanFrame(candidate);
+                std::vector<CanvasEntity> result;
+                for (auto entity : scene.geometry) if (ids.contains(entity.id)) {
+                    entity.selected = true;
+                    if (frame) {
+                        entity.segments = project_plan_path(std::move(entity.segments), *frame);
+                        for (auto& hole : entity.holes) hole = project_plan_path(std::move(hole), *frame);
+                    }
+                    result.push_back(std::move(entity));
+                }
+                return result;
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Move: %1").arg(QString::fromUtf8(error.what()))); return std::vector<CanvasEntity>{};
+            }
+        }
         if (m_wall_move_document!=m_document || m_wall_move_canvas!=canvas || !m_wall_move_source ||
             m_wall_move_source->revision()!=m_document->revision()) return std::vector<CanvasEntity>{};
         if (!m_vertex_preview_source || m_vertex_preview_document!=m_document ||
@@ -19650,6 +20179,16 @@ public:
 
             const auto source = authoringSnapshot();
             const auto wanted = requested_id.toStdString();
+            if (geometric_assembly_for_child(source, wanted)) {
+                const auto* active_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+                if (!entityTransformContextUnchanged() || m_entity_transform_canvas != active_canvas ||
+                    m_entity_transform_id != requested_id || !m_entity_transform_ready || !m_entity_transform_command ||
+                    active_canvas->entityTransformPreviewSerial() != m_entity_transform_serial ||
+                    relative_scale != m_entity_transform_scale || rotation_radians != m_entity_transform_radians ||
+                    m_entity_transform_source->entities() != source.entities())
+                    throw std::invalid_argument("The exact assembly transform preview changed. Try the transform again.");
+                applyAuthoredCommand(*m_entity_transform_command); clearError(); refresh(); return true;
+            }
             const auto model=source.entities().find(wanted);
             if (model!=source.entities().end() && (is_closed_boundary_entity(model->second.type) || model->second.type=="measurement_linework") &&
                 std::abs(relative_scale-1.0)<=1e-9) {
@@ -19862,12 +20401,13 @@ public:
     }
 
     std::vector<Entity> clipboardSelectionGraph(const DocumentSnapshot& snapshot,
-                                                bool allow_dimension_removal = false) const {
+        bool allow_dimension_removal = false, const QStringList* explicit_ids = nullptr) const {
+        const auto& selection = explicit_ids ? *explicit_ids : m_selected_ids;
         std::vector<Entity> result;
         std::set<std::string> ids;
         std::set<std::string, std::less<>> selected_ids;
-        for (const auto& id : m_selected_ids) selected_ids.insert(id.toStdString());
-        for (const auto& id : m_selected_ids) {
+        for (const auto& id : selection) selected_ids.insert(id.toStdString());
+        for (const auto& id : selection) {
             const auto root = snapshot.entities().find(id.toStdString());
             const bool dimension_root = allow_dimension_removal && root != snapshot.entities().end() &&
                 can_recognize_boundary_dimension_entity_type(root->second.type);
@@ -19920,33 +20460,84 @@ public:
         return changes;
     }
 
-    std::string clipboardSelectionPayload(const DocumentSnapshot& snapshot) const {
-        auto entities = independentAreaCopyGraph(snapshot,clipboardSelectionGraph(snapshot));
+    std::string clipboardSelectionPayload(const DocumentSnapshot& source_snapshot) const {
+        auto snapshot = source_snapshot;
+        auto copied_ids = m_selected_ids;
+        std::map<std::string, Entity, std::less<>> catalogs;
+        std::vector<EntityChange> detached_changes;
+        std::map<std::string, std::string, std::less<>> copied_children;
+        for (auto& id : copied_ids) {
+            const auto binding = geometric_assembly_for_child(source_snapshot, id.toStdString());
+            if (!binding) continue;
+            auto instance = binding->instance;
+            const auto original_child = id.toStdString();
+            instance.root_transform = embedded_assembly_transform(instance); instance.placement.reset();
+            do { instance.id = new_id("assembly"); } while (source_snapshot.entities().contains(instance.id));
+            const auto& source_catalog = source_snapshot.entities().at(binding->assembly_catalog_id);
+            Entity external{instance.id, "assembly_instance", json::object()};
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                if (source_catalog.properties.contains(key)) external.properties[key] = source_catalog.properties.at(key);
+            external = encode_document_assembly_instance(external, {binding->assembly_catalog_id, instance});
+            detached_changes.push_back(EntityChange::upsert(std::move(external)));
+            auto catalog = catalogs.contains(binding->assembly_catalog_id) ? catalogs.at(binding->assembly_catalog_id) : source_catalog;
+            const auto model = AssemblyModel::from_json(catalog.properties.at("model")); auto instances = model.instances();
+            std::erase_if(instances, [&](const auto& value) { return value.id == binding->instance.id; });
+            catalog.properties["model"] = AssemblyModel::create(model.materials(), model.types(), std::move(instances)).to_json();
+            catalogs.insert_or_assign(catalog.id, std::move(catalog));
+            copied_children.emplace(original_child, instance.id); id = id_from(instance.id);
+        }
+        for (auto& [id, catalog] : catalogs) { (void)id; detached_changes.push_back(EntityChange::upsert(std::move(catalog))); }
+        if (!copied_children.empty()) for (const auto& [id, entity] : source_snapshot.entities()) {
+            (void)id; if (entity.type != kAnnotationEntityType) continue;
+            auto annotation = entity;
+            for (auto& record : annotation.properties.at("state").at("overrides")) {
+                const auto found = copied_children.find(record.at("target_id").get<std::string>());
+                if (found != copied_children.end()) record["target_id"] = found->second;
+            }
+            if (annotation != entity) { validate_annotation_entity(annotation); detached_changes.push_back(EntityChange::upsert(std::move(annotation))); }
+        }
+        if (!detached_changes.empty()) snapshot = Document::preview_command(source_snapshot,
+            ApplyEntityChanges{source_snapshot.revision(), std::move(detached_changes), {}, "Prepare detached embedded assembly clipboard"});
+        auto entities = independentAreaCopyGraph(snapshot,clipboardSelectionGraph(snapshot, false, &copied_ids));
         if (entities.empty()) {
             throw std::invalid_argument(
                 "Select supported geometry, an area, an architectural object, or annotations.");
         }
         std::map<std::string, std::set<std::string>> material_dependencies;
+        std::vector<std::string> independent_roots;
         for(const auto& entity : entities) {
+            if (entity.type == "assembly_instance") independent_roots.push_back(entity.id);
             if(!entity.properties.contains("material_assignment")) continue;
             const auto& assignment = entity.properties.at("material_assignment");
             material_dependencies[assignment.at("catalog_id").get<std::string>()].insert(
                 assignment.at("material_id").get<std::string>());
         }
+        auto assembly_dependencies = assembly_clipboard_dependencies(snapshot, independent_roots);
         for(const auto& [catalog_id, material_ids] : material_dependencies) {
             const auto catalog = AssemblyModel::from_json(snapshot.entities().at(catalog_id).properties.at("model"));
             std::vector<AssemblyMaterial> used;
+            std::vector<AssemblyType> used_types;
+            if (const auto dependency = assembly_dependencies.find(catalog_id); dependency != assembly_dependencies.end()) {
+                const auto model = AssemblyModel::from_json(dependency->second.properties.at("model"));
+                used = model.materials();
+                used_types = model.types();
+            }
             for(const auto& material : catalog.materials())
-                if(material_ids.contains(material.id)) used.push_back(material);
-            entities.push_back(Entity{catalog_id,"assembly_model",{{"version",1},
-                {"model",AssemblyModel::create(std::move(used),{},{}).to_json()}},false,json::object()});
+                if(material_ids.contains(material.id) && std::none_of(used.begin(),used.end(),
+                    [&](const auto& value) { return value.id == material.id; })) used.push_back(material);
+            assembly_dependencies.insert_or_assign(catalog_id, Entity{catalog_id,"assembly_model",{{"version",1},
+                {"model",AssemblyModel::create(std::move(used),std::move(used_types),{}).to_json()}},false,json::object()});
+        }
+        for (auto& [id,catalog] : assembly_dependencies) {
+            (void)id;
+            entities.push_back(std::move(catalog));
         }
         if(entities.size()>kMaximumClipboardEntities)
             throw std::invalid_argument("Clipboard material dependencies exceed the entity limit.");
         json payload{{"format", std::string(kClipboardFormat)}, {"version", 1}, {"root_id",entities.front().id},
                      {"root_ids", json::array()}, {"entities", json::array()}};
         std::set<std::string> roots;
-        for (const auto& id : m_selected_ids) {
+        for (const auto& id : copied_ids) {
             const auto graph = clipboard_entities_for_selection(snapshot, id.toStdString());
             if (roots.insert(graph.front().id).second) payload["root_ids"].push_back(graph.front().id);
         }
@@ -21115,6 +21706,14 @@ public:
         try {
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (std::any_of(m_selected_ids.begin(), m_selected_ids.end(), [&](const auto& id) {
+                return geometric_assembly_for_child(source, id.toStdString()).has_value();
+            })) {
+                if (!copySelection()) return false;
+                if (document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot()))
+                    throw std::invalid_argument("The selection source changed before Cut. The project was not changed.");
+                return deleteSelection();
+            }
             const auto entities = clipboardSelectionGraph(source);
             if (entities.empty()) {
                 throw std::invalid_argument(
@@ -21168,6 +21767,9 @@ public:
                 } else if (entity.type=="wall") {
                     if (!wall_plans.contains(id)) throw std::invalid_argument("A measured-copy wall has no usable plan footprint.");
                     geometry=wall_plans.at(id).footprint;
+                } else if (entity.type == "assembly_instance") {
+                    AssemblyExpansionBudget budget;
+                    geometry = project_assembly_plan(expand_document_assembly_instance(entity,authority.entities(),budget));
                 } else if (can_recognize_building_entity_type(entity.type))
                     geometry=project_building_plan(decode_building_entity(
                         effective_building_geometry_entity(authority, entity)), authority.entities());
@@ -21213,8 +21815,7 @@ public:
                 physical_operations.push_back(std::move(operation));
             } else if (entity.type!="measurement_linework" && entity.type!="dimension" &&
                        entity.type!="constraint" && entity.type!=kAnnotationEntityType && entity.type!="opening" &&
-                       !(entity.type=="assembly_model" && entity.properties.at("model").at("types").empty() &&
-                         entity.properties.at("model").at("instances").empty())) {
+                       entity.type!="assembly_model") {
                 throw std::invalid_argument("The measured clipboard graph contains geometry that cannot be placed together: "+entity.type+". Nothing was pasted.");
             }
         }
@@ -21472,7 +22073,7 @@ public:
                     entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
                     entity.type == "wall" || entity.type == "room" || entity.type == "slab" ||
                     entity.type == "roof" || entity.type == "stair" || entity.type == "railing" || entity.type == "column" ||
-                    entity.type == "beam";
+                    entity.type == "beam" || entity.type == "assembly_instance";
                 if (placeable) {
                     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
                         entity.properties.erase(key);
@@ -21541,6 +22142,46 @@ public:
         try {
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            std::map<std::string, Entity, std::less<>> embedded_catalogs;
+            QStringList ordinary_ids;
+            std::set<std::string, std::less<>> removed_children;
+            for (const auto& id : m_selected_ids) {
+                const auto binding = geometric_assembly_for_child(source, id.toStdString());
+                if (!binding) { ordinary_ids.push_back(id); continue; }
+                auto catalog = embedded_catalogs.contains(binding->assembly_catalog_id)
+                    ? embedded_catalogs.at(binding->assembly_catalog_id) : source.entities().at(binding->assembly_catalog_id);
+                const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
+                auto instances = model.instances();
+                std::erase_if(instances, [&](const auto& value) { return value.id == binding->instance.id; });
+                catalog.properties["model"] = AssemblyModel::create(model.materials(), model.types(), std::move(instances)).to_json();
+                embedded_catalogs.insert_or_assign(catalog.id, std::move(catalog)); removed_children.insert(id.toStdString());
+            }
+            if (!embedded_catalogs.empty()) {
+                auto ordinary_graph = clipboardSelectionGraph(source, true, &ordinary_ids);
+                auto changes = selectionRemovalChanges(source, ordinary_graph);
+                for (auto& [id, catalog] : embedded_catalogs) { (void)id; changes.push_back(EntityChange::upsert(std::move(catalog))); }
+                for (const auto& [id, annotation] : source.entities()) {
+                    (void)id; if (annotation.type != kAnnotationEntityType) continue;
+                    const auto existing = std::find_if(changes.begin(), changes.end(), [&](const auto& change) {
+                        return (change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id) == annotation.id;
+                    });
+                    if (existing != changes.end() && existing->kind != EntityChangeKind::upsert) continue;
+                    auto candidate = existing == changes.end() ? annotation : existing->entity;
+                    const auto before = candidate;
+                    auto& records = candidate.properties.at("state").at("overrides");
+                    records.erase(std::remove_if(records.begin(), records.end(), [&](const auto& record) {
+                        return removed_children.contains(record.at("target_id").template get<std::string>());
+                    }), records.end());
+                    if (candidate != before) {
+                        validate_annotation_entity(candidate);
+                        if (existing == changes.end()) changes.push_back(EntityChange::upsert(std::move(candidate)));
+                        else *existing = EntityChange::upsert(std::move(candidate));
+                    }
+                }
+                const Command command = ApplyEntityChanges{source.revision(), std::move(changes), {}, "Delete selected embedded assemblies"};
+                const auto candidate = Document::preview_command(source, command); validate_document_assembly_instances(candidate.entities());
+                applyAuthoredCommand(command); m_selected_id.clear(); m_selected_ids.clear(); clearError(); refresh(); return true;
+            }
             const auto entities = clipboardSelectionGraph(source, true);
             if (entities.empty()) {
                 throw std::invalid_argument(
@@ -25407,9 +26048,14 @@ public:
                                             .arg(reason));
             return false;
         }
-        QTemporaryDir staging;
+        // Stage beside the chosen output, where this caller has explicitly
+        // requested write access. The process-wide Windows temporary directory
+        // can be unavailable to a restricted/offline launch even when the
+        // destination itself is writable. Publication remains QSaveFile atomic.
+        QTemporaryDir staging(QFileInfo(path).absoluteDir().filePath(
+            QStringLiteral(".vertex-3d-export-XXXXXX")));
         if (!staging.isValid()) {
-            setError(QStringLiteral("3D export could not stage its image."));
+            setError(QStringLiteral("3D export could not stage its image: %1").arg(staging.errorString()));
             return false;
         }
         const auto staged_path = staging.filePath(QFileInfo(path).fileName());
@@ -32333,8 +32979,12 @@ private:
                 [this](QString id) { selectEntity(id); });
             m_nativeModelView->setEntityEditRequestedCallback([this](QString id) {
                 if (!selectEntity(id, false)) return;
+                if (editEmbeddedAssemblyFromDialog()) return;
                 const auto selected = selectedEntity();
                 if (selected && selected->type == "room") editRoomVolumeFromDialog();
+                else if (selected && selected->type == "assembly_instance")
+                    editIndependentAssembly(selected->id);
+                else if (selected && selected->type == "roof_join") showRoofJoinProperties();
                 else positionContextEditor();
             });
             m_nativeModelView->setEntityTranslationRequestedCallback(
@@ -32367,18 +33017,18 @@ private:
                                                                 QPoint global_position) {
                 QMenu menu(owner);
                 const bool has_target = !hit_id.isEmpty() && selectEntity(hit_id, false) &&
-                                        selectedEntity().has_value();
+                                        (selectedEntity().has_value() || geometric_assembly_for_child(authoringSnapshot(), hit_id.toStdString()).has_value());
                 if (has_target) {
                     auto* properties = menu.addAction(QStringLiteral("Properties"));
                     QObject::connect(properties, &QAction::triggered, owner,
-                                     [this] { positionContextEditor(); });
-                    if (supportsObjectAppearance(selectedEntity()->type)) {
+                                     [this] { if (!editEmbeddedAssemblyFromDialog()) positionContextEditor(); });
+                    if (const auto selected = selectedEntity(); selected && supportsObjectAppearance(selected->type)) {
                         auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
                         appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
                         appearance->setEnabled(m_document->is_editable());
                         QObject::connect(appearance, &QAction::triggered, owner, [this] { showObjectAppearance(); });
                     }
-                    if (selectedEntity()->type == "room") {
+                    if (const auto selected = selectedEntity(); selected && selected->type == "room") {
                         auto* dimensions = menu.addAction(QStringLiteral("Edit room dimensions…"));
                         QObject::connect(dimensions, &QAction::triggered, owner,
                                          [this] { editRoomVolumeFromDialog(); });
@@ -32534,7 +33184,17 @@ private:
                 if (!candidate) throw std::invalid_argument("Select an architectural object.");
                 const auto prior = candidate->properties.value("material_assignment", json{});
                 const auto encoded = m_material_combo->currentData().toString();
-                if (encoded.isEmpty()) candidate->properties.erase("material_assignment");
+                if (candidate->type == "roof_join") {
+                    auto join = parse_roof_join(candidate->properties, candidate->id);
+                    if (encoded.isEmpty()) join.material_assignment.reset();
+                    else {
+                        const auto assignment = json::parse(encoded.toStdString());
+                        join.material_assignment = RoofJoinMaterialAssignment{
+                            assignment.at("catalog_id").get<std::string>(),
+                            assignment.at("material_id").get<std::string>()};
+                    }
+                    candidate->properties = roof_join_json(join);
+                } else if (encoded.isEmpty()) candidate->properties.erase("material_assignment");
                 else candidate->properties["material_assignment"] = json::parse(encoded.toStdString());
                 if (candidate->properties.value("material_assignment", json{}) == prior) { m_material_error->hide(); return; }
                 applyDocumentCommand(ApplyEntityChanges{m_material_context->revision,
@@ -33525,6 +34185,18 @@ private:
             // belongs to it. A target outside the group becomes the sole
             // selection before opening the same editor used by Properties.
             if (!m_selected_ids.contains(id) && !selectEntity(id, false)) return;
+            if (m_selected_ids.size() == 1) {
+                if (editEmbeddedAssemblyFromDialog()) return;
+                const auto selected = selectedEntity();
+                if (selected && selected->type == "assembly_instance") {
+                    editIndependentAssembly(selected->id);
+                    return;
+                }
+                if (selected && selected->type == "roof_join") {
+                    showRoofJoinProperties();
+                    return;
+                }
+            }
             positionContextEditor();
         });
         canvas->setSymbolDropped([this](QString id, double scale, Vec2 point) {
@@ -33549,7 +34221,8 @@ private:
                 if (const auto host = assembly_host_for_child(snapshot, id.toStdString()))
                     id = id_from(*host);
                 if ((snapshot.entities().contains(id.toStdString()) ||
-                     annotation_parent_for_child(snapshot, id.toStdString())) &&
+                     annotation_parent_for_child(snapshot, id.toStdString()) ||
+                     assembly_root_catalog_for_child(snapshot, id.toStdString())) &&
                     !m_selected_ids.contains(id)) m_selected_ids.push_back(id);
             }
             m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
@@ -33869,7 +34542,8 @@ private:
         refreshPincPageControl(snapshot);
         m_selected_ids.removeIf([&](const QString& id) {
             return !snapshot.entities().contains(id.toStdString()) &&
-                !annotation_parent_for_child(snapshot, id.toStdString());
+                !annotation_parent_for_child(snapshot, id.toStdString()) &&
+                !assembly_root_catalog_for_child(snapshot, id.toStdString());
         });
         m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
         m_refreshing = true;
@@ -33904,6 +34578,8 @@ private:
         AssemblyPlacement placement;
         double thickness_metres{};
         std::optional<QColor> fill_color;
+        std::string catalog_id;
+        std::optional<AssemblyExpansion> expansion;
     };
     struct SnapshotPlanScene {
         ProjectOrganization organization;
@@ -34089,6 +34765,15 @@ private:
             }
             result.diagnostics += message;
         };
+        std::map<std::string, AssemblyExpansion, std::less<>> independent_assemblies;
+        bool assembly_document_valid = false;
+        try {
+            AssemblyExpansionBudget budget;
+            independent_assemblies = expand_document_assembly_instances(snapshot.entities(), budget);
+            assembly_document_valid = true;
+        } catch (const std::exception& error) {
+            append_geometry_error(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
+        }
         const auto physical_room_key = entity_map_digest(snapshot.entities());
         if (caches.physical_room_source_key != physical_room_key) {
             caches.physical_rooms = physical_wall_room_checks(snapshot);
@@ -34378,6 +35063,47 @@ private:
                     all_labels.push_back(std::move(projection.label));
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Dimension %1: %2")
+                        .arg(id_from(id), QString::fromUtf8(error.what())));
+                }
+                continue;
+            }
+            if (entity.type == "roof_join") {
+                try {
+                    const auto join = parse_roof_join(entity.properties, id);
+                    auto key = entity.properties.dump();
+                    for (const auto& member : join.roof_ids)
+                        key += '\n' + effective_building_geometry_entity(snapshot,
+                            snapshot.entities().at(member)).properties.dump();
+                    auto cached = caches.projections.find(id);
+                    if (cached == caches.projections.end() || cached->second.first != key)
+                        cached = caches.projections.insert_or_assign(id, std::make_pair(key,
+                            project_shape_view(document_roof_join_shape(snapshot, entity), BuildingViewKind::plan))).first;
+                    all_geometry.push_back(CanvasEntity{id_from(id), QStringLiteral("roof_join"),
+                        cached->second.second, 0.0, id_from(id) == options.selected_id});
+                } catch (const std::exception& error) {
+                    caches.projections.erase(id);
+                    append_geometry_error(QStringLiteral("Joined roof %1: %2")
+                        .arg(id_from(id), QString::fromUtf8(error.what())));
+                }
+                continue;
+            }
+            if (entity.type == "assembly_instance") {
+                try {
+                    const auto& expansion = independent_assemblies.at(id);
+                    const auto& catalog = snapshot.entities().at(
+                        decode_document_assembly_instance(entity).assembly_catalog_id);
+                    const auto key = entity.properties.dump() + '\n' + catalog.properties.dump();
+                    auto cached = caches.projections.find(id);
+                    if (cached == caches.projections.end() || cached->second.first != key) {
+                        auto projection = project_assembly_plan(expansion);
+                        cached = caches.projections.insert_or_assign(id,
+                            std::make_pair(key, std::move(projection))).first;
+                    }
+                    all_geometry.push_back(CanvasEntity{id_from(id), QStringLiteral("assembly_instance"),
+                        cached->second.second, 0.0, id_from(id) == options.selected_id});
+                } catch (const std::exception& error) {
+                    caches.projections.erase(id);
+                    append_geometry_error(QStringLiteral("Assembly %1: %2")
                         .arg(id_from(id), QString::fromUtf8(error.what())));
                 }
                 continue;
@@ -34797,10 +35523,9 @@ private:
         const auto apply_object_appearance = [&](CanvasEntity& entity) {
             applySnapshotObjectAppearance(entity, object_appearance);
         };
-        // Reusable assembly instances are retained inside the catalog model,
-        // but their plan preview is a transformed copy of the declared host
-        // geometry.  This keeps screen, print, and export paths on the same
-        // source geometry while leaving the catalog instance immutable data.
+        // V4 profiles use their typed expansion's world placement. Legacy
+        // declarations without profiles continue to copy their declared host.
+        // The shared document preflight above gates every embedded preview.
         std::map<std::string, CanvasEntity, std::less<>> host_geometry;
         for (const auto& entity : all_geometry) {
             const auto key = entity.id.toStdString();
@@ -34808,12 +35533,60 @@ private:
         }
         std::vector<AssemblyPreview> assembly_previews;
         std::vector<std::pair<std::string, std::string>> assembly_child_hosts;
+        std::map<std::string, std::string, std::less<>> geometric_child_catalogs;
+        AssemblyExpansionBudget embedded_materialization_budget;
         for (const auto& [catalog_id, catalog_entity] : snapshot.entities()) {
+            if (!assembly_document_valid) continue;
             if (catalog_entity.type != "assembly_model" ||
                 !catalog_entity.properties.contains("model")) continue;
             try {
                 const auto model = AssemblyModel::from_json(catalog_entity.properties.at("model"));
                 for (const auto& instance : model.instances()) {
+                    const auto expansion = model.expand(instance, embedded_materialization_budget);
+                    const auto child_id = catalog_id + ":instance:" + instance.id;
+                    if (!expansion.profiles.empty()) {
+                        // Resolve each actual profile's material rather than
+                        // painting the entire compound with a root slot.
+                        for (const auto& source : expansion.profiles) {
+                            AssemblyExpansion profile_expansion;
+                            profile_expansion.profiles.push_back(source);
+                            CanvasEntity preview{id_from(child_id), QStringLiteral("assembly_instance"),
+                                project_assembly_plan(profile_expansion), 0.0,
+                                id_from(child_id) == options.selected_id};
+                            preview.presentation_key = QString::fromStdString(json{
+                                {"part_path", source.part_path}, {"type_id", source.type_id},
+                                {"profile_id", source.profile.id}}.dump());
+                            // Horizontal analytic extrusions retain distinct
+                            // outer/void loops for physical fill and picking.
+                            const AssemblyPlacement xy{ {},
+                                {source.transform.translation_m.x, source.transform.translation_m.y},
+                                source.transform.rotation_radians, source.transform.scale };
+                            preview.hit_segments = preview.segments;
+                            preview.segments = assembly_placement_boundary(source.profile.outer, xy);
+                            for (const auto& hole : source.profile.holes)
+                                preview.holes.push_back(assembly_placement_boundary(hole, xy));
+                            if (source.material_id) {
+                                const auto material = std::find_if(model.materials().begin(), model.materials().end(),
+                                    [&](const auto& candidate) { return candidate.id == *source.material_id; });
+                                if (material != model.materials().end() && material->color_srgb) {
+                                    const QColor color(QString::fromStdString(*material->color_srgb));
+                                    if (color.isValid()) {
+                                        preview.filled = true;
+                                        preview.hatch_pattern = QStringLiteral("solid");
+                                        preview.fill_color = color;
+                                    }
+                                }
+                            }
+                            all_geometry.push_back(std::move(preview));
+                        }
+                        const auto host_id = instance.placement ? instance.placement->host_entity_id : std::string{};
+                        assembly_previews.push_back({child_id, host_id,
+                            instance.placement.value_or(AssemblyPlacement{}), 0.0, std::nullopt,
+                            catalog_id, expansion});
+                        assembly_child_hosts.emplace_back(child_id, host_id.empty() ? catalog_id : host_id);
+                        geometric_child_catalogs.emplace(child_id, catalog_id);
+                        continue;
+                    }
                     if (!instance.placement) continue;
                     const auto host = host_geometry.find(instance.placement->host_entity_id);
                     if (host == host_geometry.end()) {
@@ -34824,7 +35597,6 @@ private:
                     auto segments = assembly_placement_boundary(host->second.segments,
                                                                  *instance.placement);
                     if (segments.empty()) continue;
-                    const auto child_id = catalog_id + ":instance:" + instance.id;
                     std::optional<QColor> fill_color;
                     CanvasEntity preview{id_from(child_id), QStringLiteral("assembly_instance"),
                                          std::move(segments),
@@ -34870,7 +35642,10 @@ private:
                                       .arg(QString::fromUtf8(error.what())));
         }
         for (const auto& [child_id, host_id] : assembly_child_hosts) {
-            if (visible_ids.contains(host_id) && !presentation_hidden_ids.contains(host_id) &&
+            const auto catalog = geometric_child_catalogs.find(child_id);
+            const bool catalog_visible = catalog == geometric_child_catalogs.end() ||
+                (visible_ids.contains(catalog->second) && !presentation_hidden_ids.contains(catalog->second));
+            if (catalog_visible && visible_ids.contains(host_id) && !presentation_hidden_ids.contains(host_id) &&
                 !presentation_hidden_ids.contains(child_id)) visible_ids.insert(child_id);
         }
         for (const auto& [id, layer_id] : annotation_child_layers) {
@@ -34979,7 +35754,22 @@ private:
         std::vector<CanvasEntity> geometry;
         geometry.reserve(all_geometry.size());
         const auto active_snap_context = options.active_context;
+        std::set<std::string, std::less<>> fused_roof_members;
+        std::set<std::string, std::less<>> visible_roof_joins;
+        for (const auto& item : all_geometry) {
+            if (item.type != QStringLiteral("roof_join") ||
+                !visible_ids.contains(item.id.toStdString()) || presentation_hidden_ids.contains(item.id.toStdString())) continue;
+            const auto join = parse_roof_join(snapshot.entities().at(item.id.toStdString()).properties, item.id.toStdString());
+            if (std::all_of(join.roof_ids.begin(), join.roof_ids.end(), [&](const auto& member) {
+                return visible_ids.contains(member) && !presentation_hidden_ids.contains(member);
+            })) {
+                visible_roof_joins.insert(join.id);
+                fused_roof_members.insert(join.roof_ids.begin(),join.roof_ids.end());
+            }
+        }
         for (auto entity : all_geometry) {
+            if ((entity.type == QStringLiteral("roof") && fused_roof_members.contains(entity.id.toStdString())) ||
+                (entity.type == QStringLiteral("roof_join") && !visible_roof_joins.contains(entity.id.toStdString()))) continue;
             apply_object_appearance(entity);
             if (visible_ids.contains(entity.id.toStdString()) &&
                 !presentation_hidden_ids.contains(entity.id.toStdString())) {
@@ -35098,6 +35888,7 @@ private:
         const auto id = drawable_id.toStdString();
         std::set<std::string, std::less<>> result{id};
         if (const auto parent = annotation_parent_for_child(snapshot, id)) result.insert(*parent);
+        if (const auto catalog = assembly_root_catalog_for_child(snapshot, id)) result.insert(*catalog);
         if (const auto host = assembly_host_for_child(snapshot, id)) {
             result.insert(*host);
             if (const auto split = id.find(":instance:"); split != std::string::npos) result.insert(id.substr(0, split));
@@ -35127,7 +35918,7 @@ private:
             for (const auto& edge : edges) { point(stream, edge.start); point(stream, edge.end); stream << edge.sweep_radians; }
         };
         for (const auto& entity : scene.geometry) record(entity.id, [&](QDataStream& stream) {
-            stream << QStringLiteral("geometry") << entity.type << entity.thickness_metres << entity.filled
+            stream << QStringLiteral("geometry") << entity.presentation_key << entity.type << entity.thickness_metres << entity.filled
                 << entity.hatch_pattern << entity.hatch_scale << entity.fill_color << entity.stroke_color
                 << entity.dark_stroke_color << entity.stroke_width_metres << entity.output_stroke_width_mm
                 << entity.dimension_end_ticks << entity.paper_stroke_width_on_screen;
@@ -35363,6 +36154,13 @@ private:
         // architectural presentations from the same snapshot so persisted
         // sheet viewports can render independently of the active workspace.
         std::array<std::vector<CanvasEntity>, 3> view_geometry;
+        AssemblyExpansionBudget independent_budget;
+        std::map<std::string, AssemblyExpansion, std::less<>> independent_assemblies;
+        try {
+            independent_assemblies = expand_document_assembly_instances(snapshot.entities(), independent_budget);
+        } catch (const std::exception& error) {
+            append_geometry_error(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
+        }
         const auto make_assembly_host_shape = [&](const std::string& host_id) -> TopoDS_Shape {
             const auto host = snapshot.entities().find(host_id);
             if (host == snapshot.entities().end()) {
@@ -35375,6 +36173,8 @@ private:
                 ? std::optional<Entity>{effective_building_geometry_entity(snapshot, source)}
                 : std::nullopt;
             const auto& entity = resolved ? *resolved : source;
+            if (entity.type == "assembly_instance")
+                return make_assembly_geometry(independent_assemblies.at(host_id)).shape;
             if (can_recognize_building_entity_type(entity.type)) {
                 return make_building_shape(decode_building_entity(entity), snapshot.entities());
             }
@@ -35476,12 +36276,23 @@ private:
                 // A placed assembly is a transformed copy of its host. Keep
                 // that dependent preview when the view selects the host.
                 for (const auto& assembly : assembly_previews) {
-                    if (referenced.contains(assembly.host_entity_id) &&
+                    if ((referenced.contains(assembly.host_entity_id) ||
+                         (!assembly.catalog_id.empty() && referenced.contains(assembly.catalog_id))) &&
                         !architectural_hidden_ids.contains(assembly.child_id)) {
                         referenced.insert(assembly.child_id);
                     }
                 }
             }
+            std::set<std::string, std::less<>> visible_sources;
+            for (const auto& [id, entity] : snapshot.entities()) {
+                (void)entity;
+                if (!architectural_hidden_ids.contains(id) && (!restricted || referenced.contains(id)))
+                    visible_sources.insert(id);
+            }
+            const auto joined_presentation = derived_join_presentation_entities(snapshot, visible_sources);
+            for (const auto& [id, entity] : snapshot.entities())
+                if ((entity.type == "roof" || entity.type == "roof_join") &&
+                    !joined_presentation.contains(id)) architectural_hidden_ids.insert(id);
             // Conventional plans retain analytical boundaries and annotations;
             // other frames/depth limits use the shape projection below.
             if (analytical_plan_context(kind, view_context)) {
@@ -35623,6 +36434,26 @@ private:
                         result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QStringLiteral("opening"), std::move(*projection), 0.0,
                             id_from(id) == m_selected_id}));
+                        continue;
+                    }
+                    if (entity.type == "roof_join") {
+                        const auto projection = cached_projection(id, [&] {
+                            return document_roof_join_shape(snapshot, entity);
+                        });
+                        if (projection && !projection->empty())
+                            result.push_back(decorate_projection(CanvasEntity{
+                                id_from(id), QStringLiteral("roof_join"), *projection, 0.0,
+                                id_from(id) == m_selected_id}));
+                        continue;
+                    }
+                    if (entity.type == "assembly_instance") {
+                        const auto projection = cached_projection(id, [&] {
+                            return make_assembly_geometry(independent_assemblies.at(id)).shape;
+                        });
+                        if (projection && !projection->empty())
+                            result.push_back(decorate_projection(CanvasEntity{
+                                id_from(id), QStringLiteral("assembly_instance"), *projection, 0.0,
+                                id_from(id) == m_selected_id}));
                         continue;
                     }
                     if (entity.type == "terrain_surface") {
@@ -35772,13 +36603,41 @@ private:
                 }
             }
             for (const auto& assembly : assembly_previews) {
-                if (architectural_hidden_ids.contains(assembly.host_entity_id) ||
+                if ((!assembly.host_entity_id.empty() && architectural_hidden_ids.contains(assembly.host_entity_id)) ||
                     architectural_hidden_ids.contains(assembly.child_id) ||
                     (restricted && !referenced.contains(assembly.host_entity_id) &&
-                     !referenced.contains(assembly.child_id))) {
+                     !referenced.contains(assembly.catalog_id) && !referenced.contains(assembly.child_id))) {
                     continue;
                 }
                 try {
+                    if (assembly.expansion) {
+                        const auto geometry = make_assembly_geometry(*assembly.expansion);
+                        const auto model = AssemblyModel::from_json(snapshot.entities().at(assembly.catalog_id).properties.at("model"));
+                        for (const auto& profile : geometry.solids) {
+                            const auto clipped = clip_to_view(profile.shape);
+                            if (clipped.IsNull()) continue;
+                            auto entity = decorate_projection(CanvasEntity{id_from(assembly.child_id),
+                                QStringLiteral("assembly_instance"), project_shape_view(clipped, kind, frame),
+                                0.0, id_from(assembly.child_id) == m_selected_id});
+                            entity.presentation_key = QString::fromStdString(json{
+                                {"part_path", profile.source.part_path}, {"type_id", profile.source.type_id},
+                                {"profile_id", profile.source.profile.id}}.dump());
+                            if (profile.source.material_id) {
+                                const auto material = std::find_if(model.materials().begin(), model.materials().end(),
+                                    [&](const auto& candidate) { return candidate.id == *profile.source.material_id; });
+                                if (material != model.materials().end() && material->color_srgb) {
+                                    const QColor color(QString::fromStdString(*material->color_srgb));
+                                    if (color.isValid()) {
+                                        entity.filled = true;
+                                        entity.hatch_pattern = QStringLiteral("solid");
+                                        entity.fill_color = color;
+                                    }
+                                }
+                            }
+                            result.push_back(std::move(entity));
+                        }
+                        continue;
+                    }
                     const auto transformed = transform_assembly_shape(
                         make_assembly_host_shape(assembly.host_entity_id), assembly.placement);
                     const auto clipped_shape = clip_to_view(transformed);
@@ -35972,10 +36831,16 @@ private:
             for (auto& canvas_entity : entities) {
                 if (canvas_entity.svg_symbol || canvas_entity.segments.empty()) continue;
                 const auto found = snapshot.entities().find(canvas_entity.id.toStdString());
-                if (found == snapshot.entities().end()) continue;
+                const auto embedded = geometric_assembly_for_child(snapshot, canvas_entity.id.toStdString());
+                if (found == snapshot.entities().end() && !embedded) continue;
                 try {
                     double angle{};
-                    if (can_transform_architectural_entity_type(found->second.type)) {
+                    if (embedded) {
+                        angle = embedded_assembly_transform(embedded->instance).rotation_radians;
+                    } else if (found->second.type == "assembly_instance") {
+                        angle = decode_document_assembly_instance(found->second).instance.root_transform
+                            .value_or(AssemblyTransform{}).rotation_radians;
+                    } else if (can_transform_architectural_entity_type(found->second.type)) {
                         angle = plan_axis_resize_frame(found->second);
                         if (canvas_entity.selected || projection) {
                             const auto key = found->second.properties.dump();
@@ -36008,13 +36873,23 @@ private:
                     } else continue;
                     const auto c = std::cos(angle), s = std::sin(angle);
                     const auto local = [&](Vec2 p) { return Vec2{c*p.x+s*p.y, -s*p.x+c*p.y}; };
-                    auto segments = projection && is_closed_boundary_entity(found->second.type)
+                    auto segments = !embedded && projection && is_closed_boundary_entity(found->second.type)
                         ? boundary_geometry(decode_identified_boundary_entity(found->second))
                         : canvas_entity.segments;
-                    if (projection && found->second.type=="measurement_linework") {
+                    if (!embedded && projection && found->second.type=="measurement_linework") {
                         const auto decoded=decode_measurement_linework_model(found->second.properties.at("model"));
                         segments.clear();
                         for (const auto& edge : replay_measurement_linework(*decoded.model).edges) segments.push_back(edge.segment);
+                    }
+                    if (embedded) {
+                        segments.clear();
+                        const auto model = AssemblyModel::from_json(snapshot.entities().at(embedded->assembly_catalog_id).properties.at("model"));
+                        for (const auto& profile : model.expand(embedded->instance.id).profiles) {
+                            const AssemblyPlacement xy{{}, {profile.transform.translation_m.x,profile.transform.translation_m.y},
+                                profile.transform.rotation_radians,profile.transform.scale};
+                            auto outer = assembly_placement_boundary(profile.profile.outer, xy);
+                            segments.insert(segments.end(), outer.begin(), outer.end());
+                        }
                     }
                     for (auto& segment : segments) {
                         segment.start = local(segment.start);
@@ -37680,8 +38555,11 @@ private:
         m_geometry_actions->setVisible(directly_editable_boundary || curved_wall || curve_boundary || constraint_target);
         m_boundary_geometry_button->setEnabled(directly_editable_boundary && editable);
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
+        const bool independent_assembly = (entity && entity->type == "assembly_instance") ||
+            geometric_assembly_for_child(inspector_snapshot, m_selected_id.toStdString()).has_value();
+        const bool joined_roof = entity && entity->type == "roof_join";
         const bool material_object = wall || opening || slab || building_object ||
-            (entity && (entity->type == "room" || entity->type == "room_boundary"));
+            (entity && (entity->type == "room" || entity->type == "room_boundary" || entity->type == "roof_join"));
         m_material_group->setVisible(material_object);
         m_material_group->setEnabled(material_object && m_document->is_editable());
         m_material_error->hide();
@@ -37716,8 +38594,9 @@ private:
             building_form.has_value() && (*building_form == "gable_roof" || *building_form == "hip_roof");
         const bool editable_geometry = wall || opening || slab ||
             (entity && is_closed_boundary_entity(entity->type));
-        m_edit_object_button->setVisible(building_object);
-        m_edit_object_button->setEnabled(editable && building_object);
+        m_edit_object_button->setVisible(building_object || independent_assembly || joined_roof);
+        m_edit_object_button->setEnabled(editable && (building_object || independent_assembly || joined_roof));
+        m_edit_object_button->setText(joined_roof ? QStringLiteral("Edit roof join…") : QStringLiteral("Edit object…"));
         const bool appearance_object = entity && supportsObjectAppearance(entity->type) && m_selected_ids.size() == 1;
         m_object_appearance_button->setVisible(appearance_object);
         m_object_appearance_button->setEnabled(editable && appearance_object);
@@ -38389,6 +39268,7 @@ private:
         if (m_selected_ids.size() != 1 || !m_document->is_editable()) return {false, false};
         const auto wanted = m_selected_ids.front().toStdString();
         const auto snapshot = m_document->snapshot();
+        if (geometric_assembly_for_child(snapshot, wanted)) return {true, true};
         if (const auto found = snapshot.entities().find(wanted); found != snapshot.entities().end()) {
             if (found->second.type == "reference_asset" ||
                 can_transform_architectural_entity_type(found->second.type)) return {true, true};
@@ -38421,6 +39301,14 @@ private:
 
         const auto id = m_selected_ids.front().toStdString();
         const auto snapshot = m_document->snapshot();
+        if (const auto binding = geometric_assembly_for_child(snapshot, id)) {
+            const auto model = AssemblyModel::from_json(snapshot.entities().at(binding->assembly_catalog_id).properties.at("model"));
+            const auto resolved = model.resolve(binding->instance.id);
+            if (const auto name = resolved.properties.find("name"); name != resolved.properties.end() && !name->second.empty())
+                return QStringLiteral("Selected: %1").arg(QString::fromStdString(name->second));
+            const auto type = std::find_if(model.types().begin(), model.types().end(), [&](const auto& value) { return value.id == binding->instance.type_id; });
+            return QStringLiteral("Selected: %1").arg(QString::fromStdString(type->name));
+        }
         if (const auto found = snapshot.entities().find(id); found != snapshot.entities().end()) {
             if (const auto name = read_string(found->second.properties, "name");
                 name && !name->empty()) {
@@ -41991,7 +42879,95 @@ private:
         }
     }
 
+    void showRoofJoinProperties() {
+        try {
+            const auto source = authoringSnapshot();
+            const auto original = selectedEntity();
+            if (!original || original->type != "roof_join")
+                throw std::invalid_argument("Select a joined roof first.");
+            if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto context = captureModalContext();
+            const auto workspace = m_workspace;
+            const auto prior = parse_roof_join(original->properties, original->id);
+            QDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("roofJoinPropertiesDialog"));
+            dialog.setWindowTitle(QStringLiteral("Joined roofs"));
+            dialog.resize(420, 340);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* instruction = new QLabel(QStringLiteral(
+                "Overlap priority: the first roof owns shared material volume. Source roofs and openings remain editable."), &dialog);
+            instruction->setWordWrap(true);
+            layout->addWidget(instruction);
+            auto* members = new QListWidget(&dialog);
+            members->setObjectName(QStringLiteral("roofJoinMembers"));
+            for (const auto& id : prior.roof_ids) {
+                const auto& roof = source.entities().at(id);
+                const auto name = read_string(roof.properties, "name").value_or(
+                    read_string(roof.properties, "classification").value_or("Roof"));
+                auto* item = new QListWidgetItem(QString::fromStdString(name), members);
+                item->setData(Qt::UserRole, QString::fromStdString(id));
+                item->setToolTip(QString::fromStdString(id));
+            }
+            members->setCurrentRow(0);
+            layout->addWidget(members);
+            auto* controls = new QHBoxLayout;
+            auto* up = new QPushButton(QStringLiteral("Move up"), &dialog);
+            auto* down = new QPushButton(QStringLiteral("Move down"), &dialog);
+            up->setObjectName(QStringLiteral("roofJoinMemberUp"));
+            down->setObjectName(QStringLiteral("roofJoinMemberDown"));
+            controls->addWidget(up); controls->addWidget(down); controls->addStretch();
+            layout->addLayout(controls);
+            const auto move = [members](int offset) {
+                const auto row = members->currentRow();
+                if (row < 0 || row + offset < 0 || row + offset >= members->count()) return;
+                auto* item = members->takeItem(row);
+                members->insertItem(row + offset, item);
+                members->setCurrentRow(row + offset);
+            };
+            QObject::connect(up, &QPushButton::clicked, &dialog, [move] { move(-1); });
+            QObject::connect(down, &QPushButton::clicked, &dialog, [move] { move(1); });
+            auto* error = new QLabel(&dialog); error->setWordWrap(true); error->hide(); layout->addWidget(error);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            layout->addWidget(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+                try {
+                    if (!modalContextUnchanged(context) || !assemblyDraftSourceUnchanged(source, workspace))
+                        throw std::invalid_argument("The joined roof source changed. Reopen the editor.");
+                    auto join = prior;
+                    join.roof_ids.clear();
+                    for (int row=0; row<members->count(); ++row)
+                        join.roof_ids.push_back(members->item(row)->data(Qt::UserRole).toString().toStdString());
+                    if (join == prior) { dialog.accept(); return; }
+                    auto candidate = *original;
+                    candidate.properties = roof_join_json(join);
+                    (void)document_roof_join_shape(source, candidate);
+                    ApplyEntityChanges command{source.revision(), {EntityChange::upsert(candidate)}, {}, "Change roof overlap priority"};
+                    (void)Document::preview_command(source, Command{command});
+                    applyAuthoredCommand(command); clearError(); refresh(); dialog.accept();
+                } catch (const std::exception& exception) {
+                    error->setText(QString::fromUtf8(exception.what())); error->show();
+                }
+            });
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Joined roofs: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showBuildingObjectDialog(bool editing, const QString& requested_type = {}) {
+        if (editing) {
+            if (editEmbeddedAssemblyFromDialog()) return;
+            const auto selected = selectedEntity();
+            if (selected && selected->type == "assembly_instance") {
+                editIndependentAssembly(selected->id);
+                return;
+            }
+            if (selected && selected->type == "roof_join") {
+                showRoofJoinProperties();
+                return;
+            }
+        }
         const auto context = captureModalContext();
         const auto source = m_document->snapshot();
         const auto source_digest = document_snapshot_digest(source);

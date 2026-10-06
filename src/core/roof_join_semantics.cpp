@@ -40,6 +40,10 @@ void validate_roof_join_semantics(const RoofJoin& join) {
             reject("Roof join roof IDs must be unique ASCII identifiers");
         }
     }
+    if (join.material_assignment &&
+        (!valid_reference_id(join.material_assignment->catalog_id) ||
+         !valid_reference_id(join.material_assignment->material_id)))
+        reject("Roof join material IDs must be non-empty bounded ASCII identifiers");
 }
 
 std::string_view roof_join_style_name(RoofJoinStyle style) noexcept {
@@ -58,13 +62,30 @@ std::optional<RoofJoinStyle> parse_roof_join_style(std::string_view value) noexc
 RoofJoin parse_roof_join(const nlohmann::json& value, std::string_view id) {
     RoofJoin result;
     result.id = std::string(id);
-    if (!value.is_object() || value.size() != 3 || !value.contains("version") ||
+    if (!value.is_object() || !value.contains("version") ||
         !value.contains("style") || !value.contains("roof_ids")) {
-        reject("Roof join properties must contain exactly version, style, and roof_ids");
+        reject("Roof join properties must contain version, style, and roof_ids");
     }
     const auto& version = value.at("version");
-    if ((!version.is_number_integer() && !version.is_number_unsigned()) || version != 1) {
-        reject("Roof join version must be 1");
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
+        (version != 1 && version != 2)) {
+        reject("Roof join version must be 1 or 2");
+    }
+    const bool assigned = value.contains("material_assignment");
+    if (value.size() != (assigned ? 4u : 3u) || (version == 1 && assigned))
+        reject("Roof join properties contain unsupported fields for their version");
+    if (assigned) {
+        const auto& assignment = value.at("material_assignment");
+        if (!assignment.is_object() || assignment.size() != 3 ||
+            !assignment.contains("version") ||
+            (!assignment.at("version").is_number_integer() && !assignment.at("version").is_number_unsigned()) ||
+            assignment.at("version") != 1 ||
+            !assignment.contains("catalog_id") || !assignment.contains("material_id") ||
+            !assignment.at("catalog_id").is_string() || !assignment.at("material_id").is_string())
+            reject("Roof join material assignment must contain exactly version 1, catalog_id and material_id");
+        result.material_assignment = RoofJoinMaterialAssignment{
+            assignment.at("catalog_id").get<std::string>(),
+            assignment.at("material_id").get<std::string>()};
     }
     const auto& style = value.at("style");
     if (!style.is_string()) reject("Roof join style must be a string");
@@ -73,6 +94,8 @@ RoofJoin parse_roof_join(const nlohmann::json& value, std::string_view id) {
     result.style = *parsed_style;
     const auto& roof_ids = value.at("roof_ids");
     if (!roof_ids.is_array()) reject("Roof join roof_ids must be an array");
+    if (roof_ids.size() < 2 || roof_ids.size() > 16)
+        reject("Roof joins require between two and sixteen roofs");
     result.roof_ids.reserve(roof_ids.size());
     for (const auto& roof_id : roof_ids) {
         if (!roof_id.is_string()) reject("Roof join roof_ids must contain strings");
@@ -84,8 +107,13 @@ RoofJoin parse_roof_join(const nlohmann::json& value, std::string_view id) {
 
 nlohmann::json roof_join_json(const RoofJoin& join) {
     validate_roof_join_semantics(join);
-    return {{"version", 1}, {"style", roof_join_style_name(join.style)},
-            {"roof_ids", join.roof_ids}};
+    nlohmann::json value{{"version", join.material_assignment ? 2 : 1},
+        {"style", roof_join_style_name(join.style)}, {"roof_ids", join.roof_ids}};
+    if (join.material_assignment) value["material_assignment"] = {
+        {"version", 1},
+        {"catalog_id", join.material_assignment->catalog_id},
+        {"material_id", join.material_assignment->material_id}};
+    return value;
 }
 
 }  // namespace sketch

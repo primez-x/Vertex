@@ -1297,10 +1297,402 @@ void reporting_adu_count_mapping_and_phase_scope() {
     }
 }
 
+void reporting_v2_room_vocabulary() {
+    using namespace sketch;
+    const std::vector<std::pair<AppraisalRoomUse, std::string>> vocabulary{
+        {AppraisalRoomUse::bedroom, "bedroom"}, {AppraisalRoomUse::bathroom_full, "bathroom_full"},
+        {AppraisalRoomUse::bathroom_half, "bathroom_half"}, {AppraisalRoomUse::other, "other"},
+        {AppraisalRoomUse::breakfast_room, "breakfast_room"}, {AppraisalRoomUse::den, "den"},
+        {AppraisalRoomUse::dining_room, "dining_room"}, {AppraisalRoomUse::family_room, "family_room"},
+        {AppraisalRoomUse::kitchen, "kitchen"}, {AppraisalRoomUse::laundry_room, "laundry_room"},
+        {AppraisalRoomUse::living_room, "living_room"}, {AppraisalRoomUse::loft, "loft"},
+        {AppraisalRoomUse::media_room, "media_room"}, {AppraisalRoomUse::mudroom, "mudroom"},
+        {AppraisalRoomUse::recreation_room, "recreation_room"}, {AppraisalRoomUse::sunroom, "sunroom"},
+        {AppraisalRoomUse::utility_room, "utility_room"}, {AppraisalRoomUse::walk_in_pantry, "walk_in_pantry"},
+        {AppraisalRoomUse::workshop, "workshop"}};
+    const auto rejects_area = [](const json& value) {
+        bool rejected = false;
+        try { (void)parse_appraisal_area_reporting_facts(value); } catch (const std::exception&) { rejected = true; }
+        require(rejected, "Invalid room vocabulary or description must be rejected");
+    };
+    AppraisalAreaReportingFacts declaration;
+    declaration.version = 2; declaration.living_unit_id = "home";
+    declaration.source_geometry_sha256 = std::string(64, 'a');
+    for (const auto& [use, token] : vocabulary) {
+        require(appraisal_room_use_name(use) == token, "Every V2 room type exposes its explicit persisted token");
+        declaration.rooms = {{"room", use, true, use == AppraisalRoomUse::other ? "Exercise studio" : ""}};
+        const auto encoded = appraisal_reporting_json(declaration);
+        const auto decoded = parse_appraisal_area_reporting_facts(encoded);
+        require(decoded.rooms.size() == 1 && decoded.rooms[0].use == use &&
+            decoded.rooms[0].other_description == declaration.rooms[0].other_description && appraisal_reporting_json(decoded) == encoded,
+            "All V2 room types and Other descriptions round trip without loss");
+        auto v1 = encoded; v1["version"] = 1; v1.erase("living_unit_id");
+        if (use == AppraisalRoomUse::other || static_cast<unsigned>(use) > static_cast<unsigned>(AppraisalRoomUse::other)) rejects_area(v1);
+        else require(appraisal_reporting_json(parse_appraisal_area_reporting_facts(v1)) == v1,
+            "Original V1 bedroom and bathroom vocabulary remains accepted");
+    }
+    declaration.rooms = {{"room", AppraisalRoomUse::other, true, "Exercise studio"}};
+    auto other = appraisal_reporting_json(declaration);
+    auto invalid = other; invalid["rooms"][0].erase("other_description"); rejects_area(invalid);
+    for (const auto& description : std::vector<json>{"", " \t\n", std::string(1025, 'x'), nullptr, 123}) {
+        invalid = other; invalid["rooms"][0]["other_description"] = description; rejects_area(invalid);
+    }
+    invalid = other; invalid["rooms"][0]["use"] = "kitchen"; rejects_area(invalid);
+    invalid["rooms"][0]["other_description"] = ""; rejects_area(invalid);
+    invalid = other; invalid["rooms"][0]["use"] = "unknown_room"; rejects_area(invalid);
+    auto maximum_description = other; maximum_description["rooms"][0]["other_description"] = std::string(1024, 'x');
+    require(parse_appraisal_area_reporting_facts(maximum_description).rooms[0].other_description.size() == 1024,
+        "V2 Other accepts a nonblank description at the specified byte limit");
+    auto v1_other = other; v1_other["version"] = 1; v1_other.erase("living_unit_id");
+    v1_other["rooms"][0].erase("other_description");
+    require(appraisal_reporting_json(parse_appraisal_area_reporting_facts(v1_other)) == v1_other,
+        "V1 Other retains its original description-free schema");
+
+    auto entities = ansi_fixture_entities();
+    entities.front().properties["appraisal_reporting"] = {{"version", 2}, {"contract", "uad_3_6"},
+        {"room_inventory_complete", true}, {"living_units", json::array({
+            {{"unit_id", "home"}, {"identifier", "Main dwelling"}, {"role", "primary"}}})}};
+    declaration.rooms.clear();
+    for (const auto& [use, token] : vocabulary) declaration.rooms.push_back(
+        {"room-" + token, use, true, use == AppraisalRoomUse::other ? "Exercise studio" : ""});
+    declaration.source_geometry_sha256 = appraisal_reporting_source_digest(Document::create(entities).snapshot(), "area-1");
+    entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+    const auto report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+    require(report.reporting && report.reporting->individual_units_available && report.reporting->living_units.size() == 1,
+        "Complete V2 room vocabulary projects to its declared unit");
+    const auto& home = report.reporting->living_units.front();
+    require(home.room_counts_available && home.counts.bedrooms == 1 && home.counts.bathrooms_full == 1 &&
+        home.counts.bathrooms_half == 1 && home.levels.size() == 1 && home.levels.front().room_types.size() == vocabulary.size(),
+        "Additional room types stay distinct in level detail without inflating bedroom or bathroom counts");
+    for (const auto& [use, token] : vocabulary) require(home.levels.front().room_types.at(use) == 1,
+        "Each declared V2 room type appears separately in its level inventory");
+    const auto other_room = std::find_if(report.reporting->rooms.begin(), report.reporting->rooms.end(),
+        [](const auto& room) { return room.use == AppraisalRoomUse::other; });
+    require(other_room != report.reporting->rooms.end() && other_room->other_description == "Exercise studio",
+        "Projected Other room retains the appraiser's description");
+}
+
+void reporting_v2_ansi_grade_coherence() {
+    using namespace sketch;
+    const auto rebind = [](std::vector<Entity>& entities) {
+        const auto source = Document::create(entities).snapshot();
+        for (auto& item : entities) if (item.type == "measurement_boundary")
+            item.properties["appraisal_reporting"]["source_geometry_sha256"] = appraisal_reporting_source_digest(source, item.id);
+        for (auto& unit : entities.front().properties["appraisal_reporting"]["living_units"])
+            for (auto& level : unit["levels"])
+                level["source_geometry_sha256"] = appraisal_reporting_level_source_digest(source, level.at("floor_id").get<std::string>());
+    };
+    auto entities = ansi_fixture_entities();
+    entities[2].properties["appraisal_facts"].erase("grade");
+    auto below = entities[2]; below.id = "floor-below";
+    below.properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = true;
+    auto layer = entities[3]; layer.id = "layer-below"; layer.properties["floor_id"] = below.id;
+    entities.push_back(below); entities.push_back(layer);
+    entities.front().properties["appraisal_reporting"] = {
+        {"version", 2}, {"contract", "uad_3_6"}, {"room_inventory_complete", true},
+        {"living_units", json::array()}};
+    const auto prototype = entities[4];
+    entities.erase(entities.begin() + 4);
+    unsigned index = 0;
+    for (const auto& [id, role] : std::vector<std::pair<std::string, std::string>>{
+            {"home", "primary"}, {"attached", "attached_adu"}, {"detached", "detached_adu"}}) {
+        json unit{{"unit_id", id}, {"identifier", id}, {"role", role}, {"levels", json::array()}};
+        for (const bool basement : {false, true}) {
+            const auto floor_id = basement ? "floor-below" : "floor-1";
+            json declaration{{"floor_id", floor_id}, {"level_number", 1},
+                {"grade_level_type", basement ? "fully_below_grade" : "above_grade"},
+                {"source_geometry_sha256", std::string(64, '0')}};
+            if (basement) declaration["below_grade_access"] = "interior_only";
+            unit["levels"].push_back(declaration);
+            auto area = prototype; area.id = id + (basement ? "-below" : "-above");
+            area.properties["floor_id"] = floor_id;
+            area.properties["layer_id"] = basement ? "layer-below" : "layer-1";
+            area.properties["boundary"] = square(10.0 * index++, 0, 3.048);
+            area.properties["appraisal_facts"]["ansi"]["dwelling_identity"] = role;
+            AppraisalAreaReportingFacts observations;
+            observations.version = 2; observations.living_unit_id = id;
+            observations.source_geometry_sha256 = std::string(64, '0');
+            observations.rooms = {{"bed-" + area.id, AppraisalRoomUse::bedroom, true},
+                {"half-" + area.id, AppraisalRoomUse::bathroom_half, false}};
+            area.properties["appraisal_reporting"] = appraisal_reporting_json(observations);
+            entities.push_back(std::move(area));
+        }
+        entities.front().properties["appraisal_reporting"]["living_units"].push_back(unit);
+    }
+    rebind(entities);
+    for (const bool explicit_unknown : {false, true}) {
+        auto values = entities;
+        if (explicit_unknown) for (auto& item : values) if (item.type == "floor")
+            item.properties["appraisal_facts"]["grade"] = "unknown";
+        rebind(values);
+        auto document = Document::create(values);
+        const auto source = document.snapshot();
+        const auto report = build_appraisal_document_report(source, "property-1");
+        require(report.qualified && report.reporting && report.reporting->individual_units_available,
+            "ANSI-only grades expose independently assigned primary and ADU fields without a legacy grade");
+        for (const auto& unit : report.reporting->living_units) {
+            require(unit.area_fields_available && unit.room_counts_available && unit.counts.bedrooms == 2 &&
+                unit.counts.bathrooms_half == 2 && unit.levels.size() == 2,
+                "Each ANSI-only living unit retains its own all-grade counts");
+            for (const auto& level : unit.levels) {
+                const bool basement = level.floor_id == "floor-below";
+                require(level.grade == (basement ? GradeStatus::below : GradeStatus::above) &&
+                    level.form_fields_available && level.counts.bedrooms == 1 && level.counts.bathrooms_half == 1,
+                    "Effective ANSI grade agrees with current level declarations and level room counts");
+                near(level.area_fields.at(basement ? AppraisalAreaCategory::below_grade_finished :
+                    AppraisalAreaCategory::above_grade_finished), 9.290304, 1e-8,
+                    "Each living-unit level retains only its own measured area in the effective grade category");
+            }
+        }
+        require(document_snapshot_digest(document.snapshot()) == document_snapshot_digest(source),
+            "Effective grade projection never rewrites stored floor observations");
+        AppraisalReportingChanges changes{source.revision(), source.document_id(), document_snapshot_digest(source), "property-1",
+            parse_appraisal_reporting_settings(values.front().properties.at("appraisal_reporting")), {}};
+        validate_appraisal_reporting_changes(source, changes);
+        for (std::size_t unit = 0; unit < changes.settings.living_units.size(); ++unit) for (std::size_t level = 0; level < 2; ++level) {
+            auto contradiction = changes;
+            auto& declaration = contradiction.settings.living_units[unit].levels[level];
+            declaration.level_number = 2;
+            declaration.grade_level_type = level == 0 ? "fully_below_grade" : "above_grade";
+            declaration.below_grade_access = level == 0 ? std::optional<std::string>{"interior_only"} : std::nullopt;
+            contradiction.settings.living_units[unit].identifier += " changed";
+            auto area = parse_appraisal_area_reporting_facts(source.entities().at("home-above").properties.at("appraisal_reporting"));
+            area.rooms.front().use = AppraisalRoomUse::den;
+            contradiction.areas = {{"home-above", area}};
+            bool rejected = false;
+            try { validate_appraisal_reporting_changes(source, contradiction); }
+            catch (const std::invalid_argument& error) {
+                rejected = std::string_view(error.what()) == "Unit level grade contradicts recorded measurement grade";
+            }
+            require(rejected && document_snapshot_digest(document.snapshot()) == document_snapshot_digest(source) && !document.can_undo(),
+                "Contradictory ANSI-only primary or ADU level rejects the complete reporting proposal before any mutation");
+        }
+        changes.settings.living_units.front().identifier = "Reviewed home";
+        validate_appraisal_reporting_changes(source, changes);
+        auto property = source.entities().at("property-1");
+        property.properties["appraisal_reporting"] = appraisal_reporting_json(changes.settings);
+        document.apply(ApplyEntityChanges{source.revision(), {EntityChange::upsert(property)}, {}, "Review ANSI unit levels"});
+        require(document.snapshot().entities().at("property-1") == property, "Accepted level review uses one document command");
+        document.undo(document.revision());
+        require(document.snapshot().entities() == source.entities(), "One Undo restores the exact ANSI-only observations and registry");
+        document.redo(document.revision());
+        document.mark_saved(document.revision());
+        auto restored = Document::fork(document.snapshot());
+        const auto restored_report = build_appraisal_document_report(restored.snapshot(), "property-1");
+        require(restored.snapshot().entities() == document.snapshot().entities() && restored_report.reporting->individual_units_available &&
+            restored_report.reporting->living_units.front().levels.front().form_fields_available,
+            "Redo and a saved snapshot fork preserve current ANSI-only level bindings");
+    }
+    for (const auto floor_id : {"floor-1", "floor-below"}) {
+        auto changed = entities;
+        for (auto& item : changed) if (item.id == floor_id)
+            item.properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = std::string_view(floor_id) != "floor-below";
+        const auto changed_source = Document::create(changed).snapshot();
+        const auto original_source = Document::create(entities).snapshot();
+        require(appraisal_reporting_level_source_digest(changed_source, floor_id) != appraisal_reporting_level_source_digest(original_source, floor_id),
+            "Changing the effective ANSI grade invalidates the existing level observation binding");
+        const auto stale = build_appraisal_document_report(changed_source, "property-1");
+        require(stale.qualified && stale.reporting && !stale.reporting->individual_units_available,
+            "Changed ANSI grade with old room and level bindings withholds individual reporting");
+    }
+    for (const bool retain_generic : {false, true}) {
+        auto missing = entities;
+        for (auto& item : missing) if (item.type == "floor") {
+            item.properties["appraisal_facts"]["ansi"].erase("any_part_below_grade");
+            if (retain_generic) item.properties["appraisal_facts"]["grade"] = item.id == "floor-below" ? "below" : "above";
+        }
+        rebind(missing);
+        const auto report = build_appraisal_document_report(Document::create(missing).snapshot(), "property-1");
+        require(!report.qualified && report.reporting && !report.reporting->individual_units_available,
+            "Missing ANSI grade observation withholds unit reporting even with a generic grade");
+        for (const auto& unit : report.reporting->living_units) for (const auto& level : unit.levels)
+            require(level.grade == GradeStatus::unknown && !level.form_fields_available,
+                "An unobserved ANSI grade cannot fall back to a legacy grade or expose confirmed level fields");
+    }
+    auto legacy = entities;
+    legacy.front().properties["appraisal_policy"]["policy_kind"] = "residential_declared";
+    for (auto& item : legacy) {
+        if (item.type == "floor") {
+            item.properties["appraisal_facts"]["grade"] = item.id == "floor-below" ? "below" : "above";
+            item.properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = item.id != "floor-below";
+        }
+        if (item.type == "measurement_boundary") item.properties["appraisal_facts"]["ceiling_eligibility"] = "standard";
+    }
+    rebind(legacy);
+    const auto legacy_source = Document::create(legacy).snapshot();
+    const auto legacy_report = build_appraisal_document_report(legacy_source, "property-1");
+    require(legacy_report.qualified && legacy_report.reporting, "Declared policy retains generic grade semantics with inert ANSI facts");
+    for (const auto& unit : legacy_report.reporting->living_units) for (const auto& level : unit.levels)
+        require(level.grade == (level.floor_id == "floor-below" ? GradeStatus::below : GradeStatus::above),
+            "Non-ANSI levels follow generic grade rather than retained ANSI observations");
+    validate_appraisal_reporting_changes(legacy_source, AppraisalReportingChanges{legacy_source.revision(), legacy_source.document_id(),
+        document_snapshot_digest(legacy_source), "property-1", parse_appraisal_reporting_settings(legacy.front().properties.at("appraisal_reporting")), {}});
+}
+
+void reporting_living_unit_v2_contracts() {
+    using namespace sketch;
+    const json settings = {{"version", 2}, {"contract", "uad_3_6"}, {"room_inventory_complete", true},
+        {"living_units", json::array({
+            {{"unit_id", "home"}, {"identifier", "Main dwelling"}, {"role", "primary"}},
+            {{"unit_id", "east"}, {"identifier", "East apartment"}, {"role", "attached_adu"}},
+            {{"unit_id", "garden"}, {"identifier", "Garden cottage"}, {"role", "detached_adu"}}})}};
+    require(appraisal_reporting_json(parse_appraisal_reporting_settings(settings)) == settings,
+        "V2 registry must round trip two distinct named ADUs without combining their identities");
+    const auto rejects_settings = [](const json& value) {
+        bool rejected = false;
+        try { (void)parse_appraisal_reporting_settings(value); } catch (const std::exception&) { rejected = true; }
+        require(rejected, "Invalid V2 unit registry must be rejected");
+    };
+    for (const auto field : {"unit_id", "identifier"}) {
+        auto bad = settings; bad["living_units"][1][field] = bad["living_units"][0][field]; rejects_settings(bad);
+        bad = settings; bad["living_units"][1][field] = "  \t"; rejects_settings(bad);
+        bad = settings; bad["living_units"][1][field] = std::string(257, 'x'); rejects_settings(bad);
+    }
+    for (const auto role : {"primary", "unknown", "noncontinuous"}) {
+        auto bad = settings; bad["living_units"][1]["role"] = role; rejects_settings(bad);
+    }
+    auto bad = settings; bad["living_units"][0]["role"] = "attached_adu"; rejects_settings(bad);
+    bad = settings; bad.erase("living_units"); rejects_settings(bad);
+    bad = settings; bad["living_units"] = json::object(); rejects_settings(bad);
+    bad = settings; bad["living_units"][0]["unexpected"] = true; rejects_settings(bad);
+    bad = settings; bad["version"] = 3; rejects_settings(bad);
+    bad = settings;
+    for (unsigned i = 3; i < 65; ++i) bad["living_units"].push_back(
+        {{"unit_id", "unit-" + std::to_string(i)}, {"identifier", "Unit " + std::to_string(i)}, {"role", "attached_adu"}});
+    rejects_settings(bad);
+    const json v1 = {{"version", 1}, {"contract", "uad_3_6"}, {"room_inventory_complete", true}};
+    require(appraisal_reporting_json(parse_appraisal_reporting_settings(v1)) == v1,
+        "V1 settings retain their exact persisted schema");
+
+    auto entities = ansi_fixture_entities();
+    entities.front().properties["appraisal_reporting"] = settings;
+    auto below = entities[2]; below.id = "floor-below";
+    below.properties["appraisal_facts"]["grade"] = "below";
+    below.properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = true;
+    auto below_layer = entities[3]; below_layer.id = "layer-below"; below_layer.properties["floor_id"] = below.id;
+    entities.push_back(below); entities.push_back(below_layer);
+    const auto add_area = [&](std::string id, std::string identity, bool basement, bool unfinished, bool separate, double x) {
+        auto area = entities[4]; area.id = std::move(id);
+        area.properties["boundary"] = square(x, 0, 3.048);
+        area.properties["appraisal_facts"]["ansi"]["dwelling_identity"] = std::move(identity);
+        if (basement) { area.properties["floor_id"] = "floor-below"; area.properties["layer_id"] = "layer-below"; }
+        if (unfinished) area.properties["appraisal_facts"]["finish"] = "unfinished";
+        if (separate) area.properties["appraisal_facts"]["access"] = "noncontinuous";
+        entities.push_back(std::move(area));
+    };
+    add_area("home-below", "primary", true, true, false, 10);
+    add_area("east-above", "attached_adu", false, false, false, 20);
+    add_area("east-below", "attached_adu", true, true, false, 30);
+    add_area("garden-above", "detached_adu", false, false, false, 40);
+    add_area("home-separate", "primary", false, false, true, 50);
+    const auto source = Document::create(entities).snapshot();
+    for (auto& area : entities) if (area.type == "measurement_boundary") {
+        AppraisalAreaReportingFacts declaration;
+        declaration.version = 2;
+        declaration.living_unit_id = area.id.starts_with("east") ? "east" : area.id.starts_with("garden") ? "garden" : "home";
+        declaration.source_geometry_sha256 = appraisal_reporting_source_digest(source, area.id);
+        declaration.contained_within_primary = false;
+        declaration.rooms = {{"bed-" + area.id, AppraisalRoomUse::bedroom, true},
+            {"bath-" + area.id, AppraisalRoomUse::bathroom_half, false}};
+        area.properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+        require(appraisal_reporting_json(parse_appraisal_area_reporting_facts(area.properties["appraisal_reporting"])) == area.properties["appraisal_reporting"],
+            "V2 boundary assignment must round trip with its observations");
+    }
+    const auto report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+    require(report.qualified && report.calculation && report.reporting && report.reporting->individual_units_available &&
+        report.reporting->living_units.size() == 3, "Complete explicit assignments expose all three individual living units");
+    for (const auto& unit : report.reporting->living_units) {
+        const bool garden = unit.living_unit.unit_id == "garden";
+        require(unit.area_fields_available && unit.room_counts_available && unit.counts.bedrooms == (garden ? 1U : 2U) &&
+            unit.counts.bathrooms_half == (garden ? 1U : 2U),
+            "UAD 3.6 counts each unit across grades and finishes, excluding noncontinuous rooms");
+        near(unit.area_fields.at(AppraisalAreaCategory::above_grade_finished), 9.290304, 1e-8,
+            "Each named dwelling retains its own continuous above-grade finished area");
+        if (!garden) near(unit.area_fields.at(AppraisalAreaCategory::below_grade_unfinished), 9.290304, 1e-8,
+            "Below-grade unfinished area remains assigned to the same unit across floors");
+        unsigned bedrooms = 0, halves = 0;
+        bool saw_below = false, saw_separate = false;
+        for (const auto& level : unit.levels) {
+            require(!level.boundary_ids.empty(), "Every declared level retains its boundary membership");
+            require(level.grade == (level.floor_id == "floor-below" ? GradeStatus::below : GradeStatus::above),
+                "Level grade follows explicit floor facts rather than floor names or unit role");
+            saw_below = saw_below || level.floor_id == "floor-below";
+            saw_separate = saw_separate || level.noncontinuous;
+            if (!level.noncontinuous) { bedrooms += level.counts.bedrooms; halves += level.counts.bathrooms_half; }
+        }
+        require(bedrooms == unit.counts.bedrooms && halves == unit.counts.bathrooms_half && saw_below == !garden &&
+            saw_separate == (unit.living_unit.unit_id == "home"),
+            "Per-unit totals equal continuous level sums with explicit below-grade and separate level detail");
+    }
+    for (const auto& room : report.reporting->rooms) require(room.living_unit_id.has_value(),
+        "Room summaries retain their individual unit assignment");
+    auto declared_levels = entities;
+    const auto level_source = Document::create(declared_levels).snapshot();
+    for (auto& unit : declared_levels.front().properties["appraisal_reporting"]["living_units"]) {
+        unit["levels"] = json::array();
+        for (const auto floor : {"floor-1", "floor-below"}) {
+            if (unit["unit_id"] == "garden" && std::string_view(floor) == "floor-below") continue;
+            const bool below_grade = std::string_view(floor) == "floor-below";
+            json level = {{"floor_id", floor}, {"level_number", below_grade ? 1 : 2},
+                {"grade_level_type", below_grade ? "fully_below_grade" : "above_grade"},
+                {"source_geometry_sha256", appraisal_reporting_level_source_digest(level_source, floor)}};
+            if (below_grade) level["below_grade_access"] = "interior_only";
+            unit["levels"].push_back(level);
+        }
+    }
+    const auto levels_report = build_appraisal_document_report(Document::create(declared_levels).snapshot(), "property-1");
+    require(levels_report.reporting && levels_report.reporting->individual_units_available,
+        "Explicit current level observations preserve individual unit reporting");
+    for (const auto& unit : levels_report.reporting->living_units) for (const auto& level : unit.levels)
+        require(level.declaration && level.form_fields_available,
+            "Valid per-unit floor observations expose level form fields including separate space on that floor");
+    auto duplicate_level_settings = declared_levels.front().properties["appraisal_reporting"];
+    duplicate_level_settings["living_units"][0]["levels"].push_back(duplicate_level_settings["living_units"][0]["levels"][0]);
+    rejects_settings(duplicate_level_settings);
+    for (bool stale : {false, true}) {
+        auto invalid_level = declared_levels;
+        auto& declaration = invalid_level.front().properties["appraisal_reporting"]["living_units"][0]["levels"][0];
+        if (stale) declaration["source_geometry_sha256"] = std::string(64, '0');
+        else declaration["grade_level_type"] = "fully_below_grade";
+        const auto invalid_level_report = build_appraisal_document_report(Document::create(invalid_level).snapshot(), "property-1");
+        require(invalid_level_report.qualified && invalid_level_report.calculation && invalid_level_report.reporting &&
+            invalid_level_report.reporting->individual_units_available,
+            "Stale or contradictory level observations do not suppress numeric per-unit counts");
+        const auto& home = *std::find_if(invalid_level_report.reporting->living_units.begin(), invalid_level_report.reporting->living_units.end(),
+            [](const auto& unit) { return unit.living_unit.unit_id == "home"; });
+        require(home.room_counts_available && home.counts.bedrooms == 2 &&
+            std::any_of(home.levels.begin(), home.levels.end(), [](const auto& level) {
+                return level.floor_id == "floor-1" && !level.form_fields_available;
+            }), "Only affected level form fields are withheld when level observations are stale or contradictory");
+    }
+    for (unsigned failure = 0; failure < 4; ++failure) {
+        auto changed = entities;
+        if (failure == 0) changed[4].properties["appraisal_reporting"].erase("living_unit_id");
+        if (failure == 1) changed[4].properties["appraisal_reporting"]["living_unit_id"] = "missing-unit";
+        if (failure == 2) changed[4].properties["appraisal_reporting"]["living_unit_id"] = "east";
+        if (failure == 3) changed[4].properties["boundary"] = square(0, 0, 4);
+        const auto invalid = build_appraisal_document_report(Document::create(changed).snapshot(), "property-1");
+        require(invalid.qualified && invalid.calculation && status(invalid, "area-1").measurement && invalid.reporting &&
+            !invalid.reporting->individual_units_available,
+            "Missing, dangling, role-mismatched or stale assignments withhold individual reporting while retaining measurement");
+    }
+    auto v1_area = entities[4].properties["appraisal_reporting"];
+    v1_area["version"] = 1; v1_area.erase("living_unit_id");
+    require(appraisal_reporting_json(parse_appraisal_area_reporting_facts(v1_area)) == v1_area,
+        "V1 area observations retain their exact schema");
+    v1_area["living_unit_id"] = "home";
+    bool rejected = false;
+    try { (void)parse_appraisal_area_reporting_facts(v1_area); } catch (const std::exception&) { rejected = true; }
+    require(rejected, "V1 area observations cannot silently acquire a V2 assignment");
+}
+
 int main() {
     try {
         qualified_document_recalculates_from_geometry();
         reporting_projection_contracts();
+        reporting_living_unit_v2_contracts();
+        reporting_v2_ansi_grade_coherence();
+        reporting_v2_room_vocabulary();
         reporting_unfinished_room_treatment();
         reporting_observation_context_integrity();
         reporting_adu_count_mapping_and_phase_scope();

@@ -1,13 +1,19 @@
 #include "sketch/architectural_schedule.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/architecture.hpp"
+#include <BRepAlgoAPI_Common.hxx>
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <set>
 #include <stdexcept>
+#include <tuple>
 
 namespace {
 using namespace sketch;
@@ -251,7 +257,8 @@ void test_placed_assemblies_produce_read_only_quantity_rows() {
     const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
         [](const auto& row) { return row.kind == ScheduleRowKind::assembly; });
     require(found != projection.snapshot.rows.end(), "placed assembly should have a schedule row");
-    require(std::get<std::string>(found->cells.at("name").value) == "Lintel" &&
+    require(found->object_id == "assembly-catalog:instance:lintel-1" &&
+                std::get<std::string>(found->cells.at("name").value) == "Lintel" &&
                 std::get<std::string>(found->cells.at("host_entity_id").value) == "host-wall" &&
                 std::get<std::int64_t>(found->cells.at("quantity:count").value) == 2 &&
                 std::get<ScheduleQuantity>(found->cells.at("quantity:length").value).unit ==
@@ -273,12 +280,13 @@ void test_placed_assemblies_produce_read_only_quantity_rows() {
                 std::get<std::string>(material_row->cells.at("catalog_id").value) ==
                     "assembly-catalog" &&
                 std::get<std::string>(material_row->cells.at("material_id").value) == "steel" &&
-                std::get<ScheduleQuantity>(material_row->cells.at("volume").value).unit ==
+                !material_row->cells.contains("volume") &&
+                std::get<ScheduleQuantity>(material_row->cells.at("declared_volume").value).unit ==
                     ScheduleUnit::cubic_metre &&
-                std::abs(std::get<ScheduleQuantity>(material_row->cells.at("volume").value).value -
+                std::abs(std::get<ScheduleQuantity>(material_row->cells.at("declared_volume").value).value -
                          0.18) < 1e-9 &&
-                !material_row->cells.at("volume").editable,
-            "assembly material row should expose explicit net volume and provenance");
+                !material_row->cells.at("declared_volume").editable,
+            "declaration-only material rows must keep authored volume separate from measured takeoff");
     const auto material_summary_row = std::find_if(
         projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
         [](const auto& row) {
@@ -288,9 +296,8 @@ void test_placed_assemblies_produce_read_only_quantity_rows() {
         });
     require(material_summary_row != projection.snapshot.rows.end() &&
                 std::get<std::int64_t>(material_summary_row->cells.at("count").value) == 1 &&
-                std::abs(std::get<ScheduleQuantity>(material_summary_row->cells.at("volume").value).value -
-                         0.18) < 1e-9,
-            "assembly material should contribute to the grouped material summary");
+                !material_summary_row->cells.contains("volume"),
+            "declaration-only assemblies must withhold unmeasured grouped material volume");
     const auto visible = build_architectural_schedules(document.snapshot(), {"host-wall"});
     require(std::any_of(visible.snapshot.rows.begin(), visible.snapshot.rows.end(),
                         [](const auto& row) { return row.kind == ScheduleRowKind::assembly; }),
@@ -502,10 +509,212 @@ void test_multi_flight_and_hosted_railing_quantities() {
     require(top_projection.diagnostics.empty()&&std::get<std::string>(top_row.cells.at("host_role").value)=="top" &&
         !top_row.cells.contains("host_landing_id")&&!top_row.cells.contains("host_outgoing_flight_id"),"top schedule has explicit role and no invented child");
 }
+void test_joined_roof_schedule_net_priority_and_gross_provenance() {
+    SlopedRoofPanel pa{"a",{0,0,0},0,2,4,1,std::atan(.5),0,.1,{}};
+    auto pb = pa; pb.id = "b"; pb.base_position = {1.9,0,.95};
+    auto a = assigned(encode_building_entity(pa)), b = assigned(encode_building_entity(pb));
+    a.properties["material_assignment"]["material_id"] = "red";
+    b.properties["material_assignment"]["material_id"] = "blue";
+    Entity catalog{"catalog","assembly_model", {{"model",AssemblyModel::create(
+        {{"red","Red","#ff0000"},{"blue","Blue","#0000ff"}}, {}, {}).to_json()}}};
+    RoofJoin semantic{"join",{"a","b"}};
+    Entity join{"join","roof_join",roof_join_json(semantic)};
+    auto document = Document::create({a,b,catalog,join});
+    const auto sa = make_sloped_roof_panel(pa), sb = make_sloped_roof_panel(pb);
+    BRepAlgoAPI_Common common(sa,sb); common.Build();
+    require(common.IsDone() && !common.HasErrors(), "independent joined schedule fixture common must succeed");
+    const auto va = solid_volume(sa), vb = solid_volume(sb), overlap = solid_volume(common.Shape());
+    const auto expected = va + vb - overlap;
+    const auto find = [](const DocumentScheduleProjection& projection, const std::string& id) -> const ScheduleRow& {
+        const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+            [&](const auto& candidate) { return candidate.object_id == id; });
+        if (found == projection.snapshot.rows.end()) throw std::runtime_error("missing joined schedule row");
+        return *found;
+    };
+    const auto summary_total = [](const DocumentScheduleProjection& projection) {
+        double total = 0;
+        for (const auto& candidate : projection.snapshot.rows)
+            if (candidate.kind == ScheduleRowKind::material_summary)
+                total += std::get<ScheduleQuantity>(candidate.cells.at("volume").value).value;
+        return total;
+    };
+    const auto projected = build_architectural_schedules(document.snapshot());
+    require(projected.diagnostics.empty(), "joined roof schedule should have complete measured quantities");
+    require(std::abs(std::get<ScheduleQuantity>(find(projected,"join").cells.at("volume").value).value-expected) < 1e-8 &&
+        std::abs(summary_total(projected)-expected) < 1e-8, "joined material summaries must exclude source gross quantities");
+    const auto& second = find(projected,roof_join_material_schedule_row_id("join","b"));
+    require(std::abs(std::get<ScheduleQuantity>(second.cells.at("volume").value).value-(vb-overlap)) < 1e-8 &&
+        std::get<std::string>(second.cells.at("material_id").value) == "blue" &&
+        second.cells.at("volume").explanation.find("earlier members") != std::string::npos &&
+        std::find(second.cells.at("volume").sources.begin(),second.cells.at("volume").sources.end(),
+            ScheduleSourceRef{"a","geometry"}) != second.cells.at("volume").sources.end(),
+        "net rows expose source binding, authored priority, and upstream overlap provenance");
+    require(std::get<std::string>(row(projected,"a").cells.at("takeoff_basis").value) == "source_gross" &&
+        std::abs(std::get<ScheduleQuantity>(row(projected,"a").cells.at("gross_volume").value).value-va) < 1e-8,
+        "source gross rows must remain identifiable and independently measurable");
+    semantic.roof_ids = {"b","a"}; join.properties = roof_join_json(semantic);
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(join)}, {},"reverse material priority"});
+    const auto reversed = build_architectural_schedules(document.snapshot());
+    require(std::abs(summary_total(reversed)-expected) < 1e-8 &&
+        std::abs(std::get<ScheduleQuantity>(find(reversed,roof_join_material_schedule_row_id("join","a")).cells.at("volume").value).value-(va-overlap)) < 1e-8,
+        "order reversal changes net material ownership and preserves union total");
+    semantic.material_assignment = RoofJoinMaterialAssignment{"catalog","blue"};
+    join.properties = roof_join_json(semantic);
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(join)}, {},"override joined material"});
+    const auto override_projection = build_architectural_schedules(document.snapshot());
+    require(override_projection.diagnostics.empty() && std::abs(summary_total(override_projection)-expected) < 1e-8 &&
+        std::get<std::string>(find(override_projection,roof_join_material_schedule_row_id("join","a")).cells.at("material_binding").value) == "join_override" &&
+        std::get<std::string>(find(override_projection,roof_join_material_schedule_row_id("join","a")).cells.at("material_id").value) == "blue",
+        "explicit join assignment overrides all net regions without adding gross quantities");
+    pb.base_position = pa.base_position;
+    b = assigned(encode_building_entity(pb)); b.properties["material_assignment"]["material_id"] = "blue";
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(b)}, {},"fully occlude member"});
+    const auto occluded = build_architectural_schedules(document.snapshot());
+    require(occluded.diagnostics.empty() &&
+        std::get<ScheduleQuantity>(find(occluded,roof_join_material_schedule_row_id("join","a")).cells.at("volume").value).value == 0 &&
+        std::abs(summary_total(occluded)-va) < 1e-8, "zero occluded quantities must remain complete material takeoffs");
+    const auto visible = build_architectural_schedules(document.snapshot(), {"join","a","b"});
+    require(std::abs(summary_total(visible)-va) < 1e-8, "visibility scope containing join members uses joined net totals");
 }
+
+void test_joined_roof_row_keys_preserve_colon_bearing_identities() {
+    const std::string first_source = "b:roof:c:layer:literal", second_source = "c:layer:literal";
+    const std::string first_join = "a", second_join = "a:roof:b";
+    require(first_join + ":roof:" + first_source == second_join + ":roof:" + second_source,
+        "collision fixture must exercise ambiguous legacy row concatenation");
+    const auto make_roof = [](const std::string& id, double x) {
+        return assigned(encode_building_entity(SlopedRoofPanel{id,{x,0,0},0,2,4,0,0,0,.1,{}}));
+    };
+    Entity catalog{"catalog","assembly_model", {{"model",AssemblyModel::create(
+        {{"solid","Solid"}}, {}, {}).to_json()}}};
+    auto document = Document::create({catalog,make_roof(first_source,0),make_roof("first-peer",1.9),
+        make_roof(second_source,10),make_roof("second-peer",11.9),
+        Entity{first_join,"roof_join",roof_join_json(RoofJoin{first_join,{first_source,"first-peer"}})},
+        Entity{second_join,"roof_join",roof_join_json(RoofJoin{second_join,{second_source,"second-peer"}})}});
+    const auto projection = build_architectural_schedules(document.snapshot());
+    require(projection.diagnostics.empty(), "colon-bearing source IDs must resolve complete material identities");
+    const auto first_key = roof_join_material_schedule_row_id(first_join,first_source);
+    const auto second_key = roof_join_material_schedule_row_id(second_join,second_source);
+    require(first_key != second_key, "length-prefixed row paths must distinguish colliding source pairs");
+    for (const auto& [key,source,join] : std::vector<std::tuple<std::string,std::string,std::string>>{
+        {first_key,first_source,first_join},{second_key,second_source,second_join}}) {
+        const auto found = std::find_if(projection.snapshot.rows.begin(),projection.snapshot.rows.end(),
+            [&](const auto& candidate) { return candidate.object_id == key; });
+        require(found != projection.snapshot.rows.end() &&
+            std::get<std::string>(found->cells.at("source_roof_id").value) == source &&
+            std::get<std::string>(found->cells.at("joined_roof_id").value) == join,
+            "encoded row keys must preserve readable exact source and join provenance");
+        require(std::get<std::string>(row(projection,source).cells.at("takeoff_basis").value) == "source_gross",
+            "colon-bearing source gross rows must remain excluded from joined summaries");
+    }
+    std::set<std::string> keys;
+    for (const auto& candidate : projection.snapshot.rows)
+        require(keys.insert(candidate.object_id).second, "distinct joins must produce distinct schedule row IDs");
+    require(std::abs(std::get<ScheduleQuantity>(material_summary(projection).cells.at("volume").value).value - 3.12) < 1e-8,
+        "colon-bearing sources must not double count gross roof quantities");
+}
+}
+void test_independent_nested_assembly_takeoff_and_refresh() {
+    const auto profile_rectangle = [](double w,double h) {
+        return Boundary{{{0,0},{w,0},0},{{w,0},{w,h},0},{{w,h},{0,h},0},{{0,h},{0,0},0}};
+    };
+    AssemblyType leaf{"leaf","Leaf",{},{{"core","timber"}},
+        {{"volume",{99,AssemblyQuantityUnit::cubic_metre}},{"pieces",{2,AssemblyQuantityUnit::count}}}};
+    leaf.profiles={{"ring",profile_rectangle(4,3),
+        {Boundary{{{1,1},{2,1},0},{{2,1},{2,2},0},{{2,2},{1,2},0},{{1,2},{1,1},0}}},0,1,"core"},
+        {"cap",profile_rectangle(1,1),{},2,0.5,"core"}};
+    AssemblyType root{"root","Root"};
+    root.parts={{"part:stable","leaf",{{1,2,3},0.5,2}}};
+    AssemblyInstance legacy{"legacy","root"};
+    legacy.placement=AssemblyPlacement{"legacy-host",{0,0},0,1};
+    const auto model=AssemblyModel::create({{"timber","Timber"},{"steel","Steel"}},{root,leaf},{legacy});
+    Entity catalog{"catalog","assembly_model",{{"model",model.to_json()}}};
+    AssemblyInstance instance{"independent","root"};
+    instance.root_transform=AssemblyTransform{{10,20,4},0.25,1};
+    AssemblyPathOverride override;
+    override.part_path={"part:stable"};
+    override.material_overrides={{"core","steel"}};
+    override.quantity_overrides={{"pieces",{7,AssemblyQuantityUnit::count}}};
+    instance.nested_overrides={override};
+    Entity source{"independent","assembly_instance",Json::object()};
+    source=encode_document_assembly_instance(source,{catalog.id,instance});
+    const Entity host{"legacy-host","wall",Json::object()};
+    auto document=Document::create({catalog,source,host});
+    const auto before=document.snapshot();
+    const auto projected=build_architectural_schedules(before,{source.id});
+    require(projected.diagnostics.empty(),"valid independent assembly resolves an invisible supporting catalog");
+    double material_volume=0;
+    std::size_t assembly_rows=0,material_rows=0;
+    for(const auto& row:projected.snapshot.rows) {
+        if(row.kind==ScheduleRowKind::assembly) {
+            ++assembly_rows;
+            require(row.object_id==source.id && std::get<std::int64_t>(row.cells.at("count").value)==1 &&
+                std::get<ScheduleQuantity>(row.cells.at("quantity:volume").value).value==99 &&
+                std::get<std::int64_t>(row.cells.at("quantity:pieces").value)==7 &&
+                std::abs(std::get<ScheduleQuantity>(row.cells.at("volume").value).value-92)<1e-7,
+                "one independent owner retains declared quantities distinct from its actual 92 cubic metres");
+        }
+        if(row.kind==ScheduleRowKind::material) {
+            ++material_rows;
+            material_volume+=std::get<ScheduleQuantity>(row.cells.at("volume").value).value;
+            require(std::get<std::string>(row.cells.at("part_path").value)==Json::array({"part:stable"}).dump() &&
+                std::get<std::string>(row.cells.at("catalog_id").value)==catalog.id &&
+                std::get<std::string>(row.cells.at("material_id").value)=="steel" &&
+                std::get<std::string>(row.cells.at("name").value)=="Steel" &&
+                std::find(row.cells.at("volume").sources.begin(),row.cells.at("volume").sources.end(),
+                    ScheduleSourceRef{source.id,"instance"})!=row.cells.at("volume").sources.end(),
+                "actual material rows retain exact part path, catalog identity and independent source");
+        }
+    }
+    require(assembly_rows==1 && material_rows==2 && std::abs(material_volume-92)<1e-7 &&
+        std::abs(std::get<ScheduleQuantity>(material_summary(projected).cells.at("volume").value).value-92)<1e-7,
+        "profile takeoff and material summary conserve volume without duplicate assembly rows");
+    const auto complete=build_architectural_schedules(before);
+    double complete_volume=0;
+    std::size_t complete_assemblies=0,complete_profiles=0;
+    for(const auto& candidate:complete.snapshot.rows) {
+        if(candidate.kind==ScheduleRowKind::assembly) ++complete_assemblies;
+        if(candidate.kind==ScheduleRowKind::material) {
+            ++complete_profiles;
+            complete_volume+=std::get<ScheduleQuantity>(candidate.cells.at("volume").value).value;
+        }
+    }
+    require(complete.diagnostics.empty() && complete_assemblies==2 && complete_profiles==4 &&
+        std::abs(complete_volume-184)<1e-7,
+        "legacy and independent owners each contribute their profiles exactly once, without duplicate slot volume");
+    instance.root_transform->scale=0.5;
+    source=encode_document_assembly_instance(source,{catalog.id,instance});
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(source)}, {},"scale independent assembly"});
+    const auto after=build_architectural_schedules(document.snapshot(),{source.id});
+    require(after.snapshot.revision==document.revision() &&
+        std::abs(std::get<ScheduleQuantity>(material_summary(after).cells.at("volume").value).value-11.5)<1e-7 &&
+        std::get<ScheduleQuantity>(material_summary(projected).cells.at("volume").value).value>91.9,
+        "new snapshot refreshes scaled solids and old derived snapshot remains immutable");
+    document.undo(document.revision());
+    require(build_architectural_schedules(document.snapshot(),{source.id}).snapshot.rows==projected.snapshot.rows,
+        "undo restores source-bound derived values and stable profile row identities");
+    require(build_architectural_schedules(document.snapshot(),{}).snapshot.rows.empty(),
+        "hidden independent owner contributes no takeoff despite its supporting catalog");
+    auto broken=document.snapshot().entities();
+    broken.at(source.id).properties["assembly_catalog_id"]="missing";
+    try {
+        const auto malformed=Document::create({broken.at(catalog.id),broken.at(source.id),host});
+        const auto unavailable=build_architectural_schedules(malformed.snapshot(),{source.id});
+        require(!unavailable.diagnostics.empty() && unavailable.snapshot.rows.empty(),
+            "invalid independent source reports a failed takeoff instead of partial rows");
+    } catch (const DocumentError& error) {
+        require(error.code()==DocumentErrorCode::dangling_reference ||
+            error.code()==DocumentErrorCode::invalid_entity,
+            "the integrated document boundary may reject invalid assembly references before projection");
+    }
+}
+
 int main() {
     try {
+        test_independent_nested_assembly_takeoff_and_refresh();
         test_net_volumes();
+        test_joined_roof_schedule_net_priority_and_gross_provenance();
+        test_joined_roof_row_keys_preserve_colon_bearing_identities();
         test_explicit_material_grouping_is_stable_and_normalized();
         test_composite_wall_layers_produce_material_quantities();
         test_composite_slab_layers_produce_material_quantities();

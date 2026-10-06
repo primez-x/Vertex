@@ -1,4 +1,7 @@
 #include "sketch/project_store.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/roof_join_semantics.hpp"
+#include "sketch/appraisal_document.hpp"
 #include "sketch/project_exchange.hpp"
 #include "sketch/stair_semantics.hpp"
 #include "sketch/document_digest.hpp"
@@ -3217,6 +3220,139 @@ void test_ansi_appraisal_reader_floor_retains_history(unsigned policy_version = 
         "unrelated vendor field collision stays opaque in its original format");
 }
 
+
+std::vector<std::vector<sketch::Entity>> architectural_appraisal_v57_fixtures() {
+    using namespace sketch;
+    const auto make = [](std::string id, std::string type, nlohmann::json properties) {
+        auto result = Entity::create(std::move(type), std::move(properties));
+        result.id = std::move(id); return result;
+    };
+    AssemblyType leaf;
+    leaf.id = "leaf"; leaf.name = "Panel";
+    leaf.materials = {{"surface", "wood"}};
+    leaf.quantities = {{"pieces", {1, AssemblyQuantityUnit::count}}};
+    auto catalog = make("catalog", "assembly_model",
+        {{"model", AssemblyModel::create({{"wood", "Wood"}}, {leaf}, {}).to_json()}});
+    AssemblyDocumentInstance value;
+    value.assembly_catalog_id = catalog.id;
+    value.instance.id = "independent"; value.instance.type_id = leaf.id;
+    value.instance.root_transform = AssemblyTransform{{10, 20, 3}, 0.25, 1};
+    value.instance.material_overrides = {{"surface", "wood"}};
+    value.instance.quantity_overrides = {{"pieces", {3, AssemblyQuantityUnit::count}}};
+    const auto instance = encode_document_assembly_instance(
+        make(value.instance.id, "assembly_instance", {{"note", "retained metadata"}}), value);
+    AssemblyProfile profile;
+    profile.id = "box"; profile.height_m = 2; profile.material_slot = "surface";
+    profile.outer = {{{0,0},{1,0}}, {{1,0},{1,1}}, {{1,1},{0,1}}, {{0,1},{0,0}}};
+    leaf.profiles = {profile};
+    auto profiled_catalog = catalog;
+    profiled_catalog.properties["model"] = AssemblyModel::create({{"wood", "Wood"}}, {leaf}, {}).to_json();
+    // Canonical sloped-roof authoring fields; no native solid builder is needed
+    // to exercise the core relationship/reference storage contract.
+    const auto roof = [&](std::string id, double x) {
+        return make(std::move(id), "roof", {{"version", 1}, {"form", "sloped_roof_panel"},
+            {"base_position_m", {x, 0, 0}}, {"orientation_rad", 0}, {"run_m", 2},
+            {"span_m", 4}, {"rise_m", 0}, {"pitch_rad", 0}, {"overhang_m", 0},
+            {"thickness_m", .2}});
+    };
+    const auto roof_a = roof("roof-a", 0), roof_b = roof("roof-b", 1.9);
+    const auto join = make("join", "roof_join", {{"version", 2}, {"style", "fused"},
+        {"roof_ids", {"roof-a", "roof-b"}}, {"material_assignment",
+            {{"version", 1}, {"catalog_id", catalog.id}, {"material_id", "wood"}}}});
+    const auto property = make("property", "property", {{"appraisal_reporting",
+        {{"version", 2}, {"contract", "uad_3_6"}, {"room_inventory_complete", true},
+            {"living_units", nlohmann::json::array({
+                {{"unit_id", "home"}, {"identifier", "Main dwelling"}, {"role", "primary"}}})}}}});
+    const auto building = make("building", "building", {{"property_id", property.id}});
+    const auto floor = make("floor", "floor", {{"building_id", building.id}, {"property_id", property.id}});
+    auto area = make("area", "measurement_boundary", {{"property_id", property.id},
+        {"building_id", building.id}, {"floor_id", floor.id},
+        {"boundary", nlohmann::json::array({
+            {{"start", {0,0}}, {"end", {2,0}}, {"sweep_radians", 0}},
+            {{"start", {2,0}}, {"end", {2,2}}, {"sweep_radians", 0}},
+            {{"start", {2,2}}, {"end", {0,2}}, {"sweep_radians", 0}},
+            {{"start", {0,2}}, {"end", {0,0}}, {"sweep_radians", 0}}})}});
+    const auto digest = appraisal_reporting_source_digest(
+        Document::create({property, building, floor, area}).snapshot(), area.id);
+    area.properties["appraisal_reporting"] = {{"version", 2}, {"source_geometry_sha256", digest},
+        {"living_unit_id", "home"}, {"rooms", nlohmann::json::array({
+            {{"room_id", "studio"}, {"use", "other"}, {"other_description", "Exercise studio"}}})}};
+    (void)parse_appraisal_reporting_settings(property.properties.at("appraisal_reporting"));
+    (void)parse_roof_join(join.properties, join.id);
+    (void)parse_appraisal_area_reporting_facts(area.properties.at("appraisal_reporting"));
+    // Isolate the boundary floor from the property's own v2 floor.
+    auto legacy_property = property;
+    legacy_property.properties["appraisal_reporting"]["version"] = 1;
+    legacy_property.properties["appraisal_reporting"].erase("living_units");
+    auto unassigned_area = area;
+    unassigned_area.properties["appraisal_reporting"].erase("living_unit_id");
+    return {{catalog, instance}, {profiled_catalog}, {catalog, roof_a, roof_b, join},
+        {property}, {property, building, floor, area},
+        {legacy_property, building, floor, unassigned_area}};
+}
+
+void test_architectural_appraisal_v57_reader_floor_retains_history() {
+    TempDirectory temp;
+    const auto fixtures = architectural_appraisal_v57_fixtures();
+    const auto rejects_document = [](const auto& owners) {
+        try { (void)Document::create(owners); }
+        catch (const sketch::DocumentError&) { return; }
+        require(false, "invalid v57 envelope or material reference must fail document validation");
+    };
+    for (const auto* alias : {"host", "host_entity_id", "placement", "root_transform", "type_id"}) {
+        auto malformed = fixtures.front();
+        malformed.back().properties[alias] = "forbidden";
+        rejects_document(malformed);
+    }
+    auto malformed = fixtures.front();
+    malformed.back().properties["instance"]["id"] = "different-owner";
+    rejects_document(malformed);
+    malformed = fixtures.front();
+    malformed.back().properties["assembly_catalog_id"] = "missing-catalog";
+    rejects_document(malformed);
+    malformed = fixtures.at(2);
+    malformed.back().properties["material_assignment"]["material_id"] = "missing-material";
+    rejects_document(malformed);
+    for (const auto& owners : fixtures) {
+        auto document = Document::create({});
+        std::vector<EntityChange> create, erase;
+        for (const auto& owner : owners) {
+            create.push_back(EntityChange::upsert(owner)); erase.push_back(EntityChange::erase(owner.id));
+        }
+        document.apply(ApplyEntityChanges{document.revision(), create, {}, "Create v57 semantics"});
+        const auto changed = document.snapshot();
+        auto deleted = Document::fork(changed);
+        deleted.apply(ApplyEntityChanges{deleted.revision(), erase, {}, "Delete v57 semantics"});
+        document.undo(document.revision());
+        for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
+            require(ProjectStore::required_format_version(snapshot) == 57,
+                "current, undone and deleted architectural/appraisal semantics require v57");
+            const auto path = temp.path / ("v57-" + sketch::make_stable_id() + ".bldproj");
+            (void)ProjectStore::save(path, snapshot);
+            const auto source_hash = ProjectStore::file_sha256(path);
+            const auto restored = ProjectStore::load(path).document.snapshot();
+            require(restored.entities() == snapshot.entities() && restored.history().size() == snapshot.history().size(),
+                "v57 owners and complete history reopen losslessly");
+            for (std::size_t i = 0; i < snapshot.history().size(); ++i) {
+                require(restored.history()[i].entities == snapshot.history()[i].entities &&
+                    restored.history()[i].undo_stack == snapshot.history()[i].undo_stack &&
+                    restored.history()[i].redo_stack == snapshot.history()[i].redo_stack,
+                    "every retained v57 revision preserves entities and history stacks");
+            }
+            const auto downgraded = temp.path / ("downgraded-" + path.filename().string());
+            std::filesystem::copy_file(path, downgraded);
+            execute_sql(downgraded, "PRAGMA user_version=56; UPDATE metadata SET value='56' WHERE key='format_version'");
+            rewrite_logical_digest(downgraded);
+            const auto hash = ProjectStore::file_sha256(downgraded);
+            require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::unsupported_format,
+                "recomputed digest cannot downgrade retained v57 semantics");
+            require(ProjectStore::file_sha256(downgraded) == hash &&
+                ProjectStore::file_sha256(path) == source_hash,
+                "v57 downgrade refusal preserves both the original and refused archive bytes");
+        }
+    }
+}
+
 void test_appraisal_reporting_reader_floor_retains_history() {
     TempDirectory temp;
     const auto settings = nlohmann::json{{"version", 1}, {"contract", "uad_3_6"},
@@ -4046,6 +4182,7 @@ int main() {
         test_ansi_appraisal_reader_floor_retains_history();
         test_ansi_appraisal_reader_floor_retains_history(2);
         test_appraisal_reporting_reader_floor_retains_history();
+        test_architectural_appraisal_v57_reader_floor_retains_history();
         test_automatic_angle_redraw_reader_floor();
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();

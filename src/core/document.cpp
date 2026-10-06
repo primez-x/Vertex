@@ -4,6 +4,7 @@
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_document_adapter.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/room_relationship_geometry.hpp"
@@ -472,7 +473,13 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid ") + std::string(name) + " entity: " + error.what());
         }
     };
-    if (entity.type == "assembly_model") {
+    if (entity.type == "assembly_instance") {
+        try { (void)decode_document_assembly_instance(entity); }
+        catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                std::string("invalid independent assembly instance: ") + error.what());
+        }
+    } else if (entity.type == "assembly_model") {
         validate_embedded_model([](const nlohmann::json& model) {
             (void)AssemblyModel::from_json(model);
         }, "assembly model");
@@ -532,7 +539,8 @@ struct EntityReference {
 };
 
 std::optional<std::optional<std::string_view>> reference_type_for_key(std::string_view key) {
-    static constexpr std::array<std::pair<std::string_view, std::string_view>, 18> typed{{
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 19> typed{{
+        {"assembly_catalog_id", "assembly_model"},
         {"property_id", "property"},
         {"building_id", "building"},
         {"floor_id", "floor"},
@@ -905,9 +913,9 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                             document_error(DocumentErrorCode::dangling_reference,
                                 "section dimension " + overlay.id + " references missing object " + target_id);
                         }
-                        static constexpr std::array<std::string_view, 11> dimension_types{
+                        static constexpr std::array<std::string_view, 12> dimension_types{
                             "wall", "opening", "room", "slab", "roof", "stair", "railing",
-                            "column", "beam", "wall_join", "roof_join"};
+                            "column", "beam", "wall_join", "roof_join", "assembly_instance"};
                         if (std::find(dimension_types.begin(), dimension_types.end(), target->second.type) == dimension_types.end()) {
                             document_error(DocumentErrorCode::invalid_entity,
                                 "section dimension " + overlay.id + " references unsupported object " + target_id);
@@ -1102,8 +1110,8 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         }
         if (entity.properties.contains("material_assignment")) {
             try {
-                static constexpr std::array<std::string_view, 10> roles{
-                    "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam"};
+                static constexpr std::array<std::string_view, 11> roles{
+                    "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam", "roof_join"};
                 if (std::find(roles.begin(), roles.end(), entity.type) == roles.end())
                     document_error(DocumentErrorCode::invalid_entity, "Material assignment requires an architectural object");
                 const auto& assignment = entity.properties.at("material_assignment");
@@ -1224,10 +1232,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                         document_error(DocumentErrorCode::dangling_reference,
                                        "model phases " + id + " references missing entity " + member_id);
                     }
-                    static constexpr std::array<std::string_view, 18> model_roles{
+                    static constexpr std::array<std::string_view, 19> model_roles{
                         "building", "floor", "wall", "opening", "room", "room_boundary",
                         "slab", "roof", "stair", "railing", "column", "beam", "assembly_model",
-                        "boundary", "measurement_boundary", "wall_join", "roof_join", "measurement_linework"};
+                        "boundary", "measurement_boundary", "wall_join", "roof_join", "measurement_linework", "assembly_instance"};
                     const auto& type = entities.at(member_id).type;
                     if (std::find(model_roles.begin(), model_roles.end(), type) == model_roles.end()) {
                         document_error(DocumentErrorCode::invalid_entity,
@@ -1310,6 +1318,11 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                                "invalid room relationships entity " + id + ": " + error.what());
             }
         }
+    }
+    try { validate_document_assembly_instances(entities); }
+    catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity,
+            std::string("Invalid complete assembly graph: ") + error.what());
     }
     // Separate records are one semantic graph. Deduplicate exact definitions,
     // then check physical aliases, cross-record cycles and driver conflicts.
@@ -1548,13 +1561,13 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 36> known{
+    static constexpr std::array<std::string_view, 37> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
-        "assembly_model",      "model_phases", "room_relationships", "vertical_levels",
+        "assembly_model", "assembly_instance", "model_phases", "room_relationships", "vertical_levels",
         "reference_grid", "terrain_surface", "dxf_source", "ifc_source",
         "georeferencing", "wall_join", "roof_join", "measurement_linework"};
     return std::find(known.begin(), known.end(), type) != known.end();

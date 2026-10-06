@@ -1,4 +1,5 @@
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/assembly_document_adapter.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_solid.hpp"
@@ -642,7 +643,14 @@ EntityState apply_operations(const DocumentSnapshot& source,
                     invalidate_changed_receipts(before,rail);
                 }
             }
-            if (can_recognize_building_entity_type(found->second.type)) {
+            if (found->second.type == "assembly_instance") {
+                auto value = decode_document_assembly_instance(found->second);
+                const auto& movement = *operation.transform;
+                const AssemblyTransform outer{{movement.x, movement.y, movement.z},
+                    movement.rotation_z_radians, movement.scale};
+                value.instance.root_transform = compose_assembly_transform(outer, *value.instance.root_transform);
+                found->second = encode_document_assembly_instance(found->second, value);
+            } else if (can_recognize_building_entity_type(found->second.type)) {
                 found->second = transform_building_entity(found->second, *operation.transform);
             } else if (const auto transformed =
                            try_transform_shared_solid(entities, found->second, *operation.transform)) {
@@ -663,6 +671,11 @@ EntityState apply_operations(const DocumentSnapshot& source,
             if (entities.contains(operation.duplicate_id)) throw std::invalid_argument("architectural duplicate ID already exists");
             auto copy = found->second;
             copy.id = operation.duplicate_id;
+            if (copy.type == "assembly_instance") {
+                auto value = decode_document_assembly_instance(found->second);
+                value.instance.id = copy.id;
+                copy = encode_document_assembly_instance(copy, value);
+            }
             if (canonical_form(copy,"stair",2,"multi_flight_stair")) {
                 std::map<std::string,std::string,std::less<>> children;
                 for (const auto* key : {"flights","landings"}) {

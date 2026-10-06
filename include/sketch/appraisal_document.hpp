@@ -13,15 +13,37 @@
 namespace sketch {
 
 enum class AppraisalReportingContract { legacy_uad_2_6, uad_3_6 };
-enum class AppraisalRoomUse { bedroom, bathroom_full, bathroom_half, other };
+enum class AppraisalRoomUse { bedroom, bathroom_full, bathroom_half, other,
+    breakfast_room, den, dining_room, family_room, kitchen, laundry_room,
+    living_room, loft, media_room, mudroom, recreation_room, sunroom,
+    utility_room, walk_in_pantry, workshop };
+[[nodiscard]] std::string appraisal_room_use_name(AppraisalRoomUse use);
+struct AppraisalLivingUnitLevelDeclaration {
+    std::string floor_id;
+    unsigned level_number{}; // 1..99; below-grade display uses the B prefix.
+    std::optional<std::string> grade_level_type;
+    std::optional<std::string> below_grade_access;
+    std::optional<std::string> exterior_access;
+    std::string exterior_access_description;
+    std::string source_geometry_sha256;
+};
+struct AppraisalLivingUnit {
+    std::string unit_id; // Stable technical identity, never a display label.
+    std::string identifier; // Unique appraiser-assigned free-form label.
+    DwellingIdentity role{DwellingIdentity::primary};
+    std::vector<AppraisalLivingUnitLevelDeclaration> levels;
+};
 struct AppraisalReportingSettings {
     AppraisalReportingContract contract{AppraisalReportingContract::uad_3_6};
     bool room_inventory_complete{}; // User assertion, never a geometry proof.
+    unsigned version{1};
+    std::vector<AppraisalLivingUnit> living_units;
 };
 struct AppraisalRoomDeclaration {
     std::string room_id;
     AppraisalRoomUse use{AppraisalRoomUse::other};
     std::optional<bool> legacy_total_room;
+    std::string other_description; // V2 Other requires an explicit description.
 };
 struct AppraisalAreaReportingFacts {
     // Current geometry, deductions, owner context and appraisal observations.
@@ -29,6 +51,8 @@ struct AppraisalAreaReportingFacts {
     std::string source_geometry_sha256;
     std::optional<bool> contained_within_primary;
     std::vector<AppraisalRoomDeclaration> rooms;
+    unsigned version{1};
+    std::optional<std::string> living_unit_id;
 };
 struct AppraisalRoomCounts {
     unsigned total_rooms{}, bedrooms{}, bathrooms_full{}, bathrooms_half{};
@@ -39,6 +63,28 @@ struct AppraisalReportingRoom {
     AppraisalAreaCategory category{};
     DwellingIdentity identity{DwellingIdentity::primary};
     bool included_in_primary_counts{};
+    std::optional<std::string> living_unit_id;
+    std::string other_description;
+};
+struct AppraisalLivingUnitLevel {
+    std::string floor_id;
+    GradeStatus grade{GradeStatus::unknown};
+    bool noncontinuous{};
+    AppraisalRoomCounts counts;
+    std::vector<std::string> boundary_ids;
+    std::map<AppraisalRoomUse, unsigned> room_types;
+    std::map<AppraisalAreaCategory, double> area_fields;
+    std::optional<AppraisalLivingUnitLevelDeclaration> declaration;
+    bool form_fields_available{};
+    std::map<std::string, unsigned> other_room_descriptions;
+};
+struct AppraisalLivingUnitProjection {
+    AppraisalLivingUnit living_unit;
+    bool area_fields_available{}, room_counts_available{};
+    std::map<AppraisalAreaCategory, double> area_fields;
+    AppraisalRoomCounts counts;
+    std::vector<std::string> boundary_ids;
+    std::vector<AppraisalLivingUnitLevel> levels;
 };
 struct AppraisalReportingEvidence { std::string url, edition, sections; };
 struct AppraisalFormProjection {
@@ -52,14 +98,17 @@ struct AppraisalFormProjection {
     std::vector<AppraisalReportingRoom> rooms;
     std::vector<std::string> issues;
     std::vector<AppraisalReportingEvidence> evidence;
+    bool individual_units_available{};
+    std::vector<AppraisalLivingUnitProjection> living_units;
 };
-// Strict version-one semantic JSON; absent properties leave old projects in
+// Strict V1/V2 semantic JSON; absent properties leave old projects in
 // measurement-summary mode. These serializers never infer facts from names.
 [[nodiscard]] nlohmann::json appraisal_reporting_json(const AppraisalReportingSettings& value);
 [[nodiscard]] nlohmann::json appraisal_reporting_json(const AppraisalAreaReportingFacts& value);
 [[nodiscard]] AppraisalReportingSettings parse_appraisal_reporting_settings(const nlohmann::json& value);
 [[nodiscard]] AppraisalAreaReportingFacts parse_appraisal_area_reporting_facts(const nlohmann::json& value);
 [[nodiscard]] std::string appraisal_reporting_source_digest(const DocumentSnapshot& source, const std::string& boundary_id);
+[[nodiscard]] std::string appraisal_reporting_level_source_digest(const DocumentSnapshot& source, const std::string& floor_id);
 // Root applies these typed changes in one undoable command, after checking the
 // full snapshot fingerprint. The dialog itself never mutates the Document.
 struct AppraisalReportingChanges {

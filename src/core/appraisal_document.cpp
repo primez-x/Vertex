@@ -369,8 +369,27 @@ void reporting_keys(const Json& value, std::initializer_list<const char*> allowe
         if (std::none_of(allowed.begin(), allowed.end(), [&](const char* name) { return key == name; }))
             throw std::invalid_argument("Unknown appraisal_reporting field: " + key);
     }
-    if (!value.contains("version") || !value.at("version").is_number_integer() || value.at("version") != 1)
+    if (!value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2))
         throw std::invalid_argument("Unsupported appraisal_reporting version");
+}
+bool bounded_reporting_text(const std::string& value) {
+    return !value.empty() && value.size() <= 256 &&
+        value.find_first_not_of(" \t\r\n") != std::string::npos &&
+        std::none_of(value.begin(), value.end(), [](unsigned char c) { return c < 32 || c == 127; });
+}
+const AppraisalLivingUnit* assigned_unit(const AppraisalReportingSettings& settings,
+    const AppraisalAreaReportingFacts& facts, const AppraisalFacts& observations) {
+    if (!facts.living_unit_id) return nullptr;
+    if (settings.version != 2) throw std::invalid_argument("Living unit assignment requires a V2 property registry");
+    const auto unit = std::find_if(settings.living_units.begin(), settings.living_units.end(),
+        [&](const auto& value) { return value.unit_id == *facts.living_unit_id; });
+    if (unit == settings.living_units.end()) throw std::invalid_argument("Living unit assignment references an unavailable unit");
+    if (!observations.ansi || !observations.ansi->dwelling_identity)
+        throw std::invalid_argument("Living unit assignment requires an explicit ANSI dwelling identity");
+    if (unit->role != *observations.ansi->dwelling_identity)
+        throw std::invalid_argument("Living unit role disagrees with the measured dwelling identity");
+    return &*unit;
 }
 bool reporting_bool(const Json& value, const char* name) {
     if (!value.contains(name) || !value.at(name).is_boolean())
@@ -383,12 +402,32 @@ std::string room_use_token(AppraisalRoomUse use) {
     case AppraisalRoomUse::bathroom_full: return "bathroom_full";
     case AppraisalRoomUse::bathroom_half: return "bathroom_half";
     case AppraisalRoomUse::other: return "other";
+    case AppraisalRoomUse::breakfast_room: return "breakfast_room";
+    case AppraisalRoomUse::den: return "den";
+    case AppraisalRoomUse::dining_room: return "dining_room";
+    case AppraisalRoomUse::family_room: return "family_room";
+    case AppraisalRoomUse::kitchen: return "kitchen";
+    case AppraisalRoomUse::laundry_room: return "laundry_room";
+    case AppraisalRoomUse::living_room: return "living_room";
+    case AppraisalRoomUse::loft: return "loft";
+    case AppraisalRoomUse::media_room: return "media_room";
+    case AppraisalRoomUse::mudroom: return "mudroom";
+    case AppraisalRoomUse::recreation_room: return "recreation_room";
+    case AppraisalRoomUse::sunroom: return "sunroom";
+    case AppraisalRoomUse::utility_room: return "utility_room";
+    case AppraisalRoomUse::walk_in_pantry: return "walk_in_pantry";
+    case AppraisalRoomUse::workshop: return "workshop";
     }
     throw std::invalid_argument("Unsupported room use");
 }
 AppraisalRoomUse room_use(const std::string& token) {
     for (auto value : {AppraisalRoomUse::bedroom, AppraisalRoomUse::bathroom_full,
-                       AppraisalRoomUse::bathroom_half, AppraisalRoomUse::other})
+                       AppraisalRoomUse::bathroom_half, AppraisalRoomUse::other,
+                       AppraisalRoomUse::breakfast_room, AppraisalRoomUse::den, AppraisalRoomUse::dining_room,
+                       AppraisalRoomUse::family_room, AppraisalRoomUse::kitchen, AppraisalRoomUse::laundry_room,
+                       AppraisalRoomUse::living_room, AppraisalRoomUse::loft, AppraisalRoomUse::media_room,
+                       AppraisalRoomUse::mudroom, AppraisalRoomUse::recreation_room, AppraisalRoomUse::sunroom,
+                       AppraisalRoomUse::utility_room, AppraisalRoomUse::walk_in_pantry, AppraisalRoomUse::workshop})
         if (room_use_token(value) == token) return value;
     throw std::invalid_argument("Unsupported declared room use");
 }
@@ -410,6 +449,26 @@ void add_room(AppraisalRoomCounts& counts, const AppraisalRoomDeclaration& room)
     if (room.use == AppraisalRoomUse::bathroom_full) ++counts.bathrooms_full;
     if (room.use == AppraisalRoomUse::bathroom_half) ++counts.bathrooms_half;
 }
+GradeStatus reporting_grade(const std::optional<AppraisalPolicy>& policy, const AppraisalFacts& facts) {
+    if (policy && policy->kind == AppraisalPolicyKind::ansi_z765_2021) {
+        // Match ANSI calculation eligibility: the observed whole-floor fact is
+        // authoritative; an absent observation never falls back to legacy grade.
+        if (!facts.ansi || !facts.ansi->any_part_below_grade.has_value()) return GradeStatus::unknown;
+        return *facts.ansi->any_part_below_grade ? GradeStatus::below : GradeStatus::above;
+    }
+    return facts.grade;
+}
+AppraisalAreaCategory unit_area_category(AppraisalAreaCategory category) {
+    switch (category) {
+    case AppraisalAreaCategory::adu_above_grade_finished: return AppraisalAreaCategory::above_grade_finished;
+    case AppraisalAreaCategory::adu_above_grade_unfinished: return AppraisalAreaCategory::above_grade_unfinished;
+    case AppraisalAreaCategory::adu_below_grade_finished: return AppraisalAreaCategory::below_grade_finished;
+    case AppraisalAreaCategory::adu_below_grade_unfinished: return AppraisalAreaCategory::below_grade_unfinished;
+    case AppraisalAreaCategory::adu_above_grade_nonstandard_finished: return AppraisalAreaCategory::above_grade_nonstandard_finished;
+    case AppraisalAreaCategory::adu_below_grade_nonstandard_finished: return AppraisalAreaCategory::below_grade_nonstandard_finished;
+    default: return category;
+    }
+}
 AppraisalFormProjection form_projection(const DocumentSnapshot& source,
     const AppraisalDocumentReport& report, const AppraisalReportingSettings& settings) {
     AppraisalFormProjection result; result.contract = settings.contract; result.configuration_valid=true;
@@ -423,6 +482,14 @@ AppraisalFormProjection form_projection(const DocumentSnapshot& source,
         report.policy && report.policy->kind == AppraisalPolicyKind::ansi_z765_2021;
     result.room_counts_available = result.area_fields_available && settings.room_inventory_complete;
     result.room_summaries_available = result.room_counts_available;
+    result.individual_units_available = settings.version == 2 && result.area_fields_available;
+    for (const auto& unit : settings.living_units) {
+        AppraisalLivingUnitProjection projected;
+        projected.living_unit = unit;
+        projected.area_fields_available = result.area_fields_available && settings.contract == AppraisalReportingContract::uad_3_6;
+        projected.room_counts_available = projected.area_fields_available && settings.room_inventory_complete;
+        result.living_units.push_back(std::move(projected));
+    }
     if (!result.area_fields_available) result.issues.push_back("Report fields withheld: current qualified ANSI-oriented residential measurements are required.");
     if (!settings.room_inventory_complete) result.issues.push_back("Room counts withheld: confirm a complete explicitly declared room inventory; this confirmation is not independent geometry verification.");
     if (report.calculation) {
@@ -447,6 +514,7 @@ AppraisalFormProjection form_projection(const DocumentSnapshot& source,
             (boundary.facts->access == AccessStatus::direct_interior || boundary.facts->access == AccessStatus::through_unfinished) &&
             (category == AppraisalAreaCategory::adu_above_grade_finished || category == AppraisalAreaCategory::adu_above_grade_nonstandard_finished);
         if (stored == entity.properties.end()) {
+            if (identity != DwellingIdentity::detached_other) result.individual_units_available = false;
             result.room_counts_available = false;
             result.room_summaries_available = false;
             result.issues.push_back(boundary.boundary_id + ": declare room membership (an explicit empty list is permitted).");
@@ -460,6 +528,32 @@ AppraisalFormProjection form_projection(const DocumentSnapshot& source,
             const auto facts = parse_appraisal_area_reporting_facts(*stored);
             if (facts.source_geometry_sha256 != appraisal_reporting_source_digest(source, boundary.boundary_id))
                 throw std::invalid_argument("Reporting observations are stale; reconfirm against current source geometry and appraisal observations.");
+            const auto* unit = assigned_unit(settings, facts, *boundary.facts);
+            AppraisalLivingUnitProjection* projected = nullptr;
+            AppraisalLivingUnitLevel* projected_level = nullptr;
+            if (unit) {
+                projected = &*std::find_if(result.living_units.begin(), result.living_units.end(),
+                    [&](const auto& value) { return value.living_unit.unit_id == unit->unit_id; });
+                projected->boundary_ids.push_back(boundary.boundary_id);
+                const auto floor_id = text(entity.properties, "floor_id").value_or("");
+                const bool separate = category == AppraisalAreaCategory::noncontinuous_finished;
+                auto level = std::find_if(projected->levels.begin(), projected->levels.end(),
+                    [&](const auto& value) { return value.floor_id == floor_id && value.noncontinuous == separate; });
+                if (level == projected->levels.end()) {
+                    projected->levels.push_back({floor_id, reporting_grade(report.policy, *boundary.facts), separate});
+                    level = std::prev(projected->levels.end());
+                }
+                projected_level = &*level;
+                level->boundary_ids.push_back(boundary.boundary_id);
+                if (category && boundary.measurement) {
+                    const auto mapped = unit_area_category(*category);
+                    projected->area_fields[mapped] += boundary.measurement->net_square_metres;
+                    level->area_fields[mapped] += boundary.measurement->net_square_metres;
+                } else projected->area_fields_available = false;
+            } else if (settings.version == 2 && identity != DwellingIdentity::detached_other) {
+                result.individual_units_available = false;
+                result.issues.push_back(boundary.boundary_id + ": individual unit fields withheld until a living unit is explicitly assigned.");
+            }
             if (identity != DwellingIdentity::attached_adu && facts.contained_within_primary == true)
                 throw std::invalid_argument("Only an attached ADU may be declared contained within the primary dwelling.");
             if (legacy_adu_candidate) {
@@ -499,7 +593,13 @@ AppraisalFormProjection form_projection(const DocumentSnapshot& source,
                 // appraiser declaration, never a name or fixture inference.
                 const bool counted = primary && (finished_primary || (uad3 && unfinished_primary)) && (uad3 || !below);
                 result.rooms.push_back({room.room_id, boundary.boundary_id,
-                    text(entity.properties, "floor_id").value_or(""), room.use, *category, identity, counted});
+                    text(entity.properties, "floor_id").value_or(""), room.use, *category, identity, counted, facts.living_unit_id, room.other_description});
+                if (projected_level) {
+                    add_room(projected_level->counts, room);
+                    ++projected_level->room_types[room.use];
+                    if(room.use==AppraisalRoomUse::other && !room.other_description.empty())++projected_level->other_room_descriptions[room.other_description];
+                    if (!projected_level->noncontinuous) add_room(projected->counts, room);
+                }
                 if (settings.contract == AppraisalReportingContract::legacy_uad_2_6 && counted && !room.legacy_total_room) {
                     result.room_counts_available = false;
                     result.issues.push_back(room.room_id + ": explicitly declare membership in legacy Total Rooms; use labels do not establish it.");
@@ -507,49 +607,172 @@ AppraisalFormProjection form_projection(const DocumentSnapshot& source,
                 if (counted) add_room(result.primary_counts, room);
                 if (primary && below) add_room(result.below_grade_counts, room);
                 if (noncontinuous) add_room(result.noncontinuous_counts, room);
-                // This is combined ADU summary detail, not a per-unit URAR
-                // field: the declaration model has no distinct ADU unit IDs.
+                // Retained V1 combined summary; V2 individual fields above
+                // use the explicit registry assignment instead.
                 if (adu) add_room(result.adu_counts, room);
             }
         } catch (const std::exception& error) {
+            result.individual_units_available = false;
             result.area_fields_available = false; result.room_counts_available = false;
             result.room_summaries_available = false;
             result.issues.push_back(boundary.boundary_id + ": " + error.what());
         }
     }
+    for (auto& unit : result.living_units) {
+        if (unit.boundary_ids.empty()) {
+            result.individual_units_available = false;
+            result.issues.push_back(unit.living_unit.identifier + ": individual unit fields withheld; no assigned measurements are in the active scope.");
+        }
+        for(const auto& declared:unit.living_unit.levels) if(std::none_of(unit.levels.begin(),unit.levels.end(),
+            [&](const auto& level){return level.floor_id==declared.floor_id;}))
+            result.issues.push_back(unit.living_unit.identifier + ": declared unit level has no assigned measurements in the active scope; level form fields withheld.");
+        for (auto& level : unit.levels) {
+            const auto declared = std::find_if(unit.living_unit.levels.begin(), unit.living_unit.levels.end(),
+                [&](const auto& value) { return value.floor_id == level.floor_id; });
+            if (declared != unit.living_unit.levels.end()) {
+                level.declaration = *declared;
+                const bool below_grade = declared->grade_level_type && *declared->grade_level_type != "above_grade";
+                const bool exterior = declared->below_grade_access == "interior_and_exterior" || declared->below_grade_access == "exterior_only";
+                try {
+                    level.form_fields_available = declared->source_geometry_sha256 == appraisal_reporting_level_source_digest(source, level.floor_id) &&
+                        declared->grade_level_type && level.grade != GradeStatus::unknown &&
+                        (below_grade == (level.grade == GradeStatus::below)) &&
+                        (!below_grade || declared->below_grade_access) &&
+                        (!exterior || declared->exterior_access) &&
+                        (declared->exterior_access != "other" || !declared->exterior_access_description.empty());
+                } catch (const std::exception&) { level.form_fields_available = false; }
+            }
+            if (!level.form_fields_available) result.issues.push_back(unit.living_unit.identifier + " / " + level.floor_id +
+                ": level form fields withheld; declare and reconfirm the unit's level number, grade and applicable below-grade access.");
+        }
+    }
+    if (!result.individual_units_available) for(auto& unit:result.living_units) unit.area_fields_available = unit.room_counts_available = false;
+    if (settings.version == 1) result.issues.push_back("Individual living unit fields unavailable in V1 reporting; legacy measurements and combined ADU summaries remain available.");
     std::sort(result.issues.begin(), result.issues.end());
     result.issues.erase(std::unique(result.issues.begin(), result.issues.end()), result.issues.end());
     return result;
 }
 } // namespace
 
+std::string appraisal_room_use_name(AppraisalRoomUse use) { return room_use_token(use); }
 nlohmann::json appraisal_reporting_json(const AppraisalReportingSettings& value) {
-    return {{"version", 1}, {"contract", reporting_contract_token(value.contract)},
+    Json result{{"version", value.version}, {"contract", reporting_contract_token(value.contract)},
             {"room_inventory_complete", value.room_inventory_complete}};
+    if (value.version == 2) {
+        result["living_units"] = Json::array();
+        for (const auto& unit : value.living_units) {
+            Json item{{"unit_id", unit.unit_id}, {"identifier", unit.identifier}, {"role", dwelling_identity_name(unit.role)}, {"levels", Json::array()}};
+            for (const auto& level : unit.levels) {
+                Json detail{{"floor_id", level.floor_id}, {"level_number", level.level_number}, {"source_geometry_sha256", level.source_geometry_sha256}};
+                if (level.grade_level_type) detail["grade_level_type"] = *level.grade_level_type;
+                if (level.below_grade_access) detail["below_grade_access"] = *level.below_grade_access;
+                if (level.exterior_access) detail["exterior_access"] = *level.exterior_access;
+                if (!level.exterior_access_description.empty()) detail["exterior_access_description"] = level.exterior_access_description;
+                item["levels"].push_back(std::move(detail));
+            }
+            if (unit.levels.empty()) item.erase("levels");
+            result["living_units"].push_back(std::move(item));
+        }
+    } else if (!value.living_units.empty()) throw std::invalid_argument("V1 reporting cannot contain living units");
+    (void)parse_appraisal_reporting_settings(result);
+    return result;
 }
 nlohmann::json appraisal_reporting_json(const AppraisalAreaReportingFacts& value) {
-    Json result{{"version", 1}, {"source_geometry_sha256", value.source_geometry_sha256}, {"rooms", Json::array()}};
+    Json result{{"version", value.version}, {"source_geometry_sha256", value.source_geometry_sha256}, {"rooms", Json::array()}};
+    if (value.living_unit_id) {
+        if (value.version != 2) throw std::invalid_argument("V1 reporting cannot contain a living unit assignment");
+        result["living_unit_id"] = *value.living_unit_id;
+    }
     if (value.contained_within_primary) result["contained_within_primary"] = *value.contained_within_primary;
     for (const auto& room : value.rooms) {
         Json item{{"room_id", room.room_id}, {"use", room_use_token(room.use)}};
         if (room.legacy_total_room) item["legacy_total_room"] = *room.legacy_total_room;
+        if (!room.other_description.empty()) item["other_description"] = room.other_description;
         result["rooms"].push_back(std::move(item));
     }
     (void)parse_appraisal_area_reporting_facts(result);
     return result;
 }
 AppraisalReportingSettings parse_appraisal_reporting_settings(const Json& value) {
-    reporting_keys(value, {"version", "contract", "room_inventory_complete"});
+    reporting_keys(value, {"version", "contract", "room_inventory_complete", "living_units"});
     const auto token = text(value, "contract").value_or("");
     AppraisalReportingContract contract;
     if (token == "legacy_uad_2_6") contract = AppraisalReportingContract::legacy_uad_2_6;
     else if (token == "uad_3_6") contract = AppraisalReportingContract::uad_3_6;
     else throw std::invalid_argument("Unsupported reporting contract");
-    return {contract, reporting_bool(value, "room_inventory_complete")};
+    AppraisalReportingSettings result{contract, reporting_bool(value, "room_inventory_complete")};
+    result.version = value.at("version").get<unsigned>();
+    if (result.version == 1) {
+        if (value.contains("living_units")) throw std::invalid_argument("V1 reporting cannot contain living units");
+        return result;
+    }
+    if (!value.contains("living_units") || !value.at("living_units").is_array() ||
+        value.at("living_units").empty() || value.at("living_units").size() > 64)
+        throw std::invalid_argument("V2 living_units must contain 1 to 64 units");
+    std::set<std::string> ids, identifiers;
+    unsigned primary = 0;
+    for (const auto& item : value.at("living_units")) {
+        exact_keys(item, {"unit_id", "identifier", "role", "levels"});
+        AppraisalLivingUnit unit;
+        unit.unit_id = text(item, "unit_id").value_or("");
+        unit.identifier = text(item, "identifier").value_or("");
+        if (!bounded_reporting_text(unit.unit_id) || !bounded_reporting_text(unit.identifier) ||
+            !ids.insert(unit.unit_id).second || !identifiers.insert(unit.identifier).second)
+            throw std::invalid_argument("Living unit IDs and appraiser identifiers must be bounded, nonblank and unique");
+        const auto role = parse_dwelling_identity(text(item, "role").value_or(""));
+        if (!role || *role == DwellingIdentity::detached_other)
+            throw std::invalid_argument("Living unit role must be primary, attached_adu or detached_adu");
+        unit.role = *role;
+        if (unit.role == DwellingIdentity::primary) ++primary;
+        if (item.contains("levels")) {
+            if (!item.at("levels").is_array() || item.at("levels").size() > 128) throw std::invalid_argument("Unit levels must be a bounded array");
+            std::set<std::string> floors, labels;
+            for (const auto& detail : item.at("levels")) {
+                exact_keys(detail, {"floor_id", "level_number", "grade_level_type", "below_grade_access", "exterior_access", "exterior_access_description", "source_geometry_sha256"});
+                AppraisalLivingUnitLevelDeclaration level;
+                level.floor_id = text(detail, "floor_id").value_or("");
+                if (!bounded_reporting_text(level.floor_id) || !floors.insert(level.floor_id).second) throw std::invalid_argument("Unit levels require unique bounded floor IDs");
+                if (!detail.contains("level_number") || !detail.at("level_number").is_number_integer() || detail.at("level_number") < 1 || detail.at("level_number") > 99)
+                    throw std::invalid_argument("Unit level number must be 1 to 99");
+                level.level_number = detail.at("level_number").get<unsigned>();
+                const auto choice = [&](const char* key, std::initializer_list<const char*> allowed) {
+                    auto token = text(detail, key);
+                    if (token && std::none_of(allowed.begin(), allowed.end(), [&](const char* value) { return *token == value; }))
+                        throw std::invalid_argument(std::string("Unknown unit level ") + key);
+                    return token;
+                };
+                level.grade_level_type = choice("grade_level_type", {"above_grade", "fully_below_grade", "partially_below_grade"});
+                level.below_grade_access = choice("below_grade_access", {"interior_and_exterior", "interior_only", "exterior_only"});
+                level.exterior_access = choice("exterior_access", {"cellar_door", "walk_out", "walk_up", "other"});
+                level.exterior_access_description = text(detail, "exterior_access_description").value_or("");
+                if (level.exterior_access_description.size() > 1024) throw std::invalid_argument("Unit exterior access description exceeds 1024 bytes");
+                if (level.grade_level_type == "above_grade" && (level.below_grade_access || level.exterior_access)) throw std::invalid_argument("Above-grade unit levels cannot declare below-grade access");
+                if (level.below_grade_access == "interior_only" && level.exterior_access) throw std::invalid_argument("Interior-only levels cannot declare exterior access");
+                if (!level.below_grade_access && level.exterior_access) throw std::invalid_argument("Exterior access requires a below-grade access observation");
+                if (!level.exterior_access_description.empty() && level.exterior_access != "other") throw std::invalid_argument("Exterior access description applies only to Other");
+                level.source_geometry_sha256 = text(detail, "source_geometry_sha256").value_or("");
+                if (!digest_text(level.source_geometry_sha256)) throw std::invalid_argument("Unit level source SHA256 is invalid");
+                if (level.grade_level_type) {
+                    const auto label = (*level.grade_level_type == "above_grade" ? "" : "B") + std::to_string(level.level_number);
+                    if (!labels.insert(label).second) throw std::invalid_argument("Unit level numbers must be unique within their grade");
+                }
+                unit.levels.push_back(std::move(level));
+            }
+        }
+        result.living_units.push_back(std::move(unit));
+    }
+    if (primary != 1) throw std::invalid_argument("The current single-family reporting scope requires exactly one primary unit");
+    return result;
 }
 AppraisalAreaReportingFacts parse_appraisal_area_reporting_facts(const Json& value) {
-    reporting_keys(value, {"version", "source_geometry_sha256", "contained_within_primary", "rooms"});
+    reporting_keys(value, {"version", "source_geometry_sha256", "contained_within_primary", "rooms", "living_unit_id"});
     AppraisalAreaReportingFacts result;
+    result.version = value.at("version").get<unsigned>();
+    if (value.contains("living_unit_id")) {
+        if (result.version != 2) throw std::invalid_argument("V1 reporting cannot contain a living unit assignment");
+        result.living_unit_id = text(value, "living_unit_id");
+        if (!bounded_reporting_text(*result.living_unit_id)) throw std::invalid_argument("Living unit reference must be a bounded, nonblank ID");
+    }
     result.source_geometry_sha256 = text(value, "source_geometry_sha256").value_or("");
     if (!digest_text(result.source_geometry_sha256)) throw std::invalid_argument("Reporting source geometry SHA256 is invalid");
     if (value.contains("contained_within_primary")) result.contained_within_primary = reporting_bool(value, "contained_within_primary");
@@ -560,12 +783,21 @@ AppraisalAreaReportingFacts parse_appraisal_area_reporting_facts(const Json& val
         if (!item.is_object()) throw std::invalid_argument("Room declaration must be an object");
         for (const auto& [key, ignored] : item.items()) {
             (void)ignored;
-            if (key != "room_id" && key != "use" && key != "legacy_total_room") throw std::invalid_argument("Unknown room declaration field: " + key);
+            if (key != "room_id" && key != "use" && key != "legacy_total_room" &&
+                !(result.version==2 && key=="other_description")) throw std::invalid_argument("Unknown room declaration field: " + key);
         }
         const auto id = text(item, "room_id").value_or("");
         if (id.empty() || id.size() > 256 || id.find_first_not_of(" \t\r\n") == std::string::npos || !unique.insert(id).second)
             throw std::invalid_argument("Room IDs must be bounded, nonblank and unique");
         AppraisalRoomDeclaration room{id, room_use(text(item, "use").value_or("")), {}};
+        if(result.version==1 && room.use!=AppraisalRoomUse::bedroom && room.use!=AppraisalRoomUse::bathroom_full &&
+            room.use!=AppraisalRoomUse::bathroom_half && room.use!=AppraisalRoomUse::other)
+            throw std::invalid_argument("Extended room types require V2 reporting");
+        room.other_description=text(item,"other_description").value_or("");
+        if(result.version==2 && room.use==AppraisalRoomUse::other &&
+            (room.other_description.empty() || room.other_description.size()>1024 || room.other_description.find_first_not_of(" \t\r\n")==std::string::npos))
+            throw std::invalid_argument("V2 Other room type requires a description of at most 1024 bytes");
+        if(room.use!=AppraisalRoomUse::other && item.contains("other_description"))throw std::invalid_argument("Other description applies only to Other room type");
         if (item.contains("legacy_total_room")) room.legacy_total_room = reporting_bool(item, "legacy_total_room");
         result.rooms.push_back(std::move(room));
     }
@@ -615,6 +847,17 @@ std::string appraisal_reporting_source_digest(const DocumentSnapshot& source, co
     visit(boundary_id);
     return entity_map_digest(binding);
 }
+std::string appraisal_reporting_level_source_digest(const DocumentSnapshot& source, const std::string& floor_id) {
+    const auto floor = source.entities().find(floor_id);
+    if (floor == source.entities().end() || floor->second.type != "floor") throw std::invalid_argument("Unit level floor is unavailable");
+    Json inputs{{"floor_id", floor_id}, {"floor_facts", floor->second.properties.value("appraisal_facts", Json::object())}, {"boundaries", Json::object()}};
+    for (const auto& [id, entity] : source.entities()) if (boundary_type(entity.type) &&
+        text(entity.properties, "floor_id") == floor_id && scope(entity) == "building")
+        inputs["boundaries"][id] = appraisal_reporting_source_digest(source, id);
+    std::map<std::string, Entity, std::less<>> binding;
+    binding.emplace(floor_id, Entity{floor_id, "appraisal_level_source", std::move(inputs), false, Json::object()});
+    return entity_map_digest(binding);
+}
 void validate_appraisal_reporting_changes(const DocumentSnapshot& source, const AppraisalReportingChanges& changes,
     const std::set<std::string, std::less<>>* visible_entity_ids) {
     if (changes.revision != source.revision() || changes.source_document_id != source.document_id() ||
@@ -646,8 +889,51 @@ void validate_appraisal_reporting_changes(const DocumentSnapshot& source, const 
             const auto stored = properties.find("appraisal_reporting");
             if (stored != properties.end()) facts = parse_appraisal_area_reporting_facts(*stored);
         }
-        if (facts) for (const auto& room : facts->rooms)
-            if (!unique.insert(room.room_id).second) throw std::invalid_argument("Duplicate room membership: " + room.room_id);
+        if (facts) {
+            (void)assigned_unit(changes.settings, *facts, *boundary.facts);
+            if(changes.settings.version==2 && facts->source_geometry_sha256!=appraisal_reporting_source_digest(source,boundary.boundary_id))
+                throw std::invalid_argument("Reporting source observations are stale");
+            for (const auto& room : facts->rooms)
+                if (!unique.insert(room.room_id).second) throw std::invalid_argument("Duplicate room membership: " + room.room_id);
+        }
+    }
+    // Registry identity/role changes must also preserve references outside the
+    // active phase. Numeric room aggregation remains phase-scoped above.
+    if(changes.settings.version==2) for(const auto& [id,entity]:source.entities()) {
+        if(!boundary_type(entity.type) || replacements.contains(id) || !entity.properties.contains("appraisal_reporting"))continue;
+        const auto& stored=entity.properties.at("appraisal_reporting");
+        if(!stored.is_object() || !stored.contains("living_unit_id"))continue;
+        if(belongs_to_other_property(source,entity,changes.property_id))continue;
+        const auto owners=context(source,entity,changes.property_id);
+        const auto observations=declarations(source.entities().at(changes.property_id),*owners.floor,entity);
+        if(observations.facts.use!=AreaUse::dwelling)throw std::invalid_argument("Living unit reference is outside dwelling measurements");
+        (void)assigned_unit(changes.settings,parse_appraisal_area_reporting_facts(stored),observations.facts);
+    }
+    for (const auto& unit : changes.settings.living_units) for (const auto& level : unit.levels) {
+        const auto floor = source.entities().find(level.floor_id);
+        if (floor == source.entities().end() || floor->second.type != "floor") throw std::invalid_argument("Unit level floor is unavailable");
+        const auto building = source.entities().find(text(floor->second.properties, "building_id").value_or(""));
+        if (building == source.entities().end() || building->second.type != "building" ||
+            text(building->second.properties, "property_id") != changes.property_id)
+            throw std::invalid_argument("Unit level floor is outside this property");
+        if (level.source_geometry_sha256 != appraisal_reporting_level_source_digest(source, level.floor_id))
+            throw std::invalid_argument("Unit level observations are stale; reconfirm current source measurements and grade facts");
+        for (const auto& [id,entity] : source.entities()) {
+            if(!boundary_type(entity.type))continue;
+            if (text(entity.properties, "floor_id") != level.floor_id) continue;
+            const auto changed = replacements.find(id);
+            std::optional<AppraisalAreaReportingFacts> facts;
+            if (changed != replacements.end()) facts = changed->second;
+            else if (entity.properties.contains("appraisal_reporting")) facts = parse_appraisal_area_reporting_facts(entity.properties.at("appraisal_reporting"));
+            if (!facts || facts->living_unit_id != unit.unit_id) continue;
+            const auto owner=context(source,entity,changes.property_id);
+            const auto observed=declarations(source.entities().at(changes.property_id),*owner.floor,entity);
+            if(observed.facts.use!=AreaUse::dwelling)throw std::invalid_argument("Unit level reference is outside dwelling measurements");
+            const auto grade = reporting_grade(observed.policy, observed.facts);
+            if (level.grade_level_type && ((grade == GradeStatus::above && *level.grade_level_type != "above_grade") ||
+                (grade == GradeStatus::below && *level.grade_level_type == "above_grade")))
+                throw std::invalid_argument("Unit level grade contradicts recorded measurement grade");
+        }
     }
 }
 

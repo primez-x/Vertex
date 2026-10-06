@@ -1,4 +1,5 @@
 #include "sketch/building_view_projection.hpp"
+#include "sketch/assembly_geometry.hpp"
 
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRep_Builder.hxx>
@@ -298,7 +299,8 @@ void append_section_edge(const TopoDS_Edge& edge, const FrameBasis& frame,
     }
 }
 
-Boundary project_section(const TopoDS_Shape& shape, const FrameBasis& frame) {
+Boundary project_section(const TopoDS_Shape& shape, const FrameBasis& frame,
+                         bool allow_miss = false) {
     const gp_Pln plane(frame.origin, gp_Dir(frame.normal));
     BRepAlgoAPI_Section section(shape, plane, true);
     if (!section.IsDone() || section.Shape().IsNull()) {
@@ -315,7 +317,7 @@ Boundary project_section(const TopoDS_Shape& shape, const FrameBasis& frame) {
         if (left.end.y != right.end.y) return left.end.y < right.end.y;
         return left.sweep_radians < right.sweep_radians;
     });
-    if (result.empty()) projection_error("Building section plane does not intersect the solid");
+    if (result.empty() && !allow_miss) projection_error("Building section plane does not intersect the solid");
     return result;
 }
 
@@ -584,6 +586,30 @@ Boundary project_shape_view(const TopoDS_Shape& shape, BuildingViewKind kind,
 Boundary project_building_view(const BuildingObject& object, BuildingViewKind kind,
                                const BuildingViewFrame& frame) {
     return project_shape_view(make_building_shape(object), kind, frame);
+}
+
+AssemblyViewProjection project_assembly_view(const AssemblyExpansion& expansion,
+    BuildingViewKind kind, const BuildingViewFrame& frame) {
+    try {
+        const auto frame_basis = basis(frame);
+        if (expansion.profiles.empty())
+            projection_error("Assembly view requires at least one actual profile");
+        const auto geometry = make_assembly_geometry(expansion);
+        AssemblyViewProjection result;
+        result.boundary = project_shape_view(geometry.shape, kind, frame);
+        result.profiles.reserve(geometry.solids.size());
+        for (const auto& solid : geometry.solids) {
+            const auto& source = solid.source;
+            auto edges = kind == BuildingViewKind::section
+                ? project_section(solid.shape, frame_basis, true)
+                : project_shape_view(solid.shape, kind, frame);
+            result.profiles.push_back({source.part_path, source.type_id,
+                source.profile.id, source.material_id, std::move(edges)});
+        }
+        return result;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Assembly view projection failed: ") + error.what());
+    }
 }
 
 bool shape_intersects_view_depth(const TopoDS_Shape& shape,

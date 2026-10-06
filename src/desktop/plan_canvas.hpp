@@ -157,6 +157,9 @@ struct CanvasEntity {
     // Explicit persisted styles; absence preserves legacy screen/output alpha.
     std::optional<double> fill_opacity;
     QString line_pattern{QStringLiteral("solid")};
+    // Derived profile identity within one semantic edit target. Empty retains
+    // legacy single-presentation matching; picking and callbacks use id.
+    QString presentation_key;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -493,6 +496,8 @@ public:
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
     void setEntityTransformStarted(std::function<void(QString)> callback);
+    // Capture authority at an opening-width or boundary-vertex press.
+    void setEntityEditGestureStarted(std::function<void(QString)> callback);
     // nullopt retains the ordinary transform preview; an engaged empty
     // proposal rejects it. Pending exact projections never invent geometry.
     void setEntityTransformPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
@@ -894,6 +899,7 @@ private:
         QStringList, Vec2, std::uint64_t)> m_entities_move_preview_requested;
     std::function<bool(QString, double, double)> m_entity_transform_requested;
     std::function<void(QString)> m_entity_transform_started;
+    std::function<void(QString)> m_entity_edit_gesture_started;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, double, Vec2, std::uint64_t)> m_entity_transform_preview_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;

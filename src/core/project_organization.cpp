@@ -82,9 +82,9 @@ void add_issues(std::vector<std::string>& destination,
 }
 
 bool is_placeable_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 14> placeable{
+    static constexpr std::array<std::string_view, 15> placeable{
         "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "room",
-        "slab", "roof", "stair", "railing", "column", "beam", "terrain_surface", "measurement_linework"};
+        "slab", "roof", "stair", "railing", "column", "beam", "terrain_surface", "measurement_linework", "assembly_instance"};
     return std::find(placeable.begin(), placeable.end(), type) != placeable.end();
 }
 

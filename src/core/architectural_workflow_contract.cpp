@@ -48,7 +48,7 @@ const char* name(ArchitecturalOutputKind kind) {
 bool can_transform_architectural_entity_type(std::string_view type) noexcept {
     return type == "wall" || type == "slab" || type == "room" ||
            type == "column" || type == "beam" || type == "stair" ||
-           type == "railing" || type == "roof";
+           type == "railing" || type == "roof" || type == "assembly_instance";
 }
 
 ArchitecturalTransaction ArchitecturalTransaction::create(std::string id, std::string base_revision,

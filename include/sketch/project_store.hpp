@@ -144,7 +144,9 @@ public:
     // axis dimensions require v55, including deleted and undone history.
     // Form-specific appraisal reporting and typed limitation declarations
     // require v56 across current, deleted and undone history.
-    static constexpr std::uint32_t format_version = 56;
+    // Independent/nested assembly geometry, joined roof material ownership and
+    // per-unit appraisal reporting require v57 across all retained revisions.
+    static constexpr std::uint32_t format_version = 57;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

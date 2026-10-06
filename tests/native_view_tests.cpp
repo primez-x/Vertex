@@ -3,6 +3,8 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/architecture.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/visualization/native_model_view.hpp"
@@ -899,6 +901,138 @@ void check_desktop_hosted_gestures(QTemporaryDir& temporary) {
     window.hide();
 }
 
+struct MaterialPixels {
+    std::size_t red{}, green{}, blue{};
+    std::optional<QPointF> red_point;
+};
+MaterialPixels material_pixels(const QImage& image) {
+    MaterialPixels result;
+    double red_x = 0, red_y = 0;
+    for (int y=0; y<image.height(); ++y) for (int x=0; x<image.width(); ++x) {
+        const auto color = image.pixelColor(x,y);
+        if (color.red() > 1.5*color.green()+30 && color.red() > 1.5*color.blue()+30) {
+            ++result.red;
+            red_x += x; red_y += y;
+        }
+        if (color.green() > 1.5*color.red()+30 && color.green() > 1.5*color.blue()+30) ++result.green;
+        if (color.blue() > 1.5*color.red()+30 && color.blue() > 1.5*color.green()+30) ++result.blue;
+    }
+    if (result.red) result.red_point = QPointF(red_x/result.red,red_y/result.red);
+    return result;
+}
+
+// Catches stale region-face matching, collapsed root identity and host copies
+// by exercising actual preparation, AIS rendering and native gesture callbacks.
+void check_regional_material_publication(sketch::visualization::NativeModelView& view,
+                                         QTemporaryDir& temporary) {
+    using namespace sketch;
+    const Boundary rectangle{{{0,0},{2,0}},{{2,0},{2,4}},{{2,4},{0,4}},{{0,4},{0,0}}};
+    AssemblyType type; type.id = "native-pair"; type.name = "Pair";
+    type.materials = {{"first","red"},{"second","blue"}};
+    type.profiles.push_back({"a",rectangle,{},0,0.2,"first"});
+    auto second = type.profiles.front(); second.id = "b"; second.material_slot = "second";
+    for (auto& segment : second.outer) { segment.start.x += 2; segment.end.x += 2; }
+    type.profiles.push_back(second);
+    for (const int fixture : {0,1,2}) {
+        const bool assembly = fixture != 0;
+        const bool embedded = fixture == 2;
+        const std::string root_id = embedded ? "native-region-catalog:instance:regional-child" :
+            assembly ? "native-independent" : "native-roof-regions";
+        std::vector<AssemblyInstance> embedded_instances;
+        if (embedded) {
+            AssemblyInstance instance; instance.id = "regional-child"; instance.type_id = type.id;
+            instance.root_transform = AssemblyTransform{};
+            embedded_instances.push_back(instance);
+        }
+        Entity catalog{"native-region-catalog","assembly_model",{{"model",AssemblyModel::create(
+            {{"red","Red","#ff0000"},{"blue","Blue","#0000ff"}}, {type}, embedded_instances).to_json()}}};
+        std::vector<Entity> entities{catalog};
+        if (assembly && !embedded) {
+            AssemblyInstance instance; instance.id = root_id; instance.type_id = type.id;
+            instance.root_transform = AssemblyTransform{};
+            entities.push_back(encode_document_assembly_instance(Entity{root_id,"assembly_instance"},
+                {catalog.id,instance}));
+        } else if (!assembly) {
+            auto first = encode_building_entity(SlopedRoofPanel{"native-roof-a",{0,0,0},0,2,4,0,0,0,.2,{}});
+            auto last = encode_building_entity(SlopedRoofPanel{"native-roof-b",{1.9,0,0},0,2,4,0,0,0,.2,{}});
+            first.properties["material_assignment"] = {{"version",1},{"catalog_id",catalog.id},{"material_id","red"}};
+            last.properties["material_assignment"] = {{"version",1},{"catalog_id",catalog.id},{"material_id","blue"}};
+            entities.push_back(first); entities.push_back(last);
+            entities.push_back(Entity{root_id,"roof_join",roof_join_json(RoofJoin{root_id,{first.id,last.id}})});
+        }
+        auto model = Document::create(entities);
+        const auto original = model.snapshot();
+        const auto id = QString::fromStdString(root_id);
+        const auto path = [&](const char* suffix) { return temporary.filePath(QStringLiteral("native-regions-%1").arg(fixture) + suffix); };
+        view.setSelectedEntity({}); view.setSnapshot(model.snapshot());
+        check(ready_settled(view), "Material region fixture must prepare and publish actual native geometry");
+        view.fitAll();
+        const auto initial = capture(view,path("-red-blue.png"));
+        const auto pixels = material_pixels(initial.image);
+        check(pixels.red > 100 && pixels.blue > 100,
+              "AIS must render the actual material of both roof or assembly regions");
+        {
+            // Pick an interior red pixel, away from edge antialiasing and the
+            // centroid gap between profiles. Double-click reports root identity.
+            check(pixels.red_point.has_value(), "Regional selection fixture requires an interior material pixel");
+            const QPointF pick = *pixels.red_point/view.devicePixelRatioF();
+            QString selected, edited;
+            view.onEntitySelected = [&](QString value) {
+                selected = value;
+                // MainWindow synchronizes its semantic selection back to the
+                // view. Retain that production observer contract in this
+                // standalone viewport fixture as well.
+                view.setSelectedEntity(value);
+            };
+            view.onEntityEditRequested = [&](QString value) { edited = value; };
+            mouse(view,QEvent::MouseButtonDblClick,pick,Qt::LeftButton,Qt::LeftButton);
+            mouse(view,QEvent::MouseButtonRelease,pick,Qt::LeftButton,Qt::NoButton);
+            check(selected == id && edited == id && view.transformControlsVisible() == assembly,
+                  "Picking any region selects its semantic root; both independent and catalog-owned geometric assemblies receive transform controls");
+            view.onEntitySelected = {}; view.onEntityEditRequested = {};
+            view.setSelectedEntity(id);
+        }
+        catalog.properties["model"] = AssemblyModel::create(
+            {{"red","Red","#00ff00"},{"blue","Blue"}}, {type}, embedded_instances).to_json();
+        model.apply(ApplyEntityChanges{model.revision(),{EntityChange::upsert(catalog)}, {}, "Recolor regions"});
+        view.setSnapshot(model.snapshot());
+        const auto recolored = capture(view,path("-green-default.png"));
+        const auto changed = material_pixels(recolored.image);
+        check(changed.green > 100 && changed.red == 0 && changed.blue == 0 &&
+              recolored.bounds == initial.bounds && recolored.image != initial.image,
+              "Appearance-only publication must recolor every region and remove cleared stale colors");
+        check(view.lastPublicationMetrics() && view.lastPublicationMetrics()->created == 1 &&
+              view.lastPublicationMetrics()->removed == 1,
+              "Regional appearance refresh replaces exactly one root AIS presentation");
+        if (assembly) {
+            check(view.transformControlsVisible(), "Regional recoloring retains selected root transform controls");
+            int moves = 0;
+            view.onEntityTranslationRequested = [&](QString target,double x,double y,double z) {
+                check(target == id && std::isfinite(x+y+z) && std::abs(x)+std::abs(y)+std::abs(z)>1e-8,
+                      "Assembly Move emits one independent root target and a finite nonzero world delta");
+                ++moves;
+            };
+            check(view.beginMove(id), "Independent root must support native Move");
+            const QPointF start = initial.centre / view.devicePixelRatioF();
+            const auto before = view.nativePresentationTransform(id);
+            mouse(view,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+            mouse(view,QEvent::MouseMove,start+QPointF(20,12),Qt::NoButton,Qt::LeftButton);
+            check(view.nativePresentationTransform(id) != before,
+                  "Native Move previews the whole root compound as one object");
+            mouse(view,QEvent::MouseButtonRelease,start+QPointF(20,12),Qt::LeftButton,Qt::NoButton);
+            check(moves == 1 && view.nativePresentationTransform(id) == before && view.transformControlsVisible(),
+                  "Move release emits one semantic request and restores the derived root preview");
+            view.onEntityTranslationRequested = {};
+        }
+        model.undo(model.revision()); view.setSnapshot(model.snapshot());
+        check(capture(view,path("-undo.png")).image == initial.image,
+              "Undo restores all regional materials without moving geometry or camera");
+        check(model.snapshot().entities() == original.entities(),
+              "Native region rendering and gesture requests preserve authoritative source entities");
+        view.setSelectedEntity({});
+    }
+}
+
 void check_publication_reuse(sketch::visualization::NativeModelView& view) {
     // Exercise actual AIS publication on the Windows driver. Counts express
     // bounded presentation work; recorded timings do not qualify production
@@ -1061,6 +1195,7 @@ int main(int argc,char** argv) {
                 return;
             }
             if (scenario == "publication") {
+                check_regional_material_publication(view, temporary);
                 check_publication_reuse(view);
                 application.exit(0);
                 return;

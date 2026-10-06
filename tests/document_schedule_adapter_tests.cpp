@@ -1,6 +1,7 @@
 #include "sketch/document_schedule_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/roof_join_semantics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -380,8 +381,22 @@ void test_assigned_material_schedule() {
 
 }  // namespace
 
+void test_roof_join_has_no_generic_material_row() {
+    using namespace sketch;
+    const auto catalog = Entity{"catalog","assembly_model", {{"model", AssemblyModel::create(
+        {{"solid","Solid"}}, {}, {}).to_json()}}};
+    auto join = Entity{"joined","roof_join",roof_join_json(RoofJoin{"joined",{"roof-a","roof-b"},
+        RoofJoinStyle::fused, RoofJoinMaterialAssignment{"catalog","solid"}})};
+    const auto document = Document::create({catalog,join,
+        Entity{"roof-a","roof",nlohmann::json::object()},Entity{"roof-b","roof",nlohmann::json::object()}});
+    const auto result = build_document_schedules(document.snapshot());
+    require(result.snapshot.rows.empty() && result.diagnostics.empty(),
+        "the architecture joined partition exclusively owns roof-join material rows");
+}
+
 int main() {
     try {
+        test_roof_join_has_no_generic_material_row();
         test_revision_and_opening_schedule();
         test_window_profile_schedule();
         test_assigned_material_schedule();

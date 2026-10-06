@@ -1,4 +1,7 @@
 #include "sketch/project_exchange.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/roof_join_semantics.hpp"
+#include "sketch/appraisal_document.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -24,12 +27,125 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 void check(bool value, const char *message) {
   if (!value)
     throw std::runtime_error(message);
 }
+
+std::vector<std::vector<sketch::Entity>> architectural_appraisal_v57_fixtures() {
+    using namespace sketch;
+    const auto make = [](std::string id, std::string type, nlohmann::json properties) {
+        auto result = Entity::create(std::move(type), std::move(properties));
+        result.id = std::move(id); return result;
+    };
+    AssemblyType leaf;
+    leaf.id = "leaf"; leaf.name = "Panel";
+    leaf.materials = {{"surface", "wood"}};
+    leaf.quantities = {{"pieces", {1, AssemblyQuantityUnit::count}}};
+    auto catalog = make("catalog", "assembly_model",
+        {{"model", AssemblyModel::create({{"wood", "Wood"}}, {leaf}, {}).to_json()}});
+    AssemblyDocumentInstance value;
+    value.assembly_catalog_id = catalog.id;
+    value.instance.id = "independent"; value.instance.type_id = leaf.id;
+    value.instance.root_transform = AssemblyTransform{{10, 20, 3}, 0.25, 1};
+    value.instance.material_overrides = {{"surface", "wood"}};
+    value.instance.quantity_overrides = {{"pieces", {3, AssemblyQuantityUnit::count}}};
+    const auto instance = encode_document_assembly_instance(
+        make(value.instance.id, "assembly_instance", {{"note", "retained metadata"}}), value);
+    AssemblyProfile profile;
+    profile.id = "box"; profile.height_m = 2; profile.material_slot = "surface";
+    profile.outer = {{{0,0},{1,0}}, {{1,0},{1,1}}, {{1,1},{0,1}}, {{0,1},{0,0}}};
+    leaf.profiles = {profile};
+    auto profiled_catalog = catalog;
+    profiled_catalog.properties["model"] = AssemblyModel::create({{"wood", "Wood"}}, {leaf}, {}).to_json();
+    // Canonical sloped-roof authoring fields; no native solid builder is needed
+    // to exercise the core relationship/reference storage contract.
+    const auto roof = [&](std::string id, double x) {
+        return make(std::move(id), "roof", {{"version", 1}, {"form", "sloped_roof_panel"},
+            {"base_position_m", {x, 0, 0}}, {"orientation_rad", 0}, {"run_m", 2},
+            {"span_m", 4}, {"rise_m", 0}, {"pitch_rad", 0}, {"overhang_m", 0},
+            {"thickness_m", .2}});
+    };
+    const auto roof_a = roof("roof-a", 0), roof_b = roof("roof-b", 1.9);
+    const auto join = make("join", "roof_join", {{"version", 2}, {"style", "fused"},
+        {"roof_ids", {"roof-a", "roof-b"}}, {"material_assignment",
+            {{"version", 1}, {"catalog_id", catalog.id}, {"material_id", "wood"}}}});
+    const auto property = make("property", "property", {{"appraisal_reporting",
+        {{"version", 2}, {"contract", "uad_3_6"}, {"room_inventory_complete", true},
+            {"living_units", nlohmann::json::array({
+                {{"unit_id", "home"}, {"identifier", "Main dwelling"}, {"role", "primary"}}})}}}});
+    const auto building = make("building", "building", {{"property_id", property.id}});
+    const auto floor = make("floor", "floor", {{"building_id", building.id}, {"property_id", property.id}});
+    auto area = make("area", "measurement_boundary", {{"property_id", property.id},
+        {"building_id", building.id}, {"floor_id", floor.id},
+        {"boundary", nlohmann::json::array({
+            {{"start", {0,0}}, {"end", {2,0}}, {"sweep_radians", 0}},
+            {{"start", {2,0}}, {"end", {2,2}}, {"sweep_radians", 0}},
+            {{"start", {2,2}}, {"end", {0,2}}, {"sweep_radians", 0}},
+            {{"start", {0,2}}, {"end", {0,0}}, {"sweep_radians", 0}}})}});
+    const auto digest = appraisal_reporting_source_digest(
+        Document::create({property, building, floor, area}).snapshot(), area.id);
+    area.properties["appraisal_reporting"] = {{"version", 2}, {"source_geometry_sha256", digest},
+        {"living_unit_id", "home"}, {"rooms", nlohmann::json::array({
+            {{"room_id", "studio"}, {"use", "other"}, {"other_description", "Exercise studio"}}})}};
+    (void)parse_appraisal_reporting_settings(property.properties.at("appraisal_reporting"));
+    (void)parse_roof_join(join.properties, join.id);
+    (void)parse_appraisal_area_reporting_facts(area.properties.at("appraisal_reporting"));
+    // Isolate the boundary floor from the property's own v2 floor.
+    auto legacy_property = property;
+    legacy_property.properties["appraisal_reporting"]["version"] = 1;
+    legacy_property.properties["appraisal_reporting"].erase("living_units");
+    auto unassigned_area = area;
+    unassigned_area.properties["appraisal_reporting"].erase("living_unit_id");
+    return {{catalog, instance}, {profiled_catalog}, {catalog, roof_a, roof_b, join},
+        {property}, {property, building, floor, area},
+        {legacy_property, building, floor, unassigned_area}};
+}
+
+void test_architectural_appraisal_v55_export_floor(const std::filesystem::path& root) {
+  unsigned index = 0;
+  for (const auto& fixtures : architectural_appraisal_v57_fixtures()) {
+    auto document = sketch::Document::create({});
+    std::vector<sketch::EntityChange> create, erase;
+    for (const auto& owner : fixtures) {
+      create.push_back(sketch::EntityChange::upsert(owner));
+      erase.push_back(sketch::EntityChange::erase(owner.id));
+    }
+    document.apply(sketch::ApplyEntityChanges{document.revision(), create, {}, "Create v57 semantics"});
+    const auto changed = document.snapshot();
+    auto deleted = sketch::Document::fork(changed);
+    deleted.apply(sketch::ApplyEntityChanges{deleted.revision(), erase, {}, "Delete v57 semantics"});
+    document.undo(document.revision());
+    for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
+      const auto output = root / ("architectural-appraisal-v55-" + std::to_string(index++));
+      sketch::extract_project(snapshot, output);
+      std::ifstream input(output / "project.json");
+      const auto encoded = nlohmann::json::parse(input);
+      check(encoded.at("exchange_version") == 55 &&
+          encoded.at("revisions").size() == snapshot.history().size(),
+          "current, undone and deleted v57 semantics require exchange55 with complete history");
+      for (std::size_t i = 0; i < snapshot.history().size(); ++i) {
+        const auto& expected = snapshot.history()[i];
+        const auto& row = encoded.at("revisions").at(i);
+        check(row.at("revision") == expected.revision && row.at("undo_stack") == expected.undo_stack &&
+            row.at("redo_stack") == expected.redo_stack && row.at("entities").size() == expected.entities.size(),
+            "exchange55 retains every revision and its history stacks");
+        for (const auto& [id, entity] : expected.entities) {
+          const auto found = std::find_if(row.at("entities").begin(), row.at("entities").end(),
+              [&](const auto& value) { return value.at("id") == id; });
+          check(found != row.at("entities").end() && found->at("type") == entity.type &&
+              found->at("required") == entity.required && found->at("properties") == entity.properties &&
+              found->at("extensions") == entity.extensions,
+              "exchange55 retains exact authoring envelopes and catalog/material/unit references");
+        }
+      }
+    }
+  }
+}
+
 void test_appraisal_reporting_export_floor(const std::filesystem::path& root) {
   auto property = sketch::Entity::create("property", {{"name", "Report property"}});
   auto document = sketch::Document::create({property});
@@ -1353,6 +1469,7 @@ int main() {
     }
     test_view_appearance_export_floor(root);
     test_appraisal_reporting_export_floor(root);
+    test_architectural_appraisal_v55_export_floor(root);
     test_live_exterior_source_exchange_v17(root);
     test_live_exterior_source_exchange_v17(root, true);
     test_live_exterior_source_exchange_v17(root, true,true);

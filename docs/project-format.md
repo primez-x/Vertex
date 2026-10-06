@@ -1,4 +1,48 @@
-# Vertex project formats v1 through v56
+# Vertex project formats v1 through v57
+
+## Independent assemblies, roof materials and living units (v57)
+
+Native format 57 and JSON/assets extraction version 55 protect independent
+`assembly_instance` entities, `assembly_model.model` catalogs with schema
+`sketch.assemblies.v4`, `roof_join` version 2 or its `material_assignment`, and
+property/boundary `appraisal_reporting` version 2. Reporting markers containing
+`living_units`, `living_unit_id`, or a room's `other_description` also require
+this floor. The scan includes every retained revision, including undone creation
+and deleted owners. Relabeling such an archive as v56 refuses even with a
+recomputed logical digest; refusal preserves its bytes. Existing v56/exchange54
+reporting and earlier format contracts continue to apply.
+
+Independent instances use the entity envelope `version: 1`,
+`form: independent_assembly_instance`, `assembly_catalog_id` and `instance`.
+The nested instance uses `sketch.assembly-instance.v1`, has the same identity
+as its entity, and requires a world `root_transform`. Legacy host placement and
+top-level placement/type aliases are forbidden. Catalog references, type IDs,
+material slots and nested part paths are validated against the actual catalog.
+V4 catalogs retain compact extrusion profiles, nested parts, independent root
+transforms and structured nested overrides; geometry remains derived from
+those authored values. Unrelated entity metadata remains preserved.
+
+Authored profile and part order remains stable. Expanded geometry retains its
+root identity and typed part path, type and profile provenance. Each expansion
+is limited to 4,096 nodes and 262,144 profile segments; the same limits span all
+placed roots in a document. Validation of unused definitions has a separate
+aggregate limit of 16,384 nodes and 1,048,576 profile segments. A shared nested
+definition cannot evade those limits by expanding through several branches.
+Rejected graph changes preserve the previous document and retained history.
+
+Roof joins retain their ordered `roof_ids` and fused style. Version 2 adds
+`material_assignment` with `version: 1`, `catalog_id` and `material_id`; both
+the assembly catalog and its material must exist. This assignment belongs to
+the join and does not replace the retained member roof geometry.
+
+Property reporting v2 adds one to 64 `living_units` with unique bounded
+`unit_id` and appraiser `identifier`, declared `role`, and optional level
+declarations. Boundary reporting v2 can reference a declared `living_unit_id`
+and adds the expanded room-use vocabulary; `other` requires a nonblank
+`other_description`. The existing source observation digest still fences
+reporting facts. These declarations are authored facts, not inferred from
+decorative geometry or owner names. Typed codecs reject unsupported fields
+and malformed declarations; a reader-floor marker does not grant authority.
 
 ## Appraisal reporting and conditional declarations (v56)
 
@@ -1611,7 +1655,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `56`, according to the
+`format_version` are equal and range from `1` through `57`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 

@@ -404,7 +404,11 @@ DocumentScheduleProjection project_schedules(
 #endif
             } else add_room(entity, records, result.diagnostics);
         }
-        add_material(entity, document, catalogs, records, result.diagnostics);
+        // Joined roof partitions and assembly profile materials are projected
+        // by the architectural adapter from their complete derived solids.
+        // A generic homogeneous assignment would duplicate those quantities.
+        if (entity.type != "roof_join" && entity.type != "assembly_instance")
+            add_material(entity, document, catalogs, records, result.diagnostics);
     }
     try {
         result.snapshot = build_schedule(records, document.revision());

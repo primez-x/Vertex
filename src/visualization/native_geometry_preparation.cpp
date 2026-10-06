@@ -6,6 +6,8 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/terrain_surface.hpp"
 #include <BRepBuilderAPI_Transform.hxx>
@@ -60,6 +62,29 @@ std::string entity_content(const Entity& entity,
         }
     }
     return canonical;
+}
+
+nlohmann::json assembly_boundary_content(const Boundary& boundary) {
+    auto result = nlohmann::json::array();
+    for (const auto& segment : boundary)
+        result.push_back({{segment.start.x, segment.start.y},
+                          {segment.end.x, segment.end.y}, segment.sweep_radians});
+    return result;
+}
+
+// Cache only the resolved geometry inputs. Material slots/overrides and
+// catalog colors have a separate appearance identity below.
+std::string assembly_geometry_content(const std::string& id, const AssemblyExpansion& expansion) {
+    auto profiles = nlohmann::json::array();
+    for (const auto& source : expansion.profiles) {
+        auto holes = nlohmann::json::array();
+        for (const auto& hole : source.profile.holes) holes.push_back(assembly_boundary_content(hole));
+        profiles.push_back({{"path", source.part_path}, {"type", source.type_id},
+            {"profile", source.profile.id}, {"outer", assembly_boundary_content(source.profile.outer)},
+            {"holes", std::move(holes)}, {"elevation", source.profile.elevation_m},
+            {"height", source.profile.height_m}, {"transform", encode_assembly_transform(source.transform)}});
+    }
+    return nlohmann::json{{"entity", id}, {"profiles", std::move(profiles)}}.dump();
 }
 
 Entity effective_geometry_entity(const DocumentSnapshot& snapshot, const Entity& source) {
@@ -237,13 +262,16 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     auto& solids = result.solids;
     const auto& entities = snapshot.entities();
     std::map<std::pair<std::string, std::string>, std::string> material_colors;
+    std::set<std::pair<std::string, std::string>> material_bindings;
     for (const auto& [id, entity] : entities) {
         if (cancelled && cancelled()) return std::nullopt;
         if (entity.type != "assembly_model") continue;
         try {
             const auto catalog = AssemblyModel::from_json(entity.properties.at("model"));
-            for (const auto& material : catalog.materials())
+            for (const auto& material : catalog.materials()) {
+                material_bindings.emplace(id, material.id);
                 if (material.color_srgb) material_colors[{id, material.id}] = *material.color_srgb;
+            }
         } catch (const std::exception& error) {
             append_unique(errors, "material catalog '" + id + "': " + error.what());
         }
@@ -366,6 +394,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             }
             continue;
         }
+        // External assembly roots share one expansion budget after the local
+        // solid loop; they are not unsupported placeholders.
+        if (entity.type == "assembly_instance") continue;
         if (entity.type != "wall" && entity.type != "slab" && entity.type != "room" &&
             entity.type != "terrain_surface" && entity.type != "wall_join" &&
             entity.type != "roof_join" &&
@@ -402,6 +433,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             append_unique(errors, entity.type + " '" + id + "': " + error.what());
             continue;
         }
+        // Independent assemblies are expanded together below, sharing the
+        // document-wide budget with all legacy catalog instances.
         if (geometry_entity.type == "wall_join") {
             try {
                 const auto join = parse_wall_join(geometry_entity.properties, id);
@@ -433,24 +466,32 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             }
         }
         std::optional<std::string> material_color;
-        if (geometry_entity.properties.contains("material_assignment")) {
-            const auto& assignment = geometry_entity.properties.at("material_assignment");
-            const auto found = material_colors.find({assignment.at("catalog_id").get<std::string>(),
-                assignment.at("material_id").get<std::string>()});
-            if (found != material_colors.end()) material_color = found->second;
-        }
         auto presentation_color = entity.type == "wall"
             ? Quantity_Color(0.84, 0.66, 0.32, Quantity_TOC_RGB)
             : entity.type == "terrain_surface"
                 ? Quantity_Color(0.47, 0.64, 0.44, Quantity_TOC_RGB)
                 : Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB);
-        if (material_color) {
-            const QColor color(QString::fromStdString(*material_color));
-            presentation_color = Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
+        try {
+            if (geometry_entity.properties.contains("material_assignment")) {
+                const auto& assignment = geometry_entity.properties.at("material_assignment");
+                const auto found = material_colors.find({assignment.at("catalog_id").get<std::string>(),
+                    assignment.at("material_id").get<std::string>()});
+                if (found != material_colors.end()) material_color = found->second;
+            }
+            if (material_color) {
+                const QColor color(QString::fromStdString(*material_color));
+                if (!color.isValid()) throw std::invalid_argument("material color is invalid");
+                presentation_color = Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
+            }
+        } catch (const std::exception& error) {
+            append_unique(errors, entity.type + " '" + id + "': " + error.what());
+            continue;
         }
 
         std::string parse_error;
         TopoDS_Shape shape;
+        std::vector<PreparedNativeMaterialRegion> material_regions;
+        std::string appearance_content;
         try {
             if (geometry_entity.type == "wall") {
                 Wall wall;
@@ -484,6 +525,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             } else if (geometry_entity.type == "roof_join") {
                 const auto join = parse_roof_join(geometry_entity.properties, id);
                 std::vector<TopoDS_Shape> source_roofs;
+                std::vector<Entity> source_entities;
                 source_roofs.reserve(join.roof_ids.size());
                 for (const auto& roof_id : join.roof_ids) {
                     if (cancelled && cancelled()) return std::nullopt;
@@ -493,10 +535,48 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     }
                     const auto resolved_source = resolve_vertical_placement(snapshot,
                                                                              source->second);
+                    source_entities.push_back(resolved_source);
                     source_roofs.push_back(make_building_shape(
                         decode_building_entity(resolved_source)));
                 }
-                shape = make_roof_join(join, source_roofs);
+                const auto partition = make_roof_join_partition(join, source_roofs);
+                shape = partition.shape;
+                for (std::size_t index = 0; index < partition.regions.size(); ++index) {
+                    if (cancelled && cancelled()) return std::nullopt;
+                    const auto& region = partition.regions[index];
+                    const auto& binding_entity = geometry_entity.properties.contains("material_assignment")
+                        ? geometry_entity : source_entities[index];
+                    PreparedNativeMaterialRegion prepared;
+                    prepared.source_id = region.source_roof_id;
+                    prepared.shape = region.shape;
+                    prepared.color = Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB);
+                    prepared.gross_volume = region.gross_volume;
+                    prepared.net_volume = region.net_volume;
+                    appearance_content.append(prepared.source_id).push_back('\0');
+                    if (binding_entity.properties.contains("material_assignment")) {
+                        const auto& assignment = binding_entity.properties.at("material_assignment");
+                        prepared.catalog_id = assignment.at("catalog_id").get<std::string>();
+                        prepared.material_id = assignment.at("material_id").get<std::string>();
+                        const auto key = std::pair{*prepared.catalog_id, *prepared.material_id};
+                        if (!material_bindings.contains(key))
+                            throw std::invalid_argument("roof material assignment references a missing catalog material");
+                        appearance_content.append(assignment.dump()).push_back('\0');
+                        const auto color = material_colors.find(key);
+                        if (color != material_colors.end()) {
+                            prepared.material_color = color->second;
+                            const QColor resolved(QString::fromStdString(color->second));
+                            if (!resolved.isValid()) throw std::invalid_argument("roof material color is invalid");
+                            prepared.color = Quantity_Color(resolved.redF(), resolved.greenF(),
+                                                            resolved.blueF(), Quantity_TOC_sRGB);
+                        }
+                    } else {
+                        appearance_content.append("default").push_back('\0');
+                    }
+                    appearance_content.append(prepared.material_color.value_or("default")).push_back('\0');
+                    if (!prepared.shape.IsNull()) mesh_shape(prepared.shape);
+                    if (cancelled && cancelled()) return std::nullopt;
+                    material_regions.push_back(std::move(prepared));
+                }
             } else if (geometry_entity.type == "slab") {
                 Slab slab;
                 if (!read_document_slab(geometry_entity, slab, parse_error)) {
@@ -528,7 +608,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             if (cancelled && cancelled()) return std::nullopt;
             mesh_shape(shape);
             solids.emplace(id, PreparedNativeSolid{std::move(content), std::move(shape),
-                            presentation_color, material_color, join_presentation_ids.contains(id)});
+                            presentation_color, material_color, join_presentation_ids.contains(id),
+                            std::move(material_regions), std::move(appearance_content)});
             if (progress) progress(solids.size());
         } catch (const std::exception& error) {
             append_unique(errors, entity.type + " '" + id + "': " + error.what());
@@ -537,6 +618,82 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             append_unique(errors, entity.type + " '" + id + "': unknown OCCT failure");
 
         }
+    }
+
+    // Both independent and catalog-owned roots publish the same resolved
+    // profile geometry, provenance and appearance dependencies.
+    const auto publish_assembly = [&](const std::string& id, const std::string& catalog_id,
+                                      const AssemblyExpansion& expansion) {
+        const auto geometry = make_assembly_geometry(expansion);
+        if (geometry.shape.IsNull()) throw std::invalid_argument("assembly has no native profiles");
+        std::vector<PreparedNativeMaterialRegion> regions;
+        auto appearance = nlohmann::json::array();
+        for (const auto& profile : geometry.solids) {
+            if (cancelled && cancelled()) return false;
+            PreparedNativeMaterialRegion region;
+            // JSON framing prevents collisions between part identities
+            // containing separators; nested path and local profile are
+            // preserved instead of inventing document child entities.
+            region.source_id = nlohmann::json{{"entity_id", id},
+                {"part_path", profile.source.part_path}, {"type_id", profile.source.type_id},
+                {"profile_id", profile.source.profile.id}}.dump();
+            region.shape = profile.shape;
+            region.color = Quantity_Color(0.63, 0.48, 0.78, Quantity_TOC_RGB);
+            region.catalog_id = catalog_id;
+            region.material_id = profile.source.material_id;
+            region.gross_volume = profile.volume_m3;
+            region.net_volume = profile.volume_m3;
+            if (region.material_id) {
+                const auto key = std::pair{*region.catalog_id, *region.material_id};
+                if (!material_bindings.contains(key))
+                    throw std::invalid_argument("assembly profile references a missing catalog material");
+                const auto color = material_colors.find(key);
+                if (color != material_colors.end()) {
+                    region.material_color = color->second;
+                    const QColor resolved(QString::fromStdString(color->second));
+                    if (!resolved.isValid()) throw std::invalid_argument("assembly material color is invalid");
+                    region.color = Quantity_Color(resolved.redF(), resolved.greenF(),
+                                                  resolved.blueF(), Quantity_TOC_sRGB);
+                }
+            }
+            appearance.push_back({{"source",region.source_id}, {"catalog",*region.catalog_id},
+                {"material",region.material_id.value_or("")},
+                {"color",region.material_color.value_or("default")}});
+            mesh_shape(region.shape);
+            regions.push_back(std::move(region));
+        }
+        if (cancelled && cancelled()) return false;
+        solids.emplace(id, PreparedNativeSolid{assembly_geometry_content(id,expansion),
+            geometry.shape, Quantity_Color(0.63,0.48,0.78,Quantity_TOC_RGB), std::nullopt,
+            !visible_ids || visible_ids->contains(id), std::move(regions), appearance.dump()});
+        if (progress) progress(solids.size());
+        return true;
+    };
+
+    // The adapter charges both catalog-owned and independent instances to
+    // one budget. Embedded materialization below is permitted only after this
+    // complete preflight; it must not publish a partial over-budget document.
+    bool assembly_document_valid = false;
+    try {
+        AssemblyExpansionBudget budget;
+        const auto expansions = expand_document_assembly_instances(entities, budget);
+        assembly_document_valid = true;
+        if (cancelled && cancelled()) return std::nullopt;
+        for (const auto& [id, expansion] : expansions) {
+            if (cancelled && cancelled()) return std::nullopt;
+            try {
+                const auto binding = decode_document_assembly_instance(entities.at(id));
+                if (!publish_assembly(id, binding.assembly_catalog_id, expansion)) return std::nullopt;
+            } catch (const std::exception& error) {
+                append_unique(errors, "assembly instance '" + id + "': " + error.what());
+            } catch (...) {
+                append_unique(errors, "assembly instance '" + id + "': unknown OCCT failure");
+            }
+        }
+    } catch (const std::exception& error) {
+        append_unique(errors, "assembly document expansion: " + std::string(error.what()));
+    } catch (...) {
+        append_unique(errors, "assembly document expansion: unknown failure");
     }
 
     const auto make_assembly_host_shape = [&](const std::string& host_id) -> TopoDS_Shape {
@@ -607,17 +764,25 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         return translated.Shape();
     };
 
+    AssemblyExpansionBudget embedded_materialization_budget;
     for (const auto& [catalog_id, catalog_entity] : entities) {
         if (cancelled && cancelled()) return std::nullopt;
+        if (!assembly_document_valid) continue;
         if (catalog_entity.type != "assembly_model" ||
             !catalog_entity.properties.contains("model")) continue;
         try {
             const auto catalog = AssemblyModel::from_json(catalog_entity.properties.at("model"));
             for (const auto& instance : catalog.instances()) {
                     if (cancelled && cancelled()) return std::nullopt;
-                if (!instance.placement) continue;
                 const auto child_id = catalog_id + ":instance:" + instance.id;
                 try {
+                const auto expansion = catalog.expand(instance, embedded_materialization_budget);
+                if (!expansion.profiles.empty()) {
+                    if (!publish_assembly(child_id, catalog_id, expansion)) return std::nullopt;
+                    continue;
+                }
+                // Genuine V1-V3 declarations retain their host-copy behavior.
+                if (!instance.placement) continue;
                 const auto host = entities.find(instance.placement->host_entity_id);
                 if (host == entities.end()) {
                     append_unique(errors, "assembly instance '" + child_id +

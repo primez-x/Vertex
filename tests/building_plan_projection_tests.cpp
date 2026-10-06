@@ -1,4 +1,5 @@
 #include "sketch/building_plan_projection.hpp"
+#include "sketch/assembly_model.hpp"
 
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
@@ -706,8 +707,34 @@ void test_invalid_geometry_is_rejected() {
 
 }  // namespace
 
+void test_nested_assembly_plan_uses_real_profiles() {
+    using namespace sketch;
+    const auto rectangle = [](double x, double y, double w, double h) {
+        return Boundary{{{x,y},{x+w,y},0},{{x+w,y},{x+w,y+h},0},
+            {{x+w,y+h},{x,y+h},0},{{x,y+h},{x,y},0}};
+    };
+    AssemblyType leaf{"leaf", "Leaf"};
+    leaf.profiles = {{"ring",rectangle(0,0,4,3),{rectangle(1,1,1,1)},0,1,{}}};
+    AssemblyType root{"root", "Root"};
+    root.parts = {{"stable:part", "leaf", {{1,2,3}, std::numbers::pi/2, 2}}};
+    AssemblyInstance instance{"independent", "root"};
+    instance.root_transform = AssemblyTransform{{10,20,4},0,1};
+    const auto model = AssemblyModel::create({}, {root,leaf}, {instance});
+    const auto expansion = model.expand(instance.id);
+    const auto result = project_assembly_plan(expansion);
+    const auto extent = projected_bounds(result);
+    near(extent.min_x,5,1e-5,"nested rotated profile left");
+    near(extent.max_x,11,1e-5,"nested rotated profile right");
+    near(extent.min_y,22,1e-5,"nested translated profile lower");
+    near(extent.max_y,30,1e-5,"nested scaled profile upper");
+    require(result.size() >= 8, "plan retains the actual profile hole edges");
+    rejected([] { (void)project_assembly_plan(AssemblyExpansion{}); },
+        "a declaration-only assembly has no geometric plan");
+}
+
 int main() {
     try {
+        test_nested_assembly_plan_uses_real_profiles();
         test_all_eight_forms_have_exact_plan_extents();
         test_simple_solids_have_exact_edge_sets();
         test_rotated_stairs_have_exact_edge_sets();

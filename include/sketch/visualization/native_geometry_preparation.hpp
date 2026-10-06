@@ -17,12 +17,30 @@ using NativeGeometryVisibleIds = std::set<std::string, std::less<>>;
 // Fresh, worker-owned topology. No AIS handles or live-view shapes are shared
 // with preparation. Ownership transfers to the owner thread on completion;
 // with triangulation already prepared for presentation.
+struct PreparedNativeMaterialRegion {
+    std::string source_id;
+    TopoDS_Shape shape; // empty for a fully occluded member; never mesh/display it
+    Quantity_Color color;
+    std::optional<std::string> material_color;
+    std::optional<std::string> catalog_id;
+    std::optional<std::string> material_id;
+    double gross_volume{};
+    double net_volume{};
+};
 struct PreparedNativeSolid {
     std::string content;
     TopoDS_Shape shape;
     Quantity_Color color;
     std::optional<std::string> material_color;
     bool visible{};
+    // Ordered regions, freshly meshed with this candidate. Joined roof regions
+    // are nonoverlapping; independent assembly profiles retain authored overlap.
+    // Keep shape as fused truth; construct colored presentation from these
+    // actual shapes instead of matching their faces to a cached fusion.
+    std::vector<PreparedNativeMaterialRegion> material_regions;
+    // Includes source bindings and resolved colors. Geometry content remains
+    // stable on catalog color edits; publication must compare this separately.
+    std::string appearance_content;
 };
 struct PreparedNativeGeometry {
     Revision revision{};

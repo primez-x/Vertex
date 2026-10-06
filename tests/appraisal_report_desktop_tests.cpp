@@ -521,12 +521,37 @@ void paginated_pdf_escaping_and_atomic_destination_failures() {
 }
 }
 
+void individual_unit_renderer_escapes_identifiers_and_withholds_unavailable_fields() {
+    sketch::AppraisalDocumentReport report;report.reporting=sketch::AppraisalFormProjection{};
+    auto& projection=*report.reporting;projection.configuration_valid=true;projection.contract=sketch::AppraisalReportingContract::uad_3_6;
+    sketch::AppraisalLivingUnitProjection unit;
+    unit.living_unit={"technical-unit-hidden", "Garden <script>unit</script> & suite", sketch::DwellingIdentity::attached_adu};
+    unit.area_fields_available=unit.room_counts_available=true;unit.counts={0,2,1,0};
+    unit.area_fields[sketch::AppraisalAreaCategory::above_grade_finished]=9.290304;
+    sketch::AppraisalLivingUnitLevel level;level.floor_id="floor-source";level.boundary_ids={"boundary-source"};
+    level.room_types={{sketch::AppraisalRoomUse::bedroom,2},{sketch::AppraisalRoomUse::bathroom_full,1},{sketch::AppraisalRoomUse::kitchen,1},{sketch::AppraisalRoomUse::other,1}};
+    level.other_room_descriptions={{"Music <img src='file:///foreign'> room",1}};
+    sketch::AppraisalLivingUnitLevelDeclaration declaration;declaration.level_number=1;declaration.grade_level_type="above_grade";
+    level.declaration=declaration;level.form_fields_available=true;unit.levels.push_back(level);projection.living_units.push_back(unit);
+    const auto html=sketch::desktop::appraisal_form_projection_html(report);
+    QTextDocument rendered;rendered.setHtml(html);const auto plain=rendered.toPlainText();
+    require(!html.contains("<script>") && !html.contains("<img src=") &&
+        plain.contains(QString::fromStdString(unit.living_unit.identifier)) && plain.contains("Kitchen") && plain.contains("Level 1") &&
+        plain.contains("2 bedrooms; 1 full / 0 half bathrooms") && plain.contains("boundary-source") &&
+        !plain.contains("technical-unit-hidden"),"Named unit and level fields escape appraiser text, retain provenance and keep technical unit IDs out of labels");
+    projection.living_units.front().room_counts_available=false;projection.living_units.front().area_fields_available=false;
+    rendered.setHtml(sketch::desktop::appraisal_form_projection_html(report,true));
+    require(rendered.toPlainText().contains("Withheld") && !rendered.toPlainText().contains("2 bedrooms") &&
+        !rendered.toPlainText().contains("2 — Bedroom"),"Compact Details withhold both unavailable unit counts and derived room summaries");
+}
+
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors();QStandardPaths::setTestModeEnabled(true);QApplication app(argc,argv);
     QCoreApplication::setOrganizationName(QStringLiteral("VertexTests"));
     QCoreApplication::setApplicationName(QStringLiteral("Vertex-appraisal-report-test-")+QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font must load for actual report rendering");app.setFont(QFont(QStringLiteral("Inter"),10));
+        individual_unit_renderer_escapes_identifiers_and_withholds_unavailable_fields();
         sheet_summary_preserves_per_row_policy_and_status();ansi_report_html_pdf_canonical_units_and_evidence();actual_report_summary_audit_navigation_and_refresh();display_precision_unqualified_diagnostics_and_invalid_trace();
         active_design_phase_report_scope();undeclared_policy_and_malformed_area_remain_inspectable();
         unfinished_measured_lines_refuse_pdf_without_changing_destination_or_drawing();

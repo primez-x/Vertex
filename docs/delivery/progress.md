@@ -14,11 +14,11 @@ Vertex shortcut targets that executable. The cutover completed on October 6,
 The preceding candidate is preserved at the stable rollback paths; the
 original rollback is retained separately. No previous checkpoint was deleted.
 
-The package binds source commit `3ff0431e1d389dbd8955e308ebf16a9a094c7855`.
+The package binds source commit `d882d75b6b4af147d6b3bd3232ea921d303f0591`.
 Its application SHA-256 is
-`9a7083efb4a8f52c55b6054ca473249747a327fca0de78ed176e3e8716ecd569`;
+`8a2872bfa9fc49209e6b4723b1634d436fbfaf2995d3ac1d388c5887782b2ea5`;
 runtime-manifest SHA-256 is
-`7a2194425597a087766b5424c71ac3c5281ca4bbd33cda5812c0d4054096fc64`.
+`5988c45be9783239db5ba1a61d11c26eba76a67d26578b75038647a4b6ef97ed`.
 After promotion, six source/save/reopen processes passed at the final path,
 including the normal PNG reference decoder, persisted reference assets and
 stable project/2D/native-3D output hashes. This is developer-machine evidence;
@@ -26,16 +26,19 @@ clean-machine, network-denied, hardware and human acceptance remain open.
 
 ### Current implementation checkpoint
 
-The next source checkpoint adds an editable appraisal room-reporting contract,
-explicit conditional measurement declarations, and native 3D hosted-object
-gesture corrections. It has not yet replaced the installed candidate above.
+The installed checkpoint includes editable appraisal room reporting, conditional
+measurement declarations, and hosted-object 3D gesture corrections. The current
+source batch adds geometric assemblies, joined-roof material ownership and
+separate living-unit reporting. Those later changes have not replaced the
+installed candidate above.
 
 - Reporting is an atomic document edit from Details. Entered room types and
   legacy Total Rooms membership are explicit observations. UAD 3.6 primary
   counts include the declared rooms across grades and finish categories;
   legacy unresolved ADU/unfinished-room primary mappings are withheld. Combined
-  ADU detail is clearly identified; separate living-unit identity and level
-  summaries remain an implementation gap. The joint-GSE reference and
+  ADU detail is clearly identified in the installed V1 reporting. The current
+  V2 source adds explicit primary/attached-ADU/detached-ADU identities, separate
+  room counts and level summaries with captured observation digests. The joint-GSE reference and
   implementation guides, version 1.4, support the implemented room mapping;
   they do not certify a provider exchange or ANSI calculation.
 - Room confirmations bind the current geometry, deductions, appraisal facts,
@@ -54,11 +57,30 @@ gesture corrections. It has not yet replaced the installed candidate above.
   persistent shell error.
 - Durable saving identifies the filesystem through the already checked parent
   handle instead of a restricted volume-root query. Fixed local NTFS/ReFS and
-  non-reparse-parent checks remain. The changed installed main application must
-  still pass the restricted save/reopen route before that route advances.
+  non-reparse-parent checks remain. The installed measurement save/reopen route
+  passes under the zero-capability process policy. That run exposed a separate
+  3D export staging-directory denial. The source now stages beside the selected
+  output; the changed installed restricted export retry remains unverified.
 - Native format 56 and extraction format 54 preserve these reporting and typed
   declaration records throughout retained history. Older readers must refuse
   the elevated floor; old files remain readable without invented observations.
+
+The current source uses native format 57 and extraction format 55 for geometric
+assembly catalogs, independent assembly entities, joined-roof material overrides
+and V2 living-unit reporting. Current, undone and deleted records retain the
+elevated floor; affected storage and exchange checks pass. Independent review
+identified catalog no-op/stale/multiple-catalog edits, embedded geometric
+assembly consumer agreement, aggregate unused-graph work and ANSI-specific
+level-grade agreement. All six corrections are implemented and their focused
+checks pass. The actual catalog and embedded-instance desktop workflows pass
+creation, editing, cancellation, stale-source refusal, clipboard, cloning,
+Undo/Redo and save/reopen. Native regional publication passes for joined roofs,
+independent instances and catalog-owned geometric instances, including material
+changes, semantic picking, transform controls, Move and Undo. Root inspected
+the native material captures and compound canvas previews. Compound selections
+retain distinct profile geometry and colors and show one dimension callout.
+Site/building placement, terrain datums, annotation frames and joined IFC
+geometry are being integrated from separate private staging work.
 
 Affected Release builds pass. The calculation, appraisal-document, reporting,
 Details, ANSI desktop lifecycle, partition, project-storage, exchange and native
@@ -106,8 +128,8 @@ A restricted-process discriminator reproduces the save route's volume-root
 query denial (Windows error 5), while a checked ordinary parent-directory
 handle returns NTFS under the same zero-capability profile. Task-owned Global
 and Local mutex creation also succeeds. This supports a narrow handle-based
-filesystem query correction; the actual changed application save/reopen route
-still requires verification. No installed ACL, profile or firewall was changed.
+filesystem query correction; the installed measurement save/reopen route now
+passes. No installed ACL, profile or firewall was changed.
 
 ## Recorded implementation history
 
@@ -225,13 +247,14 @@ still requires verification. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Finish and push the reviewed native-source evidence batch, then bind its
-   helpers and exact inputs into one coherent delivered source handoff.
-2. Correct the restricted save route's filesystem query without weakening
-   identity/durability guards, then check its actual save/reopen workflow.
-   Keep the stable installed candidate available throughout.
-3. Bind applicable completed verification receipts into the delivery registry;
-   complete the remaining locally actionable integrated behavior checks.
+1. Preserve the checked assembly, roof-material and unit-reporting checkpoint
+   with a scoped commit and verified remote ref.
+2. Integrate site/building placements, terrain datums and consistent
+   annotation/canvas/native/IFC coordinate consumers with atomic edits and
+   retained-history format coverage.
+3. Promote one coherent checked human-test package and retry the actual
+   restricted architectural export route. Bind applicable evidence into the
+   registry; continue the remaining locally actionable integrated checks.
 4. Continue D01 acquisition, D02 qualification and the remaining production
    gates. Candidate integrity and developer-machine checks do not substitute
    for clean offline installation, hardware or human acceptance.
@@ -536,10 +559,12 @@ the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
   retained; actual corrected package verification and installation remain
   required before replacing the human-test candidate.
 
-## Identified human-test candidate
+## Recorded October 5 human-test candidate
 
-The promoted candidate is at artifacts/packages/vertex-candidate
-from source commit 3ff0431e1d389dbd8955e308ebf16a9a094c7855. The built-in Windows
+This historical candidate was promoted to artifacts/packages/vertex-candidate
+from source commit 3ff0431e1d389dbd8955e308ebf16a9a094c7855. It is now the
+preserved rollback; the current installed candidate is identified at the top
+of this record. The built-in Windows
 PowerShell 5.1 verifier passed all 25,735 declared files. The complete handoff
 audit and delivered source-receipt replay also passed. Installation passed with
 the same built-in shell and all 5,106 runtime files. Six installed source/save/
@@ -580,10 +605,11 @@ creating tooling. The baseline fixture substitutes only its repository root so
 it uses the same prepared SDK. This establishes SDK preflight behavior, not a
 full offline dependency-source rebuild.
 
-### Previous human-test checkpoint
+### Earlier recorded human-test checkpoint
 
-The following identities describe the preceding candidate, now preserved at
-`artifacts/packages/vertex-rollback` and `artifacts/installed/rollback`.
+The following identities describe the earlier candidate retained separately
+after the subsequent cutovers. These are historical identities, not the current
+contents of the stable rollback paths.
 
 - Product/source-kit commit: 387ab41b271a23e0dedb8015a175c77343be4eb9.
 - Runtime manifest SHA-256:

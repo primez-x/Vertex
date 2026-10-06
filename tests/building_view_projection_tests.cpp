@@ -1,4 +1,5 @@
 #include "sketch/building_view_projection.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/architecture.hpp"
 
 #include <algorithm>
@@ -438,8 +439,45 @@ void test_hip_roof_views() {
     }
 }
 
+void test_assembly_view_sources_and_section_misses() {
+    using namespace sketch;
+    const Boundary outer{{{0,0},{4,0},0},{{4,0},{4,3},0},{{4,3},{0,3},0},{{0,3},{0,0},0}};
+    const Boundary hole{{{1,1},{2,1},0},{{2,1},{2,2},0},{{2,2},{1,2},0},{{1,2},{1,1},0}};
+    AssemblyType leaf{"leaf", "Leaf", {}, {{"core","timber"}}};
+    leaf.profiles = {{"ring",outer,{hole},0,1,"core"}, {"upper",outer,{},5,1,"core"}};
+    AssemblyType root{"root","Root"};
+    root.parts = {{"part:stable","leaf",{{1,2,3},std::numbers::pi/2,2}}};
+    AssemblyInstance instance{"instance","root"};
+    instance.root_transform = AssemblyTransform{{10,20,4},0,1};
+    const auto model = AssemblyModel::create({{"timber","Timber"}}, {root,leaf}, {instance});
+    const auto expansion = model.expand(instance.id);
+    const auto plan = project_assembly_view(expansion,BuildingViewKind::plan);
+    require(plan.profiles.size()==2 && plan.profiles[0].part_path==std::vector<std::string>{"part:stable"} &&
+        plan.profiles[0].type_id=="leaf" && plan.profiles[0].profile_id=="ring" &&
+        plan.profiles[0].material_id==std::optional<std::string>{"timber"},
+        "projected source paths preserve the actual nested profile and material identity");
+    const BuildingViewFrame vertical{{0,0,0},{0,-1,0},{0,0,1}};
+    const auto elevation = project_assembly_view(expansion,BuildingViewKind::elevation,vertical);
+    const auto extent = bounds(elevation.boundary);
+    // This frame looks along -Y with up +Z; cross(up,-direction)
+    // makes paper-right -X. The physical X interval is [5,11].
+    near(extent.min_x,-11,1e-5,"nested elevation horizontal minimum");
+    near(extent.max_x,-5,1e-5,"nested elevation horizontal maximum");
+    near(extent.max_y,19,1e-5,"nested elevation scaled height and Z placement");
+    const BuildingViewFrame cut{{0,0,8},{0,0,-1},{0,1,0}};
+    const auto section = project_assembly_view(expansion,BuildingViewKind::section,cut);
+    require(!section.boundary.empty() && !section.profiles[0].boundary.empty() &&
+        section.profiles[1].boundary.empty(), "a section miss is empty only for the missed valid profile");
+    require(section.profiles[0].boundary.size()==8,"section retains profile holes");
+    auto broken = expansion;
+    broken.profiles[1].profile.height_m=0;
+    rejected([&] { (void)project_assembly_view(broken,BuildingViewKind::section,cut); },
+        "invalid uncut profiles must fail instead of masquerading as section misses");
+}
+
 int main() {
     try {
+        test_assembly_view_sources_and_section_misses();
         test_elevation_preserves_horizontal_width_and_height();
         test_horizontal_section_retains_analytic_circle();
         test_vertical_section_intersects_rectangular_column();

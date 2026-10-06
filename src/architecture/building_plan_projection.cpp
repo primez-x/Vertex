@@ -1,4 +1,5 @@
 #include "sketch/building_plan_projection.hpp"
+#include "sketch/assembly_geometry.hpp"
 
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
@@ -276,6 +277,12 @@ Boundary project_building_plan(
     const BuildingObject& object,
     const std::map<std::string, Entity, std::less<>>& entities) {
     return checked_projection([&] { return make_building_shape(object, entities); });
+}
+
+Boundary project_assembly_plan(const AssemblyExpansion& expansion) {
+    if (expansion.profiles.empty())
+        projection_error("Assembly plan requires at least one actual profile");
+    return checked_projection([&] { return make_assembly_geometry(expansion).shape; });
 }
 
 }  // namespace sketch

@@ -3147,6 +3147,14 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/assembly_document_adapter.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/assembly_geometry.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/assembly_model.hpp"
     },
     {
@@ -3284,6 +3292,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/area_class_palette.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/assembly_authoring_dialog.hpp"
     },
     {
       "category": "source",
@@ -4091,6 +4103,10 @@
     },
     {
       "category": "source",
+      "path": "src/architecture/assembly_geometry.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/architecture/building_entity.cpp"
     },
     {
@@ -4172,6 +4188,10 @@
     {
       "category": "source",
       "path": "src/core/area_subtraction.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assembly_document_adapter.cpp"
     },
     {
       "category": "source",
@@ -4679,6 +4699,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/assembly_authoring_dialog.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/assistance_ocr.cpp"
     },
     {
@@ -4899,7 +4923,23 @@
     },
     {
       "category": "source",
+      "path": "tests/assembly_authoring_dialog_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assembly_document_adapter_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assembly_geometry_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/assembly_model_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assembly_workflow_desktop_tests.cpp"
     },
     {
       "category": "source",
@@ -5176,6 +5216,10 @@
     {
       "category": "source",
       "path": "tests/dxf_project_exchange_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/embedded_assembly_workflow_desktop_tests.cpp"
     },
     {
       "category": "source",

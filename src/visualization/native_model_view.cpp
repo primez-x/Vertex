@@ -6,6 +6,7 @@
 #include "sketch/document.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/stair_semantics.hpp"
+#include "sketch/assembly_document_adapter.hpp"
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Manipulator.hxx>
@@ -13,6 +14,8 @@
 #include <AIS_ManipulatorOwner.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <AIS_Shape.hxx>
+#include <AIS_ColoredShape.hxx>
+#include <BRep_Builder.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -22,6 +25,7 @@
 #include <Quantity_Color.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Compound.hxx>
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <WNT_Window.hxx>
@@ -130,6 +134,34 @@ NativeInputPoint map_input_point(const QWidget& widget, const QPointF& logical_p
     return NativeInputPoint{native_x, top_left_y};
 }
 
+occ::handle<AIS_Shape> prepared_presentation(const PreparedNativeSolid& solid) {
+    occ::handle<AIS_Shape> result;
+    if (solid.material_regions.empty()) {
+        result = new AIS_Shape(solid.shape);
+    } else {
+        // Region topology belongs to this preparation. A boolean fusion has
+        // unrelated face identities, so matching regions to its cached faces
+        // cannot reliably refresh material assignments or colors.
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        bool has_region = false;
+        for (const auto& region : solid.material_regions) {
+            if (region.shape.IsNull()) continue; // Fully occluded roof member.
+            builder.Add(compound, region.shape);
+            has_region = true;
+        }
+        if (!has_region) throw std::invalid_argument("native material presentation has no visible regions");
+        auto colored = occ::handle<AIS_ColoredShape>(new AIS_ColoredShape(compound));
+        for (const auto& region : solid.material_regions)
+            if (!region.shape.IsNull()) colored->SetCustomColor(region.shape, region.color);
+        result = colored;
+    }
+    result->SetColor(solid.color);
+    result->SetDisplayMode(AIS_Shaded);
+    return result;
+}
+
 }  // namespace
 
 class NativeModelView::Impl {
@@ -137,6 +169,7 @@ public:
     struct CachedSolid {
         // Exact equality avoids reusing stale geometry after a hash collision.
         std::string content;
+        std::string appearance_content;
         TopoDS_Shape shape;
         occ::handle<AIS_Shape> presentation;
         Quantity_Color color;
@@ -385,7 +418,8 @@ public:
             std::map<std::string, CachedSolid, std::less<>> replacement;
             for (auto& [id, solid] : prepared->solids) {
                 const auto cached = solids.find(id);
-                if (cached != solids.end() && cached->second.content == solid.content) {
+                const bool same_geometry = cached != solids.end() && cached->second.content == solid.content;
+                if (same_geometry && cached->second.appearance_content == solid.appearance_content) {
                     // Retain the live topology as well as the AIS handle. The
                     // worker's fresh triangulation must never replace or mutate
                     // a shape already owned by an unchanged presentation.
@@ -395,10 +429,12 @@ public:
                     ++metrics.reused;
                     continue;
                 }
-                auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(solid.shape));
-                presentation->SetColor(solid.color);
-                presentation->SetDisplayMode(AIS_Shaded);
-                replacement.emplace(id, CachedSolid{std::move(solid.content), std::move(solid.shape),
+                auto presentation = prepared_presentation(solid);
+                // Appearance-only publication consumes fresh region topology,
+                // while the retained fused/assembly shape remains authoritative.
+                auto geometry_shape = same_geometry ? cached->second.shape : std::move(solid.shape);
+                replacement.emplace(id, CachedSolid{std::move(solid.content), std::move(solid.appearance_content),
+                                                   std::move(geometry_shape),
                                                    presentation, solid.color});
                 ++metrics.created;
             }
@@ -439,6 +475,14 @@ public:
                     if (next == replacement.end() || next->second.presentation != solid.presentation)
                         context->Remove(solid.presentation, false);
                 }
+                // A changed regional appearance replaces its AIS handle; keep
+                // the semantic selection attached to the new root presentation.
+                context->ClearSelected(false);
+                if (selected_entity_id) {
+                    const auto selected = replacement.find(*selected_entity_id);
+                    if (selected != replacement.end() && context->IsDisplayed(selected->second.presentation))
+                        context->AddOrRemoveSelected(selected->second.presentation, false);
+                }
                 const bool has_visible_solids = std::any_of(prepared->solids.begin(), prepared->solids.end(),
                     [](const auto& entry) { return entry.second.visible; });
                 if (has_visible_solids && fit_requested) fit_all();
@@ -471,6 +515,14 @@ public:
                 }
                 has_fit = previously_fit;
                 initial_fit_pending = previously_pending_fit;
+                try {
+                    context->ClearSelected(false);
+                    if (selected_entity_id) {
+                        const auto selected = solids.find(*selected_entity_id);
+                        if (selected != solids.end() && previous_visibility.at(selected->first))
+                            context->AddOrRemoveSelected(selected->second.presentation, false);
+                    }
+                } catch (...) {}
                 try { attach_manipulator(); } catch (...) {}
                 try { viewer->Redraw(); } catch (...) {}
                 throw;
@@ -602,8 +654,32 @@ public:
     bool supports_direct_transform(const std::string& id) const {
         if (!snapshot.has_value() || id.empty()) return false;
         const auto found = snapshot->entities().find(id);
-        if (found == snapshot->entities().end() ||
-            !can_transform_architectural_entity_type(found->second.type)) return false;
+        if (found == snapshot->entities().end()) {
+            // Catalog-owned geometric instances use derived root IDs. Their
+            // controller edits the catalog instance; legacy host copies do
+            // not gain independent transform authority.
+            for (const auto& [catalog_id, entity] : snapshot->entities()) {
+                if (entity.type != "assembly_model" || !entity.properties.contains("model")) continue;
+                const auto prefix = catalog_id + ":instance:";
+                if (!id.starts_with(prefix)) continue;
+                try {
+                    const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+                    const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
+                        [&](const auto& value) { return value.id == id.substr(prefix.size()); });
+                    return instance != model.instances().end() && !model.expand(instance->id).profiles.empty();
+                } catch (...) { return false; }
+            }
+            return false;
+        }
+        if (found->second.type == "assembly_instance") {
+            try {
+                // The strict envelope requires independent world placement and
+                // excludes legacy catalog-host copies from direct manipulation.
+                (void)decode_document_assembly_instance(found->second);
+                return true;
+            } catch (...) { return false; }
+        }
+        if (!can_transform_architectural_entity_type(found->second.type)) return false;
         if (found->second.type == "railing") {
             try {
                 const auto rail = decode_railing_properties(id, found->second.properties);
@@ -992,7 +1068,11 @@ void NativeModelView::fitAll() {
 void NativeModelView::setSelectedEntity(const QString& entity_id) {
     const auto id = entity_id.trimmed().toStdString();
     const auto solid = m_impl->solids.find(id);
-    if (id.empty() || !m_impl->snapshot || !m_impl->snapshot->entities().contains(id)) {
+    // Prepared catalog children are real semantic presentations even though
+    // their authoritative record lives inside an assembly_model entity.
+    // Transform admission still validates that captured catalog instance.
+    if (id.empty() || !m_impl->snapshot ||
+        (!m_impl->snapshot->entities().contains(id) && solid==m_impl->solids.end())) {
         m_impl->selected_entity_id.reset();
         m_impl->detach_manipulator();
         if (m_impl->native_ready && !m_impl->context.IsNull())
