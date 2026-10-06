@@ -135,6 +135,38 @@ unpinned license. Some refer to platforms/tools absent from this Windows/PDF
 build, but that applicability requires evidence from the actual shipped closure.
 Root must resolve applicable gaps or document candidate-bound exclusions.
 
+A bounded follow-up separates 97 non-PDFium references from three PDFium
+references. PDFium's CPU-features `src/LICENSE` and Ninja's remote `COPYING`
+pointers both have `Shipped: no` in their original metadata. The Fuchsia SDK
+`sdk/LICENSE` pointer has `Shipped: yes`, although its description concerns
+building and testing on Fuchsia. The selected release archive lacks the exact
+CPU-features and Fuchsia SDK license paths. Another CPU-features copy's Apache
+text and an openscreen Ninja `COPYING` are retained, but their different paths
+do not establish the missing copies' identities. These findings guide the
+Windows build-closure review; they do not yet remove any unresolved reference
+or substitute an unrelated notice.
+
+The Windows closure review adds bounded technical evidence for three possible
+candidate exclusions. Chromium `DEPS` sets `checkout_fuchsia = False` (lines
+74–80), and the SDK checkout hook is conditional (lines 5101–5111); this supports
+a Windows-specific Fuchsia SDK exclusion, subject to the actual build closure.
+The PDFium CPU-features metadata says `Shipped: no`, while its `BUILD.gn` still
+contains `impl_x86_windows.c` (lines 18–35) and the aggregate
+`third_party/BUILD.gn` has no `cpu_features` edge. This supports only a
+provisional exclusion pending actual build-closure evidence. Ninja's README
+marks it `Shipped: no` as a build tool; Chromium `DEPS` pins its version (lines
+507–510), and no Ninja binary appears in the selected Qt PDF runtime inventory.
+These facts support a runtime-exclusion recommendation while leaving build-source
+obligations separate. The pinned QtWebEngine archive is SHA-256
+`df4e19ba2b3a540551b6f998d62597377ffa688c1cff564589b7da2e2bf87337` and
+566,553,436 bytes. The selected qtpdf SBOM records Windows AMD64;
+the selected-source receipt binds `Qt6Pdf.dll` by SHA-256
+`b1e59033fbfe86080d914050c7674ff312e57b0f39aaa1adeed46a5b3e9b564d` and
+5,337,736 bytes. These receipts identify the reviewed source and binary; they do
+not establish derivation or complete build closure. The evidence does not resolve
+the other 97 references, establish complete notice coverage, or alter the qtpdf
+SBOM warning that consumed third-party dependencies are omitted.
+
 The retained archive `.tag` files exactly match the source revision strings in
 the selected prebuilt module SBOMs: QtBase
 `c07c2d5a527a644d36e7853d55132ae38921682f`, QtSVG

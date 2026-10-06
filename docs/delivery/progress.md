@@ -121,17 +121,19 @@ claimed by this record.
 
 ## Next actions, in order
 
-1. Refresh the selected-runtime distribution inventory, compose corresponding
-   sources and complete notices, and qualify their final candidate binding.
-   The clean source-built extension, exact staging and complete actual worker
-   lifecycle now pass below.
-2. Record and push the next checked source checkpoint, preserving the installed
-   candidate and every failed diagnostic receipt. Continue ordinary drawing
-   acceptance, D01 acquisition, D02 rights and the remaining production gates.
+1. Finish the current desktop integration check and record/push the reviewed
+   source checkpoint, preserving the installed candidate and failed receipts.
+2. Refresh the selected-runtime inspection and inventory, bind the application
+   and dependency source kits, stage and verify one coherent candidate, and
+   exercise its actual installation and isolated worker. Keep the existing
+   installation until the replacement passes those checks.
+3. Continue D01 acquisition, D02 qualification and the remaining production
+   gates. Candidate integrity and developer-machine checks do not substitute
+   for clean offline installation, hardware or human acceptance.
 
 ## Current continuation batch
 
-The previous checked source checkpoint is `549d0cd4119d75677bff48fbf832ff4a6a2b5bea`
+The previous checked source checkpoint is `86888988a3e164f3ed4c0941770c35d3e07f8133`
 on `codex/vertex-delivery-reset`; the remote ref was verified after push. The
 changes below are a later source batch and do not describe the installed candidate.
 
@@ -342,6 +344,83 @@ the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
 - Focused checks pass: 39 source-closure, 35 composer, 38 inventory, 21 IFC
   materializer and 18 dependency-source stager cases. Independent review approves
   the source-tree/budget corrections. Failed earlier receipts remain preserved.
+
+## Room workflow, receipt replay and dimension correction
+
+- Existing physical-wall room creation now retains the entered visible name
+  and classification atomically. Clear inside-face dimensions and area retain
+  their physical source lineage. Blank input refuses before ownership reuse;
+  successful selected-room and source-wall retries clear stale errors and select
+  the existing owner without renaming, reclassifying or adding history.
+  `vertex-room-name-retry-tests-02` passes the actual controller lifecycle,
+  including branched/ambiguous geometry, full-source refusal, Undo/Redo and
+  exact save/reopen.
+- Boundary insertion/direct editing retains whole-span manual dimensions,
+  per-edge automatic dimensions and typed group transform proofs. Its updated
+  fixture waits for the real asynchronous edit and compares against the actual
+  snapped source geometry. `vertex-boundary-insertion-tests-04` passes all three
+  workflows without changing production geometry or parser behavior.
+- The connected wall/boundary fixture now explicitly selects metric units and
+  independently establishes its four 3 m source edges. Its 7.5 m² result,
+  joint movement, receipts and one-step history pass
+  `vertex-mixed-boundary-tests-02`. Earlier imperial input correctly snapped
+  to 2.9718 m and produced a different area; its failed receipt remains retained.
+- Frozen handoff auditing and closure now replay the shared full dependency
+  receipt validator against delivered files only. Exact owner/role/receipt use,
+  bytes/hashes and inventory-bound source-directory hashes are checked. Orphan
+  recipes, substituted tree receipts and unbound files refuse. Independent
+  review approves the corrected room and receipt paths.
+  `vertex-shared-dependency-validator-tests-01` passes 155 affected checks:
+  21 handoff, 40 closure, 35 composer, 47 staging and 12 IFC SDK-source cases.
+  Actual final composed-payload replay remains a separate required check.
+- Practical fractional labels are now shared by ordinary boundary dimensions,
+  physical-wall labels and measured section annotations. ANSI-oriented boundary
+  labels retain their decimal-foot policy. Exact room-property initializers and
+  whitespace-only Apply preserve the stored geometry and history. The shortest
+  exact-text refinement passes `vertex-fractional-presentation-green-tests-04`;
+  its native captures were inspected. Actual changed-field Preview/Apply,
+  one-step history and complete editable save/reopen pass
+  `vertex-room-dialog-apply-tests-01`.
+- Automatic physical-room detection now has independent clear-face geometry
+  expectations for 200 mm walls rather than wall-axis areas. Exact source walls,
+  both 3.24 m² room boundaries, atomic creation, history and editable save/reopen
+  pass `vertex-automatic-clear-room-tests-01`.
+- Boundary-copy retention checks independently distinguish opaque metadata from
+  owned identity and transform proofs. Exact custom data and four edge finishes,
+  fresh child identities, independently reconstructed copy geometry, three
+  tampered-proof refusals, history and full-authoring save/reopen pass
+  `vertex-boundary-copy-retention-tests-02`. Production copy behavior was not
+  changed to accommodate this fixture.
+- Untouched rounded height/thickness fields no longer write back presentation
+  rounding. Actual Red reproduced the history-changing bug; Green
+  `vertex-inspector-precision-green-tests-01` passes untouched signals/Return,
+  genuine and invalid edits, one-command history and editable save/reopen.
+  `vertex-inspector-cross-view-green-tests-01` also passes the projected edit.
+- Full desktop integration `vertex-current-desktop-integration-tests-07` reached
+  a fixture that directly replaced a recovered document outside its authority.
+  The malformed-geometry fixture now forks the entire snapshot before creating
+  its own workspace, uses normal Undo and proves the original stays unchanged.
+  `vertex-current-desktop-integration-tests-08` passes complete desktop_workflow
+  (446.41 seconds) and desktop_workspace_recovery (55.92 seconds). Invalid
+  PDF/SVG/PNG/print-preview refusals execute; the existing out-of-band command,
+  Undo and save refusals remain protected.
+- Constraint editing now uses authored names and distinct readable unnamed
+  owner labels across choices, previews and movement summaries. Full identities
+  remain in data/tooltips, with canonical bindings unchanged. Names are prepared
+  once per captured snapshot; geometry diagnostics and freedom counts remain.
+  `vertex-readable-constraint-green-tests-02` passes the complete dialog checks,
+  including 32 unnamed owners. The actual mixed controller lifecycle and native
+  capture pass `vertex-readable-constraint-desktop-tests-02`; the capture was
+  inspected. Its fixture selects canonical data rather than obsolete raw-ID
+  display text and retains complete Cancel snapshot preservation.
+- Project-format documentation now records native versions 54/55 and extraction
+  versions 52/53, including owned landing railings and physical-wall axis
+  dimensions. Historical format contracts remain preserved. This is source-backed
+  documentation, not migration or production certification.
+- A historical source composition bound to checkpoint `86888988` contains
+  19,056 physical files, 1,703,723,555 bytes and 52 components. Its original
+  receipts remain preserved. Later source changes require fresh binding before
+  staging; the old composition is not described as the current candidate.
 
 ## Identified human-test candidate
 

@@ -247,20 +247,18 @@ def _validate_source_kit(root: pathlib.Path, path: pathlib.Path | str) -> tuple[
 DEPENDENCY_PREFIX = "source-kit/third_party/dependency-inputs"
 
 
-def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path | str,
-                                    inventory_relative: str, source_kit_file: pathlib.Path,
-                                    source_kit: Mapping[str, Any]) -> tuple[Any, pathlib.Path, dict, dict]:
-    """Validate frozen composer output without composing or rerunning an audit.
+def _validate_dependency_payload(payload_root: pathlib.Path, source_kit: Mapping[str, Any],
+                                 resolve_project: Any, *, helper: Any = None) -> tuple[Any, dict, dict]:
+    """Replay every receipt against frozen inputs and selected project sources.
 
     Replay the composer's metadata schema through a receipt-only adapter. This
     shares its schema checks while resolving copies exclusively from the frozen
     payload, and project references exclusively from the selected source kit.
     """
-    helper = _load_sibling("dependency_payload_for_offline_bundle",
-                           "qualification/compose_dependency_source_kit.py")
+    if helper is None:
+        helper = _load_sibling("dependency_payload_for_offline_bundle",
+                               "qualification/compose_dependency_source_kit.py")
     safe, closure = helper.safe, helper.closure
-    name = safe.relative_path(relative.as_posix() if isinstance(relative, pathlib.PurePath) else relative)
-    payload_root = closure.checked_path(root, name)
     _require(payload_root.is_dir(), "dependency source kit must be a directory")
     document, receipt = closure.json_input(payload_root, helper.MANIFEST)
     helper.fields(document, {"schema_version", "payload_kind", "source_report", "candidate_binding",
@@ -360,7 +358,7 @@ def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path |
                     digest.update(len(children).to_bytes(8, "big"))
                     for child in children:
                         name = child[len(identity) + 1:].encode("utf-8")
-                        actual_hash, actual_bytes = _hash_file(_resolve_input_file(root, child, "dependency project reference"))
+                        actual_hash, actual_bytes = _hash_file(resolve_project(child))
                         bound = project_rows[child]
                         _require(actual_hash == bound["sha256"] and actual_bytes == bound["size"],
                                  "dependency project tree file differs from selected source kit")
@@ -393,8 +391,12 @@ def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path |
                 bound = project_rows.get(identity)
                 _require(bound is not None and bound["sha256"] == row["sha256"] and bound["size"] == row["bytes"],
                          "dependency project file differs from selected source kit")
+                project_file = resolve_project(identity)
+                actual_hash, actual_bytes = _hash_file(project_file)
+                _require(actual_hash == row["sha256"] and actual_bytes == row["bytes"],
+                         "dependency project file differs from selected source kit")
                 if "sha512" in row:
-                    closure.file_record(root, identity, row["sha512"], algorithm="sha512")
+                    closure.file_record(project_file.parent, project_file.name, row["sha512"], algorithm="sha512")
                 result["project_source_kit_path"] = identity
             elif copy:
                 location = "inputs/" + identity
@@ -444,6 +446,23 @@ def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path |
         if kind == "directory":
             _require(spelling in allowed_dirs or spelling in trees,
                      "dependency payload contains an unlisted directory")
+    return helper, document, receipt
+
+
+def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path | str,
+                                    inventory_relative: str, source_kit_file: pathlib.Path,
+                                    source_kit: Mapping[str, Any]) -> tuple[Any, pathlib.Path, dict, dict]:
+    """Validate the shared frozen receipt graph against workspace selections."""
+    helper = _load_sibling("dependency_payload_for_offline_bundle",
+                           "qualification/compose_dependency_source_kit.py")
+    name = helper.safe.relative_path(relative.as_posix() if isinstance(relative, pathlib.PurePath) else relative)
+    payload_root = helper.closure.checked_path(root, name)
+    helper, document, receipt = _validate_dependency_payload(
+        payload_root, source_kit,
+        lambda identity: _resolve_input_file(root, identity, "dependency project reference"), helper=helper)
+    safe, closure = helper.safe, helper.closure
+    binding = document["candidate_binding"]
+    owners = [row["id"] for row in document["components"]]
     selected_inventory = closure.file_record(root, inventory_relative)
     _require(binding["inventory"] == {"source_path": inventory_relative,
              "sha256": selected_inventory["sha256"], "bytes": selected_inventory["bytes"],

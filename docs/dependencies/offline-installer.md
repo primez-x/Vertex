@@ -20,8 +20,10 @@ and [redistribution list](https://learn.microsoft.com/en-us/visualstudio/release
 Local notice files are evidence inputs, not a licensing-clearance certificate;
 the current Redist.txt is a link stub and licensing qualification remains open.
 
-Run `scripts/prepare_cad_distribution.py` after the Release build and CAD runtime
-preparation, then `scripts/inspect-runtime.ps1 -CadPayloadManifest
+Run `scripts/prepare_cad_distribution.py` with the explicit selected runtime
+and corresponding-source table after the Release build and CAD runtime
+preparation; use the selection in [cad-runtime.md](cad-runtime.md). Then run
+`scripts/inspect-runtime.ps1 -CadPayloadManifest
 artifacts/runtime/cad-payload.json`. The payload generator reconstructs the SDK
 from the locked offline archive cache and verifies every selected staged file.
 Its generated component and portable allowlists augment the reviewed baseline;
@@ -31,11 +33,15 @@ classified as an installed Windows dependency. `bin/qt.conf` is also shipped
 so Qt plugins resolve inside the installation without developer environment
 variables.
 
-Generate the three inputs from one checkout and one Release build. Every path
+Generate the bound inputs from one checkout and one Release build. Every path
 is explicit so the staging run cannot fall back to a developer SDK or `PATH`:
 
 ```powershell
-python -B scripts/prepare_cad_distribution.py
+python -B scripts/prepare_cad_distribution.py `
+  --runtime-root .deps/cad-runtime/3.13.15-ifc-source-ff3c5b849eee `
+  --staged-root build/windows-release/cad-runtime `
+  --selection-path build/windows-release/cad-runtime-selection.json `
+  --corresponding-source-manifest .deps/source-closure/ifc-controlled/corresponding-source-paths-v2.json
 & scripts/inspect-runtime.ps1 -CadPayloadManifest artifacts/runtime/cad-payload.json
 
 python scripts/source_kit_manifest.py `
@@ -49,14 +55,40 @@ python scripts/distribution_inventory.py `
   --runtime-evidence artifacts/runtime/release-imports.json `
   --output artifacts/runtime/distribution-inventory.json
 
+python -B scripts/qualification/dependency_source_closure.py `
+  --workspace . `
+  --inventory artifacts/runtime/distribution-inventory.json `
+  --upstream-metadata artifacts/reset-delivery/dependency-source-closure/upstream-metadata.json `
+  --cache-dir .deps/vcpkg/downloads `
+  --cache-dir .deps/downloads `
+  --cache-dir .deps/downloads/cad-runtime `
+  --cache-dir .deps/downloads/source-closure `
+  --build-receipt .deps/source-closure/ifc-controlled/materialization-index-v2.json `
+  --output artifacts/reset-delivery/dependency-source-closure/selected-source.json
+
+python -B scripts/qualification/compose_dependency_source_kit.py `
+  --workspace . `
+  --report artifacts/reset-delivery/dependency-source-closure/selected-source.json `
+  --source-kit-manifest artifacts/source-kit-manifest.json `
+  --output-root .deps/source-closure/dependency-kit-selected
+
 python scripts/stage_offline_bundle.py `
   --source-root . `
   --inventory artifacts/runtime/distribution-inventory.json `
   --allowlist artifacts/runtime/cad-allowlist.json `
   --source-kit artifacts/source-kit-manifest.json `
+  --dependency-source-kit .deps/source-closure/dependency-kit-selected `
   --output-root artifacts/packages `
   --destination vertex-offline
 ```
+
+Use existing explicit cache inputs; the metadata receipt is acquired separately
+and neither audit nor composer performs a network request. Report parents must
+exist. Composition requires a new or empty directory. Preserve a selected kit
+while its candidate is checked; changed source-kit or inventory inputs require
+a newly bound composition. Do not copy private CMake caches or build logs into
+the distributable source payload. The portable source-materialization index
+retains the public input/control receipts; detailed host evidence stays private.
 
 The command validates every source-kit hash and size, delegates runtime file
 selection and inventory hash checks to `stage_portable_package.py`, copies all
@@ -68,6 +100,7 @@ that already exists is rejected. The output contains:
 | --- | --- |
 | `bin/`, `plugins/`, `assets/`, `help/`, `licenses/` | Runtime files, local assistance assets, offline user guide, and notices selected by the portable allowlist and inventory. |
 | `source-kit/` | Files named by the source-kit manifest, including their category and hash. |
+| `source-kit/third_party/dependency-inputs/` | Separately checked dependency archives, historical recipes, source trees, notices and portable bindings. These are not installed runtime files. |
 | `metadata/distribution-inventory.json` | Exact dependency, license, notice, source, and runtime ownership evidence used for staging. |
 | `metadata/distribution-sbom.spdx.json` | SPDX 2.3 package/file/dependency record derived from the same inventory. |
 | `metadata/source-kit-manifest.json` | The source-kit input whose file hashes were checked before copying. |

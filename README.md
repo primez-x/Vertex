@@ -3,6 +3,10 @@
 Vertex is an independent, offline-first Windows application for property
 measurement and residential/light-commercial architectural work.
 
+**Vertex makes use of geometry and visualization facilities provided by Open
+CASCADE Technology (OCCT).** Its original LGPL 2.1 and Open CASCADE Exception
+1.0 texts accompany the dependency notices and corresponding sources.
+
 The product name and every first-party runtime artifact use **Vertex**.
 The desktop application is `vertex.exe`, the command-line tool is
 `vertex-cli.exe`, and the documented project extension is `.bldproj`.

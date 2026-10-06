@@ -13,6 +13,15 @@ installation information in the eventual distribution. The complete dependency
 closure and production source kit are not yet qualified. A successful local
 compile is not a completed redistribution audit.
 
+Vertex makes use of facilities provided by Open CASCADE Technology (OCCT).
+The retained OCCT copyright text contains LGPL 2.1 and the Open CASCADE
+Exception 1.0, identified by SPDX as
+`LGPL-2.1-only WITH OCCT-exception-1.0`
+([exception definition](https://spdx.org/licenses/OCCT-exception-1.0.html)).
+The original installed vcpkg SPDX declaration remains unchanged; its shorter
+license field does not replace the complete notice. This attribution does not
+establish final relinking, static-dependency or source-delivery qualification.
+
 SQLite's source is dedicated to the public domain:
 <https://www.sqlite.org/copyright.html>.
 nlohmann-json uses the MIT license:

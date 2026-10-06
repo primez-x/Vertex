@@ -163,7 +163,7 @@ public:
         layout->addWidget(heading);
         persistent_freedom = new QLabel(owner);
         persistent_freedom->setObjectName(QStringLiteral("constraintPersistentFreedom"));
-        persistent_freedom->setAccessibleName(QStringLiteral("Stored component coordinate freedom"));
+        persistent_freedom->setAccessibleName(QStringLiteral("Degrees of freedom"));
         persistent_freedom->setWordWrap(true);
         layout->addWidget(persistent_freedom);
         auto* scroll = new QScrollArea(owner);
@@ -190,35 +190,35 @@ public:
         existing->setMinimumWidth(0);
         existing->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         existing->setMinimumContentsLength(12);
+        prepareOwnerLabels();
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type == "wall") {
                 try {
                     if (!ConstraintDialog::supportsEntity(entity)) continue;
-                    const auto name = entity.properties.value("name", id);
                     for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
                         endpoints.push_back({id, role});
-                        endpoint_labels.push_back(QStringLiteral("Wall · ") + text(name) + QStringLiteral(" · ") + text(wall_endpoint_role_name(role)));
+                        endpoint_labels.push_back(owner_label(id) + QStringLiteral(" · ") + text(wall_endpoint_role_name(role)));
                     }
                 } catch (const std::exception&) { /* Invalid walls are not available as endpoints. */ }
             } else if ((entity.type=="measurement_linework" || can_recognize_boundary_entity_type(entity.type)) && ConstraintDialog::supportsEntity(entity)) {
                 const auto edges = endpoint_edges(entity);
-                const auto name = text(entity.properties.value("name", id));
                 for (std::size_t i = 0; i < edges.size(); ++i) {
                     const auto& edge = edges[i];
                     for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
                         const auto& vertex = role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id;
                         endpoints.push_back({id, role, edge.segment_id, vertex});
-                        endpoint_labels.push_back((entity.type == "measurement_linework" ? QStringLiteral("Measured stroke · ") : entity.type == "room_boundary" ? QStringLiteral("Room boundary · ") : QStringLiteral("Boundary · ")) +
-                            name + QStringLiteral(" · Edge %1 · ").arg(i + 1) + text(wall_endpoint_role_name(role)));
+                        endpoint_labels.push_back(owner_label(id) + QStringLiteral(" · Edge %1 · ").arg(i + 1) + text(wall_endpoint_role_name(role)));
                     }
                 }
             } else if (entity.type == "constraint") {
                 const auto decoded = decode_constraint_entity(entity);
                 if (!decoded.constraint) continue;
                 const auto& owners = decoded.constraint->bindings;
-                if (std::any_of(owners.begin(), owners.end(), [&](const auto& b) { return b.owner_id == selected_id; }))
+                if (std::any_of(owners.begin(), owners.end(), [&](const auto& b) { return b.owner_id == selected_id; })) {
                     existing->addItem(relation_label(decoded.constraint->relation) +
-                        QStringLiteral(" · ") + text(id), text(id));
+                        QStringLiteral(" · %1").arg(existing->count() + 1), text(id));
+                    existing->setItemData(existing->count() - 1, text(id), Qt::ToolTipRole);
+                }
             }
         }
         form->addRow(QStringLiteral("Existing constraint"), existing);
@@ -235,6 +235,10 @@ public:
             bindings[index] = new QComboBox(body);
             bindings[index]->setObjectName(QStringLiteral("constraintBinding%1").arg(index));
             bindings[index]->addItems(endpoint_labels);
+            for (std::size_t i = 0; i < endpoints.size(); ++i) {
+                bindings[index]->setItemData(static_cast<int>(i), text(endpoints[i].owner_id), Qt::UserRole);
+                bindings[index]->setItemData(static_cast<int>(i), endpoint_identity(endpoints[i]), Qt::ToolTipRole);
+            }
             bindings[index]->setMinimumWidth(0);
             bindings[index]->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
             bindings[index]->setMinimumContentsLength(12);
@@ -361,7 +365,7 @@ public:
                 owners = std::move(expanded);
             }
         }
-        QString value = QStringLiteral("Stored coordinate freedom: %1").arg(stored_freedom_value(before));
+        QString value = QStringLiteral("Degrees of freedom: %1").arg(stored_freedom_value(before));
         if (after) {
             value += QStringLiteral(" → %1").arg(stored_freedom_value(*after));
             if (before.supported && after->supported && before.degrees_of_freedom >= 0 && after->degrees_of_freedom >= 0) {
@@ -392,12 +396,39 @@ public:
         persistent_freedom->setToolTip(details.join('\n'));
     }
 
+    void prepareOwnerLabels() {
+        const auto type_label = [](const Entity& value) {
+            return value.type == "wall" ? QStringLiteral("Wall") :
+                value.type == "measurement_linework" ? QStringLiteral("Measured stroke") :
+                value.type == "room_boundary" ? QStringLiteral("Room boundary") : QStringLiteral("Boundary");
+        };
+        const auto authored_name = [](const Entity& value) {
+            const auto name = value.properties.find("name");
+            return name != value.properties.end() && name->is_string()
+                ? text(name->get_ref<const std::string&>()).trimmed() : QString{};
+        };
+        // Snapshot order makes unnamed labels stable throughout this dialog.
+        // Count only unnamed supported owners of the same displayed type.
+        std::map<QString, int> ordinals;
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (!ConstraintDialog::supportsEntity(entity)) continue;
+            const auto type = type_label(entity);
+            const auto name = authored_name(entity);
+            owner_labels.emplace(id, name.isEmpty()
+                ? type + QStringLiteral(" %1").arg(++ordinals[type])
+                : type + QStringLiteral(" · ") + name);
+        }
+    }
+
     QString owner_label(const std::string& id) const {
-        const auto& entity = snapshot.entities().at(id);
-        return (entity.type == "wall" ? QStringLiteral("Wall · ") :
-            entity.type == "measurement_linework" ? QStringLiteral("Measured stroke · ") :
-            entity.type == "room_boundary" ? QStringLiteral("Room boundary · ") : QStringLiteral("Boundary · ")) +
-            text(entity.properties.value("name", id));
+        return owner_labels.at(id);
+    }
+
+    QString endpoint_identity(const WallEndpointBinding& binding) const {
+        QStringList identity{text(binding.owner_id), text(wall_endpoint_role_name(binding.role))};
+        if (!binding.segment_id.empty()) identity.push_back(QStringLiteral("Segment: ") + text(binding.segment_id));
+        if (!binding.vertex_id.empty()) identity.push_back(QStringLiteral("Vertex: ") + text(binding.vertex_id));
+        return identity.join(QStringLiteral(" · "));
     }
 
     void appendCurrentGeometry(std::vector<WallPreviewDrawing>& drawing, const std::string& id) const {
@@ -508,8 +539,10 @@ public:
             if (wall_resize) {
                 anchor->addItems(measured_mode ? QStringList{QStringLiteral("Keep segment start fixed"),QStringLiteral("Keep segment end fixed")} : QStringList{QStringLiteral("Keep selected wall start fixed"), QStringLiteral("Keep selected wall end fixed")});
             } else {
-                for (std::size_t i = 0; i < endpoints.size(); ++i)
+                for (std::size_t i = 0; i < endpoints.size(); ++i) {
                     anchor->addItem(QStringLiteral("Keep ") + endpoint_labels[static_cast<int>(i)] + QStringLiteral(" fixed"), static_cast<int>(i));
+                    anchor->setItemData(static_cast<int>(i), endpoint_identity(endpoints[i]), Qt::ToolTipRole);
+                }
                 for (std::size_t i = 0; i < endpoints.size(); ++i)
                     if (endpoints[i].owner_id == selected_id) { anchor->setCurrentIndex(static_cast<int>(i)); break; }
             }
@@ -718,11 +751,7 @@ public:
                 const auto displacement = std::max(
                     std::hypot(wall.old_baseline.start.x - wall.proposed_baseline.start.x, wall.old_baseline.start.y - wall.proposed_baseline.start.y),
                     std::hypot(wall.old_baseline.end.x - wall.proposed_baseline.end.x, wall.old_baseline.end.y - wall.proposed_baseline.end.y));
-                const auto& properties = candidate.candidate_entities().at(wall.wall_id).properties;
-                const auto name = properties.find("name");
-                const auto display_name = name != properties.end() && name->is_string() && !name->get_ref<const std::string&>().empty()
-                    ? text(name->get_ref<const std::string&>())
-                    : wall.wall_id == selected_id ? QStringLiteral("Selected wall") : text(wall.wall_id);
+                const auto display_name = owner_label(wall.wall_id);
                 const QStringList values{display_name, dimension(segment_length(wall.old_baseline), metric),
                     dimension(segment_length(wall.proposed_baseline), metric), dimension(displacement, metric)};
                 if (summary.size() < 3)
@@ -745,10 +774,14 @@ public:
                     const auto displacement = std::max(std::hypot(before.start.x - after.start.x, before.start.y - after.start.y), std::hypot(before.end.x - after.end.x, before.end.y - after.end.y));
                     changes->insertRow(row);
                     const QStringList values{label, dimension(segment_length(before), metric), dimension(segment_length(after), metric), dimension(displacement, metric)};
-                    for (int column = 0; column < values.size(); ++column) changes->setItem(row, column, new QTableWidgetItem(values[column]));
+                    for (int column = 0; column < values.size(); ++column) {
+                        auto* item = new QTableWidgetItem(values[column]);
+                        item->setToolTip(text(boundary.before.id));
+                        changes->setItem(row, column, item);
+                    }
                     ++row;
                 }
-                summary.push_back(QStringLiteral("%1: boundary movement shown in preview.").arg(text(boundary.before.id)));
+                summary.push_back(QStringLiteral("%1: boundary movement shown in preview.").arg(owner_label(boundary.before.id)));
             }
             for(const auto& stroke:candidate.changed_measured_strokes()) {
                 drawn_owners.insert(stroke.stroke_id);
@@ -758,10 +791,14 @@ public:
                     drawing.push_back({label,before,after});changes->insertRow(row);
                     const auto displacement=std::max(std::hypot(before.start.x-after.start.x,before.start.y-after.start.y),std::hypot(before.end.x-after.end.x,before.end.y-after.end.y));
                     const QStringList values{label,dimension(segment_length(before),metric),dimension(segment_length(after),metric),dimension(displacement,metric)};
-                    for(int column=0;column<values.size();++column)changes->setItem(row,column,new QTableWidgetItem(values[column]));
+                    for(int column=0;column<values.size();++column) {
+                        auto* item = new QTableWidgetItem(values[column]);
+                        item->setToolTip(text(stroke.stroke_id));
+                        changes->setItem(row,column,item);
+                    }
                     ++row;
                 }
-                summary.push_back(QStringLiteral("%1: measured segment movement shown in preview.").arg(text(stroke.stroke_id)));
+                summary.push_back(QStringLiteral("%1: measured segment movement shown in preview.").arg(owner_label(stroke.stroke_id)));
             }
             std::set<std::string> context_owners{selected_id};
             if (command.relation_anchor) context_owners.insert(command.relation_anchor->owner_id);
@@ -827,6 +864,7 @@ public:
     std::optional<PersistentConstraint> selected_constraint;
     std::optional<ConstraintRelationKind> configured_relation;
     std::optional<ConstraintAuthoringPreview> preview, accepted;
+    std::map<std::string, QString, std::less<>> owner_labels;
     PersistentConstraintComponentAnalysis source_freedom;
     QString error;
     QFormLayout* form{};

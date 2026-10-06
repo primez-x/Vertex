@@ -6,6 +6,34 @@ not licensing clearance or production acceptance. Existing authorization to
 include the supplied artwork remains recorded; this audit introduces no new
 permission gate or publication action.
 
+## Current evidence overlay (2026-10-06)
+
+The current selected runtime inventory contains 127 binaries, 18 static inputs
+and 52 components. Its selected-source audit records 49 exact local sources, two
+recorded assets, zero missing sources and one outstanding MSVC rights review.
+The inventory and audit counts below that describe earlier candidates remain
+historical observations.
+
+The source composer successfully produced `.deps/source-closure/dependency-kit-selected`:
+19,056 physical files, 1,703,723,555 bytes and 52 components. Its manifest
+SHA-256 is
+`f31024e0bef574ea6243a41320eba5325969211232be8782a5bf207b6535f542`; it is
+bound to project commit `86888988a3e164f3ed4c0941770c35d3e07f8133`
+and source-kit SHA-256
+`3cba0a5c4a9a5519c740919bf380fa8519563cd1e408023dbf433d9252b42f48`,
+covering 1,565 of 1,565 files.
+The source-v2 tree and budget corrections were reviewed and approved. This
+composition is historical after later desktop and handoff edits; candidate
+rebinding, staging, installation, offline rebuild, transitive-native review,
+license review and artwork-rights evidence remain open. All qualification flags
+remain false.
+
+The OCCT release attribution is now present in the README and third-party
+attribution. The upstream SPDX literal remains `LGPL-2.1-only`; the
+exception-aware documentation expression is
+`LGPL-2.1-only WITH OCCT-exception-1.0`. Recording the exception does not resolve
+modified-source, relinking or rights questions.
+
 The inspected inputs are the current tracked dependency, source and packaging
 manifests. The local `artifacts/runtime/distribution-inventory.json` was generated
 at `2026-10-06T00:51:44.194894Z`, covers 113 binaries and 16 static inputs, and
@@ -69,7 +97,7 @@ and preserve unresolved applicable obligations.
 | D02-Q04 | The shipped IfcOpenShell wheel is locked, but its exact publisher-to-source binding and bundled native source closure remain unresolved in `cad-runtime-lock.json`. The differently hashed official catalog candidate is not evidence for that wheel. A separately built/staged source candidate and SDK-source payload exist as historical evidence, not as a qualified replacement runtime. | Select the actual release runtime identity. Either obtain exact wheel/source/native-closure evidence or qualify the controlled replacement, including original/derived source, patch, eight-schema build settings, generated wrapper, static SDK sources and original notices. Bind the replacement to the actual independent worker and distribution inventory before substituting it. | D02/D08 |
 | D02-Q05 | CAD wheels contain bundled native code beyond their top-level Python licenses: Shapely retains GEOS and Windows notices; NumPy retains OpenBLAS and uniquely named native DLLs; CPython retains OpenSSL/libffi and other components. The generated entries preserve publisher prose, including `See package notices`, `Dual License` and other non-SPDX declarations. | Review the exact embedded notice/source sets, select any alternative license branches, and record reviewed expressions without overwriting original prose. Provide corresponding source/build inputs where the actual embedded license requires them. Include transitive code embedded in a DLL or extension, not just PE-imported DLL owners. | D02 |
 | D02-Q06 | The MSVC runtime manifest explicitly has `licensing_clearance: false`, operator-declared versions and local-evidence-only provenance. Its `Redist.txt` is a 187-byte pointer to the current list; the stored notices do not establish distributor eligibility or the exact licensed redistributable terms. | Record the applicable Visual Studio/Build Tools license basis, the actual applicable redistributable list/terms, and that the five selected non-debug CRT files are covered. Retain the existing byte hashes and third-party notices. Treat compiler/Windows SDK handoff rights separately from runtime rights; a reproducible kit need not silently redistribute an entire licensed SDK. | D02 |
-| D02-Q07 | The OCCT copyright file already contains LGPL-2.1 and the Open CASCADE exception, including a prominent supporting-documentation attribution condition. The manifest records only `LGPL-2.1-only`. Existing hashes/notices, Eigen MPL, Inter OFL, and permissive native notices are present but not a reviewed final obligation matrix. | Preserve the exact OCCT exception and add the required release attribution; record the chosen exception-aware expression without discarding the original text. Confirm exact modified-source/relinking obligations for the selected linking forms, Eigen covered files, and font redistribution/renaming facts. Keep all existing permissive copyright/disclaimer texts in the final package. | D02 |
+| D02-Q07 | The OCCT copyright file already contains LGPL-2.1 and the Open CASCADE exception, including a prominent supporting-documentation attribution condition. The README and third-party attribution now include the release attribution. The manifest retains its upstream literal `LGPL-2.1-only`; the exception-aware documentation expression is `LGPL-2.1-only WITH OCCT-exception-1.0`. Existing hashes/notices, Eigen MPL, Inter OFL, and permissive native notices are present but not a reviewed final obligation matrix. | Preserve the exact upstream expression and exception, and confirm exact modified-source/relinking obligations for the selected linking forms, Eigen covered files, and font redistribution/renaming facts. Keep all existing permissive copyright/disclaimer texts in the final package. | D02 |
 | D02-Q08 | The audit found private-source wording in `third_party/README.md` and a stale 342-file SVG README count. Root corrected these to public GPL source and 345 SVGs in this batch; these prose corrections do not establish a redistribution right. | Preserve actual hashes, authorization and dated proofs. Refresh the source-kit/inventory after the final input batch is frozen; the original count/prose finding is resolved. | Root integration |
 
 ## Obligation sources and qualification boundary

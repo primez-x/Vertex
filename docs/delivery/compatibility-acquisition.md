@@ -21,6 +21,15 @@ The retained official MSI is 21,577,728 bytes, SHA256 `01ad13b988d3e8fee7862c98a
 
 These are installer declarations, not installed registration, successful activation, server bitness, native-byte schema, or licensing evidence. No installer was run and no vendor component was installed, registered, or executed for this checkpoint. Vendor binaries and artwork are not distributable Vertex source.
 
+A subsequent read-only query of the same hash-bound MSI's File, Directory and
+Media tables found 396 files, 38 directories and one embedded `#product.cab`.
+No filename or file key matched `.ax7`, `.ax5`, `.apx`, sample, template, example
+or demo; no directory name matched the sample/template terms. The named
+`My Sketches` directory is not evidence of an included sketch. No files were
+extracted and no vendor component was executed. This closes that bounded sample
+acquisition probe, without proving samples are unavailable elsewhere or
+changing the original-project requirement.
+
 The prior [type-library inspection](../apex-compatibility-discovery.md) identifies `Apex_Integration` 6.1, library GUID `028f32b0-e185-4f17-b8fc-0c4821486744`, `ISketchClient` IID `7ee40959-4d4c-41b4-a807-4de9e0848a80`, and source events IID `22c11a2d-8057-4674-8e76-19c0c2720033`. Its path-based Open/SaveAs and native Base64 methods are separate from image/page exports. Type-library `SYS_WIN32` does not establish the actual process architecture.
 
 Current [official downloads](https://apexappraisalsolutions.com/downloads/) list v7 Pro build 39305 and v7 Standard build 45588 separately. Keep those page labels separate from MSI ProductVersion and observed installed executable identity. The inspected public guides and bounded official-domain native-format searches did not yield a native schema or downloadable representative native sample; this is a discovery result, not a claim that none exists.

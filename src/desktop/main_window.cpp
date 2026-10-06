@@ -1684,7 +1684,7 @@ struct DimensionCanvasProjection {
 };
 
 QString format_boundary_length(double metres, bool metric, bool ansi) {
-    if (!ansi) return format_length(metres, metric);
+    if (!ansi) return PlanCanvas::drawingLengthText(metres, metric);
     auto text = QStringLiteral("%1 ft").arg(QString::number(std::round(metres / 0.3048 * 10) / 10, 'f', 1));
     if (metric) text += QStringLiteral(" (%1 m)").arg(QString::number(metres, 'f', 3));
     return text;
@@ -3528,7 +3528,7 @@ CanvasLabel wall_dimension_label(const std::string& id,const Segment& baseline,
         if (positive && !negative) normal={-normal.x,-normal.y};
     }
     CanvasLabel label{id_from(id),{midpoint->x+normal.x*clearance,midpoint->y+normal.y*clearance},
-        format_length(segment_length(baseline),metric),selected};
+        PlanCanvas::drawingLengthText(segment_length(baseline),metric),selected};
     label.text_height_metres=.15;
     label.paper_height_mm=3.5;
     label.show_background=false;
@@ -3743,7 +3743,7 @@ std::vector<CanvasLabel> section_overlay_labels(const DocumentSnapshot& snapshot
             if (!measured) continue;
         }
         const auto text = dimension
-            ? format_length(measured->measured_metres, metric_units)
+            ? PlanCanvas::drawingLengthText(measured->measured_metres, metric_units)
             : QString::fromStdString(overlay.text);
         CanvasLabel label{QString::fromStdString(view.id + "/overlay/" + overlay.id),
             {dimension ? (measured->line_start_m[0] + measured->line_end_m[0]) / 2 : overlay.start_m[0],
@@ -15313,11 +15313,15 @@ public:
             if (!selected.has_value()) {
                 throw std::invalid_argument("Select existing walls or a closed boundary first.");
             }
+            const auto name = classification.trimmed();
+            if (name.isEmpty()) throw std::invalid_argument("Room name or classification cannot be empty.");
             if (is_physical_wall_room(*selected)) {
                 const auto checks = physical_wall_room_checks(authoringSnapshot());
                 const auto found = checks.find(selected->id);
                 if (found == checks.end() || !found->second.current)
                     throw std::invalid_argument("The selected physical room is stale; re-detect its sources.");
+                clearError();
+                refresh();
                 return id_from(selected->id);
             }
             Boundary boundary;
@@ -15337,8 +15341,12 @@ public:
                 }
                 if (adjacent.size() != 1)
                     throw std::invalid_argument("This wall borders several or no clear rooms. Apply a room class to the intended detected space in the area palette.");
-                const auto command = prepare_physical_wall_rooms(source, selected->id, adjacent, classification.toStdString());
+                auto command = prepare_physical_wall_rooms(source, selected->id, adjacent, name.toStdString());
                 if (!command.entity_changes.empty()) {
+                    // This single-room command asks for a room name or class.
+                    // Retain that visible name alongside the physical helper's
+                    // classification in the same source-bound history command.
+                    command.entity_changes.front().entity.properties["name"] = name.toStdString();
                     const auto id = id_from(command.entity_changes.front().entity.id);
                     (void)Document::preview_command(source, command);
                     applyDocumentCommand(command); m_selected_id = id; clearError(); refresh(); return id;
@@ -15347,7 +15355,11 @@ public:
                 for (const auto& [id, check] : checks) {
                     if (!check.current) continue;
                     const auto descriptor = decode_physical_wall_room_descriptor(source.entities().at(id));
-                    if (descriptor.source_lineage == detection.spaces[adjacent.front()].source_lineage) return id_from(id);
+                    if (descriptor.source_lineage == detection.spaces[adjacent.front()].source_lineage) {
+                        (void)selectEntity(id_from(id));
+                        clearError();
+                        return id_from(id);
+                    }
                 }
                 throw std::invalid_argument("Current room ownership could not be resolved.");
             } else {
@@ -15359,8 +15371,6 @@ public:
                 throw std::invalid_argument("Existing geometry is invalid: " +
                                             diagnostics.front().message);
             }
-            const auto name = classification.trimmed();
-            if (name.isEmpty()) throw std::invalid_argument("Room name or classification cannot be empty.");
             return createRoomBoundary(boundary, name, revision);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Create room from existing geometry: %1")
@@ -16691,10 +16701,47 @@ public:
             placement->is_object() && placement->value("mode", std::string{}) == "level";
         const double placement_offset = level_relative
             ? placement->value("offset_m", 0.0) : 0.0;
-        const auto initial_width = format_length(original_width, m_metric_units);
-        const auto initial_depth = format_length(original_depth, m_metric_units);
-        const auto initial_height = format_length(original_room.height, m_metric_units);
-        const auto initial_elevation = format_length(original_room.elevation, m_metric_units);
+        // Presentation rounding must never become the source of an edit. Use
+        // common imperial fractions only when parsing retains the exact model
+        // value; otherwise provide a round-trip decimal with an explicit unit.
+        const auto editable_length = [metric = context.metric_units](double metres) {
+            const auto round_trips = [metres](const QString& text) {
+                try {
+                    return parse_quantity(text.toStdString(), Unit::metre).metres == metres;
+                } catch (const std::exception&) {
+                    return false;
+                }
+            };
+            if (!metric) {
+                const auto fraction = PlanCanvas::drawingLengthText(metres, false);
+                if (round_trips(fraction)) return fraction;
+            }
+            const auto magnitude = metres == 0.0 ? 0 :
+                static_cast<int>(std::floor(std::log10(std::abs(metres))));
+            const auto decimal = [metres, magnitude](int significant_digits) {
+                auto text = QString::number(metres, 'f',
+                    std::max(0, significant_digits - 1 - magnitude));
+                if (text.contains(QLatin1Char('.'))) {
+                    while (text.endsWith(QLatin1Char('0'))) text.chop(1);
+                    if (text.endsWith(QLatin1Char('.'))) text.chop(1);
+                }
+                return text + QStringLiteral(" m");
+            };
+            // Prefer the shortest exact decimal instead of exposing binary
+            // floating-point noise in ordinary measurements such as 0.9 m.
+            // It can also fit the quantity parser's bounded rational range.
+            for (int digits = 1; digits <= 17; ++digits) {
+                const auto text = decimal(digits);
+                if (round_trips(text)) return text;
+            }
+            // An unchanged source value still follows the original-double path
+            // below, including model values beyond editable quantity precision.
+            return decimal(17);
+        };
+        const auto initial_width = editable_length(original_width);
+        const auto initial_depth = editable_length(original_depth);
+        const auto initial_height = editable_length(original_room.height);
+        const auto initial_elevation = editable_length(original_room.elevation);
 
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -16783,12 +16830,9 @@ public:
                                            const QLineEdit* field,
                                            const QString& initial,
                                            double original) {
-            return field->text() == initial
+            return field->text().trimmed() == initial.trimmed()
                 ? original
                 : parse_quantity(field->text().trimmed().toStdString(), unit).metres;
-        };
-        const auto exact_expression = [](double metres) {
-            return QString::number(metres, 'g', 17) + QStringLiteral(" m");
         };
         const auto restore_authoritative_view = [&] {
             if (m_nativeModelView)
@@ -16808,7 +16852,8 @@ public:
                     .anchor = selected_anchor(),
                 };
                 const bool footprint_changed = footprint_editable &&
-                    (width->text() != initial_width || depth->text() != initial_depth);
+                    (width->text().trimmed() != initial_width.trimmed() ||
+                     depth->text().trimmed() != initial_depth.trimmed());
                 if (footprint_changed) {
                     edit.width_metres = parse_or_original(width, initial_width, original_width);
                     edit.depth_metres = parse_or_original(depth, initial_depth, original_depth);
@@ -16861,24 +16906,29 @@ public:
                 update_preview();
                 return;
             }
-            const bool footprint_changed = footprint_editable &&
-                (width->text() != initial_width || depth->text() != initial_depth);
-            if (editSelectedRoomVolumeDimensions(
-                    footprint_changed
-                        ? (width->text() == initial_width
-                               ? exact_expression(original_width) : width->text())
-                        : QString{},
-                    footprint_changed
-                        ? (depth->text() == initial_depth
-                               ? exact_expression(original_depth) : depth->text())
-                        : QString{},
-                    height->text() == initial_height
-                        ? exact_expression(original_room.height) : height->text(),
-                    elevation->text() == initial_elevation
-                        ? exact_expression(original_room.elevation) : elevation->text(),
-                    selected_anchor(), context.revision)) {
+            try {
+                RoomDimensionEdit edit{
+                    .height_metres = parse_or_original(height, initial_height, original_room.height),
+                    .elevation_metres = parse_or_original(elevation, initial_elevation, original_room.elevation),
+                    .anchor = selected_anchor(),
+                };
+                const bool footprint_changed = footprint_editable &&
+                    (width->text().trimmed() != initial_width.trimmed() ||
+                     depth->text().trimmed() != initial_depth.trimmed());
+                if (footprint_changed) {
+                    edit.width_metres = parse_or_original(width, initial_width, original_width);
+                    edit.depth_metres = parse_or_original(depth, initial_depth, original_depth);
+                }
+                auto command = room_dimension_update_command(source, found->first, edit, context.revision);
+                (void)Document::preview_command(source, Command{command});
+                if (command.entity_changes.size() != 1 ||
+                    command.entity_changes.front().kind != EntityChangeKind::upsert ||
+                    command.entity_changes.front().entity != found->second)
+                    applyDocumentCommand(Command{std::move(command)});
+                clearError();
                 dialog.accept();
-            } else {
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Room volume: %1").arg(QString::fromUtf8(error.what())));
                 status->setText(lastError());
             }
         });
@@ -33196,7 +33246,11 @@ private:
                              else editSelectedLength(m_length_edit->text());
                          });
         QObject::connect(m_height_edit, &QLineEdit::editingFinished, owner,
-                         [this] { editSelectedHeight(m_height_edit->text()); });
+                         [this] {
+                             if (m_refreshing || !m_height_edit->isModified()) return;
+                             m_height_edit->setModified(false);
+                             (void)editSelectedHeight(m_height_edit->text());
+                         });
         QObject::connect(m_elevation_edit, &QLineEdit::editingFinished, owner,
                          [this] {
                              if (m_refreshing || !m_elevation_edit->isModified()) return;
@@ -33210,7 +33264,11 @@ private:
                              (void)editSelectedWallSlope(m_slope_rise_edit->text());
                          });
         QObject::connect(m_thickness_edit, &QLineEdit::editingFinished, owner,
-                         [this] { editSelectedThickness(m_thickness_edit->text()); });
+                         [this] {
+                             if (m_refreshing || !m_thickness_edit->isModified()) return;
+                             m_thickness_edit->setModified(false);
+                             (void)editSelectedThickness(m_thickness_edit->text());
+                         });
         QObject::connect(m_factor_edit, &QLineEdit::editingFinished, owner,
                          [this] { editSelectedFactor(m_factor_edit->text()); });
         QObject::connect(m_include_building_check, &QCheckBox::toggled, owner,

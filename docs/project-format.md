@@ -1,4 +1,52 @@
-# Vertex project formats v1 through v53
+# Vertex project formats v1 through v55
+
+## Physical wall axis dimensions (v55)
+
+Canonical dimensions with `dimension_version: 4` and
+`dimension_kind: wall_axis_length` target the actual physical wall through
+`target.entity_id`. They carry no segment, vertex or segment-chain target.
+Resolution reads the current physical axis and its analytical length; a stored
+observation is not measurement authority. Only this version-4 kind is supported:
+version-4 prior kinds and future versions or kinds remain opaque and retain the
+complete source entity. Malformed known typed data is rejected.
+
+Native format 55 and JSON/assets extraction version 53 are required when a
+supported wall-axis dimension occurs in any retained revision, including undone
+creation or deletion. Existing dimension versions 1–3 keep their contracts.
+
+## Owned stair landing railings (v54)
+
+Canonical `railing` properties with `version: 3` and
+`form: stair_landing_railing` persist height, thickness and post spacing plus a
+`host`. The host names `stair_id`, `role` (`connecting` or `top`),
+`incoming_flight_id`, `edge_index` (0–3), and ordered start/end station fractions.
+A connecting host also names `landing_id` and `outgoing_flight_id`; a top host
+cannot carry those fields. Hosted geometry derives from the stair landing;
+independent base position, orientation and length are rejected, as are flight
+host fields on a landing rail. Unknown forms and future integer versions retain
+their opaque data without acquiring canonical attachment authority.
+
+Native format 54 and JSON/assets extraction version 52 apply across retained
+history, including deleted, undone and abandoned records. The version-2 flight
+railing contract remains unchanged; extra version-2 host keys confer no landing
+authority. These schema additions introduce no separate replay-version field.
+
+## Assistance previews and extraction limits
+
+Assistance proposals use `schema_version: 1`, `status: unverified`, and
+`requires_explicit_acceptance: true`. Their source observations, resource
+provenance and command preview are not executable document commands. Acceptance
+creates a request for normal command validation, permission checks and an Undo
+transaction; it does not verify measurements. The decoder rejects unsupported
+schemas, unknown kinds and unexpected envelope fields rather than granting them
+opaque executable meaning. This preview schema has no replay-version field and
+does not define document-history authority.
+
+JSON/assets extraction preserves retained revisions and, when an archive is
+supplied, its recovery records. Its exchange version follows the highest native
+reader floor required by that history. Extraction remains separate from a JSON
+project importer; an assistance preview or extracted record does not itself
+establish a replayable accepted command.
 
 ## Exact physical-source translation lineage (v53)
 

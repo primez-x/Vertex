@@ -433,28 +433,28 @@ class SourceClosureTests(unittest.TestCase):
         manifest["source_inventory"]["sha256"] = self.sha("inventory.json")
         next(row for row in manifest["files"] if row["path"] == "metadata/inventory.json")["sha256"] = self.sha("inventory.json")
         portable["source_inventory"] = self.record("inventory.json")
+        # Exercise the real composer schema rather than a partial synthetic kit.
+        spec = importlib.util.spec_from_file_location(
+            "closure_fixture_composer", ROOT / "scripts/qualification/compose_dependency_source_kit.py")
+        composer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(composer)
+        source_manifest = self.root / "selected-source-kit.json"
+        composer.project_manifest.build_manifest(
+            self.root, {"entries": [{"category": "source", "path": "sdk/file.hpp"}]}, source_manifest)
+        self.write("bundle/source-kit.json", source_manifest.read_bytes())
+        self.write("bundle/source-kit/sdk/file.hpp", (self.root / "sdk/file.hpp").read_bytes())
+        next(row for row in manifest["files"] if row["path"] == "source-kit.json")["sha256"] = self.sha("bundle/source-kit.json")
+        manifest["source_kit"]["sha256"] = self.sha("bundle/source-kit.json")
+        report = self.run_audit()
+        self.write_json("source-report.json", report)
+        kit = composer.compose(self.root, "source-report.json", "dependency-kit",
+                               source_kit_manifest="selected-source-kit.json")
         kit_root = audit.DEPENDENCY_KIT_PREFIX
-        files = []
-        for original, role in (("sdk/include/unit.hpp", "sdk_source"), ("sdk/file.hpp", "assets")):
-            relative = "inputs/" + original
-            frozen = "bundle/" + kit_root + "/" + relative
-            self.write(frozen, (self.root / original).read_bytes())
-            files.append({"source_path": original, "path": relative, "sha256": self.sha(frozen),
-                          "bytes": (self.root / frozen).stat().st_size,
-                          "component_ids": ["dependency"], "roles": [role]})
-            manifest["files"].append({"path": kit_root + "/" + relative, "sha256": self.sha(frozen),
-                                      "size": (self.root / frozen).stat().st_size,
-                                      "kind": "dependency-source", "install": False})
-        file_row = files[1]
-        kit = {"schema_version": 1, "payload_kind": "candidate_dependency_source_payload",
-               "licensing_clearance": False, "corresponding_source_qualified": False, "offline_rebuild_qualified": False,
-               "candidate_binding": {"inventory": {"sha256": self.sha("inventory.json")},
-                                     "source_kit": {"sha256": self.sha("bundle/source-kit.json")}, "offline_bundle": None},
-               "components": [{"id": "dependency", "assets": [
-                   {"source_path": tree["path"], "kind": "directory", "sha256": tree["sha256"], "payload_path": "inputs/" + tree["path"]},
-                   {"source_path": file_row["source_path"], "sha256": file_row["sha256"],
-                    "bytes": file_row["bytes"], "payload_path": file_row["path"]}]}],
-               "files": files}
+        for row in kit["files"]:
+            frozen = "bundle/" + kit_root + "/" + row["path"]
+            self.write(frozen, (self.root / "dependency-kit" / row["path"]).read_bytes())
+            manifest["files"].append({"path": kit_root + "/" + row["path"], "sha256": row["sha256"],
+                                      "size": row["bytes"], "kind": "dependency-source", "install": False})
         self.bind_dependency_fixture(manifest, portable, kit)
         return manifest, portable, kit
 
@@ -485,8 +485,8 @@ class SourceClosureTests(unittest.TestCase):
             lambda kit: kit["candidate_binding"]["source_kit"].update(sha256="0" * 64),
             lambda kit: kit["components"][0]["assets"][0].update(payload_path="inputs/sdk/other"),
             lambda kit: kit["components"][0]["assets"][0].update(kind="file"),
-            lambda kit: kit["files"][0].update(component_ids=[]),
-            lambda kit: kit["files"][0].update(roles=["notices"]),
+            lambda kit: next(row for row in kit["files"] if row["source_path"] == "sdk/include/unit.hpp").update(component_ids=[]),
+            lambda kit: next(row for row in kit["files"] if row["source_path"] == "sdk/include/unit.hpp").update(roles=["notices"]),
             lambda kit: kit["files"][1].update(sha256="0" * 64),
             lambda kit: kit.update(corresponding_source_qualified=True),
             lambda kit: kit["files"].pop())
@@ -508,6 +508,31 @@ class SourceClosureTests(unittest.TestCase):
         self.bind_dependency_fixture(manifest, portable, kit)
         with self.assertRaisesRegex(ValueError, "tree hash"):
             self.run_audit(bundle_root="bundle")
+
+    def test_frozen_closure_replays_archive_recipe_notice_and_exact_owners(self):
+        manifest, portable, original = self.dependency_bundle_fixture()
+        for mode in ("orphan-recipe", "recipe-owner", "recipe-role", "recipe-hash",
+                     "archive-bytes", "notice-hash"):
+            with self.subTest(mode=mode):
+                kit = copy.deepcopy(original)
+                component = kit["components"][0]
+                recipe = next(row for row in kit["files"] if "recipe" in row["roles"])
+                if mode == "orphan-recipe":
+                    component["recipe"] = None
+                    recipe["component_ids"] = []
+                elif mode == "recipe-owner":
+                    recipe["component_ids"] = []
+                elif mode == "recipe-role":
+                    recipe["roles"] = ["assets"]
+                elif mode == "recipe-hash":
+                    component["recipe"]["files"][0]["sha256"] = "0" * 64
+                elif mode == "archive-bytes":
+                    component["sources"][0]["local_files"][0]["bytes"] += 1
+                else:
+                    component["notices"][0]["sha256"] = "0" * 64
+                self.bind_dependency_fixture(manifest, portable, kit)
+                with self.assertRaises(ValueError):
+                    self.run_audit(bundle_root="bundle")
 
     def test_source_tree_v2_prevents_ambiguous_two_tree_substitution(self):
         files = {"a.hpp": b"A", "b.hpp": b"B"}

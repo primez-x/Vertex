@@ -85,6 +85,77 @@ def _matches(record: dict[str, Any], rule: dict[str, Any]) -> bool:
     )
 
 
+def _dependency_members(root: pathlib.Path, manifest: dict[str, Any],
+                        records: dict[str, Any]) -> set[str]:
+    """Admit only the separately bound, frozen dependency attachment."""
+    reference = manifest.get("dependency_source_kit")
+    if reference is None:
+        _require(not any(row.get("kind") == "dependency-source" for row in records.values()),
+                 "dependency source files require a dependency source kit reference")
+        return set()
+    closure = _BUNDLE._load_sibling(
+        "dependency_closure_for_handoff", "qualification/dependency_source_closure.py")
+    inventory, inventory_receipt = closure.json_input(
+        root, manifest["source_inventory"]["path"], manifest["source_inventory"]["sha256"])
+    source_receipt = closure.file_record(root, manifest["source_kit"]["path"], manifest["source_kit"]["sha256"])
+    kit = _BUNDLE._read_json(
+        _BUNDLE._resolve_input_file(root, reference["path"], "dependency source kit"), "dependency source kit")
+    _require(isinstance(kit, dict), "dependency source kit must be an object")
+    binding = kit.get("candidate_binding")
+    _require(isinstance(binding, dict) and isinstance(binding.get("inventory"), dict),
+             "dependency source kit requires an inventory binding object")
+    # Frozen closure reuses the stager's receipt replay with a resolver for
+    # delivered project files; no original mutable workspace paths are opened.
+    closure.dependency_bundle_sources(root.parent, root.name, manifest, records, inventory,
+                                      inventory_receipt, source_receipt, {})
+    members = {reference["path"], *(_BUNDLE.DEPENDENCY_PREFIX + "/" + row["path"] for row in kit["files"])}
+    _require({path for path, row in records.items() if row.get("kind") == "dependency-source"} == members,
+             "bundle and dependency source kit file sets differ")
+    for path in members:
+        row = records[path]
+        _require(row.get("role") == "source-kit" and row.get("category") == "dependency-source"
+                 and row.get("install") is False, f"invalid dependency source bundle role: {path}")
+
+    def selected(receipt, reference, actual, label, *, original=False):
+        _require(isinstance(receipt, dict) and receipt.get("sha256") == actual["sha256"]
+                 and type(receipt.get("bytes")) is int and receipt["bytes"] == actual["bytes"],
+                 f"dependency {label} binding differs from frozen candidate")
+        if original:
+            identity = reference.get("original_path")
+            _require(isinstance(identity, str) and receipt.get("source_path") == identity
+                     and receipt.get("payload_path") == "inputs/" + identity,
+                     f"dependency {label} original identity differs from frozen candidate")
+
+    selected(binding["inventory"], manifest["source_inventory"], inventory_receipt, "inventory", original=True)
+    if binding.get("source_kit") is not None:
+        selected(binding["source_kit"], manifest["source_kit"], source_receipt, "project kit", original=True)
+    prior = binding.get("offline_bundle")
+    if prior is not None:
+        selected(prior.get("source_kit"), manifest["source_kit"], source_receipt, "project kit")
+        selected(prior.get("source_inventory"), manifest["source_inventory"], inventory_receipt, "inventory")
+    for key in ("component_manifest", "runtime"):
+        evidence = inventory.get("evidence", {}).get(key)
+        if evidence is not None:
+            receipt = binding.get(key)
+            _require(isinstance(receipt, dict) and receipt.get("source_path") == evidence["path"]
+                     and receipt.get("sha256") == evidence["sha256"],
+                     "dependency candidate evidence differs from frozen inventory")
+    expected_binaries = []
+    for row in inventory["binaries"]:
+        member = records.get(row["destination"])
+        _require(member is not None and member.get("kind") == "binary"
+                 and member.get("component_id") == row["component_id"] and member["sha256"] == row["sha256"],
+                 "dependency binary differs from frozen inventory")
+        expected_binaries.append((row["component_id"], row["path"], row["sha256"], member["size"]))
+    binaries = binding.get("binaries")
+    _require(isinstance(binaries, list) and all(isinstance(row, dict) for row in binaries),
+             "invalid dependency binary binding table")
+    _require(sorted((row.get("component_id"), row.get("source_path"), row.get("sha256"), row.get("bytes"))
+                    for row in binaries) == sorted(expected_binaries),
+             "dependency binary binding differs from frozen inventory")
+    return members
+
+
 def audit_bundle(bundle_root: pathlib.Path | str,
                  manifest_name: str = "offline-bundle-manifest.json") -> dict[str, Any]:
     """Return a deterministic success/failure report; never confer qualification."""
@@ -109,6 +180,7 @@ def audit_bundle(bundle_root: pathlib.Path | str,
             _require(_BUNDLE.canonical_relative(path, "bundle path") == path,
                      f"noncanonical bundle path: {path}")
             _SOURCE.verify_actual_filename(root, path)
+        dependency_members = _dependency_members(root, manifest, records)
         source_reference = manifest["source_kit"]["path"]
         source = _BUNDLE._read_json(
             _BUNDLE._resolve_input_file(root, source_reference, "source-kit manifest"), "source-kit manifest")
@@ -131,7 +203,8 @@ def audit_bundle(bundle_root: pathlib.Path | str,
             _require(record["size"] == entry["size"] and record["sha256"].lower() == entry["sha256"].lower(),
                      f"source-kit integrity mismatch: {path}")
         actual_source_paths = {path for path, row in records.items()
-                               if path.startswith("source-kit/") or row.get("kind") == "source-kit"}
+                               if (path.startswith("source-kit/") or row.get("kind") == "source-kit")
+                               and path not in dependency_members}
         _require(actual_source_paths == expected_source_paths, "bundle and source-kit file sets differ")
         for rule in sorted(contract["artifacts"], key=lambda row: row["id"]):
             paths = sorted(path for path, row in records.items() if _matches(row, rule) and row["size"] > 0)

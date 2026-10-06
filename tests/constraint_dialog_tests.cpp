@@ -1393,6 +1393,97 @@ void mixed_connected_movement_and_frozen_conflict() {
     document.undo(document.revision()); require(document.snapshot().entities() == before.entities(), "mixed movement undo was incomplete");
     document.redo(document.revision()); require(document.snapshot().entities() == committed.entities(), "mixed movement redo was incomplete");
 }
+void unnamed_owner_labels_preserve_identity() {
+    const std::string wall_id = "11111111-1111-4111-8111-111111111111";
+    const std::string other_wall_id = "22222222-2222-4222-8222-222222222222";
+    const std::string boundary_id = "33333333-3333-4333-8333-333333333333";
+    const std::string other_boundary_id = "44444444-4444-4444-8444-444444444444";
+    const std::string relation_id = "55555555-5555-4555-8555-555555555555";
+    auto first_wall = wall(); first_wall.id = wall_id;
+    auto second_wall = wall(); second_wall.id = other_wall_id; second_wall.properties["name"] = "   ";
+    second_wall.properties["baseline"]["start"] = {0, 20};
+    second_wall.properties["baseline"]["end"] = {3.6576, 20};
+    auto named_wall = wall(); named_wall.id = "named-wall"; named_wall.properties["name"] = "  Kitchen wall  ";
+    const PersistentConstraint join{relation_id, ConstraintRelationKind::coincident,
+        {{wall_id, WallEndpointRole::end}, {boundary_id, WallEndpointRole::start, "ab", "a"}}};
+    auto document = Document::create({first_wall, second_wall, named_wall,
+        boundary(boundary_id, 3.6576, 0), boundary(other_boundary_id, 20, 0), encode_constraint_entity(join)});
+    const auto before = document.snapshot();
+    ConstraintDialog dialog(before, QString::fromStdString(wall_id), true);
+    auto& endpoints = combo(dialog, "constraintBinding0");
+    const auto first = endpoint_choice(endpoints, "Wall 1", "end");
+    const auto second = endpoint_choice(endpoints, "Wall 2", "end");
+    const auto region = endpoint_choice(endpoints, "Boundary 1", "Edge 1 · start");
+    const auto other_region = endpoint_choice(endpoints, "Boundary 2", "Edge 1 · start");
+    require(first != second && region != other_region &&
+        endpoints.itemText(first) != endpoints.itemText(second) && endpoints.itemText(region) != endpoints.itemText(other_region),
+        "unnamed owners of the same type must have distinct ordinal labels");
+    require(endpoint_choice(endpoints, "Kitchen wall", "start") >= 0, "authored owner name must remain visible");
+    for (const auto& [index, id] : std::vector<std::pair<int, std::string>>{
+        {first, wall_id}, {second, other_wall_id}, {region, boundary_id}, {other_region, other_boundary_id}}) {
+        require(!endpoints.itemText(index).contains(QString::fromStdString(id)), "endpoint primary label exposes generated identity");
+        require(endpoints.itemData(index).toString() == QString::fromStdString(id), "endpoint data must retain canonical owner identity");
+        require(endpoints.itemData(index, Qt::ToolTipRole).toString().contains(QString::fromStdString(id)),
+            "endpoint tooltip must retain full owner identity");
+    }
+    auto& existing = combo(dialog, "existingConstraint");
+    require(existing.currentData().toString() == QString::fromStdString(relation_id) &&
+        !existing.currentText().contains(QString::fromStdString(relation_id)) &&
+        existing.itemData(existing.currentIndex(), Qt::ToolTipRole).toString().contains(QString::fromStdString(relation_id)),
+        "saved constraint must have a readable primary label and retain full identity in data and tooltip");
+    dialog.setLengthExpression("4.2672 m");
+    require(dialog.previewEdit() && dialog.submit(), "readable-label fixture must preview connected movement");
+    const auto preview = *dialog.acceptedPreview();
+    require(preview.changed_walls().size() == 1 && preview.changed_walls().front().wall_id == wall_id &&
+        preview.changed_boundaries().size() == 1 && preview.changed_boundaries().front().before.id == boundary_id,
+        "display names must not replace canonical movement identities");
+    const auto* table = dialog.findChild<QTableWidget*>("constraintChanges");
+    const auto* status = dialog.findChild<QPlainTextEdit*>("constraintStatus");
+    require(table && table->rowCount() == 5 && status, "connected movement must show wall and boundary details");
+    require(table->item(0, 0)->text().contains("Wall 1") && table->item(1, 0)->text().contains("Boundary 1 · Edge 1"),
+        "movement table must reuse readable owner and edge labels");
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const auto id = QString::fromStdString(row == 0 ? wall_id : boundary_id);
+        require(!table->item(row, 0)->text().contains(id) && table->item(row, 0)->toolTip().contains(id),
+            "movement primary label must hide generated identity while tooltip preserves it");
+    }
+    require(status->toPlainText().contains("Wall 1") && status->toPlainText().contains("Boundary 1") &&
+        !status->toPlainText().contains(QString::fromStdString(wall_id)) &&
+        !status->toPlainText().contains(QString::fromStdString(boundary_id)), "movement summary exposes generated identity");
+    require(document.snapshot().entities() == before.entities(), "label preview must remain detached from the document");
+    apply_constraint_authoring(document, preview);
+    const auto after = document.snapshot();
+    require(decode_constraint_entity(after.entities().at(relation_id)).constraint->bindings == join.bindings,
+        "readable labels must preserve exact saved owner, edge and vertex bindings");
+    require_near(decode_identified_boundary_entity(after.entities().at(boundary_id)).segments.front().segment.start.x, 4.2672);
+    require(after.entities().at(other_wall_id) == before.entities().at(other_wall_id) &&
+        after.entities().at(other_boundary_id) == before.entities().at(other_boundary_id), "unrelated unnamed objects must remain unchanged");
+}
+void unnamed_owner_ordinals_in_larger_snapshot() {
+    std::vector<Entity> entities;
+    auto invalid = wall(); invalid.id = "000-invalid";
+    invalid.properties["baseline"]["end"] = {0, 0};
+    entities.push_back(invalid);
+    auto named = wall(); named.id = "001-named"; named.properties["name"] = "Named wall";
+    entities.push_back(named);
+    for (int i = 1; i <= 32; ++i) {
+        auto value = wall();
+        value.id = QStringLiteral("owner-%1").arg(i, 2, 10, QLatin1Char('0')).toStdString();
+        entities.push_back(value);
+    }
+    const auto document = Document::create(entities);
+    ConstraintDialog dialog(document.snapshot(), "owner-01", true);
+    auto& choices = combo(dialog, "constraintBinding0");
+    require(choices.count() == 66, "unsupported wall must not be offered among supported owners");
+    for (int i = 1; i <= 32; ++i) {
+        const auto id = QStringLiteral("owner-%1").arg(i, 2, 10, QLatin1Char('0'));
+        const auto index = choices.findData(id);
+        require(index >= 0 && choices.itemText(index) == QStringLiteral("Wall %1 · start").arg(i) &&
+            choices.itemText(index + 1) == QStringLiteral("Wall %1 · end").arg(i) &&
+            choices.itemData(index, Qt::ToolTipRole).toString().contains(id),
+            "larger snapshot must retain distinct ordinals, endpoint roles and canonical identities");
+    }
+}
 void room_boundary_mixed_choices_and_reopen() {
     auto room = decode_identified_boundary_entity(boundary("room", 3.6576, 0));
     room.type = "room_boundary";
@@ -1457,6 +1548,8 @@ void persisted_coordinate_freedom_before_after() {
     const auto original = document.snapshot();
     ConstraintDialog dialog(original, "first", true);
     auto& label = persistent_freedom(dialog);
+    require(label.text().startsWith("Degrees of freedom:") && !label.text().contains("Stored coordinate freedom"),
+        "coordinate freedom must use the compact recognized CAD label");
     require(label.text().contains("7") && !label.text().contains(QStringLiteral("→")),
         "source must show seven stored coordinate freedoms without preview counts");
     require(label.toolTip().contains("X/Y") && label.toolTip().contains("translation") &&
@@ -1557,6 +1650,8 @@ int main(int argc, char** argv) {
         relationship_create_edit_conflict_remove();
         mixed_owner_choices_and_relation_editing();
         mixed_connected_movement_and_frozen_conflict();
+        unnamed_owner_labels_preserve_identity();
+        unnamed_owner_ordinals_in_larger_snapshot();
         room_boundary_mixed_choices_and_reopen();
         boundary_relationship_workflows();
         persisted_coordinate_freedom_before_after();

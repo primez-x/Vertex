@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -292,10 +293,19 @@ def dependency_bundle_sources(root, bundle_root, manifest, by_path, document, in
             and member["sha256"] == reference.get("sha256") and member.get("size") == reference.get("size"),
             "dependency source kit reference differs from frozen payload")
     kit, _ = json_input(root, bundle_root + "/" + relative, reference["sha256"])
-    require(kit.get("schema_version") == 1 and kit.get("payload_kind") == "candidate_dependency_source_payload"
-            and all(kit.get(key) is False for key in
-                    ("licensing_clearance", "corresponding_source_qualified", "offline_rebuild_qualified")),
-            "invalid frozen dependency source kit schema or qualification")
+    # Reuse staging's complete composer replay, resolving project references
+    # exclusively from this delivered source kit rather than the live workspace.
+    helper_path = Path(__file__).resolve().parents[1] / "stage_offline_bundle.py"
+    spec = importlib.util.spec_from_file_location("bundle_frozen_dependency_validator", helper_path)
+    require(spec is not None and spec.loader is not None, "cannot load frozen dependency validator")
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    project_kit, _ = json_input(root, bundle_root + "/" + manifest["source_kit"]["path"],
+                                source_kit_receipt["sha256"])
+    validator._SOURCE_KIT.validate_manifest(project_kit)
+    validator._validate_dependency_payload(
+        checked_path(root, bundle_root + "/" + DEPENDENCY_KIT_PREFIX), project_kit,
+        lambda identity: checked_path(root, bundle_root + "/source-kit/" + safe.relative_path(identity)))
     binding = kit.get("candidate_binding")
     require(isinstance(binding, dict) and binding.get("inventory", {}).get("sha256") == inventory_receipt["sha256"],
             "dependency source kit inventory differs from frozen candidate")
@@ -307,9 +317,6 @@ def dependency_bundle_sources(root, bundle_root, manifest, by_path, document, in
                 "dependency source kit project kit differs from frozen candidate")
     require(prior is None or isinstance(prior, dict), "invalid dependency source kit prior binding")
     rows, components = kit.get("files"), kit.get("components")
-    require(isinstance(rows, list) and len(rows) <= MAX_DEPENDENCY_RECORDS
-            and isinstance(components, list) and len(components) <= 512, "invalid dependency source kit tables")
-    safe.check_names([row["path"] for row in rows])
     component_ids = {item["id"] for item in document["components"]}
     require(len(components) == len(component_ids) and {row["id"] for row in components} == component_ids,
             "dependency source kit component ownership differs from candidate")
@@ -322,11 +329,6 @@ def dependency_bundle_sources(root, bundle_root, manifest, by_path, document, in
         require(frozen is not None and frozen.get("kind") == "dependency-source" and frozen.get("install") is False
                 and frozen["sha256"] == row["sha256"] and type(row.get("bytes")) is int
                 and frozen.get("size") == row["bytes"], "dependency source file differs from frozen payload")
-        owners, roles = row.get("component_ids"), row.get("roles")
-        require(isinstance(owners, list) and len(owners) <= 512 and len(set(owners)) == len(owners)
-                and set(owners) <= component_ids and isinstance(roles, list) and 0 < len(roles) <= 64
-                and all(isinstance(role, str) and 0 < len(role) <= 64 for role in roles)
-                and len(set(roles)) == len(roles), "invalid dependency source file owners or roles")
         files[location] = row
     expected = {relative, *[DEPENDENCY_KIT_PREFIX + "/" + path for path in files]}
     require({path for path in by_path if path.startswith(DEPENDENCY_KIT_PREFIX + "/")} == expected,
@@ -347,6 +349,8 @@ def dependency_bundle_sources(root, bundle_root, manifest, by_path, document, in
             require(row.get("payload_path") == location and row.get("sha256") == receipt["sha256"]
                     and row.get("kind", "file") == kind, "delivered source input identity differs from inventory")
             if kind == "directory":
+                require(source_tree_hash(root, bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location)
+                        == receipt["sha256"], "delivered source tree hash differs from inventory")
                 children = source_tree_files(root, bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location)
                 for child in children:
                     child_relative = child[len(bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/"):]

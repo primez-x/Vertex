@@ -6,6 +6,7 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/physical_wall_room.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
@@ -13,6 +14,8 @@
 #include "sketch/reference_grid.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -91,6 +94,7 @@
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <set>
 #include <string_view>
 #include <thread>
 
@@ -856,39 +860,369 @@ void test_workspace_profiles() {
 
 void test_room_boundary_from_existing_geometry() {
     const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    const auto create_shell = [](desktop::MainWindow& target) {
+        auto* thickness = target.findChild<QLineEdit*>("wallDrawThickness");
+        require(thickness != nullptr, "existing-geometry fixture exposes physical wall thickness");
+        thickness->setText("200 mm");
+        const QStringList ids{
+            target.createStraightWall({0.0, 0.0}, {4.0, 0.0}, "exterior"),
+            target.createStraightWall({4.0, 0.0}, {4.0, 3.0}, "exterior"),
+            target.createStraightWall({0.0, 3.0}, {0.0, 0.0}, "exterior"),
+            target.createStraightWall({4.0, 3.0}, {0.0, 3.0}, "exterior")};
+        require(std::none_of(ids.begin(), ids.end(), [](const auto& id) { return id.isEmpty(); }),
+                "existing-geometry fixture must create four walls");
+        return ids;
+    };
+    const auto assert_sources = [](const DocumentSnapshot& current, const DocumentSnapshot& source,
+                                   const QStringList& ids) {
+        for (const auto& id : ids)
+            require(current.entities().at(id.toStdString()) == source.entities().at(id.toStdString()),
+                    "derived room must preserve every source wall field");
+    };
+    const auto assert_room = [](const DocumentSnapshot& source, const QString& id,
+                               const QStringList& walls, const QString& name) {
+        const auto& entity = source.entities().at(id.toStdString());
+        require(entity.type == "room_boundary" && is_physical_wall_room(entity) &&
+                    entity.properties.at("name") == name.toStdString() &&
+                    entity.properties.at("classification") == name.toStdString() &&
+                    entity.properties.at("measurement_classification") == name.toStdString(),
+                "physical room must retain the requested visible name and classification");
+        require(!entity.properties.contains("area_m2"),
+                "physical room must derive current area rather than persist an unqualified quantity");
+        const auto descriptor = decode_physical_wall_room_descriptor(entity);
+        require(descriptor.selected_wall_id == walls.front().toStdString() && descriptor.holes.empty(),
+                "room descriptor must bind the selected source wall without fabricated holes");
+        const auto& captured = descriptor.source_lineage.at("physical_sources");
+        require(captured.size() == static_cast<std::size_t>(walls.size()),
+                "room lineage must capture all physical walls in its source context");
+        for (const auto& wall : walls) {
+            const auto owner = std::find_if(captured.begin(), captured.end(), [&](const auto& record) {
+                return record.at("owner_id") == wall.toStdString();
+            });
+            require(owner != captured.end() && owner->at("baseline") ==
+                        source.entities().at(wall.toStdString()).properties.at("baseline") &&
+                        owner->at("thickness_m") == 0.2,
+                    "room lineage must retain exact source baselines and physical thickness");
+        }
+        const auto current = physical_wall_room_checks(source).at(id.toStdString());
+        require(current.current && current.diagnostic.empty() && current.holes.empty() &&
+                    current.boundary.size() == 4 && std::abs(current.area_square_metres - 10.64) < 1e-7,
+                "current room must use the 3.8 by 2.8 metre clear inside faces");
+        const auto bounds = boundary_bounds(current.boundary);
+        require(std::abs(bounds.minimum.x - 0.1) < 1e-7 && std::abs(bounds.minimum.y - 0.1) < 1e-7 &&
+                    std::abs(bounds.maximum.x - 3.9) < 1e-7 && std::abs(bounds.maximum.y - 2.9) < 1e-7,
+                "physical room bounds must exclude source wall material");
+    };
     sketch::desktop::MainWindow window;
-    const auto first = window.createStraightWall({0.0, 0.0}, {4.0, 0.0}, QStringLiteral("exterior"));
-    const auto second = window.createStraightWall({4.0, 0.0}, {4.0, 3.0}, QStringLiteral("exterior"));
-    const auto third = window.createStraightWall({0.0, 3.0}, {0.0, 0.0}, QStringLiteral("exterior"));
-    const auto fourth = window.createStraightWall({4.0, 3.0}, {0.0, 3.0}, QStringLiteral("exterior"));
-    require(!first.isEmpty() && !second.isEmpty() && !third.isEmpty() && !fourth.isEmpty(),
-            "existing-geometry fixture must create four walls");
-    require(window.selectEntity(first), "existing-geometry fixture must select a source wall");
-    const auto before = window.document().revision();
-    const auto before_entities = window.document().snapshot().entities();
-    const auto room = window.createRoomBoundaryFromExistingGeometry(QStringLiteral("Living room"));
-    require(!room.isEmpty() && window.document().revision() == before + 1,
+    window.setMetricUnits(true);
+    const auto walls = create_shell(window);
+    require(window.selectEntity(walls.front()), "existing-geometry fixture must select a source wall");
+    const auto before = window.document().snapshot();
+    const auto room = window.createRoomBoundaryFromExistingGeometry(QStringLiteral("  Living room  "));
+    require(!room.isEmpty() && window.document().revision() == before.revision() + 1,
             "connected existing walls must create one room boundary command");
     const auto snapshot = window.document().snapshot();
     require(snapshot.entities().at(room.toStdString()).type == "room_boundary" &&
-                snapshot.entities().size() == before_entities.size() + 1 &&
+                snapshot.entities().size() == before.entities().size() + 1 &&
                 snapshot.entities().at(room.toStdString()).properties.at("name") == "Living room",
             "room creation must preserve source walls and persist its classification");
-    for (const auto& source_id : {first, second, third, fourth})
-        require(snapshot.entities().at(source_id.toStdString()) == before_entities.at(source_id.toStdString()),
-            "derived room must preserve every source wall field");
-    require(window.undoCommand() && !window.document().snapshot().entities().contains(room.toStdString()) &&
-                window.redoCommand() && window.document().snapshot().entities().contains(room.toStdString()),
-            "room creation from existing geometry must participate in undo and redo");
+    assert_sources(snapshot, before, walls);
+    assert_room(snapshot, room, walls, "Living room");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas && std::any_of(canvas->labels().begin(), canvas->labels().end(), [&](const auto& label) {
+                return label.id == room && label.text.contains("Living room") && label.text.contains("10.64");
+            }), "actual clear-room canvas label must retain the entered room name and current area");
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == snapshot.entities(),
+            "one-step room undo and redo must restore exact source walls, room identity and descriptor");
 
-    const auto branch = window.createStraightWall({4.0, 0.0}, {6.0, 0.0}, QStringLiteral("partition"));
-    require(!branch.isEmpty() && window.selectEntity(first),
+    const auto identified = decode_identified_boundary_entity(snapshot.entities().at(room.toStdString()));
+    const auto lower = std::find_if(identified.segments.begin(), identified.segments.end(), [](const auto& edge) {
+        return std::abs(edge.segment.start.y - .1) < 1e-7 && std::abs(edge.segment.end.y - .1) < 1e-7;
+    });
+    require(lower != identified.segments.end(), "clear room identifies the inside bottom wall edge");
+    const auto area = window.createAreaDimension(room, {.5, 2.4});
+    const auto length = window.createLengthDimension(room, QString::fromStdString(lower->segment_id), {2, -.7});
+    require(!area.isEmpty() && !length.isEmpty(), "clear room must support live area and inside-face dimensions");
+    const auto assert_dimensions = [&](const DocumentSnapshot& source) {
+        const auto area_value = decode_boundary_dimension_entity(source.entities().at(area.toStdString()));
+        const auto length_value = decode_boundary_dimension_entity(source.entities().at(length.toStdString()));
+        require(area_value.supported() && length_value.supported() &&
+                    std::abs(area_value.dimension->resolve(source).area() - 10.64) < 1e-7 &&
+                    std::abs(length_value.dimension->resolve(source).segment_length() - 3.8) < 1e-7,
+                "room dimensions must resolve current net clear area and inside-face length");
+    };
+    const auto dimensioned = window.document().snapshot();
+    assert_dimensions(dimensioned);
+    QTemporaryDir files;
+    require(files.isValid(), "existing-room lifecycle has an isolated project directory");
+    const auto path = files.filePath("existing-room.bldproj");
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+                window.document().snapshot().entities() == dimensioned.entities(),
+            "room name, lineage, dimensions and source walls must survive native save and reopen");
+    assert_room(window.document().snapshot(), room, walls, "Living room");
+    assert_dimensions(window.document().snapshot());
+    require(window.selectEntity(walls.front()), "reopened room source can be selected for repeat detection");
+    const auto retained = window.document().snapshot();
+    require(window.createRoomBoundaryFromExistingGeometry("Bedroom") == room &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(retained),
+            "repeat detection must retain existing room ownership, name, class and complete history");
+    require(window.createRoomBoundaryFromExistingGeometry("   ").isEmpty() &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(retained),
+            "blank room name must reject without mutating sources or retained history");
+    require(window.createRoomBoundaryFromExistingGeometry("Invalid", retained.revision() - 1).isEmpty() &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(retained),
+            "stale room creation must reject without mutating the full source snapshot");
+    require(window.selectEntity(room), "current physical room can be selected for repeat detection");
+    const auto selected_room_source = window.document().snapshot();
+    require(window.createRoomBoundaryFromExistingGeometry("Other room") == room &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(selected_room_source),
+            "selected current room must retain its owner, authored name, classification and full history");
+    require(window.createRoomBoundaryFromExistingGeometry(" \t\n ").isEmpty() &&
+                window.lastError().contains("cannot be empty") &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(selected_room_source),
+            "selected current room must reject a blank name without any source or history mutation");
+    require(window.createRoomBoundaryFromExistingGeometry("Recovered room") == room &&
+                window.lastError().isEmpty() && window.selectedEntityId() == room &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(selected_room_source),
+            "valid selected-room retry must clear its previous error and preserve the owner's full snapshot");
+    require(window.selectEntity(walls.front()) &&
+                window.createRoomBoundaryFromExistingGeometry("   ").isEmpty() &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(selected_room_source),
+            "source-wall blank retry must retain every room, source and history record");
+    require(window.createRoomBoundaryFromExistingGeometry("Recovered source room") == room &&
+                window.lastError().isEmpty() && window.selectedEntityId() == room &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(selected_room_source),
+            "valid source-wall retry must select its existing room, clear its previous error and preserve the full snapshot");
+    assert_room(window.document().snapshot(), room, walls, "Living room");
+
+    desktop::MainWindow branched;
+    auto branched_walls = create_shell(branched);
+    const auto branch = branched.createStraightWall({4.0, 0.0}, {6.0, 0.0}, "partition");
+    require(!branch.isEmpty() && branched.selectEntity(branched_walls.front()),
             "branched existing-geometry fixture must be selectable");
-    const auto before_reject = window.document().revision();
-    require(window.createRoomBoundaryFromExistingGeometry(QStringLiteral("Invalid" )).isEmpty() &&
-                window.document().revision() == before_reject &&
-                window.lastError().contains(QStringLiteral("exactly two"), Qt::CaseInsensitive),
-            "branched existing walls must fail without duplicating or mutating geometry");
+    branched_walls.push_back(branch);
+    const auto branch_source = branched.document().snapshot();
+    const auto branched_room = branched.createRoomBoundaryFromExistingGeometry("Branched room");
+    require(!branched_room.isEmpty() && branched.document().revision() == branch_source.revision() + 1 &&
+                branched.document().snapshot().entities().size() == branch_source.entities().size() + 1,
+            "external wall spur must retain one clear room in one atomic command");
+    assert_sources(branched.document().snapshot(), branch_source, branched_walls);
+    assert_room(branched.document().snapshot(), branched_room, branched_walls, "Branched room");
+    const auto branch_result = branched.document().snapshot();
+    require(branched.selectEntity(branched_walls.front()) &&
+                branched.createRoomBoundaryFromExistingGeometry("Other room") == branched_room &&
+                document_snapshot_digest(branched.document().snapshot()) == document_snapshot_digest(branch_result),
+            "repeat branch detection must retain exactly one source-bound owner and its authored name");
+    require(branched.undoCommand() && branched.document().snapshot().entities() == branch_source.entities() &&
+                branched.redoCommand() && branched.document().snapshot().entities() == branch_result.entities() &&
+                physical_wall_room_checks(branched.document().snapshot()).at(branched_room.toStdString()).current,
+            "supported branch room must retain source authority through undo and redo");
+
+    desktop::MainWindow ambiguous;
+    (void)create_shell(ambiguous);
+    const auto divider = ambiguous.createStraightWall({2.0, 0.0}, {2.0, 3.0}, "partition");
+    require(!divider.isEmpty() && ambiguous.selectEntity(divider), "shared room divider is selectable");
+    const auto ambiguous_source = ambiguous.document().snapshot();
+    require(ambiguous.createRoomBoundaryFromExistingGeometry("Invalid").isEmpty() &&
+                document_snapshot_digest(ambiguous.document().snapshot()) == document_snapshot_digest(ambiguous_source) &&
+                ambiguous.lastError().contains("several", Qt::CaseInsensitive),
+            "wall bordering two rooms must refuse ambiguous ownership without any source or history mutation");
+}
+
+void test_dimension_presentation_precision() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setMetricUnits(false);
+    const auto quarter_length = parse_quantity("12 ft 1/4 in").metres;
+    const auto boundary = window.createBoundary({{{0,0},{quarter_length,0},0},
+        {{quarter_length,0},{quarter_length,3},0},{{quarter_length,3},{0,3},0},
+        {{0,3},{0,0},0}}, "living_area");
+    const auto geometry = decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(boundary.toStdString()));
+    const auto dimension = window.createLengthDimension(boundary,
+        QString::fromStdString(geometry.segments.front().segment_id), {1,-.5});
+    const auto wall = window.createStraightWall({0,4},{quarter_length,4});
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas && !dimension.isEmpty() && !wall.isEmpty(), "fraction label sources must exist");
+    const auto label_text = [](const desktop::PlanCanvas* target, const QString& id) {
+        const auto found = std::find_if(target->labels().begin(), target->labels().end(),
+            [&](const auto& label) { return label.id == id; });
+        require(found != target->labels().end(), "fraction measurement label must be projected");
+        return found->text;
+    };
+    require(label_text(canvas, dimension) == QStringLiteral("12 ft 1/4 in") &&
+            label_text(canvas, wall) == QStringLiteral("12 ft 1/4 in"),
+            "non-ANSI boundary and physical wall labels must retain quarter inches honestly");
+    const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture_directory.isEmpty()) {
+        window.resize(1280, 900);
+        window.show();
+        QApplication::processEvents();
+        canvas->fitView();
+        QApplication::processEvents();
+        require(QDir().mkpath(capture_directory) && canvas->grab().save(
+            QDir(capture_directory).filePath("fractional-boundary-wall-labels.png")),
+            "settled fractional measurement canvas capture must save");
+    }
+    auto sheet = window.document().snapshot().entities().at("sheet-view-1");
+    const auto model = decode_sheet_view_entity(sheet);
+    auto views = model.views();
+    auto section = std::find_if(views.begin(), views.end(),
+        [](const auto& view) { return view.id == "view-section"; });
+    require(section != views.end(), "fraction annotation requires the existing section view");
+    section->overlays.push_back(SectionOverlay{.id="fraction-measurement",
+        .kind=SectionOverlayKind::dimension, .start_m={0,0}, .end_m={quarter_length,0}});
+    sheet.properties["model"] = model.with_view(*section).to_json();
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(sheet)}, {}, "fraction measured annotation fixture"});
+    require(window.selectEntity(wall), "refresh measured annotation fixture");
+    auto* view_selection = window.findChild<QComboBox*>("architecturalView");
+    auto* architectural = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+    require(view_selection && architectural, "fraction annotation canvas must exist");
+    view_selection->setCurrentIndex(view_selection->findData("view-section", Qt::UserRole + 1));
+    require(label_text(architectural, "view-section/overlay/fraction-measurement") ==
+            QStringLiteral("12 ft 1/4 in"), "measured section labels must retain quarter inches honestly");
+    auto ansi_property = window.document().snapshot().entities().at("property-1");
+    ansi_property.properties["calculation_workflow"] = "appraisal";
+    ansi_property.properties["appraisal_policy"] = {{"policy_kind", "ansi_z765_2021"}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(ansi_property)}, {}, "ANSI label fixture"});
+    require(window.selectEntity(boundary) && label_text(canvas, dimension) == QStringLiteral("12.0 ft"),
+            "ANSI boundary labels must retain the decimal-foot measurement policy");
+
+    desktop::MainWindow editor;
+    editor.setMetricUnits(false);
+    const auto width = parse_quantity("0.9 m").metres;
+    const auto depth = parse_quantity("4 ft 1/4 in").metres;
+    const auto source = editor.createRoomBoundary({{{0,0},{width,0},0},
+        {{width,0},{width,depth},0},{{width,depth},{0,depth},0},{{0,depth},{0,0},0}}, "Precision room");
+    require(editor.selectEntity(source), "precision room source must be selected");
+    const auto room = editor.createRoomVolumeFromSelectedBoundary("0.9 m", "1/4 in");
+    require(!room.isEmpty() && editor.selectEntity(room), "precision room quick properties source must exist");
+    if (!capture_directory.isEmpty()) {
+        editor.resize(1280, 900);
+        editor.show();
+        QApplication::processEvents();
+    }
+    const auto inspect_and_apply = [&](double expected_elevation) {
+        const auto before = editor.document().snapshot();
+        QTimer::singleShot(0, &editor, [&] {
+            auto* dialog = editor.findChild<QDialog*>("roomDimensionDialog");
+            require(dialog, "room quick properties must open");
+            const std::array<double,4> expected{width, depth, .9, expected_elevation};
+            const std::array<const char*,4> names{"roomDimensionWidth", "roomDimensionDepth",
+                "roomDimensionHeight", "roomDimensionElevation"};
+            for (std::size_t i=0; i<names.size(); ++i) {
+                auto* field = dialog->findChild<QLineEdit*>(names[i]);
+                require(field && !field->text().contains(QStringLiteral("≈")) &&
+                        parse_quantity(field->text().toStdString(), Unit::foot).metres == expected[i],
+                        "editable measurement initializer must parse to its exact source value");
+                if (i == 0 || i == 2)
+                    require(field->text() == QStringLiteral("0.9 m"),
+                            "exact editable measurements must use the shortest round-trip text");
+                field->setText(QStringLiteral("  ") + field->text() + QStringLiteral("  "));
+            }
+            if (!capture_directory.isEmpty()) {
+                QApplication::processEvents();
+                require(dialog->grab().save(QDir(capture_directory).filePath(
+                    expected_elevation == parse_quantity("1/4 in").metres
+                        ? "precise-room-quick-properties.png" : "tiny-room-quick-properties.png")),
+                    "settled exact room quick properties capture must save");
+            }
+            auto* buttons = dialog->findChild<QDialogButtonBox*>("roomDimensionButtons");
+            require(buttons && buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                    "whitespace-only room edits must keep the exact preview valid");
+            buttons->button(QDialogButtonBox::Apply)->click();
+        });
+        editor.showRoomVolumeDimensions();
+        const auto after = editor.document().snapshot();
+        require(after.revision()==before.revision() && after.entities()==before.entities() &&
+                after.assets()==before.assets() && after.history().size()==before.history().size() &&
+                after.named_revisions()==before.named_revisions(),
+                "whitespace-only Apply must preserve exact room geometry and history");
+        for (std::size_t i=0; i<before.history().size(); ++i) {
+            const auto& a=before.history()[i]; const auto& b=after.history()[i];
+            require(a.revision==b.revision && a.parent_revision==b.parent_revision &&
+                    a.source_revision==b.source_revision && a.action==b.action && a.name==b.name &&
+                    a.entities==b.entities && a.assets==b.assets && a.undo_stack==b.undo_stack &&
+                    a.redo_stack==b.redo_stack, "room Apply must preserve every existing history state");
+        }
+    };
+    inspect_and_apply(parse_quantity("1/4 in").metres);
+    require(editor.editSelectedRoomVolume("0.9 m", "0.0000001 m"), "tiny exact elevation must be valid");
+    inspect_and_apply(parse_quantity("0.0000001 m").metres);
+
+    const auto before_typed_apply = editor.document().snapshot();
+    RoomVolume original_room;
+    std::string room_error;
+    require(read_document_room(before_typed_apply.entities().at(room.toStdString()),
+                               original_room, room_error),
+            "typed dialog Apply needs the exact original room geometry");
+    QTimer::singleShot(0, &editor, [&] {
+        auto* dialog = editor.findChild<QDialog*>("roomDimensionDialog");
+        auto* typed_width = dialog ? dialog->findChild<QLineEdit*>("roomDimensionWidth") : nullptr;
+        auto* typed_depth = dialog ? dialog->findChild<QLineEdit*>("roomDimensionDepth") : nullptr;
+        auto* typed_height = dialog ? dialog->findChild<QLineEdit*>("roomDimensionHeight") : nullptr;
+        auto* typed_elevation = dialog ? dialog->findChild<QLineEdit*>("roomDimensionElevation") : nullptr;
+        auto* anchor = dialog ? dialog->findChild<QComboBox*>("roomDimensionAnchor") : nullptr;
+        auto* buttons = dialog ? dialog->findChild<QDialogButtonBox*>("roomDimensionButtons") : nullptr;
+        require(typed_width && typed_depth && typed_height && typed_elevation && anchor && buttons &&
+                    anchor->currentData().toInt() == static_cast<int>(RoomFootprintAnchor::first_corner) &&
+                    parse_quantity(typed_depth->text().toStdString(), Unit::foot).metres == depth,
+                "typed dialog Apply must retain the default first corner and exact untouched depth");
+        const auto original_depth_text = typed_depth->text();
+        typed_width->setText(QStringLiteral("1.2 m"));
+        typed_height->setText(QStringLiteral("0.95 m"));
+        typed_elevation->setText(QStringLiteral("0.01 m"));
+        require(buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                    typed_depth->text() == original_depth_text &&
+                    document_authoring_source_digest_v2(editor.document().snapshot()) ==
+                        document_authoring_source_digest_v2(before_typed_apply),
+                "valid changed-field preview must enable Apply without changing any authoritative source or history");
+        buttons->button(QDialogButtonBox::Apply)->click();
+    });
+    editor.showRoomVolumeDimensions();
+    const auto typed_applied = editor.document().snapshot();
+    RoomVolume applied_room;
+    require(read_document_room(typed_applied.entities().at(room.toStdString()), applied_room, room_error) &&
+                std::abs(segment_length(applied_room.boundary[0]) - 1.2) < 1e-12 &&
+                segment_length(applied_room.boundary[1]) == depth &&
+                applied_room.height == .95 && applied_room.elevation == .01 &&
+                applied_room.boundary[0].start.x == original_room.boundary[0].start.x &&
+                applied_room.boundary[0].start.y == original_room.boundary[0].start.y,
+            "changed-field dialog Apply must publish typed dimensions and preserve the exact depth and first corner");
+    require(typed_applied.revision() == before_typed_apply.revision() + 1 &&
+                typed_applied.history().size() == before_typed_apply.history().size() + 1 &&
+                typed_applied.history().back().undo_stack.size() ==
+                    before_typed_apply.history().back().undo_stack.size() + 1 &&
+                typed_applied.entities().size() == before_typed_apply.entities().size() &&
+                typed_applied.assets() == before_typed_apply.assets(),
+            "changed-field dialog Apply must publish exactly one revision and history command without changing assets");
+    for (const auto& [id, entity] : before_typed_apply.entities()) {
+        if (id != room.toStdString())
+            require(typed_applied.entities().at(id) == entity,
+                    "changed-field dialog Apply must preserve every unrelated original entity");
+    }
+    require(editor.undoCommand() &&
+                editor.document().snapshot().entities() == before_typed_apply.entities() &&
+                editor.document().snapshot().assets() == before_typed_apply.assets() &&
+                editor.redoCommand() &&
+                editor.document().snapshot().entities() == typed_applied.entities() &&
+                editor.document().snapshot().assets() == typed_applied.assets(),
+            "changed-field dialog Apply must undo and redo its exact entities and assets in one step");
+    QTemporaryDir typed_directory;
+    const auto typed_path = typed_directory.filePath(QStringLiteral("typed-room-dialog.bldproj"));
+    const auto typed_stored_source = editor.document().snapshot();
+    require(typed_directory.isValid() && editor.saveProjectAs(typed_path),
+            "changed-field dialog Apply history must save");
+    desktop::MainWindow typed_reopened;
+    require(typed_reopened.openProject(typed_path) &&
+                document_authoring_source_digest_v2(typed_reopened.document().snapshot()) ==
+                    document_authoring_source_digest_v2(typed_stored_source),
+            "native storage must retain changed-field dialog typed proofs and complete authoring history exactly");
 }
 
 void test_room_volume_authoring_workflow() {
@@ -2937,9 +3271,15 @@ void test_boundary_vertex_insertion_workflow() {
     original.extensions={{"note",identified.segments.front().segment_id}};
     original.properties["segments"][0]["edge_note"]={{"text",identified.segments.front().segment_id}};
     original.properties["segments"][1]["edge_note"]={{"text","adjacent edge"}};
-    auto dimension=encode_boundary_dimension_entity({"insertion-dimension",original.id,
-        identified.segments.front().segment_id,{2,-1}});
+    BoundaryDimension manual_dimension{"insertion-dimension",original.id,
+        identified.segments.front().segment_id,{2,-1}};
+    auto dimension=encode_boundary_dimension_entity(manual_dimension);
     dimension.properties["target"]["description"]=original.id;
+    auto automatic_dimension=manual_dimension;
+    automatic_dimension.id="insertion-automatic-dimension";
+    automatic_dimension.placement=BoundaryDimensionPlacement::automatic;
+    automatic_dimension.automatic_placement_version=2;
+    const auto automatic=encode_boundary_dimension_entity(automatic_dimension);
     AnnotationState annotations;
     auto label=instantiate_label(default_label_templates().front(),"insertion-label");
     label.content=original.id;
@@ -2951,14 +3291,16 @@ void test_boundary_vertex_insertion_workflow() {
     auto relationships=Entity::create("room_relationships",{{"version",1},{"model",
         RoomRelationshipSnapshot::create({{original.id,RoomReferenceKind::appraisal_measurement_boundary}},{}).to_json()}});
     window.document().apply(ApplyEntityChanges{window.document().revision(),
-        {EntityChange::upsert(original),EntityChange::upsert(dimension),EntityChange::upsert(annotation),
+        {EntityChange::upsert(original),EntityChange::upsert(dimension),EntityChange::upsert(automatic),
+         EntityChange::upsert(annotation),
          EntityChange::upsert(phases),EntityChange::upsert(relationships)},
         {},"insertion references"});
     const auto segment_id = QString::fromStdString(identified.segments.front().segment_id);
-    const auto before = window.document().revision();
+    const auto before = window.document().snapshot();
     const auto insertion_ok = window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("0.5"));
     require(insertion_ok &&
-                window.document().revision() == before + 1,
+                window.document().revision() == before.revision() + 1 &&
+                window.document().snapshot().history().size() == before.history().size() + 1,
             "vertex insertion must commit one semantic boundary edit");
     const auto inserted_id = window.selectedEntityId();
     require(inserted_id == boundary_id,
@@ -2985,8 +3327,41 @@ void test_boundary_vertex_insertion_workflow() {
         "insertion must retain metadata on the continuing first piece and unaffected edges without duplicating it");
     const auto resolved=decode_boundary_dimension_entity(migrated_dimension).dimension;
     require(migrated_annotation.overrides.front().target_id==inserted.id && resolved &&
-        resolved->boundary_id==inserted.id && std::abs(resolved->resolve(inserted_entity).segment_length()-2.0)<1e-9,
+        resolved->boundary_id==inserted.id,
         "boundary insertion must retain semantic annotation and dimension links");
+    // Manual dimensions retain the physical span the user placed, while
+    // automatic dimensions follow each individual edge after a split.
+    auto expected_manual=manual_dimension;
+    expected_manual.segment_chain_ids={inserted.segments[0].segment_id,inserted.segments[1].segment_id};
+    require(*resolved==expected_manual &&
+        std::abs(resolved->resolve(inserted_entity).segment_length()-4.0)<1e-9,
+        "insertion must retain the manual dimension's whole 4 m span and text placement");
+    const auto& insertion_proof=after_insertion.history().back().boundary_geometry_edit;
+    require(insertion_proof && insertion_proof->boundary_id==original.id &&
+        insertion_proof->kind==BoundaryGeometryEditKind::insert_vertex &&
+        insertion_proof->target_id==identified.segments.front().segment_id &&
+        insertion_proof->new_segment_id==inserted.segments[1].segment_id &&
+        !insertion_proof->new_dimension_id.empty() &&
+        after_insertion.entities().size()==before.entities().size()+1,
+        "insertion must retain its typed proof and create exactly one automatic split dimension");
+    const auto first_automatic=decode_boundary_dimension_entity(after_insertion.entities().at(automatic.id)).dimension;
+    const auto second_automatic=decode_boundary_dimension_entity(
+        after_insertion.entities().at(insertion_proof->new_dimension_id)).dimension;
+    require(first_automatic && second_automatic &&
+        first_automatic->boundary_id==original.id && second_automatic->boundary_id==original.id &&
+        first_automatic->placement==BoundaryDimensionPlacement::automatic &&
+        second_automatic->placement==BoundaryDimensionPlacement::automatic &&
+        first_automatic->segment_id==inserted.segments[0].segment_id &&
+        second_automatic->segment_id==inserted.segments[1].segment_id &&
+        first_automatic->segment_chain_ids.empty() && second_automatic->segment_chain_ids.empty() &&
+        std::abs(first_automatic->resolve(inserted_entity).segment_length()-2.0)<1e-9 &&
+        std::abs(second_automatic->resolve(inserted_entity).segment_length()-2.0)<1e-9,
+        "insertion must retain automatic dimension links to both 2 m pieces");
+    for (const auto& [id,entity]:before.entities()) {
+        if (id==original.id || id==dimension.id || id==automatic.id) continue;
+        require(after_insertion.entities().at(id)==entity,
+            "insertion must preserve every unrelated record and opaque field exactly");
+    }
     const auto migrated_phases=ModelPhases::from_json(after_insertion.entities().at(phases.id).properties.at("model"));
     const auto migrated_relationships=RoomRelationshipSnapshot::from_json(
         after_insertion.entities().at(relationships.id).properties.at("model"));
@@ -2998,26 +3373,32 @@ void test_boundary_vertex_insertion_workflow() {
         migrated_relationships.references().front().id==inserted.id,
             "boundary insertion must retain nested model memberships and identities");
     require(window.undoCommand() &&
-                window.document().snapshot().entities().contains(boundary_id.toStdString()) &&
-                decode_identified_boundary_entity(window.document().snapshot().entities().at(
-                    boundary_id.toStdString())).segments.size() == identified.segments.size() &&
+                window.document().snapshot().entities() == before.entities() &&
                 window.redoCommand() &&
-                decode_identified_boundary_entity(window.document().snapshot().entities().at(
-                    inserted_id.toStdString())).segments.size() == identified.segments.size() + 1,
-            "vertex insertion must be exactly undoable and redoable");
-    const auto rejected_revision = window.document().revision();
+                window.document().snapshot().entities() == after_insertion.entities(),
+            "vertex insertion must undo and redo complete geometry, dimension links and metadata");
+    QTemporaryDir directory;
+    const auto path=directory.filePath(QStringLiteral("boundary-insertion.bldproj"));
+    const auto retained=window.document().snapshot();
+    require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
+        document_authoring_source_digest_v2(window.document().snapshot())==document_authoring_source_digest_v2(retained),
+        "insertion geometry, all links and complete typed history must survive native save and reopen");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==after_insertion.entities(),
+        "reopened insertion must undo and redo both dimension placement policies exactly");
+    const auto rejected_source = document_snapshot_digest(window.document().snapshot());
     require(window.selectEntity(inserted_id) &&
                 !window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("1.0")) &&
-                window.document().revision() == rejected_revision,
-            "vertex insertion must reject an endpoint fraction without mutation");
+                document_snapshot_digest(window.document().snapshot()) == rejected_source,
+            "vertex insertion must reject an endpoint fraction without mutating the full source snapshot");
     auto receipt_bound=window.document().snapshot().entities().at(inserted_id.toStdString());
     receipt_bound.properties["segments"][0]["receipt"]={{"version",99}};
     window.document().apply(ApplyEntityChanges{window.document().revision(),
         {EntityChange::upsert(receipt_bound)},{},"unsupported directional receipt"});
     const auto receipt_snapshot=window.document().snapshot();
     require(!window.insertSelectedBoundaryVertex(QString::fromStdString(inserted.segments.front().segment_id),
-                QStringLiteral("0.5")) && window.document().snapshot().entities()==receipt_snapshot.entities() &&
-        window.document().revision()==receipt_snapshot.revision(),
+                QStringLiteral("0.5")) &&
+        document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(receipt_snapshot),
         "insertion must reject an unhandled edge receipt without discarding it or changing the document");
 }
 
@@ -3025,6 +3406,7 @@ void test_mixed_constraint_workspace_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
+    window.setMetricUnits(true);
     window.setAttribute(Qt::WA_DontShowOnScreen, true);
     window.resize(1200, 800);
     window.show();
@@ -3048,8 +3430,21 @@ void test_mixed_constraint_workspace_workflow() {
     require(!boundary_id.isEmpty() && !wall_id.isEmpty() && window.selectEntity(boundary_id),
         "mixed workspace must retain drawn boundary and straight wall");
     const auto before = window.document().snapshot();
-    const auto boundary_name = QString::fromStdString(before.entities().at(boundary_id.toStdString()).properties.value("name",boundary_id.toStdString()));
-    const auto wall_name = QString::fromStdString(before.entities().at(wall_id.toStdString()).properties.value("name",wall_id.toStdString()));
+    const auto drawn_geometry = boundary_geometry(
+        decode_identified_boundary_entity(before.entities().at(boundary_id.toStdString())));
+    const Boundary expected_square{
+        {{0,0},{3,0},0},{{3,0},{3,3},0},{{3,3},{0,3},0},{{0,3},{0,0},0}};
+    require(drawn_geometry.size() == expected_square.size(),
+        "mixed workspace metric pointer drawing must retain four source edges");
+    for (std::size_t i=0; i<expected_square.size(); ++i) {
+        const auto& actual = drawn_geometry[i];
+        const auto& expected = expected_square[i];
+        require(std::abs(actual.start.x-expected.start.x)<1e-7 &&
+            std::abs(actual.start.y-expected.start.y)<1e-7 &&
+            std::abs(actual.end.x-expected.end.x)<1e-7 &&
+            std::abs(actual.end.y-expected.end.y)<1e-7 && actual.sweep_radians==0,
+            "mixed workspace metric length magnets must draw the independent 3 m source square");
+    }
     bool choices_found = false;
     const auto relationship = [&](bool apply) {
         QTimer::singleShot(0,&window,[&,apply] {
@@ -3059,14 +3454,14 @@ void test_mixed_constraint_workspace_workflow() {
             operation->setCurrentIndex(operation->findData(1));
             auto* relation = dialog->findChild<QComboBox*>("constraintRelation");
             relation->setCurrentIndex(relation->findData(static_cast<int>(ConstraintRelationKind::coincident)));
-            const auto choose = [&](QComboBox* combo,const QString& name,const QString& suffix) {
-                for(int i=0;i<combo->count();++i) if(combo->itemText(i).contains(name) && combo->itemText(i).endsWith(suffix)) {
+            const auto choose = [&](QComboBox* combo,const QString& owner_id,const QString& suffix) {
+                for(int i=0;i<combo->count();++i) if(combo->itemData(i,Qt::UserRole).toString()==owner_id && combo->itemText(i).endsWith(suffix)) {
                     combo->setCurrentIndex(i); return true;
                 }
                 return false;
             };
-            choices_found = choose(dialog->findChild<QComboBox*>("constraintBinding0"),boundary_name,"Edge 1 · end") &&
-                choose(dialog->findChild<QComboBox*>("constraintBinding1"),wall_name,"start");
+            choices_found = choose(dialog->findChild<QComboBox*>("constraintBinding0"),boundary_id,"Edge 1 · end") &&
+                choose(dialog->findChild<QComboBox*>("constraintBinding1"),wall_id,"start");
             if(!choices_found) { dialog->reject(); return; }
             dialog->findChild<QPushButton*>("constraintPreviewButton")->click();
             auto* submit = dialog->findChild<QPushButton*>("constraintApplyButton");
@@ -3077,7 +3472,7 @@ void test_mixed_constraint_workspace_workflow() {
         window.showConstraintEditor();
     };
     relationship(false);
-    require(choices_found && window.document().snapshot().entities()==before.entities(),
+    require(choices_found && document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(before),
         "mixed endpoint choices must be available and Cancel must preserve the drawing");
     relationship(true);
     const auto linked=window.document().snapshot();
@@ -3100,9 +3495,34 @@ void test_mixed_constraint_workspace_workflow() {
     window.showConstraintEditor();
     const auto after=window.document().snapshot();
     const auto moved=decode_identified_boundary_entity(after.entities().at(boundary_id.toStdString()));
-    require(after.revision()==linked.revision()+1 && std::abs(moved.segments[0].segment.end.x-2)<1e-7 &&
-        std::abs(std::abs(signed_area(boundary_geometry(moved)))-7.5)<1e-7 &&
-        after.entities().at(boundary_id.toStdString()).extensions.contains("boundary_geometry_derivation"),
+    const bool atomic_resize = after.revision()==linked.revision()+1;
+    const bool joined_vertex_moved = std::abs(moved.segments[0].segment.end.x-2)<1e-7;
+    const auto resized_area_m2 = std::abs(signed_area(boundary_geometry(moved)));
+    const bool area_recalculated = std::abs(resized_area_m2-7.5)<1e-7;
+    const bool receipt_archived = after.entities().at(boundary_id.toStdString()).extensions.contains("boundary_geometry_derivation");
+    if (!atomic_resize || !joined_vertex_moved || !area_recalculated || !receipt_archived) {
+        const auto& record = after.history().back();
+        nlohmann::json diagnostic{
+            {"atomic_resize",atomic_resize},{"joined_vertex_moved",joined_vertex_moved},
+            {"area_recalculated",area_recalculated},{"receipt_archived",receipt_archived},
+            {"expected_vertex_x",2},{"actual_vertex_x",moved.segments[0].segment.end.x},
+            {"expected_area_m2",7.5},{"actual_area_m2",resized_area_m2},
+            {"source_revision",linked.revision()},{"actual_revision",after.revision()},
+            {"source_history_size",linked.history().size()},{"actual_history_size",after.history().size()},
+            {"last_error",window.lastError().toStdString()},
+            {"source_wall",linked.entities().at(wall_id.toStdString()).properties.at("baseline")},
+            {"resized_wall",after.entities().at(wall_id.toStdString()).properties.at("baseline")},
+            {"history_action",record.action},{"history_revision",record.revision}};
+        if (record.parent_revision) diagnostic["history_parent_revision"] = *record.parent_revision;
+        if (record.source_revision) diagnostic["history_source_revision"] = *record.source_revision;
+        diagnostic["history_has_constraint_proof"] = record.boundary_constraint_changes.has_value();
+        if (record.boundary_constraint_changes) {
+            diagnostic["history_boundary_edit_count"] = record.boundary_constraint_changes->boundary_edits.size();
+            diagnostic["history_wall_edit_count"] = record.boundary_constraint_changes->wall_edits.size();
+        }
+        std::cerr << "mixed wall/boundary resize diagnostic: " << diagnostic.dump() << '\n';
+    }
+    require(atomic_resize && joined_vertex_moved && area_recalculated && receipt_archived,
         "wall resize must move the joined boundary vertex, recalculate its area and archive its receipt in one command");
     require(window.undoCommand() && window.document().snapshot().entities()==linked.entities() &&
         window.redoCommand() && window.document().snapshot().entities()==after.entities(),
@@ -3657,7 +4077,8 @@ void test_interactive_receipt_boundary_insertion_workflow() {
     // event sequence must exercise the vertex-handle priority in Select mode.
     const QPointF drag_start(frame->center().x(), frame->bottom() - 1.5);
     const auto drag_end = drag_start + QPointF(0, -35);
-    const auto drag_revision = window.document().revision();
+    const auto drag_source = window.document().snapshot();
+    const auto drag_revision = drag_source.revision();
     const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
                            Qt::MouseButtons buttons) {
         QMouseEvent event(type, point, canvas->mapToGlobal(point.toPoint()), button,
@@ -3667,13 +4088,37 @@ void test_interactive_receipt_boundary_insertion_workflow() {
     mouse(QEvent::MouseButtonPress, drag_start, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseMove, drag_end, Qt::NoButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, drag_end, Qt::LeftButton, Qt::NoButton);
+    // Release retains the captured gesture until the asynchronous exact
+    // preview completes and authorizes its one document command.
+    const auto drag_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while (window.document().revision()==drag_revision &&
+        (canvas->boundaryVertexPreviewPending() || window.lastError().isEmpty()) &&
+        std::chrono::steady_clock::now()<drag_deadline)
+        QApplication::processEvents(QEventLoop::AllEvents,20);
     const auto dragged = decode_identified_boundary_entity(
         window.document().snapshot().entities().at(owner_id.toStdString()));
+    // The pointer-authored source honors the current unit magnets. Preserve
+    // its exact geometry instead of assuming nominal pixel inputs made 3 m.
+    auto expected_dragged=split;
+    expected_dragged.segments[0].segment.end=dragged.segments[0].segment.end;
+    expected_dragged.segments[1].segment.start=dragged.segments[0].segment.end;
+    const auto drag_failure=std::string("press/move/release on the inserted vertex must move that vertex in one command: ")+
+        "revision="+std::to_string(window.document().revision())+"; before="+std::to_string(drag_revision)+
+        "; pending="+std::to_string(canvas->boundaryVertexPreviewPending())+
+        "; error="+window.lastError().toStdString()+
+        "; inserted_x="+std::to_string(dragged.segments[0].segment.end.x)+
+        "; expected_inserted_x="+std::to_string(split.segments[0].segment.end.x)+
+        "; inserted_y="+std::to_string(dragged.segments[0].segment.end.y)+
+        "; original_start_x="+std::to_string(dragged.segments[0].segment.start.x)+
+        "; opposite_end_y="+std::to_string(dragged.segments[2].segment.end.y)+
+        "; expected_opposite_end_y="+std::to_string(split.segments[2].segment.end.y);
     require(window.document().revision() == drag_revision + 1 &&
-        dragged.segments[0].end_vertex_id == split.segments[1].start_vertex_id &&
-        dragged.segments[0].segment.end.y > 0 && dragged.segments[0].segment.start.x == 0 &&
-        dragged.segments[2].segment.end.y == 3,
-        "press/move/release on the inserted vertex must move that vertex in one command");
+        window.document().snapshot().history().size()==drag_source.history().size()+1 &&
+        window.document().snapshot().history().back().boundary_constraint_changes &&
+        dragged==expected_dragged &&
+        dragged.segments[0].segment.end.y > split.segments[0].segment.end.y &&
+        dragged.segments[0].segment.end.x == split.segments[0].segment.end.x,
+        drag_failure.c_str());
     require(window.undoCommand() && window.document().snapshot().entities() == inserted.entities(),
         "canvas inserted-vertex drag must undo exactly before the edge-length edit");
     require(window.selectEntity(owner_id) && window.moveSelectedBoundaryVertex(
@@ -3817,8 +4262,20 @@ void test_direct_boundary_geometry_edit_workflow() {
     require(window.transformSelectedBoundary(QStringLiteral("10"), false, false,
                 QStringLiteral("1 m"), QStringLiteral("0 m"), false),
             "a directly edited receipt-backed boundary must remain transformable");
-    const auto transformed_entity = window.document().snapshot().entities().at(
-        accepted.boundary.id);
+    const auto transformed_snapshot = window.document().snapshot();
+    const auto transformed_entity = transformed_snapshot.entities().at(accepted.boundary.id);
+    const auto& transform_proof=transformed_snapshot.history().back().boundary_transforms;
+    require(transform_proof && transform_proof->transformations.size()==1 &&
+        transform_proof->transformations.front().boundary_id==accepted.boundary.id,
+        "in-place boundary rotation must retain one owner's typed group transform proof");
+    const auto& retained_transform=transform_proof->transformations.front().transform;
+    const auto resize_bounds=boundary_bounds(boundary_geometry(resized));
+    require(retained_transform.pivot.x==(resize_bounds.minimum.x+resize_bounds.maximum.x)/2 &&
+        retained_transform.pivot.y==(resize_bounds.minimum.y+resize_bounds.maximum.y)/2 &&
+        std::abs(retained_transform.rotation_radians-10*std::numbers::pi/180)<1e-12 &&
+        !retained_transform.flip_horizontal && !retained_transform.flip_vertical &&
+        retained_transform.offset.x==1 && retained_transform.offset.y==0,
+        "rotation proof must retain the independently expected pivot, angle and entered offsets");
     const auto transformed = decode_identified_boundary_entity(transformed_entity);
     require(transformed != resized &&
                 transformed_entity.extensions.at("boundary_geometry_derivation")
@@ -3886,11 +4343,14 @@ void test_direct_boundary_geometry_edit_workflow() {
 
     QTemporaryDir directory;
     const auto path = directory.filePath(QStringLiteral("boundary-edit.bldproj"));
+    const auto stored_source=window.document().snapshot();
     require(directory.isValid() && window.saveProjectAs(path),
             "typed boundary edit history must save");
     desktop::MainWindow reopened;
     require(reopened.openProject(path), "typed boundary edit project must reopen");
     const auto reopened_snapshot = reopened.document().snapshot();
+    require(document_authoring_source_digest_v2(reopened_snapshot)==document_authoring_source_digest_v2(stored_source),
+        "native storage must preserve the complete boundary source, typed proofs and retained history exactly");
     require(decode_identified_boundary_entity(reopened_snapshot.entities().at(
                 accepted.boundary.id)) == final_boundary,
             "typed boundary edit geometry must survive save and reopen");
@@ -3902,6 +4362,12 @@ void test_direct_boundary_geometry_edit_workflow() {
     const auto persisted_transforms = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
         [](const RevisionRecord& record) { return record.boundary_transform.has_value(); });
+    const auto persisted_group_transforms = std::count_if(
+        reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
+        [&](const RevisionRecord& record) {
+            return record.boundary_transforms && record.boundary_transforms->transformations.size()==1 &&
+                record.boundary_transforms->transformations.front().boundary_id==accepted.boundary.id;
+        });
     const auto persisted_resizes = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
         [](const RevisionRecord& record) { return record.boundary_constraint_changes.has_value(); });
@@ -3928,9 +4394,17 @@ void test_direct_boundary_geometry_edit_workflow() {
                 record.boundary_geometry_edit->boundary_id == accepted.boundary.id &&
                 record.boundary_geometry_edit->kind == BoundaryGeometryEditKind::insert_vertex;
         });
-    require(persisted_edits == 1 && persisted_resizes == 3 && persisted_transforms == 1 &&
+    const auto history_failure=std::string("insertion, two constraint-backed vertex moves, edge resize and transform proofs must survive save and reopen: ")+
+        "edits="+std::to_string(persisted_edits)+"; constraints="+std::to_string(persisted_resizes)+
+        "; legacy_transforms="+std::to_string(persisted_transforms)+
+        "; group_transforms="+std::to_string(persisted_group_transforms)+
+        "; insertions="+std::to_string(persisted_insertions)+
+        "; vertex_moves="+std::to_string(persisted_vertex_moves)+
+        "; edge_resizes="+std::to_string(persisted_edge_resizes);
+    require(persisted_edits == 1 && persisted_resizes == 3 && persisted_transforms == 0 &&
+                persisted_group_transforms == 1 &&
                 persisted_insertions == 1 && persisted_vertex_moves == 2 && persisted_edge_resizes == 1,
-            "insertion, two constraint-backed vertex moves, edge resize and transform proofs must survive save and reopen");
+            history_failure.c_str());
 }
 
 void test_normal_receipt_boundary_redefinition_workflow() {
@@ -4377,6 +4851,9 @@ void test_automatic_room_boundary_detection_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
+    auto* thickness = window.findChild<QLineEdit*>(QStringLiteral("wallDrawThickness"));
+    require(thickness != nullptr, "automatic detection fixture must expose physical wall thickness");
+    thickness->setText(QStringLiteral("200 mm"));
     const auto wall_ids = QStringList{
         window.createStraightWall({0.0, 0.0}, {2.0, 0.0}),
         window.createStraightWall({2.0, 0.0}, {4.0, 0.0}),
@@ -4389,29 +4866,77 @@ void test_automatic_room_boundary_detection_workflow() {
     require(std::all_of(wall_ids.begin(), wall_ids.end(), [](const auto& id) { return !id.isEmpty(); }),
             "automatic detection fixture must create wall graph");
     require(window.selectEntity(wall_ids.front()), "automatic detection must select a seed wall");
+    const auto original = window.document().snapshot();
+    const auto assert_walls = [&](const DocumentSnapshot& source) {
+        for (const auto& id : wall_ids)
+            require(source.entities().at(id.toStdString()) == original.entities().at(id.toStdString()),
+                    "automatic room detection must preserve every original wall record");
+    };
     const auto before = window.document().revision();
     const auto room_ids = window.detectRoomBoundariesFromExistingWalls(QStringLiteral("detected room"));
     require(room_ids.size() == 2 && window.document().revision() == before + 1,
             "automatic detection must create all bounded rooms in one command");
+    const auto detected = window.document().snapshot();
+    assert_walls(detected);
+    require(detected.entities().size() == original.entities().size() + 2,
+            "automatic detection must add exactly two rooms and preserve the disconnected spur");
+    bool found_left = false;
+    bool found_right = false;
     for (const auto& room_id : room_ids) {
-        const auto entity = window.document().snapshot().entities().at(room_id.toStdString());
-        require(entity.type == "room_boundary" && entity.properties.at("classification") == "detected room",
+        const auto& entity = detected.entities().at(room_id.toStdString());
+        require(entity.type == "room_boundary" && is_physical_wall_room(entity) &&
+                    entity.properties.at("classification") == "detected room",
                 "detected faces must become independent classified room boundaries");
         const auto model = decode_identified_boundary_entity(entity);
-        require(model.segments.size() == 4 &&
-                    std::abs(signed_area(boundary_geometry(model))) == 4.0,
-                "detected room must retain one valid analytical face");
+        const auto geometry = boundary_geometry(model);
+        const auto check = physical_wall_room_checks(detected).at(room_id.toStdString());
+        require(model.segments.size() == 4 && check.current && check.diagnostic.empty() &&
+                    check.holes.empty() && std::abs(check.area_square_metres - 3.24) < 1e-7 &&
+                    std::abs(std::abs(signed_area(geometry)) - 3.24) < 1e-7,
+                "detected room must retain a valid 1.8 by 1.8 metre clear analytical face");
+        const auto bounds = boundary_bounds(geometry);
+        require(std::abs(bounds.minimum.y - 0.1) < 1e-7 &&
+                    std::abs(bounds.maximum.y - 1.9) < 1e-7,
+                "detected rooms must exclude the bottom and top wall material");
+        const bool left = std::abs(bounds.minimum.x - 0.1) < 1e-7 &&
+                          std::abs(bounds.maximum.x - 1.9) < 1e-7;
+        const bool right = std::abs(bounds.minimum.x - 2.1) < 1e-7 &&
+                           std::abs(bounds.maximum.x - 3.9) < 1e-7;
+        require((left && !found_left) || (right && !found_right),
+                "automatic detection must retain both distinct clear rooms beside the divider");
+        found_left = found_left || left;
+        found_right = found_right || right;
     }
+    require(found_left && found_right, "automatic detection must include both clear rooms");
     require(window.undoCommand(), "automatic room detection must be undoable");
     for (const auto& room_id : room_ids) {
         require(!window.document().snapshot().entities().contains(room_id.toStdString()),
                 "undo must remove every detected room from the compound command");
     }
+    assert_walls(window.document().snapshot());
+    require(window.document().snapshot().entities() == original.entities(),
+            "undo must restore the complete original wall model");
     require(window.redoCommand(), "automatic room detection must be redoable");
     for (const auto& room_id : room_ids) {
-        require(window.document().snapshot().entities().contains(room_id.toStdString()),
-                "redo must restore every detected room");
+        require(window.document().snapshot().entities().at(room_id.toStdString()) ==
+                    detected.entities().at(room_id.toStdString()),
+                "redo must restore every detected room exactly");
     }
+    const auto restored = window.document().snapshot();
+    assert_walls(restored);
+    require(restored.entities() == detected.entities(),
+            "redo must restore the complete detected room model");
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("automatic-clear-rooms.bldproj"));
+    require(directory.isValid() && window.saveProjectAs(path),
+            "automatic clear rooms must save to native storage");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(path), "automatic clear rooms must reopen from native storage");
+    const auto reopened_source = reopened.document().snapshot();
+    assert_walls(reopened_source);
+    require(document_authoring_source_digest_v2(reopened_source) ==
+                document_authoring_source_digest_v2(restored),
+            "native storage must preserve the complete automatically detected room model and proofs");
 }
 
 void test_explicit_boundary_geometry_operations() {
@@ -4550,6 +5075,24 @@ void test_named_revisions() {
 void test_boundary_transform_workflow(const QString& capture_directory) {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
+    const auto diagnose_field = [](std::string_view field, const nlohmann::json& expected,
+                                   const nlohmann::json& actual) {
+        if (actual != expected)
+            std::cerr << "boundary transform " << field << ": expected=" << expected.dump()
+                      << " actual=" << actual.dump() << '\n';
+    };
+    const auto diagnose_entity = [&](std::string_view field, const Entity& expected,
+                                     const Entity& actual) {
+        diagnose_field(std::string(field) + ".id", expected.id, actual.id);
+        diagnose_field(std::string(field) + ".type", expected.type, actual.type);
+        if (actual.properties != expected.properties)
+            std::cerr << "boundary transform " << field << ".properties diff="
+                      << nlohmann::json::diff(expected.properties, actual.properties).dump() << '\n';
+        diagnose_field(std::string(field) + ".required", expected.required, actual.required);
+        if (actual.extensions != expected.extensions)
+            std::cerr << "boundary transform " << field << ".extensions diff="
+                      << nlohmann::json::diff(expected.extensions, actual.extensions).dump() << '\n';
+    };
     desktop::MainWindow window;
     const auto boundary_id = window.createBoundary(
         Boundary{{{{0.0, 0.0}, {4.0, 0.0}, 0.0},
@@ -4581,9 +5124,14 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
     decorated.properties["custom_metadata"] = {{"entity_id", boundary_id.toStdString()}};
     decorated.extensions["vendor_note"] = "Retain this boundary finish";
     decorated.properties["segments"][0]["finish"] = "paint";
+    decorated.properties["segments"][1]["finish"] = "tile";
+    decorated.properties["segments"][2]["finish"] = "plaster";
+    decorated.properties["segments"][3]["finish"] = "wood";
     window.document().apply(ApplyEntityChanges{window.document().revision(),
         {EntityChange::upsert(decorated)},{},"clone metadata fixture"});
-    const auto source_count = window.document().snapshot().entities().size();
+    const auto before_copy = window.document().snapshot();
+    const auto source_count = before_copy.entities().size();
+    const auto before_copy_revision = before_copy.revision();
     require(window.selectEntity(boundary_id) &&
                 window.transformSelectedBoundary(QStringLiteral("0"), false, true,
                                                  QStringLiteral("4 ft"), QStringLiteral("0"), true),
@@ -4594,15 +5142,147 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
                 window.document().snapshot().entities().contains(boundary_id.toStdString()),
             "boundary clone should create a distinct selected entity and preserve its source");
     const auto clone = window.document().snapshot().entities().at(clone_id.toStdString());
+    diagnose_field("copy.name", decorated.properties.at("name"),
+        clone.properties.value("name",nlohmann::json{}));
+    diagnose_field("copy.custom_metadata", decorated.properties.at("custom_metadata"),
+        clone.properties.value("custom_metadata",nlohmann::json{}));
+    const auto clone_model = decode_identified_boundary_entity(clone);
+    require(clone_model.segments.size() == rotated_model.segments.size(),
+        "boundary copy must retain its complete topology");
+    std::set<std::string> source_children;
+    for (const auto& edge : rotated_model.segments) {
+        source_children.insert(edge.segment_id);
+        source_children.insert(edge.start_vertex_id);
+        source_children.insert(edge.end_vertex_id);
+    }
+    auto expected_capture = nlohmann::json{{"boundary_model_version",1},
+        {"segments",original.properties.at("segments")}};
+    for (std::size_t index = 0; index < clone_model.segments.size(); ++index) {
+        const auto& edge = clone_model.segments[index];
+        const auto& source_edge = rotated_model.segments[index].segment;
+        require(!source_children.contains(edge.segment_id) &&
+            !source_children.contains(edge.start_vertex_id) && !source_children.contains(edge.end_vertex_id),
+            "boundary copy must allocate all segment and vertex identities independently");
+        const auto expected_geometry = nlohmann::json::array({source_edge.start.x+1.2192,
+            2.0-source_edge.start.y,source_edge.end.x+1.2192,2.0-source_edge.end.y,-source_edge.sweep_radians});
+        const auto actual_geometry = nlohmann::json::array({edge.segment.start.x,edge.segment.start.y,
+            edge.segment.end.x,edge.segment.end.y,edge.segment.sweep_radians});
+        const auto correct_geometry = std::abs(edge.segment.start.x-(source_edge.start.x+1.2192)) < 1e-9 &&
+            std::abs(edge.segment.start.y-(2.0-source_edge.start.y)) < 1e-9 &&
+            std::abs(edge.segment.end.x-(source_edge.end.x+1.2192)) < 1e-9 &&
+            std::abs(edge.segment.end.y-(2.0-source_edge.end.y)) < 1e-9 &&
+            edge.segment.sweep_radians == -source_edge.sweep_radians;
+        if (!correct_geometry)
+            diagnose_field("copy.edge[" + std::to_string(index) + "].geometry",expected_geometry,actual_geometry);
+        require(correct_geometry,"every copied edge must independently match the requested Y reflection and four-foot X offset");
+        expected_capture["segments"][index]["segment_id"] = edge.segment_id;
+        expected_capture["segments"][index]["start_vertex_id"] = edge.start_vertex_id;
+        expected_capture["segments"][index]["end_vertex_id"] = edge.end_vertex_id;
+        diagnose_field("copy.edge[" + std::to_string(index) + "].finish",
+            decorated.properties.at("segments")[index].at("finish"),
+            clone.properties.at("segments")[index].value("finish",nlohmann::json{}));
+        require(clone.properties.at("segments")[index].value("finish",nlohmann::json{}) ==
+            decorated.properties.at("segments")[index].at("finish"),
+            "boundary copy must preserve each corresponding edge finish");
+    }
+    // The first rotation established a v2 topology origin. A copy preserves
+    // that original capture, rebinds its identities and appends its own intent;
+    // it must not replace the capture with already-transformed geometry.
+    const auto& source_proof = decorated.extensions.at("boundary_geometry_derivation");
+    require(source_proof.at("version") == 2 && source_proof.at("operations").size() == 1 &&
+        source_proof.at("operations")[0].at("kind") == "transform",
+        "copy fixture must retain the original rotation as its sole source derivation");
+    const auto source_rotation = decode_boundary_transform(source_proof.at("operations")[0].at("value"));
+    const auto& rotation = source_rotation.transform;
+    require(source_rotation.boundary_id == boundary_id.toStdString() &&
+        rotation.pivot.x == 2.0 && rotation.pivot.y == 1.0 &&
+        std::abs(rotation.rotation_radians-std::numbers::pi/2) < 1e-12 &&
+        !rotation.flip_horizontal && !rotation.flip_vertical && rotation.offset.x == 0 && rotation.offset.y == 0,
+        "source derivation must prove the independently expected ninety-degree rotation");
+    auto expected_prior_operation = source_proof.at("operations")[0];
+    expected_prior_operation["value"]["boundary_id"] = clone_id.toStdString();
+    const auto expected_copy_operation = nlohmann::json{{"kind","transform"},
+        {"value",encode_boundary_transform(BoundaryTransformation{clone_id.toStdString(),
+            PlanarTransform{{2.0,1.0},0.0,false,true,{1.2192,0.0}}})}};
+    const auto expected_proof = nlohmann::json{{"version",2},{"source_boundary",expected_capture},
+        {"operations",nlohmann::json::array({expected_prior_operation,expected_copy_operation})}};
+    if (clone.extensions.at("boundary_geometry_derivation") != expected_proof)
+        std::cerr << "boundary transform copy.derivation diff="
+                  << nlohmann::json::diff(expected_proof,clone.extensions.at("boundary_geometry_derivation")).dump() << '\n';
+    require(clone.extensions.at("boundary_geometry_derivation") == expected_proof,
+        "boundary copy must retain its remapped original capture and rotation, then append exactly the requested flip/offset proof");
+    // Compare every opaque extension while validating the one owned extension
+    // above. No unrelated key or vendor value may be added, lost or rewritten.
+    auto expected_extensions = decorated.extensions;
+    expected_extensions["boundary_geometry_derivation"] = expected_proof;
+    if (clone.extensions != expected_extensions)
+        std::cerr << "boundary transform copy.extensions diff="
+                  << nlohmann::json::diff(expected_extensions,clone.extensions).dump() << '\n';
+    diagnose_field("copy.segments[0].finish", "paint",
+        clone.properties.at("segments")[0].value("finish",nlohmann::json{}));
     require(clone.properties.value("name",std::string{}) == decorated.properties.at("name").get<std::string>() &&
         clone.properties.value("custom_metadata",nlohmann::json{}) == decorated.properties.at("custom_metadata") &&
-        clone.extensions == decorated.extensions &&
+        clone.extensions == expected_extensions &&
         clone.properties.at("segments")[0].value("finish",std::string{}) == "paint",
         "boundary copy must retain names, opaque metadata and per-edge finishes");
-    require(window.document().snapshot().entities().at(boundary_id.toStdString()) == decorated &&
-        window.undoCommand() && !window.document().snapshot().entities().contains(clone_id.toStdString()) &&
-        window.redoCommand() && window.document().snapshot().entities().at(clone_id.toStdString()) == clone,
-        "boundary copy must preserve its source and restore metadata exactly through undo/redo");
+    const auto copied_snapshot = window.document().snapshot();
+    require(!validate_boundary_integrity(copied_snapshot.entities()),
+        "the copied derivation must independently replay to its complete saved geometry and topology");
+    const auto require_bad_copy_proof = [&](Entity tampered, std::string_view message) {
+        auto entities = copied_snapshot.entities();
+        entities.at(tampered.id) = std::move(tampered);
+        bool rejected = false;
+        try { rejected = validate_boundary_integrity(entities).has_value(); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected,message);
+    };
+    auto tampered = clone;
+    tampered.extensions["boundary_geometry_derivation"]["operations"][1]["value"]["offset"][0] = 0.0;
+    require_bad_copy_proof(tampered,"copy integrity must reject a lost offset in the retained proof");
+    tampered = clone;
+    tampered.extensions["boundary_geometry_derivation"]["operations"][1]["value"]["boundary_id"] = boundary_id.toStdString();
+    require_bad_copy_proof(tampered,"copy integrity must reject a proof targeting the original owner");
+    tampered = clone;
+    tampered.extensions["boundary_geometry_derivation"]["source_boundary"]["segments"][0]["segment_id"] = rotated_model.segments[0].segment_id;
+    require_bad_copy_proof(tampered,"copy integrity must reject an original child identity in its remapped capture");
+    diagnose_field("copy.revision", before_copy_revision + 1, window.document().revision());
+    require(window.document().revision() == before_copy_revision + 1,
+        "boundary copy must commit exactly one revision");
+    diagnose_entity("copy.source", decorated,
+        window.document().snapshot().entities().at(boundary_id.toStdString()));
+    require(window.document().snapshot().entities().at(boundary_id.toStdString()) == decorated,
+        "boundary copy must preserve its source exactly");
+    require(window.undoCommand(), "boundary copy undo must succeed");
+    require(!window.document().snapshot().entities().contains(clone_id.toStdString()),
+        "boundary copy undo must remove the copied identity");
+    require(window.document().snapshot().entities() == before_copy.entities(),
+        "boundary copy undo must restore the entire source entity map exactly");
+    diagnose_entity("copy.undo.source", decorated,
+        window.document().snapshot().entities().at(boundary_id.toStdString()));
+    require(window.document().snapshot().entities().at(boundary_id.toStdString()) == decorated,
+        "boundary copy undo must preserve its source exactly");
+    require(window.redoCommand(), "boundary copy redo must succeed");
+    require(window.document().snapshot().entities().contains(clone_id.toStdString()),
+        "boundary copy redo must restore the copied identity");
+    diagnose_entity("copy.redo", clone,
+        window.document().snapshot().entities().at(clone_id.toStdString()));
+    require(window.document().snapshot().entities().at(clone_id.toStdString()) == clone,
+        "boundary copy redo must restore metadata exactly");
+    require(window.document().snapshot().entities() == copied_snapshot.entities(),
+        "boundary copy redo must restore the complete copied entity map exactly");
+    QTemporaryDir copy_directory;
+    require(copy_directory.isValid(),"boundary copy persistence requires a temporary directory");
+    const auto copy_path = copy_directory.filePath(QStringLiteral("boundary-copy.bldproj"));
+    const auto stored_copy = window.document().snapshot();
+    require(window.saveProjectAs(copy_path),"boundary copy and retained transform history must save");
+    require(window.openProject(copy_path) && window.document().is_editable(),
+        "boundary copy and retained transform history must reopen for editing");
+    const auto reopened_snapshot = window.document().snapshot();
+    diagnose_entity("copy.reopen",clone,reopened_snapshot.entities().at(clone_id.toStdString()));
+    require(reopened_snapshot.entities().at(clone_id.toStdString()) == clone &&
+        reopened_snapshot.entities().at(boundary_id.toStdString()) == decorated &&
+        document_authoring_source_digest_v2(reopened_snapshot) == document_authoring_source_digest_v2(stored_copy),
+        "boundary copy save/reopen must retain both full models, opaque values, proofs and complete history exactly");
     require(window.selectEntity(clone_id), "reselect restored boundary copy");
     require(clone.properties.at("classification") == "measurement" &&
                 decode_identified_boundary_entity(clone).segments.front().segment.start.x > 1.2,
@@ -7936,6 +8616,91 @@ void test_architectural_authoring_commands() {
             "read-only projects must reject wall joins without mutation");
 }
 
+void test_inspector_untouched_dimension_precision() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setWorkspace(desktop::Workspace::architectural);
+    const auto wall = window.createStraightWall({0, 0}, {4, 0}, "interior");
+    require(!wall.isEmpty() && window.selectEntity(wall) &&
+                window.editSelectedHeight(QStringLiteral("2.7004 m")) &&
+                window.editSelectedThickness(QStringLiteral("0.06 m")),
+            "inspector precision fixture must retain exact metric dimensions");
+    window.setMetricUnits(false);
+    auto* height = window.findChild<QLineEdit*>("inspectorHeight");
+    auto* thickness = window.findChild<QLineEdit*>("inspectorThickness");
+    require(height && thickness && height->isEnabled() && thickness->isEnabled() &&
+                !height->isHidden() && !thickness->isHidden(),
+            "selected wall must expose both editable dimension fields");
+    require(height->text() == QStringLiteral("8' 10.3\"") &&
+                thickness->text() == QStringLiteral("2.4\"") &&
+                !height->isModified() && !thickness->isModified(),
+            "inspector must present rounded imperial dimensions as untouched text");
+    const auto exact = window.document().snapshot();
+    const auto exact_digest = document_snapshot_digest(exact);
+    for (auto* field : {height, thickness}) {
+        // Deliver the focus-out callback explicitly so the check is independent
+        // of platform window activation; Return also exercises QLineEdit itself.
+        require(QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection),
+                "untouched inspector editingFinished must be deliverable");
+        require(document_snapshot_digest(window.document().snapshot()) == exact_digest &&
+                    document_authoring_source_digest_v2(window.document().snapshot()) ==
+                        document_authoring_source_digest_v2(exact),
+                std::string("untouched rounded ") + field->objectName().toStdString() +
+                    " editingFinished must preserve full model and authoring history");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(field, &enter);
+        require(document_snapshot_digest(window.document().snapshot()) == exact_digest,
+                std::string("Return in untouched rounded ") + field->objectName().toStdString() +
+                    " must preserve full model and authoring history");
+    }
+
+    const auto edit = [&](QLineEdit* field, const char* property,
+                          const QString& expression, double metres) {
+        const auto before = window.document().snapshot();
+        field->setText(expression);
+        field->setModified(true); // setText alone is a refresh, not user input.
+        require(QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection),
+                "modified inspector editingFinished must be deliverable");
+        const auto after = window.document().snapshot();
+        require(after.revision() == before.revision() + 1 &&
+                    after.history().size() == before.history().size() + 1 &&
+                    after.entities().at(wall.toStdString()).properties.at(property) == metres,
+                "genuine inspector dimension input must publish one exact authoring command");
+        require(window.undoCommand() &&
+                    window.document().snapshot().entities() == before.entities() &&
+                    window.document().snapshot().assets() == before.assets() &&
+                    window.redoCommand() &&
+                    window.document().snapshot().entities() == after.entities() &&
+                    window.document().snapshot().assets() == after.assets(),
+                "genuine inspector dimension edit must undo and redo atomically");
+        const auto retained = document_snapshot_digest(window.document().snapshot());
+        require(QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection) &&
+                    document_snapshot_digest(window.document().snapshot()) == retained,
+                "refreshed rounded dimension after redo must remain untouched");
+        field->setText(QStringLiteral("-1 m"));
+        field->setModified(true);
+        require(QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection) &&
+                    document_snapshot_digest(window.document().snapshot()) == retained,
+                "invalid inspector dimension must reject without model or history mutation");
+        require(window.selectEntity(wall), "precision fixture must refresh after rejected input");
+    };
+    edit(height, "height_m", QStringLiteral("2.8004 m"), 2.8004);
+    edit(thickness, "thickness_m", QStringLiteral("0.07004 m"), 0.07004);
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("inspector-precision.bldproj"));
+    const auto stored = window.document().snapshot();
+    require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
+                window.document().is_editable() &&
+                document_authoring_source_digest_v2(window.document().snapshot()) ==
+                    document_authoring_source_digest_v2(stored),
+            "inspector edits and complete authoring history must save and reopen editable");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(wall.toStdString()).properties.at("thickness_m") == 0.06 &&
+                window.redoCommand() && window.document().snapshot().entities() == stored.entities(),
+            "reopened inspector dimension history must retain atomic undo and redo");
+}
+
 void test_cross_view_source_editing() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -8031,6 +8796,7 @@ void test_cross_view_source_editing() {
     auto* height = window.findChild<QLineEdit*>("inspectorHeight");
     require(height && height->isEnabled() && !height->isHidden(), "projected wall exposes typed height");
     height->setText("4 m");
+    height->setModified(true);
     QMetaObject::invokeMethod(height, "editingFinished", Qt::DirectConnection);
     require(window.document().revision() == before_wall.revision() + 1 &&
             window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m") == 4.0 &&
@@ -8110,7 +8876,10 @@ void test_section_overlay_workflow() {
     require(std::any_of(canvas->labels().begin(), canvas->labels().end(),
         [](const auto& label) { return label.text == "Section overlay proof"; }), "section note retained on canvas");
     require(std::any_of(canvas->labels().begin(), canvas->labels().end(),
-        [](const auto& label) { return label.text.contains('\''); }),
+        [](const auto& label) {
+            return label.text.contains(QStringLiteral(" ft ")) ||
+                   label.text.endsWith(QStringLiteral(" in"));
+        }),
         "section dimensions follow the active Imperial display units");
     require(window.undoCommand() && count_lines() == 0 && window.redoCommand() && count_lines() == 1,
         "overlay undo and redo refresh canvas");
@@ -8222,7 +8991,8 @@ int main(int argc, char** argv) {
         test_vertex_preview_area_name_placement();
         return 0;
     }
-    if (argc == 2 && std::string_view(argv[1]) == "--boundary-transform-preview-only") {
+    if (argc == 2 && (std::string_view(argv[1]) == "--boundary-transform-only" ||
+                     std::string_view(argv[1]) == "--boundary-transform-preview-only")) {
         test_boundary_transform_workflow(qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"));
         return 0;
     }
@@ -8254,8 +9024,14 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--room-volume-only") {
+        test_dimension_presentation_precision();
         test_room_volume_authoring_workflow();
         std::cout << "Room volume workflow tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--inspector-precision-only") {
+        test_inspector_untouched_dimension_precision();
+        std::cout << "Inspector dimension precision tests passed\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--cross-view-editing-only") {
@@ -8263,6 +9039,17 @@ int main(int argc, char** argv) {
         std::cout << "Cross-view source editing tests passed\n";
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--automatic-room-detection-only") {
+        test_automatic_room_boundary_detection_workflow();
+        std::cout << "Automatic room detection checks passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--room-from-existing-only") {
+        test_room_boundary_from_existing_geometry();
+        std::cout << "Room from existing geometry checks passed\n";
+        return 0;
+    }
+    test_inspector_untouched_dimension_precision();
     test_cross_view_source_editing();
     test_architectural_authoring_commands();
     test_section_overlay_workflow();
@@ -8317,6 +9104,7 @@ int main(int argc, char** argv) {
     test_external_project_change_blocks_save();
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
+    test_dimension_presentation_precision();
     test_room_volume_authoring_workflow();
     test_multiple_selection_clipboard_workflow();
     test_annotation_transform_legacy_and_ambiguity();
@@ -9700,47 +10488,58 @@ int main(int argc, char** argv) {
                 factored_area->text().contains(QStringLiteral("4.500 m²")),
             "calculation inspector should refresh from the reopened document");
 
-    auto malformed = window.document().snapshot().entities().at(column_id.toStdString());
+    // Prepare malformed loaded geometry before its own workspace acquires
+    // authority. Never replace the recovered source behind its command ledger.
+    const auto recovered_source = window.document().snapshot();
+    const auto recovered_source_digest = sketch::document_snapshot_digest(recovered_source);
+    auto invalid_document = std::make_shared<sketch::Document>(
+        sketch::Document::fork(recovered_source));
+    auto malformed = recovered_source.entities().at(column_id.toStdString());
     malformed.properties["form"] = "unsupported-form";
-    window.document().apply(sketch::ApplyEntityChanges{
-        .expected_revision = window.document().revision(),
+    invalid_document->apply(sketch::ApplyEntityChanges{
+        .expected_revision = invalid_document->revision(),
         .entity_changes = {sketch::EntityChange::upsert(malformed)},
         .message = "exercise unsupported loaded geometry",
     });
-    require(window.selectEntity(column_id), "select malformed loaded building object");
+    sketch::desktop::MainWindow invalid_window(invalid_document);
+    invalid_window.setMetricUnits(window.metricUnits());
+    invalid_window.setWorkspace(window.workspace());
+    require(window.activeLayerId().isEmpty() ||
+                invalid_window.setActiveLayer(window.activeLayerId()),
+            "malformed loaded fixture must retain the recovered drawing context");
+    require(invalid_window.selectEntity(column_id), "select malformed loaded building object");
     const auto protected_output =
         QString::fromStdWString((project_path.parent_path() / "must-not-exist.pdf").wstring());
     const auto protected_svg =
         QString::fromStdWString((project_path.parent_path() / "must-not-exist.svg").wstring());
     const auto protected_png =
         QString::fromStdWString((project_path.parent_path() / "must-not-exist.png").wstring());
-    require(!window.exportDraftPdf(protected_output) && !window.exportDraftSvg(protected_svg) &&
-                !window.exportDraftImage(protected_png) &&
-                !window.showPrintPreview() &&
+    require(!invalid_window.exportDraftPdf(protected_output) && !invalid_window.exportDraftSvg(protected_svg) &&
+                !invalid_window.exportDraftImage(protected_png) &&
+                !invalid_window.showPrintPreview() &&
                 !std::filesystem::exists(std::filesystem::path(protected_output.toStdWString())) &&
                 !std::filesystem::exists(std::filesystem::path(protected_svg.toStdWString())) &&
                 !std::filesystem::exists(std::filesystem::path(protected_png.toStdWString())),
             "invalid plan geometry must block output before creating a file or print dialog");
-    auto* plan_error = window.findChild<QLabel*>(QStringLiteral("planGeometryError"));
+    auto* plan_error = invalid_window.findChild<QLabel*>(QStringLiteral("planGeometryError"));
     require(plan_error && !plan_error->isHidden() && !plan_error->text().isEmpty(),
             "a missing building projection must be visible in the workspace");
     for (int index = 1; index + 1 < argc; ++index) {
         if (std::string_view(argv[index]) == "--capture-invalid-plan") {
-            window.setAttribute(Qt::WA_DontShowOnScreen, true);
-            window.resize(1366, 768);
-            window.show();
+            invalid_window.setAttribute(Qt::WA_DontShowOnScreen, true);
+            invalid_window.resize(1366, 768);
+            invalid_window.show();
             QCoreApplication::processEvents();
-            require(window.grab().save(QString::fromLocal8Bit(argv[index + 1])),
+            require(invalid_window.grab().save(QString::fromLocal8Bit(argv[index + 1])),
                     "invalid-plan workspace capture must be written");
-            window.hide();
+            invalid_window.hide();
         }
     }
-    // The malformed entity above is injected directly through the public
-    // document fixture API, outside the workspace command ledger. Reverse it
-    // through that same test-only path; desktop commands deliberately reject
-    // out-of-band divergence instead of replacing recovery history.
-    window.document().undo(window.document().revision());
-    require(window.selectEntity(column_id), "restored building geometry should be selectable");
+    require(invalid_window.undoCommand(),
+            "malformed loaded fixture must restore geometry through workspace history");
+    require(invalid_window.selectEntity(column_id), "restored building geometry should be selectable");
     require(plan_error->isHidden(), "geometry error must clear after the valid object is restored");
+    require(sketch::document_snapshot_digest(window.document().snapshot()) == recovered_source_digest,
+            "invalid geometry fixture must preserve the recovered source and history");
     return 0;
 }
