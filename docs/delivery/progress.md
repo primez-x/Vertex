@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 physical transforms and opening hover
+
+Physical plan rotation and side resizing now prepare a single-use document or
+recovery edit in the worker and publish the exact previewed candidate on
+release. Press captures the complete authority once; READY and release retain
+the source, selection, view, viewport, focus, serial and parameter guards.
+Cancellation, rejection, new proposals and reset retire the ticket. A no-op
+discards it without adding history. A physical side-resize request without its
+own admitted lane now refuses the request before any command-building fallback.
+
+Click-to-place door, window and doorway previews now use detached worker input
+instead of generating native artwork during cursor callbacks. Only the latest
+pointer proposal is retained. Source, settings, camera, canvas serial and
+capture identity guard completion; click insertion independently checks its
+own host, fit and source. Ordinary and Site authorities use the same immutable
+capture representation. Curved doorway previews retain exact arcs. Hosted
+click and library previews show physical width, height and station along the
+wall, with all artwork and control coordinates presented together.
+
+Canvas completion has a separate placement serial, retired by leave,
+cancellation, navigation, display changes, parameter edits and scene changes.
+Fit/zoom now retire old navigation before capturing a new pointer preview.
+Transient artwork and callouts remain excluded from document geometry and
+output. Independent source review accepted both changes after correcting the
+resize-lane fallback and Site authority type mismatch. No build, test, probe,
+native job, launch, package or installation ran. Compilation, rendered output,
+event ordering and responsiveness remain unverified; the installed candidate
+has not changed.
+
 ### October 7 physical endpoint publication
 
 Existing wall, beam, independent railing, slab and room endpoint gestures now

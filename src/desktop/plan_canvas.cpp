@@ -840,6 +840,7 @@ void PlanCanvas::setGridEnabled(bool enabled) {
 void PlanCanvas::setSnapEnabled(bool enabled) {
     if (m_snap_enabled == enabled) return;
     clearSymbolDragPreview();
+    clearComponentPlacementPreview();
     m_snap_enabled = enabled;
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
@@ -847,6 +848,7 @@ void PlanCanvas::setSnapEnabled(bool enabled) {
 
 void PlanCanvas::setWallSnapEnabled(bool enabled) {
     if (m_wall_snap_enabled == enabled) return;
+    clearComponentPlacementPreview();
     m_wall_snap_enabled = enabled;
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
@@ -1038,19 +1040,48 @@ void PlanCanvas::setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> pre
 }
 
 void PlanCanvas::setComponentPlacementPreview(std::optional<CanvasEntity> preview) {
+    ++m_component_placement_preview_serial;
+    m_component_placement_preview_pending = false;
     if (preview) preview->selected = false;
     m_component_placement_preview = std::move(preview);
     update();
 }
 
+void PlanCanvas::clearComponentPlacementPreview() {
+    ++m_component_placement_preview_serial;
+    m_component_placement_preview_pending = false;
+    if (!m_component_placement_preview) return;
+    m_component_placement_preview.reset();
+    update();
+}
+
+std::uint64_t PlanCanvas::beginComponentPlacementPreview() {
+    ++m_component_placement_preview_serial;
+    m_component_placement_preview_pending = true;
+    m_component_placement_preview.reset();
+    update();
+    return m_component_placement_preview_serial;
+}
+
+bool PlanCanvas::completeComponentPlacementPreview(std::uint64_t serial,
+                                                  std::optional<CanvasEntity> preview) {
+    if (!m_component_placement_preview_pending || serial != m_component_placement_preview_serial)
+        return false;
+    m_component_placement_preview_pending = false;
+    if (preview) preview->selected = false;
+    m_component_placement_preview = std::move(preview);
+    update();
+    return true;
+}
+
 void PlanCanvas::clearPreview() {
     clearSymbolDragPreview();
+    clearComponentPlacementPreview();
     m_pending_dimension_space_tap.reset();
     m_boundary_preview.clear();
     m_wall_preview.reset();
     m_drawing_witnesses.clear();
     m_boundary_draft_preview.reset();
-    m_component_placement_preview.reset();
     update();
 }
 
@@ -1207,9 +1238,12 @@ void PlanCanvas::fitView() {
     if (!bounds) {
         m_view_center = {0.0, 0.0};
         m_scale = 80.0;
-        if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
-        update();
+        const QPointer<PlanCanvas> guard(this);
         notifyNavigationChanged(previous_center, previous_scale);
+        if (!guard) return;
+        if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
+        if (!guard) return;
+        update();
         return;
     }
     const auto minimum = bounds->first;
@@ -1227,9 +1261,12 @@ void PlanCanvas::fitView() {
                                             (height + padding * 2.0)
                                       : 80.0),
                         minimum_scale, maximum_scale);
-    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
-    update();
+    const QPointer<PlanCanvas> guard(this);
     notifyNavigationChanged(previous_center, previous_scale);
+    if (!guard) return;
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
+    if (!guard) return;
+    update();
 }
 
 void PlanCanvas::zoomBy(double factor, QPointF anchor) {
@@ -1246,9 +1283,12 @@ void PlanCanvas::zoomBy(double factor, QPointF anchor) {
     m_scale = std::clamp(m_scale * factor, minimum_scale, maximum_scale);
     const auto after = toModel(anchor, rect());
     m_view_center = m_view_center + (before - after);
-    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
-    update();
+    const QPointer<PlanCanvas> guard(this);
     notifyNavigationChanged(previous_center, previous_scale);
+    if (!guard) return;
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
+    if (!guard) return;
+    update();
 }
 
 void PlanCanvas::setViewTransform(Vec2 center, double scale) {
@@ -1262,9 +1302,12 @@ void PlanCanvas::setViewTransform(Vec2 center, double scale) {
     beginPerformanceMeasurement(PerformanceMetric::navigation);
     m_view_center = center;
     m_scale = scale;
-    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
-    update();
+    const QPointer<PlanCanvas> guard(this);
     notifyNavigationChanged(previous_center, previous_scale);
+    if (!guard) return;
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
+    if (!guard) return;
+    update();
 }
 
 void PlanCanvas::setNavigationChanged(std::function<void(Vec2, double)> callback) {
@@ -1275,6 +1318,7 @@ void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_s
     if (m_view_center.x == previous_center.x && m_view_center.y == previous_center.y &&
         m_scale == previous_scale) return;
     clearSymbolDragPreview();
+    clearComponentPlacementPreview();
     // Hosted station captures belong to the pressed view. Navigation must
     // invalidate a drag or released pending admission before it can reappear.
     if (m_opening_move_active) resetGesture();
@@ -2814,16 +2858,13 @@ bool PlanCanvas::event(QEvent* event) {
         clearSymbolDragPreview();
         // Leave retires only the hover image. The placement command remains
         // armed and the next admitted cursor update supplies its new preview.
-        if (m_component_placement_preview) {
-            m_component_placement_preview.reset();
-            update();
-        }
+        clearComponentPlacementPreview();
         break;
     case QEvent::Hide:
     case QEvent::WindowBlocked:
     case QEvent::WindowDeactivate:
     case QEvent::UngrabMouse:
-        m_component_placement_preview.reset();
+        clearComponentPlacementPreview();
         resetPerformanceMeasurements();
         resetGesture();
         m_space_pan_armed = false;
@@ -3572,6 +3613,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
 
 void PlanCanvas::resetGesture() {
     clearSymbolDragPreview();
+    clearComponentPlacementPreview();
     m_pending_dimension_space_tap.reset();
     ++m_opening_width_preview_serial;
     ++m_boundary_vertex_preview_serial;
@@ -5138,6 +5180,9 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                 drawingLengthText(m_opening_move_preview_intent->offset_metres,m_metric_units));
             if (m_move_preview_pending) text+=QStringLiteral("  ·  Checking");
         }
+        if (placing && opening)
+            text+=QStringLiteral("  ·  Along wall %1").arg(
+                drawingLengthText(opening->offset_metres,m_metric_units));
         if (invalid_opening) text += QStringLiteral("  ·  Invalid");
         if (transforming && m_transform_preview_exact) {
             if (m_transform_preview_pending) text += QStringLiteral("  ·  Checking");
@@ -5524,6 +5569,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
     }
     if (event->key() == Qt::Key_Escape) {
         clearSymbolDragPreview();
+        clearComponentPlacementPreview();
         m_drawing_witnesses.clear();
         update();
         if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_vertex_release_pending || m_transform_frame_start) {
@@ -5601,6 +5647,7 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
 void PlanCanvas::resizeEvent(QResizeEvent* event) {
     if (event->oldSize() != event->size()) {
         clearSymbolDragPreview();
+        clearComponentPlacementPreview();
         ++m_navigation_generation;
     }
     m_pending_dimension_space_tap.reset();
@@ -5828,6 +5875,7 @@ std::optional<Vec2> PlanCanvas::closingAnchor(QPointF point) const {
 
 void PlanCanvas::setRawPointInput(bool enabled) {
     if (m_raw_point_input == enabled) return;
+    clearComponentPlacementPreview();
     m_raw_point_input = enabled;
     update();
 }
@@ -6864,6 +6912,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlappi
 
 void PlanCanvas::invalidateRetainedPresentation() {
     clearSymbolDragPreview();
+    clearComponentPlacementPreview();
     m_content_bounds_cache = {};
     m_overview_geometry_cache = {};
     m_retained_selection_ready = false;
@@ -7227,9 +7276,10 @@ void PlanCanvas::setBoundaryVertexMoveRequested(
 
 void PlanCanvas::updateCursor(QPointF point) {
     m_last_mouse_position = point;
-    if (m_cursor_moved) {
-        m_cursor_moved(inputPoint(point));
-    }
+    const auto callback = m_cursor_moved;
+    const QPointer<PlanCanvas> guard(this);
+    if (callback) callback(inputPoint(point));
+    if (!guard || m_last_mouse_position != std::optional<QPointF>{point}) return;
     updatePointerCursor(point);
     update();
 }

@@ -436,6 +436,18 @@ public:
     // A pending library component is never part of committed geometry,
     // selection, snapping, content bounds, minimap, print or export.
     void setComponentPlacementPreview(std::optional<CanvasEntity> preview);
+    void clearComponentPlacementPreview();
+    // Hover workers publish on the UI thread against one pointer proposal.
+    // Leave, cancellation, navigation and scene replacement retire its serial.
+    [[nodiscard]] std::uint64_t beginComponentPlacementPreview();
+    [[nodiscard]] std::uint64_t componentPlacementPreviewSerial() const noexcept {
+        return m_component_placement_preview_serial;
+    }
+    [[nodiscard]] bool componentPlacementPreviewPending() const noexcept {
+        return m_component_placement_preview_pending;
+    }
+    bool completeComponentPlacementPreview(std::uint64_t serial,
+        std::optional<CanvasEntity> preview);
     void clearPreview();
     void fitView();
     void zoomBy(double factor, QPointF anchor = {});
@@ -1021,6 +1033,8 @@ private:
     std::vector<DrawingWitness> m_drawing_witnesses;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;
     std::optional<CanvasEntity> m_component_placement_preview;
+    std::uint64_t m_component_placement_preview_serial{};
+    bool m_component_placement_preview_pending{};
     std::optional<CanvasEntity> m_symbol_drag_preview;
     bool m_symbol_drag_active{};
     std::uint64_t m_symbol_drag_preview_serial{};
