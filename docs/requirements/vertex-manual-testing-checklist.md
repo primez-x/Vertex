@@ -1185,6 +1185,7 @@ drawing; switching modes does not change existing geometry.
 ## 3D views, elevations and sections
 
 - [ ] **U197 — Orbit, pan and zoom the 3D view**
+  - Steps: Right-drag to orbit, middle-drag to pan, hold Space and left-drag to pan, and use the wheel to zoom. Repeat over an object and empty space, then release Space and click an object.
   - Expected: Navigation is predictable and does not edit objects.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1192,6 +1193,8 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U198 — Select an object in 3D**
   - Steps: Select a supported wall, room, slab, column, beam, stair, railing or roof from the plan or navigator, then select a different object directly in 3D. Drag an axis handle, the vertical rotation ring and a scale handle in separate undoable edits. Open the object's right-click **Transform…** action and enter an exact value.
   - Expected: The same object is selected in every view and receives visible move, vertical-rotation and uniform-scale controls. Each released drag changes the shared semantic object once; plan, 3D and applicable elevation/section/schedule/calculation views refresh. Undo and redo restore each state. Exact numeric entry matches the handle behavior, while exported 3D imagery contains no editing controls.
+  - Group check: Ctrl-click two visible objects, then Ctrl-click one again to remove it. Ctrl-drag left to right around fully enclosed objects, then right to left across another object. The rectangle is visible while dragging; both gestures add to the existing selection. Select a plan-only item as well: it stays selected even though it has no 3D highlight. Double-click or right-click a selected group member; the group stays selected, its count is shown, and single-object Move and transform handles are unavailable. Click empty 3D space to clear the group.
+  - Cancellation and output check: Start a Ctrl selection rectangle and press Escape or change the view before release. No selection result is applied. Export a 3D image with several objects selected: no highlights or handles appear in the image, and all selected highlights return in the interactive view afterward. Change the project or selection while an object menu is open; its retained edit must refuse rather than operate on the replacement selection.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

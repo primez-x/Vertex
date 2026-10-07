@@ -19,28 +19,33 @@ classification and manual dimension placement before the outline is complete.
 | Left drag from empty canvas | Pan without placing a node | Pan without placing a wall point | No model edit |
 | Left drag from selected object | Move the selected object or compatible selected group in one undoable transaction | Move the selected object or compatible selected group in one undoable transaction | Reserved for an explicitly armed Move command |
 | Left drag from unselected object | Pan; click first if the object should move | Pan; click first if the object should move | Select only |
-| Ctrl + left click | Toggle the hit object in the selection | Toggle the hit object in the selection | Reserved for later additive-selection support |
-| Ctrl + left drag | Add a directional marquee result to the selection | Add a directional marquee result to the selection | Pan |
-| Left-to-right Ctrl marquee | Add fully enclosed objects | Add fully enclosed objects | Planned |
-| Right-to-left Ctrl marquee | Add crossing or enclosed objects | Add crossing or enclosed objects | Planned |
+| Ctrl + left click | Toggle the hit object in the selection | Toggle the hit object in the selection | Toggle the visible object in the shared selection |
+| Ctrl + left drag | Add a directional marquee result to the selection | Add a directional marquee result to the selection | Add a directional marquee result to the shared selection |
+| Left-to-right Ctrl marquee | Add fully enclosed objects | Add fully enclosed objects | Add fully enclosed selectable presentations |
+| Right-to-left Ctrl marquee | Add crossing or enclosed objects | Add crossing or enclosed objects | Add crossing or enclosed selectable presentations |
 | Middle drag | Pan from any hit location without changing geometry or a draft | Pan from any hit location without changing geometry | Pan |
 | Space + left drag | Pan from any hit location without changing geometry or a draft | Pan from any hit location without changing geometry | Pan |
 | Right click | Cancel a pending drawing or new placement while retaining committed geometry; otherwise open relevant object/canvas actions | Cancel a pending new placement; otherwise open relevant object/canvas actions | Open object or view actions |
 | Right drag | Pan without changing geometry, cancelling the draft, or opening a menu | Pan without changing geometry or opening a menu | Orbit |
 | Wheel | Zoom about the pointer without changing the draft | Zoom about the pointer | Zoom |
-| Double click on object | Preserve an existing selected group member, otherwise select the target, then open contextual properties once | Same | Open contextual properties for the selected object |
+| Double click on object | Preserve an existing selected group member, otherwise select the target, then open contextual properties once | Same | Preserve a selected group member, otherwise select the target, then open contextual properties |
 | Double click on empty canvas | No special action | No special action | No special action |
 
-Ctrl is the 2D selection modifier. Selection marquees do not replace an existing
+Ctrl is the selection modifier in plan and 3D views. Selection marquees do not replace an existing
 selection. A left-to-right marquee uses enclosure rules; a right-to-left marquee
-uses crossing rules.
+uses crossing rules. The 3D marquee highlights the visible members of the shared
+selection and retains selected plan-only objects. Escape, capture or focus loss,
+or a changed source, camera or view extent abandons the marquee without applying
+its result.
 
 ## Explicit 3D Move
 
 `Move object` is available from the 3D context menu for a selected transformable
 object. It arms one plain-left drag and commits one document transaction on
-release. Ctrl-drag and middle drag navigate the view and never translate an
-object.
+release. Ctrl starts additive selection and cancels an armed Move. Middle drag
+and Space + left drag pan; right drag orbits. Navigation never translates an
+object. Move and single-object manipulator controls are unavailable for a group,
+including a mixed group with only one member visible in 3D.
 
 Escape, focus loss, capture loss, hiding the view, changing the camera, or
 starting another navigation gesture cancels Move and restores the unmodified
@@ -63,6 +68,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 - An opening preview follows its physical wall, with the same width, height, sill and style used at commit. The completed wall, sibling openings, manufactured assemblies and affected joins must admit the proposed cut before one undoable command changes the document. Recovered projects use the same authoritative model in placement, properties and output.
 - Right click is evaluated on stationary release. Crossing the drag threshold prevents the menu.
 - An unmodified object double click opens the same contextual editor as right click → Properties. Ctrl-double-click only performs the first selection toggle. Active drawing and placement consume the second press so they cannot add a duplicate point or place two components.
+- In 3D, right-clicking or double-clicking a selected group member preserves the whole selection. Object-specific actions apply only to a single object; Copy and Delete use the shared selection. A changed source or selection invalidates retained menu actions, and a pending plan placement prevents unrelated 3D object actions.
 - Pan, zoom, fit, and overview navigation refresh the effective cursor position used by measurements and contextual UI.
 - Selection and move previews are screen-only and never appear in print or export.
 
@@ -82,7 +88,6 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Rotation uses a positive counterclockwise model angle. The handle and frame retain the committed orientation and preview the resulting angle, snapping to absolute 45-degree increments (including 0°, 90°, 180° and 270°); Shift bypasses snapping for fine adjustment. The canvas callout displays the current angle while rotating. Release commits once, Escape restores the document, and editing controls never appear in output.
 - Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
 - Direct endpoint grips for additional architectural object types.
-- 3D directional marquee selection and additive selection parity.
 - Pen barrel-button mapping, pinch zoom, and multi-touch navigation.
 - Overlap cycling for stacked selectable objects.
 - A component ghost preview before click placement.

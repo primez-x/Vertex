@@ -19200,6 +19200,51 @@ public:
         }
     }
 
+    bool selectEntities(const QStringList& ids, bool additive) {
+        const auto previous_id=m_selected_id;
+        const auto previous_ids=m_selected_ids;
+        const auto previous_layer=m_active_layer_id;
+        try {
+            const auto snapshot=authoringSnapshot();
+            if (!additive) m_selected_ids.clear();
+            for (auto id : ids) {
+                const auto wanted=id.toStdString();
+                const bool direct=snapshot.entities().contains(wanted) ||
+                    annotation_child_exists(snapshot,wanted) ||
+                    (siteCanvas(m_architecturalCanvas) && m_site_annotation_targets.contains(id));
+                if (!direct)
+                    if (const auto host=assembly_host_for_child(snapshot,wanted)) id=id_from(*host);
+                if ((snapshot.entities().contains(id.toStdString()) ||
+                     annotation_child_exists(snapshot,id.toStdString()) ||
+                     (siteCanvas(m_architecturalCanvas) && m_site_annotation_targets.contains(id)) ||
+                     assembly_root_catalog_for_child(snapshot,id.toStdString())) &&
+                    !m_selected_ids.contains(id)) m_selected_ids.push_back(id);
+            }
+            m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            m_selected_id=previous_id;
+            m_selected_ids=previous_ids;
+            m_active_layer_id=previous_layer;
+            setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void completeNativeSelectionAuthority(const std::shared_ptr<const DocumentSnapshot>& source) {
+        const auto published=m_nativeModelView->publishedSnapshot();
+        if (!source || !published || fullSnapshotDigest(*source)!=fullSnapshotDigest(*published) ||
+            fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot())) {
+            m_native_input_authority.reset();
+            m_nativeModelView->setSelectedEntities(m_selected_ids);
+            throw std::invalid_argument("The displayed 3D source changed during selection. Start again in the current view.");
+        }
+        // Selection and its owning layer intentionally changed in this admitted
+        // event. Renew their authority only against the original displayed source.
+        m_native_input_authority=captureSourceEditAuthority(*source);
+    }
+
     struct SelectionTranslationParts {
         QStringList model_ids;
         std::vector<EntityChange> presentation_changes;
@@ -34501,24 +34546,35 @@ private:
             m_nativeModelView->onSceneInputRequested = [this](bool starting) {
                 return admitNativeSceneInput(starting);
             };
-            m_nativeModelView->setEntitySelectedCallback(
-                [this](QString id) {
-                    if (!admitNativeSceneInput(false) || !selectEntity(id)) return;
-                    // This already admitted selection intentionally changes
-                    // selection context without changing the displayed source.
-                    const auto source=m_nativeModelView->publishedSnapshot();
-                    if (source) m_native_input_authority=captureSourceEditAuthority(*source);
+            m_nativeModelView->setEntitySelectionClickedCallback(
+                [this](QString id, bool toggle) {
+                    const auto source=m_nativeModelView->gestureSourceSnapshot();
+                    if (!admitNativeSceneInput(false) || !selectEntity(id,toggle)) {
+                        m_nativeModelView->setSelectedEntities(m_selected_ids);
+                        return;
+                    }
+                    completeNativeSelectionAuthority(source);
+                });
+            m_nativeModelView->setEntitiesSelectedCallback(
+                [this](QStringList ids, bool additive) {
+                    const auto source=m_nativeModelView->gestureSourceSnapshot();
+                    if (!admitNativeSceneInput(false) || !selectEntities(ids,additive)) {
+                        m_nativeModelView->setSelectedEntities(m_selected_ids);
+                        return;
+                    }
+                    completeNativeSelectionAuthority(source);
                 });
             m_nativeModelView->setEntityEditRequestedCallback([this](QString id) {
                 if (!admitNativeSceneInput(false)) return;
-                if (!selectEntity(id, false)) return;
-                if (editEmbeddedAssemblyFromDialog()) return;
-                const auto selected = selectedEntity();
-                if (selected && selected->type == "room") editRoomVolumeFromDialog();
-                else if (selected && selected->type == "assembly_instance")
-                    editIndependentAssembly(selected->id);
-                else if (selected && selected->type == "roof_join") showRoofJoinProperties();
-                else positionContextEditor();
+                if (!m_selected_ids.contains(id) && !selectEntity(id,false)) return;
+                if (m_selected_ids.size()==1) {
+                    if (editEmbeddedAssemblyFromDialog()) return;
+                    const auto selected=selectedEntity();
+                    if (selected && selected->type=="room") { editRoomVolumeFromDialog(); return; }
+                    if (selected && selected->type=="assembly_instance") { editIndependentAssembly(selected->id); return; }
+                    if (selected && selected->type=="roof_join") { showRoofJoinProperties(); return; }
+                }
+                positionContextEditor();
             });
             m_nativeModelView->onTransformGestureStarted = [this](QString id) {
                 m_native_gesture_authority.reset();
@@ -34543,57 +34599,92 @@ private:
             });
             m_nativeModelView->onContextMenuRequested = [this](QString hit_id,
                                                                 QPoint global_position) {
-                if (!admitNativeSceneInput(false)) return;
-                QMenu menu(owner);
-                const bool has_target = !hit_id.isEmpty() && selectEntity(hit_id, false) &&
-                                        (selectedEntity().has_value() || geometric_assembly_for_child(authoringSnapshot(), hit_id.toStdString()).has_value());
-                if (has_target) {
-                    if (selectedEntity() && supportsSitePlacement(*selectedEntity())) {
-                        auto* placement = menu.addAction(QStringLiteral("Site placement and coordinate frame…"));
-                        placement->setObjectName(QStringLiteral("sitePlacementContextAction"));
-                        placement->setEnabled(m_document->is_editable());
-                        QObject::connect(placement, &QAction::triggered, owner, [this] { showSitePlacement(); });
-                    }
-                    auto* properties = menu.addAction(QStringLiteral("Properties"));
-                    QObject::connect(properties, &QAction::triggered, owner,
-                                     [this] { if (!editEmbeddedAssemblyFromDialog()) positionContextEditor(); });
-                    if (const auto selected = selectedEntity(); selected && supportsObjectAppearance(selected->type)) {
-                        auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
-                        appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
-                        appearance->setEnabled(m_document->is_editable());
-                        QObject::connect(appearance, &QAction::triggered, owner, [this] { showObjectAppearance(); });
-                    }
-                    if (const auto selected = selectedEntity(); selected && selected->type == "room") {
-                        auto* dimensions = menu.addAction(QStringLiteral("Edit room dimensions…"));
-                        QObject::connect(dimensions, &QAction::triggered, owner,
-                                         [this] { editRoomVolumeFromDialog(); });
-                    }
-                    auto* transform = menu.addAction(QStringLiteral("Transform…"));
-                    QObject::connect(transform, &QAction::triggered, owner,
-                                     [this] { showArchitecturalObjectTransformEditor(); });
-                    auto* move = menu.addAction(QStringLiteral("Move object"));
-                    QObject::connect(move, &QAction::triggered, owner, [this] {
-                        if (!m_nativeModelView->beginMove(m_selected_id)) {
-                            setError(QStringLiteral(
-                                "Select a visible movable architectural object first."));
-                            return;
+                try {
+                    if (!admitNativeSceneInput(false)) return;
+                    QMenu menu(owner);
+                    const bool has_target = !hit_id.isEmpty() &&
+                                            (m_selected_ids.contains(hit_id) || selectEntity(hit_id,false)) &&
+                                            (selectedEntity().has_value() || geometric_assembly_for_child(authoringSnapshot(), hit_id.toStdString()).has_value());
+                    if (has_target) {
+                        const bool single=m_selected_ids.size()==1;
+                        const auto source=m_nativeModelView->gestureSourceSnapshot();
+                        if (!source) throw std::invalid_argument("The captured 3D context source is unavailable.");
+                        const auto authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
+                        const auto current=[this,authority] {
+                            if (sourceEditAuthorityCurrent(*authority,false)) return true;
+                            setError(QStringLiteral("The selection or project changed while this menu was open. Open its actions again."));
+                            return false;
+                        };
+                        const auto guarded=[this,current](auto action) {
+                            return [this,current,action=std::move(action)] {
+                                try {
+                                    if (current()) action();
+                                } catch (const Standard_Failure& error) {
+                                    setError(QStringLiteral("3D actions: %1").arg(
+                                        QString::fromUtf8(error.GetMessageString())));
+                                } catch (const std::exception& error) {
+                                    setError(QStringLiteral("3D actions: %1").arg(
+                                        QString::fromUtf8(error.what())));
+                                }
+                            };
+                        };
+                        if (!single) {
+                            auto* count=menu.addAction(QStringLiteral("%1 selected").arg(m_selected_ids.size()));
+                            count->setEnabled(false);
+                            menu.addSeparator();
                         }
-                        owner->statusBar()->showMessage(
-                            QStringLiteral("Move armed — drag the selected object once. Esc cancels."));
-                    });
-                    menu.addSeparator();
-                    auto* copy = menu.addAction(QStringLiteral("Copy"));
-                    QObject::connect(copy, &QAction::triggered, owner,
-                                     [this] { (void)copySelection(); });
-                    auto* remove = menu.addAction(QStringLiteral("Delete"));
-                    QObject::connect(remove, &QAction::triggered, owner,
-                                     [this] { (void)deleteSelection(); });
-                    menu.addSeparator();
+                        if (single && selectedEntity() && supportsSitePlacement(*selectedEntity())) {
+                            auto* placement = menu.addAction(QStringLiteral("Site placement and coordinate frame…"));
+                            placement->setObjectName(QStringLiteral("sitePlacementContextAction"));
+                            placement->setEnabled(m_document->is_editable());
+                            QObject::connect(placement, &QAction::triggered, owner, guarded([this] { showSitePlacement(); }));
+                        }
+                        auto* properties = menu.addAction(QStringLiteral("Properties"));
+                        QObject::connect(properties, &QAction::triggered, owner,
+                                         guarded([this] { if (m_selected_ids.size()!=1 || !editEmbeddedAssemblyFromDialog()) positionContextEditor(); }));
+                        if (const auto selected = selectedEntity(); single && selected && supportsObjectAppearance(selected->type)) {
+                            auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
+                            appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
+                            appearance->setEnabled(m_document->is_editable());
+                            QObject::connect(appearance, &QAction::triggered, owner, guarded([this] { showObjectAppearance(); }));
+                        }
+                        if (const auto selected = selectedEntity(); single && selected && selected->type == "room") {
+                            auto* dimensions = menu.addAction(QStringLiteral("Edit room dimensions…"));
+                            QObject::connect(dimensions, &QAction::triggered, owner,
+                                             guarded([this] { editRoomVolumeFromDialog(); }));
+                        }
+                        auto* transform = menu.addAction(QStringLiteral("Transform…"));
+                        transform->setEnabled(single && m_document->is_editable());
+                        QObject::connect(transform, &QAction::triggered, owner,
+                                         guarded([this] { showArchitecturalObjectTransformEditor(); }));
+                        auto* move = menu.addAction(QStringLiteral("Move object"));
+                        move->setEnabled(single && m_document->is_editable());
+                        QObject::connect(move, &QAction::triggered, owner, guarded([this] {
+                            if (!m_nativeModelView->beginMove(m_selected_id)) {
+                                setError(QStringLiteral(
+                                    "Select a visible movable architectural object first."));
+                                return;
+                            }
+                            owner->statusBar()->showMessage(
+                                QStringLiteral("Move armed — drag the selected object once. Esc cancels."));
+                        }));
+                        menu.addSeparator();
+                        auto* copy = menu.addAction(QStringLiteral("Copy"));
+                        QObject::connect(copy, &QAction::triggered, owner,
+                                         guarded([this] { (void)copySelection(); }));
+                        auto* remove = menu.addAction(QStringLiteral("Delete"));
+                        remove->setEnabled(m_document->is_editable());
+                        QObject::connect(remove, &QAction::triggered, owner,
+                                         guarded([this] { (void)deleteSelection(); }));
+                        menu.addSeparator();
+                    }
+                    auto* fit = menu.addAction(QStringLiteral("Fit 3D view"));
+                    QObject::connect(fit, &QAction::triggered, owner,
+                                     [this] { m_nativeModelView->fitAll(); });
+                    menu.exec(global_position);
+                } catch (const std::exception& error) {
+                    setError(QStringLiteral("3D actions: %1").arg(QString::fromUtf8(error.what())));
                 }
-                auto* fit = menu.addAction(QStringLiteral("Fit 3D view"));
-                QObject::connect(fit, &QAction::triggered, owner,
-                                 [this] { m_nativeModelView->fitAll(); });
-                menu.exec(global_position);
             };
             architectural_splitter->addWidget(m_nativeModelView);
             architectural_splitter->setStretchFactor(0, 1);
@@ -35809,9 +35900,6 @@ private:
             return definition != catalog.end() && is_hosted_opening_symbol(*definition);
         });
         canvas->setEntitiesSelected([this,canvas](QStringList ids, bool additive) {
-            const auto previous_id=m_selected_id;
-            const auto previous_ids=m_selected_ids;
-            const auto previous_layer=m_active_layer_id;
             try {
                 try { if (siteCanvas(canvas)) requireSitePublicationCurrent(false); }
                 catch (const std::exception& error) { clearSitePublication(); setError(QString::fromUtf8(error.what())); return; }
@@ -35821,23 +35909,8 @@ private:
                             QStringLiteral("Click once to place the component; drag does not change selection while placement is active."));
                     return;
                 }
-                const auto snapshot = authoringSnapshot();
-                if (!additive) m_selected_ids.clear();
-                for (auto id : ids) {
-                    if (const auto host = assembly_host_for_child(snapshot, id.toStdString()))
-                        id = id_from(*host);
-                    if ((snapshot.entities().contains(id.toStdString()) ||
-                         annotation_child_exists(snapshot, id.toStdString()) ||
-                         (siteCanvas(m_architecturalCanvas) && m_site_annotation_targets.contains(id)) ||
-                         assembly_root_catalog_for_child(snapshot, id.toStdString())) &&
-                        !m_selected_ids.contains(id)) m_selected_ids.push_back(id);
-                }
-                m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
-                refresh();
+                (void)selectEntities(ids,additive);
             } catch (const std::exception& error) {
-                m_selected_id=previous_id;
-                m_selected_ids=previous_ids;
-                m_active_layer_id=previous_layer;
                 setError(QStringLiteral("Selection: %1").arg(QString::fromUtf8(error.what())));
             }
         });
@@ -39495,8 +39568,7 @@ private:
             native_visible_ids.insert(visible_ids.begin(), visible_ids.end());
             m_native_visible_ids = native_visible_ids;
             m_nativeModelView->setSnapshot(snapshot, native_visible_ids);
-            m_nativeModelView->setSelectedEntity(
-                m_selected_ids.size() == 1 ? m_selected_id : QString{});
+            m_nativeModelView->setSelectedEntities(m_selected_ids);
             m_native_geometry_document = m_document;
             m_native_geometry_revision = snapshot.revision();
         }
@@ -44567,6 +44639,8 @@ private:
     bool admitNativeSceneInput(bool starting) {
         try {
             if (starting) m_native_input_authority.reset();
+            if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("Finish or cancel the current plan placement before selecting or editing in 3D.");
             const auto source=m_nativeModelView->publishedSnapshot();
             if (!source || fullSnapshotDigest(*source) != fullSnapshotDigest(authoringSnapshot()))
                 throw std::invalid_argument("The displayed 3D source changed. Refresh the current view before selecting or editing.");

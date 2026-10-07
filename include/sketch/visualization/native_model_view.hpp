@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QString>
+#include <QStringList>
 #include <QSize>
 
 #include <cstddef>
@@ -43,8 +44,8 @@ public:
     // Exact immutable source of the successfully published AIS scene. A newer
     // queued request never substitutes its source for displayed geometry.
     [[nodiscard]] std::shared_ptr<const DocumentSnapshot> publishedSnapshot() const noexcept;
-    // Gesture press capture, retained through the synchronous commit callback.
-    // Empty outside an active Move/manipulator gesture or its commit callback.
+    // Actual displayed-source press capture, retained through synchronous
+    // selection/edit/context and Move/manipulator completion callbacks.
     [[nodiscard]] std::shared_ptr<const DocumentSnapshot> gestureSourceSnapshot() const noexcept;
     // Called after the native press capture and before the first preview. The
     // shell captures selection/workspace/context here; this emits no command.
@@ -54,9 +55,12 @@ public:
     // independent, and a stationary context click starts its own admission.
     std::function<bool(bool starting)> onSceneInputRequested;
     void fitAll();
-    // Synchronize the shell's single semantic selection into the native view.
-    // Transformable visible solids receive an OCCT manipulator; empty, hidden,
-    // missing, or unsupported IDs clear it without changing the document.
+    // Synchronize complete logical selection; IDs without a displayed solid
+    // still count toward multi-selection. The last supplied ID is primary.
+    // Highlights cover valid visible semantic presentations only. Manipulators
+    // require exactly one logical member; this API never emits a callback.
+    void setSelectedEntities(const QStringList& entity_ids);
+    // Backward-compatible replacement with one ID (empty clears selection).
     void setSelectedEntity(const QString& entity_id);
     [[nodiscard]] bool transformControlsVisible() const noexcept;
     // Export the OCCT framebuffer directly. This deliberately does not use
@@ -107,6 +111,13 @@ public:
     // Exceptions from status/error observers are contained so they cannot
     // interrupt preparation or replace diagnostics.
     std::function<void(QString)> onEntitySelected;
+    // Plain click: replacement (false); Ctrl click: toggle the hit (true).
+    // A plain background click supplies an empty ID. Selected group members
+    // retain the group for subsequent double-click/context editing.
+    std::function<void(QString, bool)> onEntitySelectionClicked;
+    // Directional Ctrl marquee supplies displayed semantic hits, in stable ID
+    // order, with additive=true. The shell owns its full logical selection.
+    std::function<void(QStringList, bool)> onEntitiesSelected;
     // Stationary plain-left double-click release on a visible selectable entity.
     // Receives its stable semantic ID after selection; never requests translation.
     std::function<void(QString)> onEntityEditRequested;
@@ -130,6 +141,8 @@ public:
     std::function<void(QString)> onGeometryStatusChanged;
 
     void setEntitySelectedCallback(std::function<void(QString)> callback);
+    void setEntitySelectionClickedCallback(std::function<void(QString, bool)> callback);
+    void setEntitiesSelectedCallback(std::function<void(QStringList, bool)> callback);
     void setEntityEditRequestedCallback(std::function<void(QString)> callback);
     void setEntityTranslationRequestedCallback(
         std::function<void(QString, double, double, double)> callback);
@@ -138,7 +151,7 @@ public:
     void setErrorCallback(std::function<void(QString)> callback);
     void setGeometryStatusChangedCallback(std::function<void(QString)> callback);
     // Arm one plain left drag of the supplied visible architectural entity.
-    // Ctrl+left and middle always pan; right always orbits or opens context actions.
+    // Ctrl+left selects additively; middle pans; right orbits or opens context actions.
     [[nodiscard]] bool beginMove(const QString& entity_id);
     void cancelInteraction();
     [[nodiscard]] bool isMoveActive() const noexcept;
@@ -157,6 +170,7 @@ protected:
 
 private:
     [[nodiscard]] bool admitSceneInput(bool starting);
+    void resetInteraction(bool restore_controls);
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

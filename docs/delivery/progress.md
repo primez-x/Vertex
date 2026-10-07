@@ -379,6 +379,19 @@ single document command. The existing model-plan label and legacy overlay
 conventions remain intact. Root reviewed these source changes; no application
 build or test was started and the installed candidate remains unchanged.
 
+Native 3D selection now supports Ctrl-click toggles and additive directional
+marquees against the actually published scene. It retains the full logical
+selection, including plan-only members, while highlighting visible members.
+Double-click and context actions preserve a selected group; single-object
+manipulators and Move are unavailable for groups. Source, camera, view extent,
+focus or capture changes abandon the pending selection. Space + left-drag pans
+through the existing navigation lane, and image export restores every selected
+highlight afterward. Retained context actions guard their original source and
+selection and contain callback errors. Independent source review approved the
+integration except for that callback boundary, which root corrected and reviewed.
+No build, test, package or installed change was made; native interaction and DPI
+behavior remain unobserved.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

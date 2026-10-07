@@ -14,6 +14,8 @@
 #include <AIS_ManipulatorMode.hxx>
 #include <AIS_ManipulatorOwner.hxx>
 #include <AIS_SelectionScheme.hxx>
+#include <Graphic3d_Camera.hxx>
+#include <StdSelect_ViewerSelector3d.hxx>
 #include <AIS_Shape.hxx>
 #include <AIS_ColoredShape.hxx>
 #include <BRep_Builder.hxx>
@@ -41,6 +43,8 @@
 #include <QImageWriter>
 #include <QSaveFile>
 #include <QLabel>
+#include <QFrame>
+#include <QRectF>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QPaintEngine>
@@ -178,6 +182,7 @@ public:
 
     NativeModelView* owner{};
     QLabel* status_label{};
+    QFrame* selection_rectangle{};
     std::shared_ptr<const DocumentSnapshot> snapshot;
     std::shared_ptr<const DocumentSnapshot> published_snapshot;
     std::shared_ptr<const DocumentSnapshot> gesture_snapshot;
@@ -207,16 +212,28 @@ public:
     occ::handle<AIS_Manipulator> manipulator;
     occ::handle<WNT_Window> window;
     std::map<std::string, CachedSolid, std::less<>> solids;
+    QStringList selected_entity_ids;
     std::optional<std::string> selected_entity_id;
     std::optional<std::string> manipulator_entity_id;
     std::optional<gp_Trsf> manipulation_transform;
 
-    enum class Gesture { none, select, edit, pan, orbit, move, manipulate };
+    struct SelectionCapture {
+        std::shared_ptr<const DocumentSnapshot> source;
+        Graphic3d_WorldViewProjState camera;
+        QSize logical_size;
+        QSize native_size;
+        qreal pixel_ratio{};
+        QStringList selection;
+    };
+    std::optional<SelectionCapture> selection_capture;
+
+    enum class Gesture { none, select, additive_select, edit, pan, orbit, move, manipulate };
     Gesture gesture = Gesture::none;
     Qt::MouseButton initiating_button = Qt::NoButton;
     QPoint navigation_start;
     QPointF left_press;
     bool left_moved{};
+    bool space_pan_armed{};
     std::optional<std::string> translation_entity_id;
     std::vector<std::string> translation_preview_ids;
     struct WorldPoint {
@@ -498,8 +515,8 @@ public:
                 // A changed regional appearance replaces its AIS handle; keep
                 // the semantic selection attached to the new root presentation.
                 context->ClearSelected(false);
-                if (selected_entity_id) {
-                    const auto selected = replacement.find(*selected_entity_id);
+                for (const auto& id : selected_entity_ids) {
+                    const auto selected = replacement.find(id.toStdString());
                     if (selected != replacement.end() && context->IsDisplayed(selected->second.presentation))
                         context->AddOrRemoveSelected(selected->second.presentation, false);
                 }
@@ -540,8 +557,8 @@ public:
                 initial_fit_pending = previously_pending_fit;
                 try {
                     context->ClearSelected(false);
-                    if (selected_entity_id) {
-                        const auto selected = solids.find(*selected_entity_id);
+                    for (const auto& id : selected_entity_ids) {
+                        const auto selected = solids.find(id.toStdString());
                         if (selected != solids.end() && previous_visibility.at(selected->first))
                             context->AddOrRemoveSelected(selected->second.presentation, false);
                     }
@@ -667,7 +684,7 @@ public:
             return {};
         }
         for (const auto& [id, solid] : solids) {
-            if (solid.presentation == selected) {
+            if (solid.presentation == selected && !context.IsNull() && context->IsDisplayed(solid.presentation)) {
                 return QString::fromStdString(id);
             }
         }
@@ -757,7 +774,7 @@ public:
     }
 
     void attach_manipulator() {
-        if (!selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
+        if (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
             !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
             !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
             detach_manipulator();
@@ -902,34 +919,126 @@ public:
         }
     }
 
-    QString select_at(const NativeInputPoint point, bool editing = false) {
-        if (!native_ready || !geometry_status.isEmpty() || context.IsNull() || view.IsNull()) {
-            return {};
-        }
-        if (!owner->admitSceneInput(false)) return {};
-        const auto x = point.x;
-        const auto y = point.y;
-        context->MoveTo(x, y, view, false);
-        // Background and nonsemantic presentations cannot clear selection or
-        // open an editor. Picking still uses OCCT's visibility/selection filters.
-        if (editing && (!context->HasDetected() ||
-                        entity_id_for_presentation(context->DetectedInteractive()).isEmpty()))
-            return {};
-        const auto previous_id = context->NbSelected() > 0
-            ? entity_id_for_presentation(context->FirstSelectedObject()) : QString{};
+    SelectionCapture capture_selection() const {
+        int width=0, height=0;
+        if (!window.IsNull()) window->Size(width,height);
+        return {published_snapshot,view->Camera()->WorldViewProjState(),owner->size(),
+                QSize(width,height),input_scale(),selected_entity_ids};
+    }
+
+    bool selection_current(const SelectionCapture& capture) const {
+        if (!owner->isReady() || !capture.source || published_snapshot != capture.source ||
+            view.IsNull() || view->Camera().IsNull() || owner->size() != capture.logical_size ||
+            input_scale() != capture.pixel_ratio || selected_entity_ids != capture.selection ||
+            view->Camera()->WorldViewProjState() != capture.camera) return false;
+        int width=0, height=0;
+        if (!window.IsNull()) window->Size(width,height);
+        return QSize(width,height)==capture.native_size;
+    }
+
+    void restore_selection_highlights() {
+        if (context.IsNull()) return;
         context->ClearSelected(false);
-        context->SelectDetected(AIS_SelectionScheme_Replace);
-        const auto selected = context->FirstSelectedObject();
-        const auto selected_id = entity_id_for_presentation(selected);
-        viewer->Redraw();
-        const auto selected_callback = owner->onEntitySelected;
-        const auto edit_callback = owner->onEntityEditRequested;
-        const QPointer<NativeModelView> owner_guard(owner);
-        if (selected_callback && (!editing || selected_id != previous_id))
-            selected_callback(selected_id);
-        if (owner_guard && editing && !selected_id.isEmpty() && edit_callback)
-            edit_callback(selected_id);
-        return selected_id;
+        for (const auto& id : selected_entity_ids) {
+            const auto found=solids.find(id.toStdString());
+            if (found!=solids.end() && !found->second.presentation.IsNull() &&
+                context->IsDisplayed(found->second.presentation))
+                context->AddOrRemoveSelected(found->second.presentation,false);
+        }
+    }
+
+    std::optional<QString> select_at(const NativeInputPoint point, const SelectionCapture& capture,
+                                     bool editing=false, bool toggle=false) {
+        const QPointer<NativeModelView> guard(owner);
+        try {
+            if (!selection_current(capture) || !owner->admitSceneInput(false) || !guard ||
+                !selection_current(capture)) return std::nullopt;
+            context->MoveTo(point.x,point.y,view,false);
+            const auto id=context->HasDetected()
+                ? entity_id_for_presentation(context->DetectedInteractive()) : QString{};
+            if ((editing || toggle) && id.isEmpty()) return QString{};
+            if (!selection_current(capture)) return std::nullopt;
+            // Preserve selected groups on their first plain click, as Qt sends
+            // that release before a possible double-click. Context uses this
+            // same policy; its selected member never replaces the group.
+            const bool retained=!toggle && !id.isEmpty() && selected_entity_ids.contains(id);
+            if (!retained) {
+                auto next=toggle ? selected_entity_ids : QStringList{};
+                if (toggle && next.contains(id)) next.removeAll(id);
+                else if (!id.isEmpty()) next.append(id);
+                const auto clicked=owner->onEntitySelectionClicked;
+                const auto legacy=owner->onEntitySelected;
+                owner->setSelectedEntities(next);
+                if (!guard) return id;
+                if (clicked) clicked(id,toggle);
+                else if (legacy) legacy(toggle && !next.contains(id) ? QString{} : id);
+            }
+            if (guard && editing && !id.isEmpty()) {
+                const auto callback=owner->onEntityEditRequested;
+                if (callback) callback(id);
+            }
+            return id;
+        } catch (const Standard_Failure& error) {
+            if (guard) show_input_error(QStringLiteral("3D selection failed: ")+exception_text(error));
+        } catch (const std::exception& error) {
+            if (guard) show_input_error(QStringLiteral("3D selection failed: ")+exception_text(error));
+        } catch (...) {
+            if (guard) show_input_error(QStringLiteral("3D selection failed: unknown failure"));
+        }
+        return std::nullopt;
+    }
+
+    void select_rectangle(const QPointF& start, const QPointF& end, const SelectionCapture& capture) {
+        const QPointer<NativeModelView> guard(owner);
+        try {
+            if (!selection_current(capture) || !owner->admitSceneInput(false) || !guard ||
+                !selection_current(capture)) return;
+            const auto first=input_point(start), last=input_point(end);
+            const auto selector=context->MainSelector();
+            const auto previous_overlap=selector->GetManager().IsOverlapAllowed();
+            struct RestoreOverlap {
+                occ::handle<StdSelect_ViewerSelector3d> selector;
+                bool previous;
+                ~RestoreOverlap() { try { selector->AllowOverlapDetection(previous); } catch (...) {} }
+            } restore_overlap{selector,previous_overlap};
+            selector->AllowOverlapDetection(end.x()<start.x());
+            context->SelectRectangle(NCollection_Vec2<int>(std::min(first.x,last.x),std::min(first.y,last.y)),
+                NCollection_Vec2<int>(std::max(first.x,last.x),std::max(first.y,last.y)),view,AIS_SelectionScheme_Replace);
+            std::set<QString> selected;
+            for (context->InitSelected();context->MoreSelected();context->NextSelected()) {
+                const auto id=entity_id_for_presentation(context->SelectedInteractive());
+                if (!id.isEmpty()) selected.insert(id);
+            }
+            restore_selection_highlights();
+            if (!selection_current(capture)) return;
+            QStringList hits;
+            auto next=selected_entity_ids;
+            for (const auto& id : selected) {
+                hits.append(id);
+                if (!next.contains(id)) next.append(id);
+            }
+            const auto callback=owner->onEntitiesSelected;
+            const auto legacy=owner->onEntitySelected;
+            owner->setSelectedEntities(next);
+            if (!guard) return;
+            if (callback) callback(hits,true);
+            else if (legacy && !hits.isEmpty()) legacy(hits.back());
+        } catch (const Standard_Failure& error) {
+            if (guard) {
+                try { restore_selection_highlights(); } catch (...) {}
+                show_input_error(QStringLiteral("3D marquee selection failed: ")+exception_text(error));
+            }
+        } catch (const std::exception& error) {
+            if (guard) {
+                try { restore_selection_highlights(); } catch (...) {}
+                show_input_error(QStringLiteral("3D marquee selection failed: ")+exception_text(error));
+            }
+        } catch (...) {
+            if (guard) {
+                try { restore_selection_highlights(); } catch (...) {}
+                show_input_error(QStringLiteral("3D marquee selection failed: unknown failure"));
+            }
+        }
     }
 
     bool export_view_image(const QString& path) {
@@ -967,16 +1076,11 @@ public:
         const bool restore_manipulator = !manipulator.IsNull() && manipulator->IsAttached();
         const int control_display_mode = restore_manipulator && manipulator->HasDisplayMode()
             ? manipulator->DisplayMode() : context->DisplayMode();
-        const auto highlighted_id = selected_entity_id;
-        const auto restore_controls = [this, restore_manipulator, control_display_mode, highlighted_id] {
+        const auto restore_controls = [this, restore_manipulator, control_display_mode] {
             try {
                 if (restore_manipulator && !context.IsNull())
                     context->MainPrsMgr()->SetVisibility(manipulator, control_display_mode, true);
-                if (highlighted_id.has_value() && !context.IsNull()) {
-                    const auto found = solids.find(*highlighted_id);
-                    if (found != solids.end() && context->IsDisplayed(found->second.presentation))
-                        context->SetSelected(found->second.presentation, false);
-                }
+                restore_selection_highlights();
                 return true;
             } catch (...) {
                 show_operation_error(QStringLiteral("3D export could not restore editing controls. Refresh the model view."));
@@ -1046,6 +1150,11 @@ NativeModelView::NativeModelView(QWidget* parent)
     setAttribute(Qt::WA_NoSystemBackground, true);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
 
+    m_impl->selection_rectangle = new QFrame(this);
+    m_impl->selection_rectangle->setAttribute(Qt::WA_TransparentForMouseEvents,true);
+    m_impl->selection_rectangle->setStyleSheet(QStringLiteral(
+        "QFrame { border: 1px solid #64b5f6; background: rgba(100, 181, 246, 35); }"));
+    m_impl->selection_rectangle->hide();
     m_impl->status_label = new QLabel(this);
     m_impl->status_label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     m_impl->status_label->setWordWrap(true);
@@ -1125,51 +1234,44 @@ void NativeModelView::fitAll() {
 }
 
 void NativeModelView::setSelectedEntity(const QString& entity_id) {
-    const auto id = entity_id.trimmed().toStdString();
-    const auto solid = m_impl->solids.find(id);
-    // Prepared catalog children are real semantic presentations even though
-    // their authoritative record lives inside an assembly_model entity.
-    // Transform admission still validates that captured catalog instance.
-    if (id.empty() || !m_impl->snapshot ||
-        (!m_impl->snapshot->entities().contains(id) && solid==m_impl->solids.end())) {
-        m_impl->selected_entity_id.reset();
-        m_impl->detach_manipulator();
-        if (m_impl->native_ready && !m_impl->context.IsNull())
-            m_impl->context->ClearSelected(false);
-        if (m_impl->native_ready && !m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
-        return;
+    setSelectedEntities(entity_id.trimmed().isEmpty() ? QStringList{} : QStringList{entity_id});
+}
+
+void NativeModelView::setSelectedEntities(const QStringList& entity_ids) {
+    QStringList normalized;
+    for (const auto& raw : entity_ids) {
+        const auto id=raw.trimmed();
+        if (!id.isEmpty() && !normalized.contains(id)) normalized.append(id);
     }
-    m_impl->selected_entity_id = id;
-    if (!m_impl->supports_direct_transform(id)) {
-        m_impl->detach_manipulator();
-        if (!m_impl->context.IsNull()) {
-            m_impl->context->ClearSelected(false);
-            if (solid != m_impl->solids.end() && !solid->second.presentation.IsNull() &&
-                m_impl->context->IsDisplayed(solid->second.presentation))
-                m_impl->context->AddOrRemoveSelected(solid->second.presentation, false);
-        }
-        if (!m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
-        return;
-    }
+    if (normalized!=m_impl->selected_entity_ids) cancelInteraction();
+    m_impl->selected_entity_ids=normalized;
+    m_impl->selected_entity_id=normalized.isEmpty() ? std::nullopt
+        : std::optional<std::string>{normalized.back().toStdString()};
+    const QPointer<NativeModelView> guard(this);
     try {
+        m_impl->restore_selection_highlights();
         m_impl->attach_manipulator();
+        if (m_impl->native_ready && !m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
     } catch (const Standard_Failure& error) {
-        m_impl->detach_manipulator();
-        m_impl->show_operation_error(QStringLiteral("3D transform controls unavailable: ") +
-                                     exception_text(error));
+        if (guard) {
+            m_impl->detach_manipulator();
+            m_impl->show_operation_error(QStringLiteral("3D selection controls unavailable: ")+exception_text(error));
+        }
     } catch (const std::exception& error) {
-        m_impl->detach_manipulator();
-        m_impl->show_operation_error(QStringLiteral("3D transform controls unavailable: ") +
-                                     exception_text(error));
+        if (guard) {
+            m_impl->detach_manipulator();
+            m_impl->show_operation_error(QStringLiteral("3D selection controls unavailable: ")+exception_text(error));
+        }
     } catch (...) {
-        m_impl->detach_manipulator();
-        m_impl->show_operation_error(
-            QStringLiteral("3D transform controls unavailable: unknown failure"));
+        if (guard) {
+            m_impl->detach_manipulator();
+            m_impl->show_operation_error(QStringLiteral("3D selection controls unavailable: unknown failure"));
+        }
     }
 }
 
 bool NativeModelView::transformControlsVisible() const noexcept {
-    return m_impl->selected_entity_id.has_value() &&
+    return m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
            m_impl->manipulator_entity_id == m_impl->selected_entity_id &&
            !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
 }
@@ -1230,6 +1332,14 @@ void NativeModelView::setEntitySelectedCallback(std::function<void(QString)> cal
     onEntitySelected = std::move(callback);
 }
 
+void NativeModelView::setEntitySelectionClickedCallback(std::function<void(QString, bool)> callback) {
+    onEntitySelectionClicked=std::move(callback);
+}
+
+void NativeModelView::setEntitiesSelectedCallback(std::function<void(QStringList, bool)> callback) {
+    onEntitiesSelected=std::move(callback);
+}
+
 void NativeModelView::setEntityEditRequestedCallback(std::function<void(QString)> callback) {
     onEntityEditRequested = std::move(callback);
 }
@@ -1254,10 +1364,11 @@ void NativeModelView::setGeometryStatusChangedCallback(std::function<void(QStrin
 
 bool NativeModelView::beginMove(const QString& entity_id) {
     cancelInteraction();
-    if (!isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
+    if (m_impl->selected_entity_ids.size()>1 || !isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
     const auto found = m_impl->solids.find(entity_id.toStdString());
     if (found == m_impl->solids.end() ||
         !m_impl->context->IsDisplayed(found->second.presentation)) return false;
+    m_impl->selected_entity_ids=QStringList{entity_id};
     m_impl->selected_entity_id = entity_id.toStdString();
     m_impl->detach_manipulator();
     m_impl->translation_entity_id = entity_id.toStdString();
@@ -1301,6 +1412,10 @@ std::optional<std::array<double, 12>> NativeModelView::nativePresentationTransfo
 }
 
 void NativeModelView::cancelInteraction() {
+    resetInteraction(true);
+}
+
+void NativeModelView::resetInteraction(bool restore_controls) {
     if (!m_impl->manipulator.IsNull()) {
         try {
             if (m_impl->manipulator->HasActiveTransformation())
@@ -1311,13 +1426,15 @@ void NativeModelView::cancelInteraction() {
     }
     m_impl->manipulation_transform.reset();
     m_impl->gesture_snapshot.reset();
+    m_impl->selection_capture.reset();
+    if (m_impl->selection_rectangle) m_impl->selection_rectangle->hide();
     m_impl->clear_translation_preview();
     m_impl->gesture = Impl::Gesture::none;
     m_impl->initiating_button = Qt::NoButton;
     m_impl->left_moved = false;
     m_impl->translation_entity_id.reset();
     m_impl->translation_start.reset();
-    try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
+    if (restore_controls) { try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); } }
     unsetCursor();
     if (m_impl->native_ready && !m_impl->view.IsNull()) m_impl->view->Redraw();
 }
@@ -1326,10 +1443,24 @@ bool NativeModelView::event(QEvent* event) {
     if (m_impl && (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
                    event->type() == QEvent::WindowDeactivate || event->type() == QEvent::FocusOut)) {
         cancelInteraction();
+        if (event->type()!=QEvent::UngrabMouse) m_impl->space_pan_armed=false;
+    }
+    if (event->type()==QEvent::ShortcutOverride &&
+        static_cast<QKeyEvent*>(event)->key()==Qt::Key_Space) {
+        event->accept();
+        return true;
+    }
+    if ((event->type()==QEvent::KeyPress || event->type()==QEvent::KeyRelease) &&
+        static_cast<QKeyEvent*>(event)->key()==Qt::Key_Space) {
+        const auto* key=static_cast<QKeyEvent*>(event);
+        if (!key->isAutoRepeat()) m_impl->space_pan_armed=event->type()==QEvent::KeyPress;
+        event->accept();
+        return true;
     }
     if (event->type() == QEvent::KeyPress &&
         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
         cancelInteraction();
+        m_impl->space_pan_armed=false;
         event->accept();
         return true;
     }
@@ -1385,9 +1516,15 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
     m_impl->left_press = logical_point;
     m_impl->left_moved = false;
     if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton ||
-        (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::ControlModifier))) {
+        (event->button()==Qt::LeftButton && m_impl->space_pan_armed)) {
         // Camera changes invalidate an armed Move's view-plane anchor.
         cancelInteraction();
+        if (event->button()==Qt::RightButton && isReady()) {
+            m_impl->detach_manipulator();
+            m_impl->view->Redraw();
+            m_impl->selection_capture=m_impl->capture_selection();
+            m_impl->gesture_snapshot=m_impl->published_snapshot;
+        }
         m_impl->initiating_button = event->button();
         m_impl->gesture = event->button() == Qt::RightButton ? Impl::Gesture::orbit : Impl::Gesture::pan;
         m_impl->navigation_start = QPoint(point.x, point.y);
@@ -1405,6 +1542,17 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
             return;
         }
         if (!admitSceneInput(true)) { event->accept(); return; }
+        if (event->modifiers().testFlag(Qt::ControlModifier)) {
+            cancelInteraction();
+            m_impl->detach_manipulator();
+            m_impl->view->Redraw();
+            m_impl->initiating_button=Qt::LeftButton;
+            m_impl->gesture=Impl::Gesture::additive_select;
+            m_impl->selection_capture=m_impl->capture_selection();
+            m_impl->gesture_snapshot=m_impl->published_snapshot;
+            event->accept();
+            return;
+        }
         m_impl->initiating_button = Qt::LeftButton;
         const auto capture_transform = [this](const QString& target) {
             m_impl->gesture_snapshot = m_impl->published_snapshot;
@@ -1440,6 +1588,10 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
             return;
         }
         m_impl->gesture = isMoveActive() ? Impl::Gesture::move : Impl::Gesture::select;
+        if (m_impl->gesture==Impl::Gesture::select) {
+            m_impl->selection_capture=m_impl->capture_selection();
+            m_impl->gesture_snapshot=m_impl->published_snapshot;
+        }
         m_impl->translation_start.reset();
         if (m_impl->gesture == Impl::Gesture::move) {
             if (!capture_transform(QString::fromStdString(*m_impl->translation_entity_id))) {
@@ -1460,6 +1612,7 @@ void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
     const bool can_edit = isReady() && event->button() == Qt::LeftButton &&
                           event->buttons() == Qt::LeftButton &&
                           event->modifiers() == Qt::NoModifier &&
+                          !m_impl->space_pan_armed &&
                           m_impl->initiating_button == Qt::NoButton;
     cancelInteraction();
     if (can_edit && admitSceneInput(true)) {
@@ -1467,6 +1620,9 @@ void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
         // for the semantic edit pick so a real double-click never targets the
         // derived control instead of its document object.
         m_impl->detach_manipulator();
+        m_impl->view->Redraw();
+        m_impl->selection_capture=m_impl->capture_selection();
+        m_impl->gesture_snapshot=m_impl->published_snapshot;
         m_impl->gesture = Impl::Gesture::edit;
         m_impl->initiating_button = Qt::LeftButton;
         m_impl->left_press = event->position();
@@ -1490,6 +1646,23 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
     if (m_impl->initiating_button != Qt::NoButton &&
         (logical_point - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
         m_impl->left_moved = true;
+    if (m_impl->gesture==Impl::Gesture::additive_select) {
+        const QPointer<NativeModelView> guard(this);
+        if (!m_impl->selection_capture || !m_impl->selection_current(*m_impl->selection_capture) ||
+            !admitSceneInput(false)) {
+            if (guard) guard->cancelInteraction();
+            event->accept();
+            return;
+        }
+        if (m_impl->left_moved) {
+            const auto rectangle=QRectF(m_impl->left_press,logical_point).normalized().toAlignedRect().intersected(rect());
+            m_impl->selection_rectangle->setGeometry(rectangle);
+            m_impl->selection_rectangle->show();
+            m_impl->selection_rectangle->raise();
+        }
+        event->accept();
+        return;
+    }
     if (m_impl->gesture == Impl::Gesture::orbit) {
         if (m_impl->left_moved) m_impl->view->Rotation(point.x, point.y);
         event->accept();
@@ -1535,23 +1708,37 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
     const QPointer<NativeModelView> owner_guard(this);
+    struct CommitSourceReset {
+        QPointer<NativeModelView> owner;
+        ~CommitSourceReset() { if (owner) owner->m_impl->commit_snapshot.reset(); }
+    } reset_source{owner_guard};
     const auto point = m_impl->input_point(event->position());
     if ((event->position() - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
         m_impl->left_moved = true;
     if (m_impl->gesture == Impl::Gesture::orbit || m_impl->gesture == Impl::Gesture::pan) {
         const bool context_click = m_impl->gesture == Impl::Gesture::orbit && !m_impl->left_moved;
         const auto global_position = event->globalPosition().toPoint();
-        cancelInteraction();
+        const auto capture=m_impl->selection_capture;
+        resetInteraction(!context_click);
         const auto callback = onContextMenuRequested;
         event->accept();
         if (context_click) {
+            if (!capture || !m_impl->selection_current(*capture)) { cancelInteraction(); return; }
             if (!admitSceneInput(true)) return;
-            const auto target = m_impl->select_at(point);
-            if (owner_guard && callback) callback(target, global_position);
+            m_impl->commit_snapshot=capture->source;
+            m_impl->detach_manipulator();
+            const auto target = m_impl->select_at(point,*capture);
+            if (owner_guard) {
+                try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
+            }
+            if (owner_guard && target && callback) callback(*target, global_position);
         }
         return;
     }
     if (event->button() == Qt::LeftButton) {
+        const auto capture=m_impl->selection_capture;
+        const auto selection_start=m_impl->left_press;
+        const auto was_additive=m_impl->gesture==Impl::Gesture::additive_select;
         const auto was_edit = m_impl->gesture == Impl::Gesture::edit && !m_impl->left_moved;
         const auto was_click = m_impl->gesture == Impl::Gesture::select && !m_impl->left_moved;
         const auto was_translation = m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
@@ -1560,6 +1747,14 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         const auto was_manipulation = m_impl->gesture == Impl::Gesture::manipulate &&
                                       m_impl->left_moved &&
                                       m_impl->manipulator_entity_id.has_value();
+        if ((was_additive || was_edit || was_click) &&
+            (!capture || !m_impl->selection_current(*capture))) {
+            cancelInteraction();
+            m_impl->show_input_error(QStringLiteral("The displayed 3D source, selection or camera changed. Start selection again."));
+            event->accept();
+            return;
+        }
+        const auto selection_drag=m_impl->left_moved;
         std::optional<NativeModelView::Impl::WorldPoint> end_world;
         if (was_translation) {
             end_world = m_impl->world_point(point);
@@ -1571,19 +1766,24 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         const auto manipulation_id = m_impl->manipulator_entity_id;
         const auto manipulation_transform = m_impl->manipulation_transform;
         const auto gesture_source = m_impl->gesture_snapshot;
-        cancelInteraction();
+        resetInteraction(!(was_additive || was_edit || was_click));
         // Reset even when an observer throws; the shell can read only this
         // actual press capture, never the newest requested snapshot.
-        struct CommitSourceReset {
-            QPointer<NativeModelView> owner;
-            ~CommitSourceReset() {
-                if (owner) owner->m_impl->commit_snapshot.reset();
-            }
-        } reset_source{owner_guard};
+
         m_impl->commit_snapshot = gesture_source;
+        if (was_additive) {
+            m_impl->detach_manipulator();
+            if (selection_drag) m_impl->select_rectangle(selection_start,event->position(),*capture);
+            else (void)m_impl->select_at(point,*capture,false,true);
+            if (owner_guard) {
+                try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
+            }
+            event->accept();
+            return;
+        }
         if (was_edit && isReady()) {
             m_impl->detach_manipulator();
-            m_impl->select_at(point, true);
+            (void)m_impl->select_at(point,*capture,true);
             if (!owner_guard) { event->accept(); return; }
             try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
             event->accept();
@@ -1639,7 +1839,7 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
             }
         }
         if (was_click) {
-            m_impl->select_at(point);
+            (void)m_impl->select_at(point,*capture);
         }
         event->accept();
         return;
