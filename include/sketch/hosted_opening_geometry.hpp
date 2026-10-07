@@ -15,6 +15,13 @@ namespace sketch {
 // drag can display a candidate which admission will subsequently reject.
 [[nodiscard]] Vec2 point_at_host_station(const Segment& host, double station_metres);
 
+// Snap a signed station to the nearest lattice from host station zero, with
+// half increments rounded away from zero. A zero increment returns the exact
+// input unchanged. Finite stations and finite nonnegative increments are
+// required; unrepresentable arithmetic throws std::invalid_argument. No host
+// bounds are applied, preserving the existing admission checks after snapping.
+[[nodiscard]] double quantize_host_station(double station_metres, double increment_metres);
+
 // Line projection is unclamped. Arc projection ignores radial displacement,
 // choosing the unwrapped station nearest reference_station_metres; the centre
 // has no unique projection and is rejected. Invalid/unrepresentable inputs to

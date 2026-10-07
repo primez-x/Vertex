@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 hosted placement station magnets
+
+Initial door, window and doorway placement now uses the practical length
+increment for the current zoom and units. The starting jamb's measured station
+snaps along the actual host independently of raw XY input or label rounding.
+An analytical station projection replaces sampled curved-wall searching.
+Hover, click and hosted library drag/drop use the same station proposal before
+the existing full-width, sibling and wall admission checks. No bounds or
+overlaps are silently repaired by the station quantizer.
+
+Canvas input retains actual pointer, pen, touch and library-event modifiers;
+Shift supplies fine placement and Snap off supplies free placement. Modifier
+changes retire transient artwork serials, and both worker capture types reject
+an obsolete increment. A stationary Shift change refreshes an armed placement.
+Opening body and jamb edits reuse the same bounded arithmetic helper while
+retaining their previous anchor and endpoint behavior. Independent source
+review found a Shift path bypassing the existing Space-tap cancellation;
+non-Space cancellation now precedes modifier dispatch, and the corrected
+source was accepted. These source changes
+have not been compiled or exercised. No build, test, probe, native job, launch,
+package or installation ran; manual checks remain Not tested and the installed
+candidate is unchanged.
+
 ### October 7 roof footprint corner editing
 
 Independent shed, gable and hip roofs now expose round grips at their actual

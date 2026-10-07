@@ -5248,6 +5248,7 @@ class MainWindow::Impl {
         double width{};
         double sill{};
         double height{};
+        double station_increment{};
         OpeningAssembly assembly;
         std::optional<DoorOperation> operation;
         bool bare_opening{};
@@ -33495,7 +33496,10 @@ public:
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& visible_entities,
         Vec2 model_point,Vec2 displayed_point,double width,const std::string& layer_id,
         const std::optional<DrawingContext>& architectural_context,
-        const std::map<QString,SitePresentationPlacement>* site_frames=nullptr) {
+        const std::map<QString,SitePresentationPlacement>* site_frames=nullptr,
+        double station_increment=0.0) {
+        if (!std::isfinite(station_increment) || station_increment<0.0)
+            throw std::invalid_argument("The opening placement increment must be finite and nonnegative.");
         std::map<std::string,std::vector<const Entity*>,std::less<>> openings;
         for (const auto& [id,entity]:source.entities()) {
             (void)id;
@@ -33534,28 +33538,18 @@ public:
                 frame=found->second;point=site_source_plan_point(displayed_point,*frame);
             }
             const auto& baseline=candidate.baseline;
-            const auto distance=[&](double fraction) {
-                const auto target=point_at_segment(baseline,fraction).value();
-                return std::hypot(point.x-target.x,point.y-target.y);
-            };
-            double fraction{};
-            if (baseline.sweep_radians==0.0) {
-                const auto dx=baseline.end.x-baseline.start.x,dy=baseline.end.y-baseline.start.y;
-                fraction=std::clamp(((point.x-baseline.start.x)*dx+(point.y-baseline.start.y)*dy)/(dx*dx+dy*dy),0.0,1.0);
-            } else {
-                for (int index=1;index<=64;++index)
-                    if (distance(index/64.0)<distance(fraction)) fraction=index/64.0;
-                auto low=std::max(0.0,fraction-1.0/64.0),high=std::min(1.0,fraction+1.0/64.0);
-                for (int iteration=0;iteration<40;++iteration) {
-                    const auto a=std::lerp(low,high,1.0/3.0),b=std::lerp(low,high,2.0/3.0);
-                    if (distance(a)<distance(b)) high=b;else low=a;
-                }
-                fraction=std::midpoint(low,high);
-            }
-            const auto separation=distance(fraction);
+            double station{},separation{};
+            try {
+                const auto length=segment_length(baseline);
+                station=std::clamp(project_host_station(baseline,point,length*.5),0.0,length);
+                const auto target=point_at_host_station(baseline,station);
+                separation=std::hypot(point.x-target.x,point.y-target.y);
+            } catch (const std::exception&) { continue; }
             if (separation>std::max(.15,candidate.thickness*.5) || separation>=nearest) continue;
             nearest=separation;
-            const auto offset=fraction*segment_length(baseline)-width*.5;
+            // Snap the starting jamb's station, not the wall's arbitrary XY
+            // location or the displayed label. Fit and sibling checks follow.
+            const auto offset=quantize_host_station(station-width*.5,station_increment);
             result=VisibleOpeningHost{owner->second,std::move(candidate),offset,std::move(frame)};
         }
         return result;
@@ -33672,7 +33666,8 @@ public:
         const HostedLibraryDragInput& input,Vec2 point) {
         const auto model=input.plan_frame ? unproject_plan_point(point,*input.plan_frame) : point;
         const auto placement=visibleOpeningHostAt(*input.source,input.visible,model,point,input.width,
-            input.layer_id,input.architectural_context,input.site_frames ? &*input.site_frames : nullptr);
+            input.layer_id,input.architectural_context,input.site_frames ? &*input.site_frames : nullptr,
+            input.station_increment);
         if (!placement) return std::nullopt;
         auto host=placement->wall;
         const auto length=segment_length(host.baseline);
@@ -33713,7 +33708,8 @@ public:
             if (!capture || capture!=m_library_drag_capture || !capture->canvas || !capture->authority ||
                 !capture->source || !capture->canvas->isVisible() || !sourceEditAuthorityCurrent(*capture->authority) ||
                 m_boundary_session || m_linework_drawing || (m_pending_wall_start && !m_wall_chain_has_segments) ||
-                capture->canvas!=(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas)) return false;
+                capture->canvas!=(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) ||
+                (capture->opening && capture->opening->station_increment!=capture->canvas->placementLengthIncrementMetres())) return false;
             const auto& viewport=capture->viewport;
             const auto center=capture->canvas->viewCenter();
             return viewport.canvas==capture->canvas && center.x==viewport.center.x && center.y==viewport.center.y &&
@@ -33791,7 +33787,8 @@ public:
                 m_pending_wall_start || !m_pending_symbol_id.isEmpty() ||
                 capture->canvas!=(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) ||
                 capture->site!=siteCanvas(capture->canvas) ||
-                capture->configuration!=openingPlacementConfiguration()) return false;
+                capture->configuration!=openingPlacementConfiguration() ||
+                capture->input->station_increment!=capture->canvas->placementLengthIncrementMetres()) return false;
             if (capture->site) {
                 requireSitePublicationCurrent();
                 if (capture->input->source!=m_site_opening_source || capture->authority!=m_site_opening_authority ||
@@ -33904,6 +33901,7 @@ public:
             input.width=parse_quantity(m_opening_draw_width->text().toStdString(),unit).metres;
             input.height=parse_quantity(m_opening_draw_height->text().toStdString(),unit).metres;
             input.sill=parse_quantity(m_opening_draw_sill->text().toStdString(),unit).metres;
+            input.station_increment=canvas->placementLengthIncrementMetres();
             if (!std::isfinite(input.width) || input.width<=0 || !std::isfinite(input.height) || input.height<=0 ||
                 !std::isfinite(input.sill) || input.sill<0)
                 throw std::invalid_argument("Width and height must be positive; sill cannot be negative.");
@@ -33975,6 +33973,7 @@ public:
                 const bool window=definition->category=="10_windows";
                 input.width=catalog_opening_width(*definition)*scale;
                 input.sill=window ? .9 : 0.0;input.height=window ? 1.2 : 2.1;
+                input.station_increment=canvas->placementLengthIncrementMetres();
                 input.assembly=catalog_opening_assembly(window ? QStringLiteral("window") : QStringLiteral("door"),id);
                 if (input.assembly.window_layout==WindowLayoutKind::bay) input.assembly.window_bay_projection_m*=scale;
                 input.operation=catalog_door_operation(*definition);
@@ -47109,7 +47108,8 @@ private:
             const auto active_context=architectural ? organize_project(snapshot).drawing_context(m_active_layer_id.toStdString()) : std::optional<DrawingContext>{};
             if (architectural && !active_context) throw std::invalid_argument("The captured opening layer is unavailable.");
             const auto placement=visibleOpeningHostAt(snapshot,canvas->entities(),point,displayed_point,width,
-                m_active_layer_id.toStdString(),active_context,site ? &m_site_opening_frames : nullptr);
+                m_active_layer_id.toStdString(),active_context,site ? &m_site_opening_frames : nullptr,
+                canvas->placementLengthIncrementMetres());
             if (placement) {
                 auto host=placement->wall;
                 const auto offset=placement->offset;

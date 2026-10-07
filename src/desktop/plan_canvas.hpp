@@ -466,6 +466,9 @@ public:
     // Current screen grid increment, shared by painting and interactive snap.
     [[nodiscard]] double gridSpacingMetres() const noexcept;
     [[nodiscard]] double drawingLengthIncrementMetres() const noexcept;
+    // Hosted placement uses a distance along its wall, independently of raw
+    // XY input. Snap off or Shift disables its practical length increment.
+    [[nodiscard]] double placementLengthIncrementMetres() const noexcept;
     // Read-only length labels share practical inch fractions or metric units.
     // An approximation marker distinguishes rounded display from exact geometry.
     [[nodiscard]] static QString drawingLengthText(double metres, bool metric);
@@ -702,6 +705,7 @@ private:
     [[nodiscard]] bool admitInteraction(bool context = false);
     void notifyNavigationChanged(Vec2 previous_center, double previous_scale);
     void clearSymbolDragPreview();
+    void updatePlacementModifiers(Qt::KeyboardModifiers modifiers);
     [[nodiscard]] bool updateSymbolDragPreview(const QMimeData* mime, QPointF position);
     [[nodiscard]] std::optional<Vec2> symbolDropPoint(const QString& id, QPointF position);
     using PerformanceClock = std::chrono::steady_clock;
@@ -1043,6 +1047,7 @@ private:
     bool m_snap_enabled{true};
     bool m_wall_snap_enabled{false};
     bool m_raw_point_input{false};
+    Qt::KeyboardModifiers m_placement_modifiers{};
     bool m_overview_map_enabled{true};
     bool m_metric_units{false};
     QColor m_canvas_background{248, 250, 252};

@@ -297,6 +297,17 @@ Vec2 point_at_host_station(const Segment& host, double station_metres) {
     return point_at(host,host_geometry(host),station_metres);
 }
 
+double quantize_host_station(double station_metres, double increment_metres) {
+    require(std::isfinite(station_metres) && std::isfinite(increment_metres) &&
+        increment_metres >= 0, "Hosted opening station quantization requires finite station and nonnegative increment");
+    if (increment_metres == 0) return station_metres;
+    const double lattice_station = station_metres/increment_metres;
+    require(std::isfinite(lattice_station), "Hosted opening station quantization exceeds numeric range");
+    const double result = std::round(lattice_station)*increment_metres;
+    require(std::isfinite(result), "Hosted opening station quantization exceeds numeric range");
+    return result;
+}
+
 double project_host_station(const Segment& host, Vec2 point, double reference_station_metres) {
     const auto geometry = host_geometry(host);
     require(finite(point) && std::isfinite(reference_station_metres),

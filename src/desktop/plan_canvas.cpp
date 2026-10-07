@@ -2428,7 +2428,7 @@ void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers 
                         const auto step = drawingLengthIncrementMetres();
                         if (!std::isfinite(step) || step <= 0.0)
                             throw std::invalid_argument("Invalid opening station increment");
-                        offset = std::round(offset / step) * step;
+                        offset = quantize_host_station(offset,step);
                     }
                     offset = std::clamp(offset, 0.0, maximum_offset);
                 }
@@ -2669,6 +2669,7 @@ bool PlanCanvas::updateSymbolDragPreview(const QMimeData* mime, QPointF position
 }
 
 void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
+    updatePlacementModifiers(event->modifiers());
     m_pending_dimension_space_tap.reset();
     if(event->mimeData()->hasFormat(area_class_mime_type)) {
         clearSymbolDragPreview();
@@ -2682,6 +2683,7 @@ void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
 }
 
 void PlanCanvas::dragMoveEvent(QDragMoveEvent* event) {
+    updatePlacementModifiers(event->modifiers());
     m_pending_dimension_space_tap.reset();
     if(event->mimeData()->hasFormat(area_class_mime_type)) {
         clearSymbolDragPreview();
@@ -2700,6 +2702,7 @@ void PlanCanvas::dragLeaveEvent(QDragLeaveEvent* event) {
 }
 
 void PlanCanvas::dropEvent(QDropEvent* event) {
+    updatePlacementModifiers(event->modifiers());
     m_pending_dimension_space_tap.reset();
     clearSymbolDragPreview();
     const auto serial = m_symbol_drag_preview_serial;
@@ -3053,6 +3056,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     // buttons cannot retarget or complete the gesture that owns the press.
     if (m_gesture_button != Qt::NoButton && (m_panning || !middle_pan)) return;
     resetGesture();
+    updatePlacementModifiers(modifiers);
     if (middle_pan || (button == Qt::LeftButton && overviewMapRect().contains(position)))
         beginPerformanceMeasurement(PerformanceMetric::navigation);
     setFocus();
@@ -3229,6 +3233,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
+    updatePlacementModifiers(modifiers);
     m_pending_dimension_space_tap.reset();
     if (m_overview_dragging) {
         (void)navigateOverviewMap(position);
@@ -3379,6 +3384,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                                Qt::KeyboardModifiers modifiers) {
     m_pending_dimension_space_tap.reset();
     if (button != m_gesture_button) return;
+    updatePlacementModifiers(modifiers);
     if (m_overview_dragging) {
         // Apply the final map location even when the platform omitted a move,
         // then leave the authoring cursor and draft exactly as they were.
@@ -4608,7 +4614,7 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers 
             m_snap_enabled && !m_raw_point_input && !m_opening_width_preview_fine) {
             const auto step = drawingLengthIncrementMetres();
             if (!std::isfinite(step) || step <= 0.0) return;
-            width = std::round(width / step) * step;
+            width = quantize_host_station(width,step);
         }
         const auto moving_station = handle.keep_start_jamb
             ? offset + width : offset + original_width - width;
@@ -5447,6 +5453,16 @@ void PlanCanvas::wheelEvent(QWheelEvent* event) {
 
 void PlanCanvas::keyPressEvent(QKeyEvent* event) {
     if (event->key() != Qt::Key_Space) m_pending_dimension_space_tap.reset();
+    if (event->key()==Qt::Key_Shift && !event->isAutoRepeat()) {
+        const bool library_drag=m_symbol_drag_active;
+        auto modifiers=event->modifiers();modifiers.setFlag(Qt::ShiftModifier,true);
+        updatePlacementModifiers(modifiers);
+        const QPointer<PlanCanvas> guard(this);
+        if (!library_drag && m_gesture_button==Qt::NoButton && m_last_mouse_position)
+            updateCursor(*m_last_mouse_position);
+        if (!guard) return;
+        event->accept();return;
+    }
     if (hasFocus() && event->modifiers() == Qt::NoModifier && !event->isAutoRepeat() &&
         drawingCommandIdle() && !m_point_placement_requested && selectedIds().isEmpty() &&
         (m_tool == CanvasTool::select || m_tool == CanvasTool::wall || m_tool == CanvasTool::boundary)) {
@@ -5630,6 +5646,16 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
 }
 
 void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
+    if (event->key()==Qt::Key_Shift && !event->isAutoRepeat()) {
+        const bool library_drag=m_symbol_drag_active;
+        auto modifiers=event->modifiers();modifiers.setFlag(Qt::ShiftModifier,false);
+        updatePlacementModifiers(modifiers);
+        const QPointer<PlanCanvas> guard(this);
+        if (!library_drag && m_gesture_button==Qt::NoButton && m_last_mouse_position)
+            updateCursor(*m_last_mouse_position);
+        if (!guard) return;
+        event->accept();return;
+    }
     if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
         const auto tap = std::exchange(m_pending_dimension_space_tap, std::nullopt);
         m_space_pan_armed = false;
@@ -5687,6 +5713,21 @@ double PlanCanvas::drawingLengthIncrementMetres() const noexcept {
         for (const auto multiple : {1.0,2.0,5.0})
             if (decade*multiple>=minimum) return decade*multiple;
     return decade;
+}
+
+double PlanCanvas::placementLengthIncrementMetres() const noexcept {
+    return !m_snap_enabled || m_placement_modifiers.testFlag(Qt::ShiftModifier)
+        ? 0.0 : drawingLengthIncrementMetres();
+}
+
+void PlanCanvas::updatePlacementModifiers(Qt::KeyboardModifiers modifiers) {
+    const bool was_fine=m_placement_modifiers.testFlag(Qt::ShiftModifier);
+    m_placement_modifiers=modifiers;
+    if (was_fine==modifiers.testFlag(Qt::ShiftModifier)) return;
+    // Modifier-only changes retire worker artwork even at the same pointer
+    // coordinates. A later event starts a proposal with the new policy.
+    clearComponentPlacementPreview();
+    clearSymbolDragPreview();
 }
 
 QString PlanCanvas::drawingLengthText(double metres, bool metric) {
