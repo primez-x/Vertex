@@ -4378,6 +4378,26 @@ Wall opening_plan_host(const DocumentSnapshot& source,const Entity& opening) {
     return wall;
 }
 
+void retain_opening_plan_controls(CanvasEntity& entity,const HostedOpeningResizeFrame& frame,
+                                  std::uint64_t revision) {
+    entity.opening_width_controls=CanvasOpeningWidthControls{frame.start_jamb,frame.end_jamb,
+        frame.width_metres,frame.height_metres,revision,frame.host_baseline,frame.offset_metres};
+    entity.hit_segments={hosted_opening_span(frame.host_baseline,frame.offset_metres,frame.width_metres)};
+    entity.resize_frame.reset();
+    if (entity.segments.empty()) {entity.opening_width_controls.reset();return;}
+    const auto c=std::cos(frame.angle_radians),s=std::sin(frame.angle_radians);
+    auto local=entity.segments;
+    for (auto& edge:local) {
+        edge.start={c*edge.start.x+s*edge.start.y,-s*edge.start.x+c*edge.start.y};
+        edge.end={c*edge.end.x+s*edge.end.y,-s*edge.end.x+c*edge.end.y};
+    }
+    const auto bounds=boundary_bounds(local);
+    const auto x=std::midpoint(bounds.minimum.x,bounds.maximum.x);
+    const auto y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
+    entity.resize_frame=CanvasSelectionFrame{{c*x-s*y,s*x+c*y},frame.angle_radians,
+        bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+}
+
 // Full semantic opening support is required before offering analytical jamb
 // handles. A partially depth-clipped object keeps its real native outline.
 void project_horizontal_opening_plan(CanvasEntity& entity,const Entity& owner,
@@ -5254,6 +5274,7 @@ class MainWindow::Impl {
         std::shared_ptr<const SiteTransformPreviewCapture> site_wall_move_capture;
         std::shared_ptr<std::optional<Command>> site_wall_move_command;
         std::shared_ptr<std::optional<Command>> physical_rotation_command;
+        QStringList move_selection_ids;
     };
 
 public:
@@ -7241,9 +7262,30 @@ public:
         return {source.revision(),std::move(changes),{},"Transform boundary"};
     }
 
+    static QStringList translationModelRoots(const DocumentSnapshot& source,QStringList model_ids) {
+        std::set<std::string,std::less<>> selected_walls;
+        for (const auto& id:model_ids) {
+            const auto found=source.entities().find(id.toStdString());
+            if (found!=source.entities().end() && found->second.type=="wall") selected_walls.insert(found->first);
+        }
+        model_ids.erase(std::remove_if(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+            const auto found=source.entities().find(id.toStdString());
+            if (found==source.entities().end() || found->second.type!="opening") return false;
+            std::string host,error;
+            if (!read_document_wall_id(found->second,host,error)) throw std::invalid_argument(error);
+            if (!selected_walls.contains(host))
+                throw std::invalid_argument("Move the opening on its own along the wall, or select its host wall to move this group.");
+            // The wall's native command already owns its cuts and children.
+            // Selecting an opening as well must not add a second movement.
+            return true;
+        }),model_ids.end());
+        return model_ids;
+    }
+
     static Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
         QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {},
         std::optional<Vec2> presentation_delta = std::nullopt) {
+        model_ids=translationModelRoots(source,std::move(model_ids));
         const auto movement_error = [](const ConstraintAuthoringPreview& preview) {
             std::string message;
             for (const auto& diagnostic : preview.diagnostics()) {
@@ -7481,6 +7523,14 @@ public:
             (void)Document::preview_command(source,movement);
             return movement;
         }
+        if (changes.empty() && !model_ids.isEmpty() &&
+            std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+                return source.entities().at(id.toStdString()).type=="wall";
+            }) && std::none_of(graph.begin(),graph.end(),[](const auto& item) {
+                return is_closed_boundary_entity(item.type) || item.type=="measurement_linework";
+            }))
+            return wallGeometryCommand(source,wallTranslationIntent(source,model_ids,offset).targets,
+                "Move walls and connected corners");
         std::vector<BoundaryTranslation> translations;
         std::vector<std::string> walls;
         std::vector<ArchitecturalOperation> operations;
@@ -20278,7 +20328,7 @@ public:
             return found != source.entities().end() && (found->second.type == "reference_asset" ||
                 can_recognize_boundary_dimension_entity_type(found->second.type));
         }),model_ids.end());
-        return {std::move(model_ids),std::move(presentation_changes),model_delta};
+        return {translationModelRoots(source,std::move(model_ids)),std::move(presentation_changes),model_delta};
     }
 
 
@@ -21321,7 +21371,8 @@ public:
                         [&](const auto& value) { return value.id==entity.id; });
                     if (opening==host.openings.end()) return std::nullopt;
                     const auto kind=entity.properties.value("opening_kind",std::string{});
-                    if (shape_projection) {
+                    const bool horizontal_plan=!view_context || horizontal_plan_frame(view_context->frame);
+                    if (shape_projection && !horizontal_plan) {
                         proposed.segments = project_architectural_view_shape(make_opening_view_shape(entity, host),
                             BuildingViewKind::plan, *view_context).value_or(Boundary{});
                         world_paths = false;
@@ -21342,6 +21393,16 @@ public:
                         proposed.segments={outline.at(1),outline.at(3),span};
                     }
                     proposed.holes.clear();
+                    proposed.stroke_segments.reset();
+                    proposed.hit_segments.clear(); proposed.snap_segments.clear(); proposed.snap_points.clear();
+                    proposed.vertex_handles.clear(); proposed.resize_frame.reset();
+                    proposed.opening_width_controls.reset();
+                    if (horizontal_plan && source.is_editable())
+                        retain_opening_plan_controls(proposed,hosted_opening_resize_frame(candidate_snapshot,entity.id),source.revision());
+                    if (view_context && horizontal_plan) {
+                        project_horizontal_opening_plan(proposed,entity,host,*opening,*view_context);
+                        world_paths=false;
+                    }
                 } else continue;
                 if (view_context && world_paths) {
                     proposed.segments = project_plan_path(std::move(proposed.segments), view_context->frame);
@@ -21691,6 +21752,27 @@ public:
         }
     }
 
+    static void retainNoOpMovePresentations(VertexPreviewProjection& projection,
+        const DocumentSnapshot& source,const DocumentSnapshot& candidate,
+        const std::vector<CanvasEntity>& retained,const std::vector<CanvasLabel>& labels,
+        const QStringList& ids) {
+        // Property equality of one opening is insufficient: its unchanged
+        // station can move with its host. Prove the entire source is unchanged.
+        if (source.entities()!=candidate.entities()) return;
+        QSet<QString> selected;
+        for (const auto& id:ids) selected.insert(id);
+        std::set<std::pair<QString,QString>> presentations;
+        for (const auto& entity:projection.entities) presentations.emplace(entity.id,entity.presentation_key);
+        for (const auto& entity:retained)
+            if (selected.contains(entity.id) && presentations.emplace(entity.id,entity.presentation_key).second)
+                projection.entities.push_back(entity);
+        std::set<QString> callouts;
+        for (const auto& label:projection.labels) callouts.insert(plan_label_instance_key(label));
+        for (const auto& label:labels)
+            if (selected.contains(label.id) && callouts.insert(plan_label_instance_key(label)).second)
+                projection.labels.push_back(label);
+    }
+
     void startVertexPreviewJob(PendingVertexPreview request) {
         const auto source=request.source;
         const auto retained=request.retained;
@@ -21719,8 +21801,9 @@ public:
         const auto axis_angle=request.axis_resize_model_angle;
         const auto axis_command=request.axis_resize_command;
         const auto rotation_command=request.physical_rotation_command;
+        const auto move_selection_ids=request.move_selection_ids;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,site_wall_command,rotation_command]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,site_wall_command,rotation_command,move_selection_ids]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (site_wall_move && site_wall_command) {
@@ -21840,6 +21923,8 @@ public:
                     } else if (entities_move_candidate) {
                         *result=computeConstraintGeometryProjection(*source,*entities_move_candidate,*retained,
                             *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,label_font,site_input.get());
+                        if (*result && !move_selection_ids.isEmpty())
+                            retainNoOpMovePresentations(**result,*source,*entities_move_candidate,*retained,*labels,move_selection_ids);
                         if (*result && rigid_transform) {
                             for (auto& proposed : (**result).entities) {
                                 const auto original=std::find_if(retained->begin(),retained->end(),[&](const auto& item){return item.id==proposed.id;});
@@ -21868,12 +21953,17 @@ public:
                             }
                         }
                     } else if (wall_move) {
-                        ConstraintAuthoringIntent intent;
-                        intent.wall_geometry_move=*wall_move;
-                        const auto preview=preview_constraint_authoring(*source,intent);
-                        if (preview.accepted() && !cancellation.is_cancelled())
-                            *result=computeConstraintGeometryProjection(*source,preview_constraint_authoring_snapshot(*source,preview),*retained,
+                        // The connected solver reports unchanged targets as
+                        // an unaccepted intent. Admit that exact no-op through
+                        // the same source-bound command as a committed move.
+                        const auto command=wallGeometryCommand(*source,wall_move->targets,"Preview wall movement");
+                        if (!cancellation.is_cancelled()) {
+                            const auto candidate=Document::preview_command(*source,command);
+                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,label_font,site_input.get());
+                            if (*result && !move_selection_ids.isEmpty())
+                                retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,move_selection_ids);
+                        }
                     } else *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
                         *label_footprints,*component_bounds,id,vertex,position,view_context,label_font,
                         endpoint_command ? endpoint_command.get() : nullptr,site_input.get());
@@ -22786,7 +22876,8 @@ public:
         }
         if (!m_vertex_preview_source || !m_vertex_preview_authority || !sourceEditAuthorityCurrent(*m_vertex_preview_authority) || fullSnapshotDigest(*m_vertex_preview_source)!=fullSnapshotDigest(*m_wall_move_source))
             return std::vector<CanvasEntity>{};
-        const bool only_walls=std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
+        const auto model_roots=translationModelRoots(*m_vertex_preview_source,ids);
+        const bool only_walls=!model_roots.isEmpty() && std::all_of(model_roots.begin(),model_roots.end(),[&](const auto& id) {
             const auto found=m_vertex_preview_source->entities().find(id.toStdString());
             return found!=m_vertex_preview_source->entities().end() && found->second.type=="wall";
         });
@@ -22805,8 +22896,9 @@ public:
             m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,{}, {}, {},
             m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),
             std::nullopt};
+        request.move_selection_ids=ids;
         try {
-            if (only_walls) request.wall_geometry_move=wallTranslationIntent(*m_vertex_preview_source,ids,delta);
+            if (only_walls) request.wall_geometry_move=wallTranslationIntent(*m_vertex_preview_source,model_roots,delta);
             else {
                 auto parts=prepareSelectionTranslation(*m_vertex_preview_source,ids,canvas_delta,canvas,&m_wall_move_frame);
                 const auto command=makeSelectionGeometryTranslationCommand(*m_vertex_preview_source,
@@ -23365,19 +23457,7 @@ public:
                         preview.segments={outline.at(1),outline.at(3),span};
                     } else return std::nullopt;
                     preview.stroke_segments.reset();preview.holes.clear();
-                    preview.hit_segments={hosted_opening_span(wall.baseline,opening.offset,opening.width)};
-                    preview.opening_width_controls=CanvasOpeningWidthControls{frame.start_jamb,frame.end_jamb,frame.width_metres,
-                        frame.height_metres,source.revision(),frame.host_baseline,frame.offset_metres};
-                    const auto c=std::cos(frame.angle_radians),s=std::sin(frame.angle_radians);
-                    auto local=preview.segments;
-                    for(auto& edge:local) {
-                        edge.start={c*edge.start.x+s*edge.start.y,-s*edge.start.x+c*edge.start.y};
-                        edge.end={c*edge.end.x+s*edge.end.y,-s*edge.end.x+c*edge.end.y};
-                    }
-                    const auto bounds=boundary_bounds(local);
-                    const auto x=std::midpoint(bounds.minimum.x,bounds.maximum.x),y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
-                    preview.resize_frame=CanvasSelectionFrame{{c*x-s*y,s*x+c*y},frame.angle_radians,
-                        bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+                    retain_opening_plan_controls(preview,frame,source.revision());
                     if(view_context) project_horizontal_opening_plan(preview,original,wall,opening,*view_context);
                     result.push_back(std::move(preview));
                 }
@@ -38872,7 +38952,9 @@ private:
                         const auto found=m_wall_move_source->entities().find(id.toStdString());
                         return !m_site_edit_annotation_targets.contains(id) && found!=m_wall_move_source->entities().end() &&
                             (can_transform_architectural_entity_type(found->second.type) ||
-                             is_closed_boundary_entity(found->second.type) || found->second.type=="measurement_linework") &&
+                             is_closed_boundary_entity(found->second.type) || found->second.type=="measurement_linework" ||
+                             (found->second.type=="opening" && m_wall_move_ids.contains(id_from(
+                                 read_string(found->second.properties,"wall_id").value_or(""))))) &&
                             !geometric_assembly_for_child(*m_wall_move_source,id.toStdString());
                     })) {
                     (void)annotation_selection_owners(*m_wall_move_source,m_wall_move_ids);

@@ -14,6 +14,22 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 grouped wall and opening movement
+
+Selecting a wall together with its hosted doors or windows now moves the host
+once; the openings retain their stations rather than receiving a second move.
+Wall-only roots use the connected-wall command after the complete exterior and
+deduction branches, preserving adjoining corners and measured-area ownership.
+Ordinary and Site proposals retain the full displayed selection. Moving an
+opening with an unrelated group explains that its host must be selected.
+
+Candidate opening geometry now refreshes jambs, host stations and selection
+axes in the candidate source before applying horizontal plan presentation.
+Returning a drag exactly to its origin retains unchanged selected geometry and
+callouts; the connected worker admits the empty command without adding history.
+Independent source review accepted both repairs. No runtime qualification or
+new build was performed, and the installed candidate remains unchanged.
+
 ### October 7 hosted opening body movement
 
 Source now connects selected door, window and doorway body drags to an exact

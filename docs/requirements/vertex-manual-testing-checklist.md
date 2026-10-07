@@ -1752,6 +1752,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Draw two connected walls and place a window in the first. Select the first wall, then drag inside its blue selection frame. Watch the adjoining wall and window before releasing. Undo, redo, save and reopen.
   - Expected: Both endpoints of the selected wall move together. The adjoining shared corner follows; its other endpoint stays in place unless another declared relationship requires movement. Its length updates in the preview. The window stays in its host at the same offset and width. One undo restores the whole edit; reopening preserves the result.
   - Also try: Move to one location, then release at a slightly different one. The released position determines the completed move. Press Escape during a drag; no preview geometry is saved.
+  - Also try: Ctrl-click the first wall and its window together, move them and return to the starting position before release. The opening follows its host once, the jamb handles follow the preview, and returning exactly to the start adds no Undo entry. Repeat in Site and a rotated saved plan.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
