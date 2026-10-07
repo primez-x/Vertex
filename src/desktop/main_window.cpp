@@ -24353,21 +24353,19 @@ public:
                     command = constraint_authoring_verified_command(source, *preview, nullptr);
                 }
             } else {
-                auto properties = selected->second.properties;
+                auto edited = selected->second;
                 const auto key = target_is("opening.width") ? "width_m"
                     : target_is("wall.height") || target_is("opening.height") || target_is("room.height")
                         ? "height_m"
                     : target_is("wall.thickness") || target_is("slab.thickness")
                         ? "thickness_m" : "elevation_m";
-                properties[key] = quantity.metres;
-                std::map<std::string, std::string> encoded;
-                for (const auto& [name, value] : properties.items()) encoded.emplace(name, value.dump());
-                const auto transaction = ArchitecturalTransaction::create(new_id("measurement-tx"),
-                    std::to_string(source.revision()), {selected->first},
-                    {ArchitecturalOperation{ArchitecturalAction::property_edit, selected->first,
-                        {}, {}, std::move(encoded), std::nullopt}}, "Apply measurement");
-                command = augmentAuthoredCommand(architectural_transaction_command(
-                    source, transaction, source.revision()), source);
+                edited.properties[key] = quantity.metres;
+                // Scalar input already has one complete detached owner. Admit
+                // its geometry below once, after authored consequences, instead
+                // of generating the same native solids twice through a property
+                // transaction and then the required measured-owner check.
+                command = augmentAuthoredCommand(ApplyEntityChanges{source.revision(),
+                    {EntityChange::upsert(std::move(edited))}, {}, "Apply measurement"}, source);
             }
 
             const auto geometry = Document::preview_command(source, command);

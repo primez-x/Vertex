@@ -154,6 +154,37 @@ corrects source-level quantization; it does not establish the cause or resolutio
 of the previously observed 96/192-DPI glyph-bound failure. No build, test-suite
 run or candidate package was generated for these edits.
 
+The following source batch admits changed canonical roofs, columns, beams and
+standalone railings through their existing native codecs. Only authored
+geometry/placement fields trigger that work; opaque properties and nested roof
+opening metadata remain preserved. The original canonical owner also
+participates in recognition, so corrupting its schema markers cannot bypass
+validation. Changed roofs and changed join membership check the completed fused
+roof join. Independent review identified that dependency gap and a material-only
+join regression; both were corrected. Material assignment and its schema-only
+upgrade retain the non-geometric path. Direct floor/building/property ownership
+changes also participate in physical placement checks for walls, slabs and rooms.
+
+Scalar device measurements now build the same detached owner change directly,
+then perform the shared required-owner check once before composing the
+observation. They no longer repeat solid generation through an intermediate
+property transaction. The typed wall-length solve, explicit replacement policy,
+one-command history and final source authority fence remain intact. Root source
+review confirms the property-merge equivalence; this source batch is not yet
+compiled or observed at runtime.
+
+Wall-axis resize and hosted opening width resize now share the completed-host
+validator. The wall route no longer overlooks default door/window frames; the
+opening route replaces its duplicate property transaction and local native
+validator with the equivalent detached scalar change and one required-owner
+check. Existing aliases, quantity receipts, jamb anchors, no-op preview and
+single-command history remain. Typed door operations still reach the native
+assembly factory, which rejects a window carrying a door operation. The plan
+resize target now links the shared architectural adapter. These source changes
+passed independent integrated source review, including the material-only join
+correction and the CMake dependency direction. They have not been compiled,
+linked or exercised in the application.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

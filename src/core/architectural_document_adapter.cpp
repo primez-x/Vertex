@@ -40,6 +40,74 @@ bool canonical_hosted_railing(const Entity& entity) {
         canonical_form(entity,"railing",3,"stair_landing_railing");
 }
 
+bool canonical_independent_building(const Entity& entity) {
+    return canonical_form(entity,"column",1,"rectangular_column") ||
+        canonical_form(entity,"column",1,"circular_column") ||
+        canonical_form(entity,"beam",1,"straight_beam") ||
+        canonical_form(entity,"railing",1,"straight_railing") ||
+        canonical_form(entity,"roof",1,"sloped_roof_panel") ||
+        canonical_form(entity,"roof",2,"sloped_roof_panel") ||
+        canonical_form(entity,"roof",1,"gable_roof") ||
+        canonical_form(entity,"roof",2,"gable_roof") ||
+        canonical_form(entity,"roof",1,"hip_roof") ||
+        canonical_form(entity,"roof",2,"hip_roof");
+}
+
+bool geometry_fields_changed(const nlohmann::json& original,
+                             const nlohmann::json& current,
+                             std::initializer_list<const char*> fields) {
+    for (const auto* key : fields) {
+        const auto old = original.find(key), value = current.find(key);
+        if ((old == original.end()) != (value == current.end()) ||
+            (old != original.end() && *old != *value)) return true;
+    }
+    return false;
+}
+
+bool building_property_geometry_changed(const Entity* before, const Entity& after) {
+    // Retain the original owner's admission even if an edit corrupts both
+    // schema markers. Incomplete/future transport records remain opaque.
+    if (!canonical_independent_building(after) &&
+        (!before || !canonical_independent_building(*before))) return false;
+    if (!before || before->type != after.type ||
+        canonical_independent_building(*before) != canonical_independent_building(after)) return true;
+    const auto changed = [&](std::initializer_list<const char*> fields) {
+        return geometry_fields_changed(before->properties, after.properties, fields);
+    };
+    if (changed({"version", "form", "vertical_placement", "layer_id", "floor_id",
+                 "building_id", "property_id"})) return true;
+    if (after.type == "column") {
+        if (changed({"base_center_m", "height_m", "rotation_rad"})) return true;
+        return after.properties.at("form") == "rectangular_column"
+            ? changed({"width_m", "depth_m"}) : changed({"radius_m"});
+    }
+    if (after.type == "beam")
+        return changed({"start_m", "end_m", "up_dir", "width_m", "depth_m"});
+    if (after.type == "railing")
+        return changed({"base_position_m", "orientation_rad", "length_m", "height_m",
+                        "thickness_m", "post_spacing_m", "host"});
+    if (changed({"base_position_m", "orientation_rad", "span_m", "rise_m", "pitch_rad",
+                 "overhang_m", "thickness_m"})) return true;
+    if (after.properties.at("form") == "sloped_roof_panel"
+            ? changed({"run_m"}) : changed({"length_m"})) return true;
+    const auto old = before->properties.find("roof_openings");
+    const auto current = after.properties.find("roof_openings");
+    if ((old == before->properties.end()) != (current == after.properties.end())) return true;
+    if (old == before->properties.end()) return false;
+    if (!old->is_array() || !current->is_array()) return *old != *current;
+    if (old->size() != current->size()) return true;
+    for (std::size_t index = 0; index < old->size(); ++index) {
+        const auto& original = old->at(index);
+        const auto& value = current->at(index);
+        if (!original.is_object() || !value.is_object()) {
+            if (original != value) return true;
+        } else if (geometry_fields_changed(original, value, {"id", "x_m", "y_m", "width_m", "depth_m"})) {
+            return true;
+        }
+    }
+    return false; // Opaque nested opening metadata does not regenerate roof solids.
+}
+
 std::string join_member_type(ArchitecturalJoinKind kind) {
     switch (kind) {
     case ArchitecturalJoinKind::wall: return "wall";
@@ -771,6 +839,37 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
     if (!command.entity_changes.empty()) {
         const auto preview=Document::preview_command(source,command);
         validate_architectural_geometry_changes(source, preview);
+        std::set<std::string, std::less<>> changed_roofs, changed_roof_joins;
+        for (const auto& change : command.entity_changes) {
+            if (change.kind != EntityChangeKind::upsert) continue;
+            const auto& entity = preview.entities().at(change.entity.id);
+            const auto found = source.entities().find(entity.id);
+            const auto* before = found == source.entities().end() ? nullptr : &found->second;
+            if (entity.type == "roof_join" && (!before || geometry_fields_changed(
+                before->properties, entity.properties, {"style", "roof_ids"})))
+                changed_roof_joins.insert(entity.id);
+            if (!building_property_geometry_changed(before, entity)) continue;
+            // Decode already admits native geometry for these independent
+            // forms. Resolve placement on the completed authored candidate;
+            // hosted conversions retain the host-map admission below.
+            (void)decode_building_entity(resolve_vertical_placement(preview, entity));
+            if (entity.type == "roof") changed_roofs.insert(entity.id);
+        }
+        if (!changed_roofs.empty() || !changed_roof_joins.empty()) {
+            for (const auto& [id, entity] : preview.entities()) {
+                if (entity.type != "roof_join") continue;
+                const auto join = parse_roof_join(entity.properties, id);
+                if (!changed_roof_joins.contains(id) && std::none_of(join.roof_ids.begin(), join.roof_ids.end(),
+                    [&](const auto& member) { return changed_roofs.contains(member); })) continue;
+                std::vector<TopoDS_Shape> members;
+                members.reserve(join.roof_ids.size());
+                for (const auto& member_id : join.roof_ids) {
+                    const auto effective = resolve_vertical_placement(preview, preview.entities().at(member_id));
+                    members.push_back(make_building_shape(decode_building_entity(effective)));
+                }
+                (void)make_roof_join(join, members);
+            }
+        }
         for (const auto& [id,entity] : preview.entities()) {
             (void)id;
             if (!canonical_stair(entity) && !canonical_hosted_railing(entity)) continue;
@@ -826,17 +925,19 @@ void validate_architectural_geometry_changes(
         if (entity.type == "wall")
             physical_change = changed(before, entity, {"baseline", "thickness_m", "thickness",
                 "height_m", "height", "elevation_m", "elevation", "slope_rise_m", "slope_rise",
-                "layers", "vertical_placement", "layer_id"});
+                "layers", "vertical_placement", "layer_id", "floor_id", "building_id", "property_id"});
         else if (entity.type == "opening")
             physical_change = changed(before, entity, {"wall_id", "offset_m", "offset", "width_m",
                 "width", "sill_m", "sill", "height_m", "height", "opening_kind",
                 "opening_assembly", "door_operation"});
         else if (entity.type == "slab")
             physical_change = changed(before, entity, {"boundary", "holes", "thickness_m", "thickness",
-                "elevation_m", "elevation", "layers", "element_kind", "vertical_placement", "layer_id"});
+                "elevation_m", "elevation", "layers", "element_kind", "vertical_placement", "layer_id",
+                "floor_id", "building_id", "property_id"});
         else if (entity.type == "room")
             physical_change = changed(before, entity, {"boundary", "segments", "holes", "height_m",
-                "height", "elevation_m", "elevation", "vertical_placement", "layer_id"});
+                "height", "elevation_m", "elevation", "vertical_placement", "layer_id",
+                "floor_id", "building_id", "property_id"});
         if (!physical_change) continue;
         if (entity.type == "opening" && before && before->properties.contains("wall_id") &&
             !entity.properties.contains("wall_id"))
@@ -922,7 +1023,7 @@ void validate_architectural_geometry_changes(
             if (hosted == wall.openings.end())
                 throw std::invalid_argument("The edited opening lost its wall host: " + opening->id);
             std::optional<DoorOperation> operation;
-            if (assembly->kind == OpeningAssemblyKind::door && opening->properties.contains("door_operation"))
+            if (opening->properties.contains("door_operation"))
                 operation = decode_door_operation(opening->properties.at("door_operation"));
             (void)make_opening_assembly(wall, *hosted, *assembly, operation);
         }

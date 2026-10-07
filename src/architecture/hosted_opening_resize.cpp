@@ -90,38 +90,6 @@ void invalidate_changed_quantity_entries(const Entity& before, Entity& after) {
     after.properties["quantity_entries"] = std::move(retained);
 }
 
-void validate_generated_host(const DocumentSnapshot& preview, const std::string& wall_id) {
-    const auto openings = hosted_openings(preview,wall_id);
-    const auto wall = decode_host(preview,wall_id,openings);
-    (void)make_wall(wall);
-    for (std::size_t i=0; i<openings.size(); ++i) {
-        const auto& entity = *openings[i];
-        const auto kind = entity.properties.find("opening_kind");
-        const auto explicit_assembly = entity.properties.find("opening_assembly");
-        std::optional<OpeningAssembly> assembly;
-        if (explicit_assembly != entity.properties.end()) assembly = parse_opening_assembly(*explicit_assembly);
-        else if (kind != entity.properties.end() && kind->is_string()) {
-            const auto parsed = parse_opening_assembly_kind(kind->get<std::string>());
-            if (parsed) assembly = default_opening_assembly(*parsed);
-        }
-        if (!assembly) continue; // Generic wall cuts have no manufactured frame.
-        std::optional<DoorOperation> operation;
-        if (entity.properties.contains("door_operation"))
-            operation = decode_door_operation(entity.properties.at("door_operation"));
-        (void)make_opening_assembly(wall,wall.openings[i],*assembly,operation);
-    }
-
-    // The resized cut also participates in each source wall's derived join.
-    for (const auto& [id,entity] : preview.entities()) {
-        if (entity.type != "wall_join") continue;
-        const auto join = parse_wall_join(entity.properties,id);
-        if (std::find(join.wall_ids.begin(),join.wall_ids.end(),wall_id) == join.wall_ids.end()) continue;
-        std::vector<Wall> members;
-        for (const auto& member_id : join.wall_ids)
-            members.push_back(decode_host(preview,member_id,hosted_openings(preview,member_id)));
-        (void)make_wall_join(join,members);
-    }
-}
 } // namespace
 
 HostedOpeningResizeFrame hosted_opening_resize_frame(const DocumentSnapshot& source,
@@ -158,21 +126,14 @@ ApplyEntityChanges hosted_opening_width_resize_command(const DocumentSnapshot& s
         set_dimension(candidate.properties,"offset_m","offset",offset);
         invalidate_changed_quantity_entries(original,candidate);
     }
-    ArchitecturalOperation operation{ArchitecturalAction::property_edit,opening_id,{}, {},{},std::nullopt};
-    // A property transaction retains exact entity identity/extensions and
-    // does not replace typed receipts or derived proofs elsewhere in history.
-    for (const auto& [key,value] : candidate.properties.items())
-        if (!original.properties.contains(key) || original.properties.at(key) != value)
-            operation.properties.emplace(key,value.dump());
+    // The scalar owner copy is the exact property-merge result, including
+    // aliases, retained receipts, identity and opaque metadata/extensions.
     ApplyEntityChanges command{source.revision(),{}, {},"Resize hosted opening width"};
-    if (!operation.properties.empty()) {
-        const auto transaction = ArchitecturalTransaction::create("hosted-opening-width-resize",
-            std::to_string(source.revision()),{opening_id},{std::move(operation)},command.message);
-        command = architectural_transaction_command(source,transaction,source.revision());
-    }
+    if (candidate != original)
+        command.entity_changes.push_back(EntityChange::upsert(std::move(candidate)));
     // Even a no-op must prove source editability and complete host geometry.
     const auto preview = Document::preview_command(source,command);
-    validate_generated_host(preview,host.wall.id);
+    validate_architectural_geometry_changes(source,preview,{opening_id});
     return command;
 }
 } // namespace sketch

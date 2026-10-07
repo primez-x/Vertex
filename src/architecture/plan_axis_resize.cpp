@@ -1,5 +1,6 @@
 #include "sketch/plan_axis_resize.hpp"
 
+#include "sketch/architectural_document_adapter.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
@@ -281,42 +282,20 @@ TopoDS_Shape entity_shape(const Entity& entity) {
     return make_building_shape(decode_building_entity(entity));
 }
 
-void validate_dependent_geometry(const DocumentSnapshot& preview, const std::string& changed_id) {
+void validate_dependent_geometry(const DocumentSnapshot& source,
+                                 const DocumentSnapshot& preview, const std::string& changed_id) {
     const auto& changed = preview.entities().at(changed_id);
-    const auto resolved = resolve_vertical_placement(preview,changed);
     if (changed.type == "wall") {
-        const auto openings = hosted_openings(preview,changed_id);
-        Wall wall;
-        std::string error;
-        if (!read_document_wall(resolved,openings,wall,error)) throw std::invalid_argument(error);
-        (void)make_wall(wall);
-        for (std::size_t i=0; i<openings.size(); ++i) {
-            const auto assembly = openings[i]->properties.find("opening_assembly");
-            if (assembly == openings[i]->properties.end()) continue;
-            std::optional<DoorOperation> operation;
-            if (openings[i]->properties.contains("door_operation"))
-                operation = decode_door_operation(openings[i]->properties.at("door_operation"));
-            (void)make_opening_assembly(wall,wall.openings[i],parse_opening_assembly(*assembly),operation);
-        }
-    } else (void)entity_shape(resolved);
+        // The shared boundary admits every sibling's explicit/default frame
+        // and affected fused wall joins against the completed candidate.
+        validate_architectural_geometry_changes(source,preview,{changed_id});
+        return;
+    }
+    (void)entity_shape(resolve_vertical_placement(preview,changed));
 
-    // A source-member resize must not leave a formerly valid fused join with
-    // disconnected or otherwise inadmissible geometry.
+    // Roof-dependent admission remains on its existing native path.
     for (const auto& [id,entity] : preview.entities()) {
-        if (changed.type == "wall" && entity.type == "wall_join") {
-            const auto join = parse_wall_join(entity.properties,id);
-            if (std::find(join.wall_ids.begin(),join.wall_ids.end(),changed_id) == join.wall_ids.end()) continue;
-            std::vector<Wall> walls;
-            for (const auto& member : join.wall_ids) {
-                Wall wall;
-                std::string error;
-                const auto member_entity = resolve_vertical_placement(preview,preview.entities().at(member));
-                if (!read_document_wall(member_entity,hosted_openings(preview,member),wall,error))
-                    throw std::invalid_argument(error);
-                walls.push_back(std::move(wall));
-            }
-            (void)make_wall_join(join,walls);
-        } else if (changed.type == "roof" && entity.type == "roof_join") {
+        if (changed.type == "roof" && entity.type == "roof_join") {
             const auto join = parse_roof_join(entity.properties,id);
             if (std::find(join.roof_ids.begin(),join.roof_ids.end(),changed_id) == join.roof_ids.end()) continue;
             std::vector<TopoDS_Shape> shapes;
@@ -454,7 +433,7 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
     if (result != original) command.entity_changes.push_back(EntityChange::upsert(std::move(result)));
     if (!command.entity_changes.empty()) {
         const auto preview = Document::preview_command(source,command);
-        validate_dependent_geometry(preview,entity_id);
+        validate_dependent_geometry(source,preview,entity_id);
         if (original.type=="stair") {
             for (const auto& [id,entity] : preview.entities()) {
                 const auto& p=entity.properties;
