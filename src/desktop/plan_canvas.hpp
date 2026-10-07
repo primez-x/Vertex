@@ -87,6 +87,10 @@ struct CanvasSelectionFrame {
     double rotation_radians{};
     double width_metres{};
     double depth_metres{};
+    // Optional authored angle for a projected model object. Its presented
+    // angle may be shifted or reflected; snapping and readouts use the source.
+    std::optional<double> source_rotation_radians;
+    double source_rotation_direction{1.0};
 };
 
 // Semantic, screen-only opening controls. The jamb points lie on the host
@@ -161,6 +165,9 @@ struct CanvasEntity {
     // Derived profile identity within one semantic edit target. Empty retains
     // legacy single-presentation matching; picking and callbacks use id.
     QString presentation_key;
+    // Physical model-plan annotations are projected with their source axes.
+    // Legacy symbols retain saved view-overlay XY when false.
+    bool model_plan{false};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -413,6 +420,9 @@ public:
     [[nodiscard]] const std::optional<BoundaryDraftPreview>& boundaryDraftPreview() const noexcept {
         return m_boundary_draft_preview;
     }
+    // A pending library component is never part of committed geometry,
+    // selection, snapping, content bounds, minimap, print or export.
+    void setComponentPlacementPreview(std::optional<CanvasEntity> preview);
     void clearPreview();
     void fitView();
     void zoomBy(double factor, QPointF anchor = {});
@@ -947,6 +957,7 @@ private:
     std::optional<WallDraftPreview> m_wall_preview;
     std::vector<DrawingWitness> m_drawing_witnesses;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;
+    std::optional<CanvasEntity> m_component_placement_preview;
     CanvasTool m_tool{CanvasTool::select};
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
@@ -994,6 +1005,8 @@ private:
     double m_axis_scale_x_preview{1.0};
     double m_axis_scale_y_preview{1.0};
     double m_transform_initial_rotation{};
+    std::optional<double> m_transform_source_rotation;
+    double m_transform_source_rotation_direction{1.0};
     QString m_transform_source_id;
     bool m_selection_controls_visible{true};
     Vec2 m_transform_pivot{};

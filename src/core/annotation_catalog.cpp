@@ -1158,6 +1158,8 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
         [](const auto& value) { return value.plan_label_offset.has_value() || value.inherit_appearance; });
     const auto model_plan = std::any_of(state.labels.begin(),state.labels.end(),
         [](const auto& label){return label.model_plan;});
+    const auto model_plan_symbols = std::any_of(state.symbols.begin(),state.symbols.end(),
+        [](const auto& symbol){return symbol.model_plan;});
     const auto wall_dimensions = std::any_of(state.overrides.begin(),state.overrides.end(),
         [](const auto& value){return value.target_kind == "wall_dimension" ||
             value.paper_text_height_mm.has_value() || value.plan_label_rotation_radians.has_value();});
@@ -1169,7 +1171,7 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
     const auto aligned = extended || std::any_of(state.labels.begin(),state.labels.end(),[](const auto& l){return l.style.text_alignment!="center";}) ||
         std::any_of(state.symbols.begin(),state.symbols.end(),[](const auto& s){return s.style.text_alignment!="center";}) ||
         std::any_of(state.overrides.begin(),state.overrides.end(),[](const auto& o){return area_role(o.target_kind)||o.style.text_alignment!="center";});
-    json j{{"version",extended ? 9 : aligned ? 8 : svg_palettes ? 7 : wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
+    json j{{"version",model_plan_symbols ? 10 : extended ? 9 : aligned ? 8 : svg_palettes ? 7 : wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) {
         json label{{"id",l.id},{"template_id",l.template_id},{"content",l.content},
@@ -1186,6 +1188,7 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
             {"pinned_svg",s.pinned_svg}, {"width_scale",s.width_scale}, {"depth_scale",s.depth_scale},
             {"flip_horizontal",s.flip_horizontal}, {"flip_vertical",s.flip_vertical}});
         if (s.svg_palette) j["symbols"].back()["svg_palette"] = encode_svg_palette(*s.svg_palette);
+        if (s.model_plan) j["symbols"].back()["model_plan"] = true;
     }
     for (const auto& o : state.overrides) {
         json value{{"target_kind",o.target_kind},{"target_id",o.target_id},
@@ -1208,12 +1211,13 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
         check(j.at("version").is_number_integer() &&
                   (j.at("version") == 1 || j.at("version") == 2 ||
                    j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5 ||
-                   j.at("version") == 6 || j.at("version") == 7 || j.at("version") == 8 || j.at("version") == 9),
+                   j.at("version") == 6 || j.at("version") == 7 || j.at("version") == 8 || j.at("version") == 9 ||
+                   j.at("version") == 10),
               "Unsupported annotation version");
         const bool pinned = j.at("version") != 1;
         const bool independent_transform = j.at("version").get<int>() >= 3;
         const bool aligned = j.at("version").get<int>() >= 8;
-        const bool extended = j.at("version") == 9;
+        const bool extended = j.at("version").get<int>() >= 9;
         const auto catalog_revision = j.contains("catalog_revision")
             ? j.at("catalog_revision")
             : json(kLegacySymbolCatalogRevision);
@@ -1232,9 +1236,12 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
         }
         for (const auto& s : j.at("symbols")) {
             const bool has_palette = s.contains("svg_palette");
+            const bool has_model_plan = s.contains("model_plan");
             check(!has_palette || j.at("version").get<int>() >= 7, "SVG palette requires annotation version 7 or later");
+            check(!has_model_plan || (j.at("version") == 10 && s.at("model_plan").is_boolean()),
+                  "Plan-anchored symbols require annotation version 10 and a boolean mode");
             check(s.is_object() && s.size() == (independent_transform ? 11 : pinned ? 7 : 5) +
-                      (has_palette ? 1 : 0),
+                      (has_palette ? 1 : 0) + (has_model_plan ? 1 : 0),
                   "Invalid symbol instance keys");
             SymbolInstance instance{s.at("id").get<std::string>(), s.at("symbol_id").get<std::string>(),
                 decode_placement(s.at("placement")),decode_style(s.at("style"),aligned,extended),s.at("visible").get<bool>()};
@@ -1245,6 +1252,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                 instance.flip_vertical = s.at("flip_vertical").get<bool>();
             }
             if (has_palette) instance.svg_palette = decode_svg_palette(s.at("svg_palette"));
+            instance.model_plan = s.value("model_plan",false);
             if (pinned) {
                 const auto& d = s.at("definition");
                 SymbolDefinition definition;

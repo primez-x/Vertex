@@ -886,12 +886,19 @@ void PlanCanvas::setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> pre
     update();
 }
 
+void PlanCanvas::setComponentPlacementPreview(std::optional<CanvasEntity> preview) {
+    if (preview) preview->selected = false;
+    m_component_placement_preview = std::move(preview);
+    update();
+}
+
 void PlanCanvas::clearPreview() {
     m_pending_dimension_space_tap.reset();
     m_boundary_preview.clear();
     m_wall_preview.reset();
     m_drawing_witnesses.clear();
     m_boundary_draft_preview.reset();
+    m_component_placement_preview.reset();
     update();
 }
 
@@ -1595,6 +1602,13 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     // Transient overlays belong to the interactive canvas only. Both fitted
     // and explicitly scaled output must contain document entities alone.
     if (interactive) {
+        if (m_component_placement_preview) {
+            painter.save();
+            painter.setOpacity(painter.opacity() * 0.6);
+            drawEntity(painter, *m_component_placement_preview, false, background,
+                       paper_pixels_per_mm);
+            painter.restore();
+        }
         if (m_boundary_preview.size() >= 2) {
             QPen pen(QColor(255, 220, 126), 0.0, Qt::DashLine);
             painter.setPen(pen);
@@ -2394,10 +2408,19 @@ bool PlanCanvas::event(QEvent* event) {
         resetTouchInput();
         m_tablet_active = false;
         break;
+    case QEvent::Leave:
+        // Leave retires only the hover image. The placement command remains
+        // armed and the next admitted cursor update supplies its new preview.
+        if (m_component_placement_preview) {
+            m_component_placement_preview.reset();
+            update();
+        }
+        break;
     case QEvent::Hide:
     case QEvent::WindowBlocked:
     case QEvent::WindowDeactivate:
     case QEvent::UngrabMouse:
+        m_component_placement_preview.reset();
         resetPerformanceMeasurements();
         resetGesture();
         m_space_pan_armed = false;
@@ -2656,6 +2679,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         const auto axes = selectionAxes();
         if (axes) m_transform_center = toScreen(axes->center, rect());
         m_transform_initial_rotation = axes ? axes->rotation_radians : 0.0;
+        m_transform_source_rotation = axes ? axes->source_rotation_radians : std::nullopt;
+        m_transform_source_rotation_direction = axes ? axes->source_rotation_direction : 1.0;
         m_transform_start = position;
         m_transform_scale_preview = 1.0;
         m_transform_rotation_preview = 0.0;
@@ -2824,13 +2849,16 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 if (std::hypot(current.x(), current.y()) > 1e-6) {
                     const auto delta = std::remainder(std::atan2(current.y(), current.x()) -
                         std::atan2(start.y(), start.x()), 2.0 * pi);
-                    auto absolute = m_transform_initial_rotation - delta;
+                    const auto initial = m_transform_source_rotation.value_or(m_transform_initial_rotation);
+                    const auto direction = m_transform_source_rotation
+                        ? m_transform_source_rotation_direction : 1.0;
+                    auto absolute = initial - delta * direction;
                     if (!modifiers.testFlag(Qt::ShiftModifier)) {
                         constexpr double step = pi / 4.0;
                         absolute = std::round(absolute / step) * step;
                     }
                     m_transform_rotation_preview = std::remainder(
-                        absolute - m_transform_initial_rotation, 2.0 * pi);
+                        (absolute - initial) * direction, 2.0 * pi);
                 }
                 setCursor(Qt::CrossCursor);
             }
@@ -3094,6 +3122,8 @@ void PlanCanvas::resetGesture() {
     m_transform_frame_start.reset();
     m_transform_scale_preview = 1.0;
     m_transform_rotation_preview = 0.0;
+    m_transform_source_rotation.reset();
+    m_transform_source_rotation_direction = 1.0;
     ++m_transform_preview_serial;
     m_transform_source_id.clear();
     m_transform_entities_preview.clear();
@@ -3288,8 +3318,13 @@ std::optional<CanvasSelectionFrame> PlanCanvas::entitySelectionAxes(const Canvas
         return std::isfinite(frame.center.x) && std::isfinite(frame.center.y) &&
             std::isfinite(frame.rotation_radians) && std::isfinite(frame.width_metres) &&
             std::isfinite(frame.depth_metres) && frame.width_metres >= 0 &&
-            frame.depth_metres >= 0 && (frame.width_metres > 0 || frame.depth_metres > 0);
+            frame.depth_metres >= 0 && (frame.width_metres > 0 || frame.depth_metres > 0) &&
+            (!frame.source_rotation_radians ||
+             (std::isfinite(*frame.source_rotation_radians) &&
+              (frame.source_rotation_direction == 1.0 || frame.source_rotation_direction == -1.0)));
     };
+    if (entity.resize_frame && entity.resize_frame->source_rotation_radians &&
+        valid(*entity.resize_frame)) return entity.resize_frame;
     if (entity.svg_symbol) {
         const auto& s = *entity.svg_symbol;
         const CanvasSelectionFrame frame{s.position, s.rotation_radians, s.width_metres, s.depth_metres};
@@ -4470,7 +4505,9 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             else if (!m_transform_preview_valid) text += QStringLiteral("  ·  Invalid");
         }
         if (transforming && m_left_gesture == LeftGesture::selection_rotate) {
-            const auto radians = m_transform_preview_exact
+            const auto radians = m_transform_source_rotation
+                ? *m_transform_source_rotation + m_transform_rotation_preview * m_transform_source_rotation_direction
+                : m_transform_preview_exact
                 ? m_transform_initial_rotation + m_transform_rotation_preview : axes.rotation_radians;
             auto degrees = std::fmod(radians * 180/pi, 360.0);
             if (degrees < 0) degrees += 360;

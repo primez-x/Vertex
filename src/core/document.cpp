@@ -3029,7 +3029,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                             if (prior[index].at("id") != next[index].at("id"))
                                 throw std::invalid_argument("Joint presentation movement must retain instance identities");
                             if (before.at("x") != after.at("x") || before.at("y") != after.at("y")) {
-                                const auto offset = std::string_view(kind) == "labels" && prior[index].value("model_plan",false)
+                                const auto offset = prior[index].value("model_plan",false)
                                     ? command.joint_translation->offset : view_offset;
                                 check_position(nlohmann::json::array({before.at("x"),before.at("y")}),
                                                nlohmann::json::array({after.at("x"),after.at("y")}),offset);

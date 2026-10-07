@@ -711,7 +711,9 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U112 — Place a symbol by choosing it and clicking the drawing**
+  - Steps: Choose furniture from the Library, move the pointer around the plan, then click to place it. Repeat in a shifted or rotated horizontal architectural plan and in a recovered project. Choose another item and press Escape or right-click before placing it.
   - Expected: It lands at the chosen location with its declared nominal footprint when supplied, or a clearly editable default size. The selected caption uses its human name.
+  - Also check: A translucent preview follows the pointer and matches the placed artwork and size. Cancellation adds nothing. Switching the floor, layer, plan or project while an item is pending abandons that placement. An elevation or section explains why new furniture needs a horizontal plan. Printing or exporting while an item is pending includes only already placed items.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -728,6 +730,7 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U115 — Change a symbol's width and depth**
   - Steps: Select a symbol. Drag its right/left side handle, then its top/bottom side handle. Double-click it and enter exact width and depth.
   - Expected: Each side handle changes only its corresponding dimension; the opposite edge stays fixed. Dimensions appear on the canvas, including on rotated symbols. Exact entries update the footprint and undo restores each edit.
+  - Rotated plan check: Resize newly placed furniture in a rotated horizontal architectural plan. Drag each side handle separately; the opposite side stays fixed, and Properties shows the same physical width and depth as the canvas.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -739,6 +742,7 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U117 — Rotate a symbol**
   - Steps: Note the symbol's starting angle. Drag the rotation handle to 45, 90 and 180 degrees, releasing between drags. Hold Shift to choose an angle between snapping points. Return to the starting angle (zero for an initially unrotated symbol).
   - Expected: The selection box and rotation handle retain the object's angle after release. Rotation snaps every 45 degrees, Shift permits fine adjustment, and a live angle matches the saved orientation. Returning to the starting angle restores the original orientation; undo/redo and save/reopen preserve it.
+  - Rotated plan check: Repeat with a newly placed furniture item in a rotated horizontal architectural plan. The degree readout and 45-degree stops match the object's saved angle in Properties, even though the view is rotated. Changing the plan's viewing angle does not rotate the furniture itself.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

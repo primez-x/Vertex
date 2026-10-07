@@ -139,6 +139,8 @@ struct SymbolInstance {
     bool flip_vertical{};
     // Explicit SVG presentation intent; absence retains the original artwork.
     std::optional<SymbolSvgPalette> svg_palette;
+    // Opt-in physical/model XY anchor. Legacy instances remain view overlays.
+    bool model_plan{false};
 };
 
 struct AnnotationState {
@@ -187,7 +189,8 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>&);
     const std::vector<SymbolDefinition>&, std::string pinned_svg = {});
 [[nodiscard]] nlohmann::json encode_annotation_state(
     const AnnotationState&, const std::vector<SymbolDefinition>&);
-// Roles or noncenter alignment select v8; centered states retain their previous
+// Model-plan symbols select v10; extended styles remain admitted in v9/v10.
+// Roles or noncenter alignment select v8; legacy states retain their previous
 // conditional version. Before v8, even an explicit centered alignment key is
 // refused. In v8, omitted alignment retains the centered legacy default.
 [[nodiscard]] AnnotationState decode_annotation_state(

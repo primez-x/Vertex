@@ -110,6 +110,11 @@ CanvasEntity site_presented_canvas_entity(
         source.drawing_alignment_segments, placement.forward);
 
     if (source.resize_frame) {
+        if (!source.resize_frame->source_rotation_radians &&
+            (source.type != QStringLiteral("symbol") || source.model_plan)) {
+            result.resize_frame->source_rotation_radians=source.resize_frame->rotation_radians;
+            result.resize_frame->source_rotation_direction=1.0;
+        }
         result.resize_frame->center = site_presented_plan_point(
             source.resize_frame->center, placement);
         result.resize_frame->rotation_radians = presented_angle(

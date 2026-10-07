@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v59
+# Vertex project formats v1 through v60
+
+## Model-plan furniture and equipment symbols (v60)
+
+Native format 60 and JSON/assets extraction version 58 protect annotation state
+version 10. A symbol can opt into physical model XY coordinates with the Boolean
+`model_plan: true`. Its placement, rotation, width/depth scales, local-axis flips,
+pinned definition, SVG and palette remain in the existing symbol record. The
+outer annotation entity envelope and its owning layer contract do not change.
+
+The marker is optional in state v10: absent or false retains the legacy view
+overlay convention. Earlier annotation states reject the marker, including
+explicit false, and non-Boolean values are invalid. V10 retains the extended
+styles admitted by v9. The writer selects v10 when a model-plan symbol exists;
+states containing only earlier semantics keep their conditional older version.
+Loading a legacy symbol never reinterprets its saved coordinates as model XY.
+
+Model-plan symbols use the same horizontal plan projection as authored geometry.
+The complete physical footprint and SVG orientation follow the plan axes,
+including reflected views. A Site annotation instead resolves its saved child's
+layer and declared presentation frame once; it does not add a second conventional
+plan transform. View-overlay symbols retain their existing presentation path.
+Joint connected translation applies the model offset to model-plan symbols and
+labels, and the separate presentation offset to legacy overlays. Translation
+cannot change the coordinate mode or any unrelated symbol property.
+
+The native reader floor includes every retained revision, including undone
+creation, deleted symbols and abandoned branches. Such an archive cannot be
+relabelled below v60 even when its current head has no model-plan symbol. Older
+projects without these semantics retain their existing format floors and remain
+readable. Extraction uses version 58 for this floor in both ordinary and compact
+asset output.
 
 ## Atomic geometry and device observations (v59)
 
@@ -1717,7 +1748,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `59`, according to the
+`format_version` are equal and range from `1` through `60`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 

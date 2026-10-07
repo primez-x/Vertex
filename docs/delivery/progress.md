@@ -392,6 +392,25 @@ integration except for that callback boundary, which root corrected and reviewed
 No build, test, package or installed change was made; native interaction and DPI
 behavior remain unobserved.
 
+New library furniture now retains physical model-plan coordinates across
+Measurement, horizontal Architectural and Site insertion. Arming captures the
+published source and complete context, retains admitted SVG artwork once, and
+uses one inverse and one forward presentation frame for its transient preview
+and command. Preset changes, click and drop consume that original capture;
+stale source/context changes cancel it. Recovered furniture exposes its handles,
+and movement, local-axis resize, exact rotation preview, coordinated views and
+output use the same saved position and dimensions. Reflected plans retain the
+SVG's handedness. Rotation snaps and readouts use the authored angle rather than
+the viewing angle; older overlay symbols keep their saved convention.
+
+Annotation state v10/native format60/extraction58 carry the opt-in marker and
+protect every retained history branch. Independent source review approved the
+codec and preview separation, and the integrated workflow except for new Site
+symbols being left in overlay mode; root corrected that discriminator. The Site
+child frame remains the sole Site conversion. No build, test, package or installed
+change was made. Compilation, persistence, visuals, interaction and performance
+remain unobserved.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

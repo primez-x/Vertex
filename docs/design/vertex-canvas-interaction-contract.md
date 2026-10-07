@@ -61,6 +61,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 - After the first drawing click, the pending edge follows the pointer with its live length.
 - Each click places the next measured-boundary node. Clicking the highlighted first node closes a valid outline.
 - Component placement is a distinct pending state. Escape or the drawing context menu cancels it.
+- A pending furniture or equipment item follows the pointer as translucent artwork using its chosen physical footprint. Its click or drop commits at that same location. Placement retains the displayed source, layer and horizontal plan axes; a changed source or context cancels it. The preview never participates in selection, snapping, overview extents or output.
 - Wall previews follow the effective snapped pointer after the first endpoint.
 - Architectural wall clicks retain the displayed horizontal plan's source and axes. Connected endpoints snap to authored baselines on the active floor, including in shifted or rotated named plans. Cropped endpoints outside the view are not snap targets. Elevation and section views refuse new wall points with an explanation.
 - A committed wall continues the chain in the same architectural plan. A changed source, layer or view refuses the next point; cancellation keeps already committed walls. Area and loose measured-line construction remain available in the Measurement workspace.
@@ -90,7 +91,6 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Direct endpoint grips for additional architectural object types.
 - Pen barrel-button mapping, pinch zoom, and multi-touch navigation.
 - Overlap cycling for stacked selectable objects.
-- A component ghost preview before click placement.
 - Shared painted-footprint hit testing for every filled and custom-stroke entity type.
 
 ## Acceptance sequences
