@@ -775,6 +775,8 @@ private:
     void ensureEntityHitIndex() const;
     [[nodiscard]] std::optional<std::vector<std::size_t>> entityHitCandidates(
         QPointF point, double hit_pixels) const;
+    [[nodiscard]] std::optional<std::vector<std::size_t>> labelHitCandidates(
+        QPointF point, double hit_pixels) const;
     [[nodiscard]] std::optional<std::vector<std::size_t>> visiblePublishedEntityIndices(
         const QTransform& model_to_device, const QTransform& canvas_to_device,
         const QRectF& device_viewport) const;
@@ -899,6 +901,23 @@ private:
         QRectF bounds;
         QRectF ink_bounds;
     };
+    struct LabelHitIndexEntry {
+        QRectF bounds; // Conservative model-space padded rotated rectangle.
+        std::size_t label_index{};
+    };
+    struct LabelHitIndexNode {
+        QRectF bounds;
+        std::size_t first{};
+        std::size_t count{};
+        std::size_t left{};
+        std::size_t right{};
+    };
+    struct LabelHitIndex {
+        bool ready{};
+        bool usable{}; // Unsafe published labels keep the original full loop.
+        std::vector<LabelHitIndexEntry> entries;
+        std::vector<LabelHitIndexNode> nodes;
+    };
     struct LabelPlacementCache {
         QByteArray key;
         // A small device/layout key can reuse owned unchanged source labels.
@@ -908,6 +927,8 @@ private:
         // Owned immutable derivatives, indexed exactly like labels. Replaced
         // with the placement key and cleared by the same setter invalidation.
         std::vector<LabelPaintLayout> paint_layouts;
+        // Owned derivatives of this exact publication; no pan-dependent key.
+        LabelHitIndex hit_index;
     };
     // Keep interactive picking warm while a separate output device is used.
     mutable std::array<LabelPlacementCache, 4> m_label_placement_cache;

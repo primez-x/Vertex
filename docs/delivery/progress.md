@@ -276,6 +276,15 @@ approved the corrected integration. These changes have not been compiled,
 rendered, measured, packaged or installed. Implementation continues without
 additional builds or test runs at the user's direction.
 
+Label picking now reuses those owned layout bounds and a retained spatial index
+of the actual positioned labels. The index keeps rotated bounds in model space,
+so panning changes the query instead of rebuilding it. Candidate labels retain
+their original order, exact distance calculation, nine-pixel tolerance and
+overlap priority; previews and unsafe publications use the original complete
+scan. Font and screen-metric changes clear the index. Independent source review
+approved this implementation; picking behavior and performance remain
+unobserved, and no build or test was run.
+
 Wall measurement and boundary dimension panels now retain that same complete
 source authority. Apply dispatches from the captured object and refuses a changed
 project, selection, units or view. Recovered wall measurements use the captured

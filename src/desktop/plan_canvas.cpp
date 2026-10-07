@@ -2380,6 +2380,9 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::StyleChange:
     case QEvent::ScreenChangeInternal:
     case QEvent::DevicePixelRatioChange:
+        // Picking and paint share this screen metrics publication. System font
+        // or device changes can invalidate metrics even if QFont values match.
+        m_label_placement_cache[0] = {};
         m_content_bounds_cache = {};
         m_overview_geometry_cache = {};
         break;
@@ -3504,6 +3507,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     // A label replacement must never inherit paint layouts from the previous
     // key, including the invalid-scale/DPI early publication below.
     cache.paint_layouts.clear();
+    cache.hit_index = {};
     if (!(scale > 0) || !std::isfinite(scale) || !(dpi > 0) || !std::isfinite(dpi)) {
         cache.key = std::move(key);
         cache.retained_key = std::move(retained_key);
@@ -5844,6 +5848,166 @@ std::optional<std::vector<std::size_t>> PlanCanvas::entityHitCandidates(
     return result;
 }
 
+std::optional<std::vector<std::size_t>> PlanCanvas::labelHitCandidates(
+    QPointF point, double hit_pixels) const {
+    auto& cache = m_label_placement_cache[0];
+    constexpr double safe_extent = 1e12;
+    const auto viewport = QRectF(rect());
+    const auto safe_point = [safe_extent](Vec2 p) {
+        return std::isfinite(p.x) && std::isfinite(p.y) &&
+            std::abs(p.x) <= safe_extent && std::abs(p.y) <= safe_extent;
+    };
+    // hitTest has just requested this exact screen publication. Preview keys
+    // and invalid-scale/DPI publications do not prove retained layout coverage.
+    if (hasInteractivePresentation() || cache.retained_key.isEmpty() ||
+        cache.paint_layouts.size() != cache.labels.size() ||
+        !std::isfinite(m_scale) || m_scale < minimum_scale || m_scale > maximum_scale ||
+        !safe_point(m_view_center) || !safe_point({point.x(), point.y()}) ||
+        !finite_rect(viewport) || !std::isfinite(hit_pixels) || hit_pixels < 0.0)
+        return std::nullopt;
+    const auto model = toModel(point, viewport);
+    if (!safe_point(model)) return std::nullopt;
+    auto& index = cache.hit_index;
+    if (!index.ready) {
+        index.entries.clear();
+        index.nodes.clear();
+        index.entries.reserve(cache.labels.size());
+        index.usable = true;
+        for (std::size_t i = 0; i < cache.labels.size(); ++i) {
+            const auto& label = cache.labels[i];
+            if (!drawable_label(label)) continue; // Same exclusion as the narrow loop.
+            const auto& local_bounds = cache.paint_layouts[i].bounds;
+            const auto transform = label_transform(label, {});
+            bool invertible = false;
+            const auto inverse = transform.inverted(&invertible);
+            if (!safe_point(label.position) || !std::isfinite(label.rotation_radians) ||
+                std::abs(label.rotation_radians) > 2.0 * pi || !invertible ||
+                !std::isfinite(inverse.m11()) || !std::isfinite(inverse.m12()) ||
+                !std::isfinite(inverse.m21()) || !std::isfinite(inverse.m22()) ||
+                !std::isfinite(transform.determinant()) ||
+                std::abs(transform.determinant() - 1.0) > 1e-12 ||
+                !finite_rect(local_bounds) || !(local_bounds.width() > 0.0) ||
+                !(local_bounds.height() > 0.0) ||
+                local_bounds.width() > safe_extent || local_bounds.height() > safe_extent) {
+                index.usable = false;
+                break;
+            }
+            const auto rotated = transform.mapRect(local_bounds);
+            const Vec2 minimum{label.position.x + rotated.left() / m_scale,
+                               label.position.y - rotated.bottom() / m_scale};
+            const Vec2 maximum{label.position.x + rotated.right() / m_scale,
+                               label.position.y - rotated.top() / m_scale};
+            if (!finite_rect(rotated) || !safe_point(minimum) || !safe_point(maximum)) {
+                index.usable = false;
+                break;
+            }
+            const auto rounding = 64.0 * std::numeric_limits<double>::epsilon() *
+                std::max({1.0, std::abs(label.position.x), std::abs(label.position.y),
+                    std::abs(minimum.x), std::abs(minimum.y),
+                    std::abs(maximum.x), std::abs(maximum.y),
+                    std::abs(rotated.left()) / m_scale, std::abs(rotated.right()) / m_scale,
+                    std::abs(rotated.top()) / m_scale, std::abs(rotated.bottom()) / m_scale});
+            const QRectF bounds(QPointF(minimum.x - rounding, minimum.y - rounding),
+                                QPointF(maximum.x + rounding, maximum.y + rounding));
+            if (!finite_rect(bounds) || !std::isfinite(bounds.width()) ||
+                !std::isfinite(bounds.height())) {
+                index.usable = false;
+                break;
+            }
+            index.entries.push_back({bounds, i});
+        }
+        if (index.usable) {
+            index.nodes.reserve(index.entries.size());
+            const auto build = [&](auto&& self, std::size_t first, std::size_t count) -> std::size_t {
+                auto left_edge = index.entries[first].bounds.left();
+                auto top_edge = index.entries[first].bounds.top();
+                auto right_edge = index.entries[first].bounds.right();
+                auto bottom_edge = index.entries[first].bounds.bottom();
+                for (std::size_t offset = 1; offset < count; ++offset) {
+                    const auto& bounds = index.entries[first + offset].bounds;
+                    left_edge = std::min(left_edge, bounds.left());
+                    top_edge = std::min(top_edge, bounds.top());
+                    right_edge = std::max(right_edge, bounds.right());
+                    bottom_edge = std::max(bottom_edge, bounds.bottom());
+                }
+                const auto rounding = 4.0 * std::numeric_limits<double>::epsilon() *
+                    std::max({1.0, std::abs(left_edge), std::abs(right_edge),
+                              std::abs(top_edge), std::abs(bottom_edge)});
+                LabelHitIndexNode node;
+                node.bounds = QRectF(QPointF(left_edge - rounding, top_edge - rounding),
+                                     QPointF(right_edge + rounding, bottom_edge + rounding));
+                const auto node_index = index.nodes.size();
+                index.nodes.push_back(node);
+                if (count <= 8) {
+                    index.nodes[node_index].first = first;
+                    index.nodes[node_index].count = count;
+                } else {
+                    const bool split_x = node.bounds.width() >= node.bounds.height();
+                    const auto middle = first + count / 2;
+                    std::nth_element(index.entries.begin() + first, index.entries.begin() + middle,
+                        index.entries.begin() + first + count, [split_x](const auto& a, const auto& b) {
+                            const auto center = [split_x](const auto& entry) {
+                                return split_x ? std::midpoint(entry.bounds.left(), entry.bounds.right())
+                                               : std::midpoint(entry.bounds.top(), entry.bounds.bottom());
+                            };
+                            const auto a_center = center(a), b_center = center(b);
+                            return a_center == b_center ? a.label_index < b.label_index : a_center < b_center;
+                        });
+                    const auto left = self(self, first, middle - first);
+                    const auto right = self(self, middle, first + count - middle);
+                    index.nodes[node_index].left = left;
+                    index.nodes[node_index].right = right;
+                }
+                return node_index;
+            };
+            if (!index.entries.empty()) build(build, 0, index.entries.size());
+        } else {
+            index.entries.clear();
+        }
+        index.ready = true;
+    }
+    if (!index.usable) return std::nullopt;
+    const auto overlaps = [](const QRectF& a, const QRectF& b) {
+        return !(a.right() < b.left() || a.left() > b.right() ||
+                 a.bottom() < b.top() || a.top() > b.bottom());
+    };
+    std::vector<std::size_t> result;
+    std::vector<std::size_t> pending;
+    if (!index.nodes.empty()) pending.push_back(0);
+    while (!pending.empty()) {
+        const auto& node = index.nodes[pending.back()];
+        pending.pop_back();
+        // Cover view subtraction, inverse rotation/translation and conversion
+        // to model coordinates as well as the exact nine-pixel narrow radius.
+        const auto rounding = 128.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(model.x), std::abs(model.y),
+                std::abs(m_view_center.x), std::abs(m_view_center.y),
+                std::abs(node.bounds.left()), std::abs(node.bounds.right()),
+                std::abs(node.bounds.top()), std::abs(node.bounds.bottom()),
+                (std::abs(point.x()) + std::abs(viewport.center().x())) / m_scale,
+                (std::abs(point.y()) + std::abs(viewport.center().y())) / m_scale});
+        const auto padding = hit_pixels / m_scale + rounding;
+        const QRectF query(QPointF(model.x - padding, model.y - padding),
+                           QPointF(model.x + padding, model.y + padding));
+        if (!std::isfinite(padding) || !finite_rect(query) ||
+            !std::isfinite(query.width()) || !std::isfinite(query.height()) ||
+            !finite_rect(node.bounds)) return std::nullopt;
+        if (!overlaps(node.bounds, query)) continue;
+        if (node.count) {
+            for (std::size_t offset = 0; offset < node.count; ++offset) {
+                const auto& entry = index.entries[node.first + offset];
+                if (overlaps(entry.bounds, query)) result.push_back(entry.label_index);
+            }
+        } else {
+            pending.push_back(node.right);
+            pending.push_back(node.left);
+        }
+    }
+    // Labels are tested in paint/source order; a later zero-distance hit wins.
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
 QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
     constexpr double hit_pixels = 9.0;
     QString result;
@@ -5926,16 +6090,23 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
     if (!interior_area.isEmpty() && best > hit_pixels) { result = interior_area; best = 0.0; }
     // Measure the same font and padded rotated rectangle as interactive paint.
     // Retain the geometry selection tolerance outside that painted rectangle.
-    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
+    const auto& labels = positionedLabels(font(), this, m_scale, logicalDpiY(), false);
+    const auto label_candidates = labelHitCandidates(point, hit_pixels);
+    const auto& paint_layouts = m_label_placement_cache[0].paint_layouts;
+    const auto label_count = label_candidates ? label_candidates->size() : labels.size();
+    for (std::size_t candidate_index = 0; candidate_index < label_count; ++candidate_index) {
+        const auto label_index = label_candidates ? (*label_candidates)[candidate_index] : candidate_index;
+        const auto& label = labels[label_index];
         if (filtered && !matchesSelectionFilter(label.id)) continue;
         if (!drawable_label(label)) continue;
         const auto screen = toScreen(label.position, rect());
-        const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
+        const auto bounds = label_candidates ? paint_layouts[label_index].bounds
+            : label_layout(label, font(), this, m_scale, logicalDpiY()).bounds;
         const auto local = label_transform(label, screen).inverted().map(point);
-        const auto dx = std::max({layout.bounds.left() - local.x(), 0.0,
-                                  local.x() - layout.bounds.right()});
-        const auto dy = std::max({layout.bounds.top() - local.y(), 0.0,
-                                  local.y() - layout.bounds.bottom()});
+        const auto dx = std::max({bounds.left() - local.x(), 0.0,
+                                  local.x() - bounds.right()});
+        const auto dy = std::max({bounds.top() - local.y(), 0.0,
+                                  local.y() - bounds.bottom()});
         const auto candidate = std::hypot(dx, dy);
         // Labels paint after geometry; a hit inside their painted rectangle
         // wins a zero-distance tie, including later overlapping labels.
