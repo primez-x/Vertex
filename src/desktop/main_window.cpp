@@ -4951,6 +4951,8 @@ class MainWindow::Impl {
         std::shared_ptr<const SourceEditAuthority> authority;
         std::shared_ptr<const ArchitecturalViewContext> view_context;
         std::shared_ptr<std::optional<Command>> command;
+        std::shared_ptr<std::vector<CanvasLabel>> labels;
+        bool metric_units{false};
     };
     struct VertexPreviewProjection {
         std::vector<CanvasEntity> entities;
@@ -21334,11 +21336,14 @@ public:
         const auto keep_start = request.keep_start;
         const auto view_context=request.view_context;
         const auto command=request.command;
+        const auto labels=request.labels;
+        const auto metric_units=request.metric_units;
         m_opening_preview_sequence = m_opening_preview_queue.enqueue(
-            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command]
+            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units]
             (const RegenerationCancellationToken& cancellation) {
                 if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(), {}};
-                *result = computeOpeningWidthPreview(*source, retained, id, scale, keep_start,view_context.get(),command.get());
+                *result = computeOpeningWidthPreview(*source, retained, id, scale, keep_start,
+                    view_context.get(), command.get(), metric_units, labels.get());
                 return RegenerationReceipt{source->revision(), {}};
             });
         m_running_opening_preview = std::move(request);
@@ -21414,6 +21419,8 @@ public:
         request.authority=m_opening_preview_authority;
         request.view_context=m_opening_preview_view_context;
         request.command=std::make_shared<std::optional<Command>>();
+        request.labels=std::make_shared<std::vector<CanvasLabel>>();
+        request.metric_units=m_metric_units;
         m_opening_preview_command.reset();m_opening_preview_release_pending=false;
         m_opening_preview_latest_serial=serial;m_opening_preview_id=requested_id;
         m_opening_preview_scale=scale;m_opening_preview_keep_start=keep_start_jamb;
@@ -21472,7 +21479,7 @@ public:
             if(!m_running_opening_preview || completion.sequence!=m_opening_preview_sequence) continue;
             auto request=std::move(*m_running_opening_preview);m_running_opening_preview.reset();
             if(!completion.succeeded() || !current(request) || completion.receipt->source_revision!=request.source->revision() ||
-                !*request.result || !request.command || !*request.command) {reject(request);continue;}
+                !*request.result || !request.command || !*request.command || !request.labels) {reject(request);continue;}
             if(request.serial==m_opening_preview_latest_serial) m_opening_preview_command=**request.command;
             if(m_opening_preview_release_pending && request.serial==m_opening_preview_latest_serial) {
                 try {
@@ -21488,7 +21495,8 @@ public:
                     m_opening_preview_release_pending=false;m_opening_preview_command.reset();
                     setError(QStringLiteral("Resize opening: %1").arg(QString::fromUtf8(error.what())));
                 }
-            } else (void)request.canvas->completeOpeningWidthPreview(request.serial,std::move(*request.result));
+            } else (void)request.canvas->completeOpeningWidthPreview(request.serial,
+                std::move(*request.result), std::move(*request.labels));
         }
         if(!m_running_opening_preview && m_pending_opening_preview) {
             auto request=std::move(*m_pending_opening_preview);m_pending_opening_preview.reset();
@@ -21499,8 +21507,10 @@ public:
     static std::optional<std::vector<CanvasEntity>> computeOpeningWidthPreview(
         const DocumentSnapshot& source, const std::vector<CanvasEntity>& retained_scene,
         const QString& requested_id, double scale, bool keep_start_jamb,
-        const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr) {
+        const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr,
+        bool metric_units=false, std::vector<CanvasLabel>* proposed_labels=nullptr) {
         try {
+            if (proposed_labels) proposed_labels->clear();
             // This exact scalar command performs complete host, sibling/frame
             // and fused-join admission before any candidate geometry is shown.
             Command command=hosted_opening_width_resize_command(source,requested_id.toStdString(),scale,keep_start_jamb);
@@ -21590,6 +21600,12 @@ public:
                 }
             }
             if(std::none_of(result.begin(),result.end(),[&](const auto& entity){return entity.id==requested_id;})) return std::nullopt;
+            if (view_context && !view_context->overlays.empty()) {
+                auto overlays = project_view_overlays(candidate, BuildingViewKind::plan,
+                    *view_context, metric_units, true);
+                for (auto& entity : overlays.entities) result.push_back(std::move(entity));
+                if (proposed_labels) *proposed_labels = std::move(overlays.labels);
+            }
             if(admitted_command) *admitted_command=std::move(command);
             return result;
         } catch(const Standard_Failure&) {return std::nullopt;}

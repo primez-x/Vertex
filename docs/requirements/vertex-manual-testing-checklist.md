@@ -1005,6 +1005,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U162 — Change a door's width and height**
   - Canvas check: Select a door in the plan and drag either jamb handle. The opposite jamb stays fixed, the wall cut and circular swing update together, and the width/height readout follows the edit. Undo and Redo restore it. Use quick properties to change height.
+  - Linked dimension check: In an Architectural plan, right-click the door and add a view dimension. Drag a jamb again. The dimension line, witnesses and value update with the proposed width before release. Cancel restores the previous value; accepting, Undo/Redo and save/reopen retain the corresponding value. Repeat in Metric and a rotated saved plan.
   - Plan check: Repeat in shifted, rotated and reflected horizontal plans. Crop around both jambs, then crop one out; narrow the depth until it cuts the opening. Both visible jambs offer handles when the full opening survives the depth limit. Partially clipped openings offer quick properties instead. Roll the wheel out and back during a jamb drag, then release: that cancelled drag must not change the door. Start a fresh drag and confirm one Undo restores it.
   - Expected: The opening and door update together.
   - Curved wall check: Repeat on a curved host with sufficient frame depth. The opposite jamb remains fixed; Arc W reports width along the wall, while the swing remains circular. An impossible leaf/frame fit rejects the edit without changing the project.
@@ -1030,6 +1031,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U166 — Change window size and sill height**
   - Canvas check: Select a window in the plan and drag either jamb handle. Its width changes along the wall while height and sill remain. Dragging into another opening or beyond the host wall is rejected without changing the saved geometry.
+  - Linked dimension check: Add a view dimension to the window in an Architectural plan, then drag each jamb. Its witnesses and value follow the proposal together with the frame and wall cut. Cancel restores the original value; one accepted drag is one undoable edit. Output during a pending drag uses committed geometry and dimensions.
   - Recovery check: While holding the jamb, make the proposed width overlap another opening or cross the fixed jamb, then move back to a valid width. The same drag should recover and its final release should create one edit. Releasing an invalid proposal changes nothing.
   - Plan check: Repeat in a rotated or reflected horizontal plan and with both jambs visible in a crop. The jambs and frame follow the preview at the final click position. Clip one jamb or the opening's height out of the view: use quick properties to edit it. Undo once, Redo, save and reopen.
   - Expected: Plan, elevation and 3D agree.

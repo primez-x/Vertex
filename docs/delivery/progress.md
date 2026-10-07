@@ -97,6 +97,13 @@ save/reopen and output behavior remain unverified; the installed candidate is
 unchanged. The manual checklist and user guide describe the user-facing actions
 without recording them as passed.
 
+Opening-width proposals now carry their linked dimension values and witness
+geometry together. The canvas retains label overrides by presentation identity,
+clears them on cancellation or source/serial changes, and keeps proposals out
+of printed/exported scenes. A newly resolved vertex-proposal dimension is
+admitted only with its exact candidate dimension line. These are source changes
+reviewed by root; no compilation or interactive outcome is claimed.
+
 The next source batch retains an immutable architectural-view source instead
 of copying its complete entity map. Separate retained spatial indexes enumerate
 pointer-hit geometry and nearby actual snap endpoints/segments. Source-order

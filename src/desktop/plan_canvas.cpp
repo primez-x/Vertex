@@ -706,6 +706,7 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
         m_transform_frame_start) resetGesture();
     else {
         ++m_opening_width_preview_serial;
+        m_opening_width_labels_preview.clear();
         ++m_boundary_vertex_preview_serial;
         ++m_move_preview_serial;
         ++m_transform_preview_serial;
@@ -911,8 +912,12 @@ void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // A captured projection depends on the source annotations as well as the
     // geometry, even when a replacement retains every annotation identity.
-    if (m_touch_active || m_gesture_button != Qt::NoButton || m_vertex_move_handle || m_move_release_pending ||
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_opening_width_handle || m_vertex_move_handle || m_move_release_pending ||
         m_transform_frame_start) resetGesture();
+    else {
+        ++m_opening_width_preview_serial;
+        m_opening_width_labels_preview.clear();
+    }
     resetTouchInput();
     // Derived plan labels share their owner's ID for output filtering; they
     // are not independent annotations with their own transform controls.
@@ -3307,6 +3312,7 @@ void PlanCanvas::resetGesture() {
     m_opening_width_pointer_station.reset();
     m_opening_width_jamb_preview.reset();
     m_opening_width_entities_preview.clear();
+    m_opening_width_labels_preview.clear();
     m_opening_width_scale_preview = 1.0;
     m_opening_width_preview_valid = false;
     m_opening_width_preview_pending = false;
@@ -3597,6 +3603,12 @@ CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) co
             [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
         if (preview_label != m_boundary_vertex_labels_preview.end()) presented = *preview_label;
     }
+    if (!output && m_opening_width_preview_valid) {
+        const auto preview_label = std::find_if(m_opening_width_labels_preview.begin(),
+            m_opening_width_labels_preview.end(),
+            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
+        if (preview_label != m_opening_width_labels_preview.end()) presented = *preview_label;
+    }
     if (!output && label.selected && m_transform_frame_start && !m_transform_preview_exact && m_move_ids.contains(label.id) &&
         (m_left_gesture == LeftGesture::selection_resize || m_left_gesture == LeftGesture::selection_rotate)) {
         presented.rotation_radians += m_transform_rotation_preview;
@@ -3643,6 +3655,12 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         for (const auto& proposed:m_boundary_vertex_labels_preview)
             if (std::none_of(retained_labels.begin(),retained_labels.end(),
                 [&](const auto& label){return same_label_presentation(label, proposed);}))
+                retained_labels.push_back(proposed);
+    }
+    if (interactive && m_opening_width_preview_valid) {
+        for (const auto& proposed : m_opening_width_labels_preview)
+            if (std::none_of(retained_labels.begin(), retained_labels.end(),
+                [&](const auto& label) { return same_label_presentation(label, proposed); }))
                 retained_labels.push_back(proposed);
     }
     std::vector<CanvasLabel> labels;
@@ -4170,6 +4188,7 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
     m_opening_width_preview_request_in_progress = false;
     m_opening_width_preview_pointer = point;
     m_opening_width_entities_preview.clear();
+    m_opening_width_labels_preview.clear();
     m_opening_width_scale_preview = std::numeric_limits<double>::quiet_NaN();
     if (!m_opening_width_press_station || !m_opening_width_pointer_station) return;
     const auto host = source.host_baseline.value_or(Segment{source.start_jamb, source.end_jamb});
@@ -4209,6 +4228,9 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
         if (m_opening_width_preview_serial == serial) {
             m_opening_width_preview_request_in_progress = false;
             m_opening_width_preview_pending = false;
+            m_opening_width_preview_valid = false;
+            m_opening_width_entities_preview.clear();
+            m_opening_width_labels_preview.clear();
         }
         return;
     }
@@ -4232,19 +4254,20 @@ bool PlanCanvas::markOpeningWidthPreviewPending(std::uint64_t serial) {
 }
 
 bool PlanCanvas::completeOpeningWidthPreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels) {
     if (!m_opening_width_preview_pending) return false;
-    return applyOpeningWidthPreview(serial, std::move(result));
+    return applyOpeningWidthPreview(serial, std::move(result), std::move(labels));
 }
 
 bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels) {
     if (serial != m_opening_width_preview_serial || !m_opening_width_handle ||
         m_left_gesture != LeftGesture::opening_width_resize) return false;
     m_opening_width_preview_request_in_progress = false;
     m_opening_width_preview_pending = false;
     m_opening_width_preview_valid = false;
     m_opening_width_entities_preview.clear();
+    m_opening_width_labels_preview.clear();
     // Exact projection must contain the captured opening. Further geometry
     // constraints belong to the document projection and final resize command.
     if (!result || !unambiguous_entity_presentations(*result, m_entities) || std::none_of(result->begin(), result->end(),
@@ -4252,12 +4275,51 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
         update();
         return true;
     }
+    std::vector<CanvasLabel> admitted_labels;
+    admitted_labels.reserve(labels.size());
+    const auto finite_point = [](Vec2 point) {
+        return std::isfinite(point.x) && std::isfinite(point.y);
+    };
+    for (auto& label : labels) {
+        const auto original = std::find_if(m_labels.begin(), m_labels.end(),
+            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
+        if (original == m_labels.end()) {
+            // New derived callouts must belong to this admitted projection,
+            // including linked-view dimensions whose line and label share ID.
+            if (std::none_of(result->begin(), result->end(),
+                [&](const auto& entity) { return entity.id == label.id; })) continue;
+            label.selected = false;
+        } else label.selected = original->selected;
+        // Empty text is an intentional clearing override, not drawable input.
+        // Match the committed output's finite presentation requirements for
+        // visible labels, including optional placement and fill values.
+        bool finite = label.text.isEmpty() ||
+            (finite_point(label.position) && std::isfinite(label.rotation_radians) &&
+             std::isfinite(label.scale) && std::isfinite(label.text_height_metres) &&
+             std::isfinite(label.paper_height_mm) &&
+             (!label.leader_start || finite_point(*label.leader_start)) &&
+             (!label.plan_label_offset || (finite_point(*label.plan_label_offset) &&
+                 finite_point(label.position + *label.plan_label_offset))) &&
+             (!label.fill_opacity || std::isfinite(*label.fill_opacity)));
+        if (finite && !label.text.isEmpty() && label.automatic_linear_placement) {
+            const auto& placement = *label.automatic_linear_placement;
+            finite = finite_point(placement.anchor.start) && finite_point(placement.anchor.end) &&
+                std::isfinite(placement.anchor.sweep_radians) &&
+                finite_point(placement.outward_normal) && std::isfinite(placement.clearance_metres);
+        }
+        if (!finite) {
+            update();
+            return true;
+        }
+        admitted_labels.push_back(std::move(label));
+    }
     for (auto& entity : *result) {
         const auto original = std::find_if(m_entities.begin(), m_entities.end(),
             [&](const CanvasEntity& item) { return same_entity_presentation(item, entity); });
         if (original != m_entities.end()) entity.selected = original->selected;
     }
     m_opening_width_entities_preview = std::move(*result);
+    m_opening_width_labels_preview = std::move(admitted_labels);
     m_opening_width_preview_valid = true;
     update();
     return true;
@@ -4395,10 +4457,18 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
             [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
         if (original == m_labels.end()) {
             // A repaired area may acquire its first qualified quantity. Only
-            // derived plan labels on retained visible owners can be introduced.
-            if (!label.plan_only || !label.avoid_components ||
-                std::none_of(m_entities.begin(),m_entities.end(),
-                    [&](const auto& entity){return entity.id==label.id;})) continue;
+            // Derived area labels belong to retained visible owners. A bound
+            // view dimension may newly resolve during the proposal; admit its
+            // value only alongside that exact proposed dimension line.
+            const bool area_label = label.plan_only && label.avoid_components &&
+                std::any_of(m_entities.begin(), m_entities.end(),
+                    [&](const auto& entity) { return entity.id == label.id; });
+            const bool view_dimension = label.callout_role.isEmpty() &&
+                std::any_of(result->begin(), result->end(), [&](const auto& entity) {
+                    return entity.id == label.id && entity.type == QStringLiteral("section_overlay") &&
+                        entity.dimension_end_ticks;
+                });
+            if (!area_label && !view_dimension) continue;
             label.selected=false;
         } else label.selected = original->selected;
         m_boundary_vertex_labels_preview.push_back(std::move(label));
@@ -6427,7 +6497,7 @@ bool PlanCanvas::hasInteractivePresentation() const {
         !m_move_references_preview.empty() || !m_transform_entities_preview.empty() ||
         !m_transform_labels_preview.empty() || !m_transform_references_preview.empty() ||
         !m_boundary_vertex_entities_preview.empty() || !m_boundary_vertex_labels_preview.empty() ||
-        !m_opening_width_entities_preview.empty();
+        !m_opening_width_entities_preview.empty() || !m_opening_width_labels_preview.empty();
 }
 
 QByteArray PlanCanvas::retainedSelectionKey(const QRectF& viewport, bool model_axes) const {

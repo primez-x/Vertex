@@ -546,7 +546,8 @@ public:
     void setOpeningWidthPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, bool, std::uint64_t)> callback);
     // UI-thread deferred preview protocol. Capture the serial inside the
-    // callback, mark it pending, and complete with exact proposal geometry.
+    // callback, mark it pending, and complete with exact proposal geometry
+    // and associated labels. Empty label text clears its retained presentation.
     // Cancellation, scene replacement, and each new proposal invalidate old
     // serials, even when their parameters match. Completion never persists.
     [[nodiscard]] std::uint64_t openingWidthPreviewSerial() const noexcept {
@@ -558,9 +559,12 @@ public:
     [[nodiscard]] const std::vector<CanvasEntity>& openingWidthPreviewEntities() const noexcept {
         return m_opening_width_entities_preview;
     }
+    [[nodiscard]] const std::vector<CanvasLabel>& openingWidthPreviewLabels() const noexcept {
+        return m_opening_width_labels_preview;
+    }
     bool markOpeningWidthPreviewPending(std::uint64_t serial);
     bool completeOpeningWidthPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result);
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void setOpeningWidthResizeRequested(
         std::function<bool(QString, double, bool, std::uint64_t)> callback);
     // Exact document projection for a selected stable boundary vertex. The
@@ -743,7 +747,7 @@ private:
     void finishBoundaryVertexPreview(std::uint64_t serial);
     void updateOpeningWidthPreview(QPointF point);
     bool applyOpeningWidthPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result);
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionFrame(QPainter& painter, const QRectF& viewport,
         const std::vector<QRectF>& annotation_footprints) const;
@@ -1059,6 +1063,7 @@ private:
     std::optional<double> m_opening_width_pointer_station;
     std::optional<Vec2> m_opening_width_jamb_preview;
     std::vector<CanvasEntity> m_opening_width_entities_preview;
+    std::vector<CanvasLabel> m_opening_width_labels_preview;
     double m_opening_width_scale_preview{1.0};
     bool m_opening_width_preview_valid{};
     bool m_opening_width_preview_pending{};
