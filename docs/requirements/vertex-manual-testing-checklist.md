@@ -397,6 +397,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U059 — Move a selected object**
+  - Steps: Select furniture and drag inside its selection frame with Snap on. While holding the mouse still, press Shift to switch to a fine position and release Shift to restore snapping. Repeat with a wall, then a mixed selection. Release without another pointer movement; only the final displayed position should apply. Undo and Redo, cancel another drag with Escape, then return one drag exactly to its start before releasing.
   - Expected: Its geometry follows the intended displacement and measurements remain correct.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -471,6 +472,7 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U069 — Rotate a selected object around a chosen pivot**
   - Steps: Rotate an area and a column to 90 degrees, release, then rotate again to 180 degrees and back to the original angle. Hold Shift for an angle between snapping points. Repeat with a circular column and in a saved horizontal architectural plan view.
   - Area and line check: Rotate an appraisal area containing a deduction, then a measured area derived from walls containing a door or window. The complete preview and released result must agree, including dimensions, labels and any related room. Rotate a standalone measured line too. Repeat in a reflected or cropped horizontal plan. Release immediately after choosing the final angle, then Undo and Redo. Return exactly to the starting angle and release; no edit should be added. Escape or canvas navigation during a pending turn must leave the original drawing unchanged.
+  - Fine-angle check: Stop the pointer between common angles while still holding the rotation grip. Press and release Shift without moving the pointer; the displayed angle must switch between the fine and snapped choices. Release at that same position and check the accepted angle.
   - Expected: The handle stays attached to the rotated selection box after release. Common angles snap, Shift permits fine adjustment, and degrees appear while dragging. Undo/redo and save/reopen retain the orientation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

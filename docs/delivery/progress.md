@@ -14,6 +14,19 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 stationary precision changes
+
+Ordinary object and mixed-selection moves now honor Shift and raw-point input
+for fine placement. Shift press/release refreshes an active move, rotation,
+resize, opening jamb or endpoint preview at the stationary pointer. Release
+keeps an existing move proposal when both pointer and effective precision
+are unchanged, instead of cancelling and preparing the same native edit
+again. A changed position or precision still requests the final proposal;
+existing serial, source and one-use publication guards remain in force.
+Root reviewed these source changes. Compilation and interaction remain
+unverified; no build, test, probe, native job, launch, package or installation
+ran. Manual checks remain Not tested.
+
 ### October 7 measured geometry and assembly transforms
 
 Ordinary measured areas, measured linework, embedded geometric assembly

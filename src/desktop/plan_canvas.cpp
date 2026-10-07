@@ -3448,7 +3448,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         // omitted a move event. An unchanged transform keeps its admitted serial.
         if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::canvas_pan ||
             (m_left_gesture == LeftGesture::object_move &&
-             (!m_opening_move_active || !m_move_preview_pointer || *m_move_preview_pointer != position ||
+             (!m_move_preview_pointer || *m_move_preview_pointer != position ||
               m_move_preview_fine != (modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled || m_raw_point_input))) ||
             ((m_left_gesture == LeftGesture::selection_axis_resize ||
               m_left_gesture == LeftGesture::selection_resize ||
@@ -5617,8 +5617,14 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         auto modifiers=event->modifiers();modifiers.setFlag(Qt::ShiftModifier,true);
         updatePlacementModifiers(modifiers);
         const QPointer<PlanCanvas> guard(this);
-        if (!library_drag && m_gesture_button==Qt::NoButton && m_last_mouse_position)
-            updateCursor(*m_last_mouse_position);
+        if (!library_drag && m_last_mouse_position) {
+            if (m_gesture_button==Qt::LeftButton && m_left_dragging &&
+                (m_left_gesture==LeftGesture::object_move || m_left_gesture==LeftGesture::vertex_move ||
+                 m_left_gesture==LeftGesture::selection_rotate || m_left_gesture==LeftGesture::selection_resize ||
+                 m_left_gesture==LeftGesture::selection_axis_resize || m_left_gesture==LeftGesture::opening_width_resize))
+                pointerMove(*m_last_mouse_position,modifiers);
+            else if (m_gesture_button==Qt::NoButton) updateCursor(*m_last_mouse_position);
+        }
         if (!guard) return;
         event->accept();return;
     }
@@ -5810,8 +5816,14 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
         auto modifiers=event->modifiers();modifiers.setFlag(Qt::ShiftModifier,false);
         updatePlacementModifiers(modifiers);
         const QPointer<PlanCanvas> guard(this);
-        if (!library_drag && m_gesture_button==Qt::NoButton && m_last_mouse_position)
-            updateCursor(*m_last_mouse_position);
+        if (!library_drag && m_last_mouse_position) {
+            if (m_gesture_button==Qt::LeftButton && m_left_dragging &&
+                (m_left_gesture==LeftGesture::object_move || m_left_gesture==LeftGesture::vertex_move ||
+                 m_left_gesture==LeftGesture::selection_rotate || m_left_gesture==LeftGesture::selection_resize ||
+                 m_left_gesture==LeftGesture::selection_axis_resize || m_left_gesture==LeftGesture::opening_width_resize))
+                pointerMove(*m_last_mouse_position,modifiers);
+            else if (m_gesture_button==Qt::NoButton) updateCursor(*m_last_mouse_position);
+        }
         if (!guard) return;
         event->accept();return;
     }
@@ -7216,7 +7228,8 @@ QString PlanCanvas::contextTarget(QPointF point) const {
 Vec2 PlanCanvas::dragDelta(QPointF position) const {
     const auto start = toModel(m_left_start, rect());
     const auto end = toModel(position, rect());
-    if (!m_snap_enabled) return {end.x - start.x, end.y - start.y};
+    if (!m_snap_enabled || m_raw_point_input || m_placement_modifiers.testFlag(Qt::ShiftModifier))
+        return {end.x - start.x, end.y - start.y};
     const auto snapped_start = snapped(start);
     const auto snapped_end = snapped(end);
     return {snapped_end.x - snapped_start.x, snapped_end.y - snapped_start.y};
