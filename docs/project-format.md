@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v62
+# Vertex project formats v1 through v63
+
+## Per-flight stair dimensions (v63)
+
+Native format 63 and JSON/assets extraction version 61 protect canonical
+`stair` properties with `version: 3` and `form: multi_flight_stair`. The ordered
+`flights` records retain their stable `id` and `riser_count`, and may add numeric
+`going_m` and `width_m` overrides. An omitted dimension inherits the stair's
+top-level default. Each resolved dimension must be finite, positive and bounded.
+Versions 1 and 2 cannot carry operative per-flight overrides.
+
+The authoritative layout derives each flight's run, footprint and treads from
+its resolved dimensions. Connecting landings use their actual incoming and
+outgoing widths; a quarter-turn landing must fit its outgoing flight. Railings
+derive from that same layout. Plan-axis resize leaves elevations, total rise,
+risers, level connections and stable identities intact, and can materialize
+overrides for perpendicular flights. Uniform physical scaling also scales
+explicit overrides. Unknown flight metadata remains attached to its stable ID.
+
+The encoder retains the earlier v1/v2 form when no override is authored. Legacy
+shared-dimension bounds still apply to that inherited form. Every retained
+revision is inspected for the v3 reader floor, including undone, deleted and
+abandoned stairs. Clearing an override cannot relabel its earlier history below
+format 63. Quantity-entry expressions for `/flights/N/going_m` and
+`/flights/N/width_m` follow stable child IDs when ordered rows move; changed or
+cleared dimensions invalidate only their affected receipts.
 
 ## Planar wall tops and curved slopes (v62)
 

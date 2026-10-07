@@ -817,7 +817,8 @@ void append_building_rows(const DocumentSnapshot& document,
             record.properties.emplace("type", entity.type);
             if (const auto form = building_text_field(entity, "form"))
                 record.properties.emplace("form", *form);
-            add_building_quantity(record, entity, "width_m", "width", ScheduleUnit::metre);
+            if (!std::holds_alternative<StairFlight>(object))
+                add_building_quantity(record, entity, "width_m", "width", ScheduleUnit::metre);
             add_building_quantity(record, entity, "depth_m", "depth", ScheduleUnit::metre);
             add_building_quantity(record, entity, "height_m", "height", ScheduleUnit::metre);
             add_building_quantity(record, entity, "radius_m", "radius", ScheduleUnit::metre);
@@ -832,7 +833,8 @@ void append_building_rows(const DocumentSnapshot& document,
                 add_building_quantity(record, entity, "rise_m", "rise", ScheduleUnit::metre);
             add_building_quantity(record, entity, "overhang_m", "overhang", ScheduleUnit::metre);
             add_building_quantity(record, entity, "thickness_m", "thickness", ScheduleUnit::metre);
-            add_building_quantity(record, entity, "going_m", "going", ScheduleUnit::metre);
+            if (!std::holds_alternative<StairFlight>(object))
+                add_building_quantity(record, entity, "going_m", "going", ScheduleUnit::metre);
             add_building_quantity(record, entity, "post_spacing_m", "post_spacing", ScheduleUnit::metre);
             add_building_scalar(record, entity, "pitch_rad", "pitch_radians");
             add_building_scalar(record, entity, "rotation_rad", "rotation_radians");
@@ -874,6 +876,25 @@ void append_building_rows(const DocumentSnapshot& document,
             }
             if (const auto* stair = std::get_if<StairFlight>(&object)) {
                 const auto layout = derive_stair_layout(*stair);
+                const auto add_flight_dimension = [&](const char* name, double StairFlightLayout::*dimension) {
+                    const auto first = layout.flights.front().*dimension;
+                    const auto shared = std::all_of(layout.flights.begin(), layout.flights.end(),
+                        [&](const auto& flight) { return flight.*dimension == first; });
+                    if (shared) {
+                        add_layout_quantity(record, name, ScheduleQuantity{first, ScheduleUnit::metre});
+                        return;
+                    }
+                    for (std::size_t index = 0; index < layout.flights.size(); ++index) {
+                        const auto& flight = layout.flights[index];
+                        const auto label = "Flight " + std::to_string(index + 1) + ' ' + name;
+                        record.calculated.emplace(label, ScheduleCalculation{
+                            ScheduleQuantity{flight.*dimension, ScheduleUnit::metre}, {{id, "geometry"}},
+                            "Resolved " + std::string(name) + " of flight " + std::to_string(index + 1) +
+                                " (" + flight.id + ") from the current authoritative stair layout"});
+                    }
+                };
+                add_flight_dimension("width", &StairFlightLayout::width);
+                add_flight_dimension("going", &StairFlightLayout::going);
                 double run = 0.0;
                 for (const auto& flight : layout.flights) run += flight.run;
                 add_layout_quantity(record, "rise", ScheduleQuantity{stair->total_rise, ScheduleUnit::metre});

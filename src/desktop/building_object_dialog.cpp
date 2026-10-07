@@ -677,8 +677,8 @@ private:
                 setup_stair_topology(layout);
             }
             add_quantity_field(layout, "Total rise", "buildingObjectTotalRise", 2.5);
-            add_quantity_field(layout, "Going", "buildingObjectGoing", 0.25);
-            add_quantity_field(layout, "Width", "buildingObjectWidth", 1.2);
+            add_quantity_field(layout, form == "multi_flight_stair" ? "Default going" : "Going", "buildingObjectGoing", 0.25);
+            add_quantity_field(layout, form == "multi_flight_stair" ? "Default width" : "Width", "buildingObjectWidth", 1.2);
             landing_check = new QCheckBox(QStringLiteral("Add top landing"), form_page);
             landing_check->setObjectName(QStringLiteral("buildingObjectLandingEnabled"));
             layout->addRow(QString(), landing_check);
@@ -822,6 +822,10 @@ private:
                 for (const auto& previous : old) {
                     if (previous.is_object() && previous.value("id", std::string{}) == child.value("id", std::string{})) {
                         auto retained = previous;
+                        if (std::string_view(key) == "flights") {
+                            for (const auto* dimension : {"going_m", "width_m"})
+                                if (!child.contains(dimension)) retained.erase(dimension);
+                        }
                         retained.update(child);
                         child = std::move(retained);
                         break;
@@ -835,13 +839,33 @@ private:
         return table->item(row, 0)->data(Qt::UserRole).toString().toStdString();
     }
 
-    void add_stair_flight_row(std::string id, std::size_t risers) {
+    void add_stair_flight_row(std::string id, std::size_t risers,
+                              std::optional<double> going = std::nullopt,
+                              std::optional<double> width = std::nullopt) {
         const QSignalBlocker blocker(stair_flights);
         const auto row = stair_flights->rowCount();
         stair_flights->insertRow(row);
         auto* cell = new QTableWidgetItem(QString::number(static_cast<qulonglong>(risers)));
         cell->setData(Qt::UserRole, qt_string(id));
         stair_flights->setItem(row, 0, cell);
+        const std::array<std::optional<double>, 2> values{going, width};
+        const std::array<const char*, 2> keys{"going_m", "width_m"};
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            QString text;
+            if (values[i]) {
+                text = display_length(*values[i], metric);
+                const auto pointer = "/flights/" + std::to_string(row) + "/" + keys[i];
+                if (const auto receipt = original_quantity_entries.find(pointer); receipt != original_quantity_entries.end()) {
+                    if (const auto decoded = receipt_for_value(receipt->second, *values[i]); decoded)
+                        text = display_receipt_expression(decoded->quantity, metric);
+                }
+            }
+            auto* dimension = new QTableWidgetItem(text);
+            dimension->setData(Qt::UserRole + 1, text);
+            if (values[i]) dimension->setData(Qt::UserRole + 2, *values[i]);
+            dimension->setToolTip(QStringLiteral("Leave blank to use the stair default. Enter a length or expression with units, such as 0.3 m or 11 in."));
+            stair_flights->setItem(row, static_cast<int>(i) + 1, dimension);
+        }
     }
 
     void add_stair_landing_row(const StairConnectingLanding& landing) {
@@ -876,9 +900,9 @@ private:
     }
 
     void setup_stair_topology(QFormLayout* layout) {
-        stair_flights = new QTableWidget(0, 1, form_page);
+        stair_flights = new QTableWidget(0, 3, form_page);
         stair_flights->setObjectName(QStringLiteral("buildingObjectStairFlights"));
-        stair_flights->setHorizontalHeaderLabels({QStringLiteral("Risers in flight")});
+        stair_flights->setHorizontalHeaderLabels({QStringLiteral("Risers in flight"), QStringLiteral("Going (optional)"), QStringLiteral("Width (optional)")});
         stair_flights->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
         stair_flights->setSelectionBehavior(QAbstractItemView::SelectRows);
         stair_flights->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -913,10 +937,12 @@ private:
             const auto target = row + offset;
             if (row < 0 || target < 0 || target >= stair_flights->rowCount()) return;
             const QSignalBlocker blocker(stair_flights);
-            auto* a = stair_flights->takeItem(row, 0);
-            auto* b = stair_flights->takeItem(target, 0);
-            stair_flights->setItem(row, 0, b);
-            stair_flights->setItem(target, 0, a);
+            for (int column = 0; column < stair_flights->columnCount(); ++column) {
+                auto* a = stair_flights->takeItem(row, column);
+                auto* b = stair_flights->takeItem(target, column);
+                stair_flights->setItem(row, column, b);
+                stair_flights->setItem(target, column, a);
+            }
             stair_flights->selectRow(target);
             refresh_stair_summary();
         };
@@ -929,7 +955,7 @@ private:
         stair_landings->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
         stair_landings->setMinimumHeight(110);
         layout->addRow(QStringLiteral("Connecting landings"), stair_landings);
-        auto* help = new QLabel(QStringLiteral("Landing 1 connects flights 1 and 2. Reordering moves whole flights and retains landing order. Return gap applies to 180° turns; other turns require zero. Each flight keeps its own riser count."), form_page);
+        auto* help = new QLabel(QStringLiteral("Each flight has its own riser count and optional going and width. Leave a dimension blank to use the stair default below; enter lengths or expressions with units to override it. Landing 1 connects flights 1 and 2. Reordering moves whole flights and retains landing order. Return gap applies to 180° turns; other turns require zero."), form_page);
         help->setWordWrap(true);
         layout->addRow(help);
         stair_summary = new QLabel(form_page);
@@ -945,43 +971,59 @@ private:
         const QSignalBlocker flight_blocker(stair_flights), landing_blocker(stair_landings);
         stair_flights->setRowCount(0);
         stair_landings->setRowCount(0);
-        for (const auto& flight : stair.flights) add_stair_flight_row(flight.id, flight.riser_count);
+        for (const auto& flight : stair.flights) add_stair_flight_row(flight.id, flight.riser_count, flight.going, flight.width);
         for (const auto& landing : stair.landings) add_stair_landing_row(landing);
     }
 
-    void remap_landing_receipts() {
+    void remap_stair_child_receipts() {
         if (!original_entity || !original_entity->properties.contains("quantity_entries")) return;
         for (auto it = original_quantity_entries.begin(); it != original_quantity_entries.end();) {
-            if (it->first.starts_with("/landings/")) it = original_quantity_entries.erase(it);
+            if (it->first.starts_with("/landings/") || it->first.starts_with("/flights/")) it = original_quantity_entries.erase(it);
             else ++it;
         }
         const auto* stair = original_as<StairFlight>();
         if (!stair) return;
         const auto& receipts = original_entity->properties.at("quantity_entries");
         if (!receipts.is_object()) return;
-        for (int row = 0; row < stair_landings->rowCount(); ++row) {
-            const auto id = row_id(stair_landings, row);
-            for (std::size_t old_row = 0; old_row < stair->landings.size(); ++old_row) {
-                if (stair->landings[old_row].id != id) continue;
-                const auto old_prefix = "/landings/" + std::to_string(old_row) + "/";
-                const auto new_prefix = "/landings/" + std::to_string(row) + "/";
-                for (const auto& [pointer, receipt] : receipts.items()) {
-                    if (pointer.starts_with(old_prefix)) original_quantity_entries[new_prefix + pointer.substr(old_prefix.size())] = receipt;
+        const auto remap = [&](QTableWidget* table, const auto& children, const char* key) {
+            for (int row = 0; row < table->rowCount(); ++row) {
+                const auto id = row_id(table, row);
+                for (std::size_t old_row = 0; old_row < children.size(); ++old_row) {
+                    if (children[old_row].id != id) continue;
+                    const auto old_prefix = std::string("/") + key + "/" + std::to_string(old_row) + "/";
+                    const auto new_prefix = std::string("/") + key + "/" + std::to_string(row) + "/";
+                    for (const auto& [pointer, receipt] : receipts.items()) {
+                        if (pointer.starts_with(old_prefix)) original_quantity_entries[new_prefix + pointer.substr(old_prefix.size())] = receipt;
+                    }
                 }
             }
-        }
+        };
+        remap(stair_flights, stair->flights, "flights");
+        remap(stair_landings, stair->landings, "landings");
     }
 
     bool read_stair_topology(StairFlight& stair, bool record_receipts = true, bool validate = true) {
         stair.flights.clear(); stair.landings.clear(); stair.riser_count = 0;
-        if (record_receipts) remap_landing_receipts();
+        if (record_receipts) remap_stair_child_receipts();
         for (int row = 0; row < stair_flights->rowCount(); ++row) {
             bool ok{};
             const auto text = stair_flights->item(row, 0)->text().trimmed();
             const auto count = text.toULongLong(&ok);
             if (!ok || count == 0 || count > maximum_risers || text != QString::number(count))
                 throw std::invalid_argument("Each flight must have an integer riser count from 1 to 10000.");
-            stair.flights.push_back({row_id(stair_flights, row), static_cast<std::size_t>(count)});
+            const auto length = [&](int column, const char* key) -> std::optional<double> {
+                const auto* cell = stair_flights->item(row, column);
+                const auto pointer = "/flights/" + std::to_string(row) + "/" + key;
+                if (record_receipts) quantity_pointers["stairFlight" + std::to_string(row) + key] = pointer;
+                if (!cell || cell->text().trimmed().isEmpty()) return std::nullopt;
+                if (original_entity && cell->text() == cell->data(Qt::UserRole + 1).toString())
+                    return cell->data(Qt::UserRole + 2).toDouble();
+                const auto parsed = parse_quantity(cell->text().toStdString(), metric ? Unit::metre : Unit::foot);
+                if (record_receipts) parsed_quantities.insert_or_assign(pointer, parsed);
+                return parsed.metres;
+            };
+            stair.flights.push_back({row_id(stair_flights, row), static_cast<std::size_t>(count),
+                                     length(1, "going_m"), length(2, "width_m")});
             stair.riser_count += static_cast<std::size_t>(count);
         }
         for (int row = 0; row < stair_landings->rowCount(); ++row) {
@@ -1047,7 +1089,8 @@ private:
             throw std::invalid_argument("Choose a current multi-flight stair.");
         const auto id = host_combo->currentData().toString().toStdString();
         const auto& entity = source_snapshot->entities().at(id);
-        if (entity.properties.value("version", 0) != 2 ||
+        const auto version = entity.properties.value("version", 0);
+        if ((version != 2 && version != 3) ||
             entity.properties.value("form", std::string{}) != "multi_flight_stair")
             throw std::invalid_argument("Landing railings require a canonical multi-flight stair.");
         return decode_stair_properties(id, entity.properties);
@@ -1063,7 +1106,8 @@ private:
                 if (entity.type != "stair") continue;
                 try {
                     const auto stair = decode_stair_properties(id, entity.properties);
-                    if (entity.properties.value("version", 0) != 2 || stair.flights.empty() ||
+                    const auto version = entity.properties.value("version", 0);
+                    if ((version != 2 && version != 3) || stair.flights.empty() ||
                         (stair.landings.empty() && !stair.top_landing)) continue;
                     auto name = QStringLiteral("Stair %1").arg(++number);
                     if (entity.extensions.contains("name") && entity.extensions.at("name").is_string())

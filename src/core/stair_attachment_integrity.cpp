@@ -16,7 +16,7 @@ using Json = nlohmann::json;
 constexpr std::size_t max_relevant_work = 2000000, max_json_nodes = 100000;
 constexpr std::size_t max_phase_members = 100000, max_alternatives = 4096;
 [[noreturn]] void invalid(const char* reason) { throw std::invalid_argument(reason); }
-enum class Form { opaque, stair_v1, stair_v2, rail_v1, rail_v2, landing_rail_v3 };
+enum class Form { opaque, stair_v1, stair_multi, rail_v1, rail_v2, landing_rail_v3 };
 struct Budget { std::size_t json_nodes{}, stair_risers{}, phase_work{}; };
 
 // Only recognized forms are interpreted. A future integer version or unknown
@@ -38,15 +38,19 @@ Form form(const Entity& e) {
     if (!has_version || !p.at("version").is_number_integer())
         invalid("Known stair/railing form requires an integer version");
     const auto& version=p.at("version");
-    // The one canonical v3 addition does not reinterpret other future forms.
+    // Recognize each form's supported versions without interpreting future forms.
     if (name=="stair_landing_railing") {
         if(version>3) return Form::opaque;
         if(version==3) return Form::landing_rail_v3;
         invalid("Landing railing requires version 3");
     }
+    if (name=="multi_flight_stair") {
+        if (version>3) return Form::opaque;
+        if (version==2 || version==3) return Form::stair_multi;
+        invalid("Multi-flight stair requires version 2 or 3");
+    }
     if (version>2) return Form::opaque;
     if (version==1 && name=="straight_stair_flight") return Form::stair_v1;
-    if (version==2 && name=="multi_flight_stair") return Form::stair_v2;
     if (version==1 && name=="straight_railing") return Form::rail_v1;
     if (version==2 && name=="stair_flight_railing") return Form::rail_v2;
     invalid("Known stair/railing form and version disagree");
@@ -76,7 +80,7 @@ void preflight(const Map& entities,Budget& budget,bool hosted_rails) {
         if (!known && !(hosted_rails && e.type=="model_phases")) continue;
         if (id.empty() || id.size()>128 || e.id!=id) invalid("Stair admission entity map identity mismatch");
         bounded_json(e.properties,budget);
-        if (kind==Form::stair_v1 || kind==Form::stair_v2) {
+        if (kind==Form::stair_v1 || kind==Form::stair_multi) {
             const auto& p=e.properties;
             const auto count=p.find("riser_count");
             if (count==p.end() || !count->is_number_integer() || *count<1 || *count>10000)
@@ -86,7 +90,7 @@ void preflight(const Map& entities,Budget& budget,bool hosted_rails) {
                 invalid("Stair admission aggregate riser work limit exceeded");
             budget.stair_risers+=risers;
             if (p.contains("host")) invalid("Stair cannot carry railing host authority");
-            if (kind==Form::stair_v2) {
+            if (kind==Form::stair_multi) {
                 const auto fs=p.find("flights"), ls=p.find("landings");
                 if (fs==p.end() || !fs->is_array() || fs->empty() || fs->size()>256 ||
                     ls==p.end() || !ls->is_array() || ls->size()!=fs->size()-1)
@@ -133,7 +137,7 @@ void child_id(const std::string& id) {
 }
 bool has_topology(const Map& entities) {
     for (const auto& [id,e]:entities)
-        if (e.type=="stair" && form(e)==Form::stair_v2) return true;
+        if (e.type=="stair" && form(e)==Form::stair_multi) return true;
     return false;
 }
 Children identity_children(const Map& entities,std::size_t& child_work) {
@@ -141,14 +145,14 @@ Children identity_children(const Map& entities,std::size_t& child_work) {
     for (const auto& [id,e]:entities) {
         if (e.type!="stair") continue;
         const auto kind=form(e);
-        if (kind!=Form::stair_v1 && kind!=Form::stair_v2) continue;
+        if (kind!=Form::stair_v1 && kind!=Form::stair_multi) continue;
         child_id(id);
         if (e.id!=id) invalid("Stair admission entity map identity mismatch");
         const auto& p=e.properties;
         if (p.contains("host")) invalid("Stair cannot carry railing host authority");
         if (kind==Form::stair_v1) {
             if (p.contains("flights") || p.contains("landings"))
-                invalid("Stair topology requires version 2");
+                invalid("Stair topology requires version 2 or 3");
             continue;
         }
         const auto fs=p.find("flights"), ls=p.find("landings");
@@ -261,13 +265,13 @@ void validate_stair_attachment_state(const Map& entities) {
         };
         for (const auto& [id,e]:entities) {
             const auto kind=form(e);
-            if (kind==Form::stair_v1 || kind==Form::stair_v2) {
+            if (kind==Form::stair_v1 || kind==Form::stair_multi) {
                 // Resolve original host placement once, then decode the derived
                 // copy. Never replace the source map with derived coordinates.
                 const auto resolved=resolve_vertical_placement(entities,e);
                 auto stair=decode_stair_properties(id,resolved.properties);
                 add_children(children,stair,entities);
-                if (kind==Form::stair_v2) {
+                if (kind==Form::stair_multi) {
                     if (stair.level_connection) coherent_lower_level(entities,e,stair,org());
                     stairs.emplace(id,std::move(stair));
                 }
@@ -293,7 +297,7 @@ void validate_stair_attachment_state(const Map& entities) {
             if (e.properties.contains("vertical_placement"))
                 invalid("Hosted railing cannot own independent vertical placement");
             const auto s=stairs.find(rail.host?rail.host->stair_id:rail.landing_host->stair_id);
-            if (s==stairs.end()) invalid("Hosted railing requires a current canonical version-2 stair");
+            if (s==stairs.end()) invalid("Hosted railing requires a current canonical multi-flight stair");
             const auto& host=entities.at(s->first);
             const auto rc=complete_context(org(),e), hc=complete_context(org(),host);
             if (rc.property_id!=hc.property_id || rc.building_id!=hc.building_id || rc.floor_id!=hc.floor_id)
@@ -360,11 +364,11 @@ void StairIdentityHistory::validate_transition(const Map& before,const Map& afte
         for (const auto& [id,e]:after) {
             if (children_.contains(id)) invalid("Retained stair child cannot become an entity identity");
             const auto kind=e.type=="stair"?form(e):Form::opaque;
-            if ((kind==Form::stair_v1 || kind==Form::stair_v2) && stair_owner_ids_.contains(id)) {
+            if ((kind==Form::stair_v1 || kind==Form::stair_multi) && stair_owner_ids_.contains(id)) {
                 const auto old=before.find(id);
                 const auto old_kind=old!=before.end() && old->second.type=="stair"
                     ?form(old->second):Form::opaque;
-                if (old_kind!=Form::stair_v1 && old_kind!=Form::stair_v2)
+                if (old_kind!=Form::stair_v1 && old_kind!=Form::stair_multi)
                     invalid("Retired stair owner cannot be reused by an authored change");
             }
         }
@@ -393,7 +397,7 @@ void StairIdentityHistory::reserve_state(const Map& state) {
             if (id.empty() || e.id!=id) invalid("Stair ledger entity map identity mismatch");
             if (children_.contains(id)) invalid("Retained stair child identity collides with retained entity");
             const auto kind=e.type=="stair"?form(e):Form::opaque;
-            if (kind==Form::stair_v1 || kind==Form::stair_v2) stair_owners.push_back(id);
+            if (kind==Form::stair_v1 || kind==Form::stair_multi) stair_owners.push_back(id);
         }
         // Prepare rollback storage before mutation; these references stay valid
         // for the call. No full-ledger copy is needed for exception safety.

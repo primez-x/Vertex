@@ -361,8 +361,8 @@ TopoDS_Shape make_stair_flight(const StairFlight& flight) {
                 primitive.orientation_radians = part.orientation_radians;
                 primitive.riser_count = part.treads.size();
                 primitive.total_rise = part.rise;
-                primitive.going = flight.going;
-                primitive.width = flight.width;
+                primitive.going = part.going;
+                primitive.width = part.width;
                 builder.Add(compound, make_stair_flight(primitive));
             }
             for (const auto& landing : layout.landings) {

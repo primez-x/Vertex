@@ -6,6 +6,7 @@
 #include <numbers>
 #include <set>
 #include <stdexcept>
+#include <utility>
 
 namespace sketch {
 namespace {
@@ -21,6 +22,44 @@ void identity(std::string_view id) {
 }
 Vec3 local(Vec3 base,double yaw,double x,double y,double z=0) { Vec3 p{base.x+std::cos(yaw)*x-std::sin(yaw)*y,base.y+std::sin(yaw)*x+std::cos(yaw)*y,base.z+z}; coordinate(p); return p; }
 StairPolygon rectangle(Vec3 base,double yaw,double x0,double y0,double x1,double y1,double z) {return {local(base,yaw,x0,y0,z),local(base,yaw,x1,y0,z),local(base,yaw,x1,y1,z),local(base,yaw,x0,y1,z)};}
+// A flight's full contact must lie on one landing boundary, with its solid
+// outside the landing. Reuse this proof for stair admission and railing edges.
+std::pair<std::size_t,StairLandingEdgeInterval> landing_contact(
+    const StairLandingLayout& landing,Vec3 a,Vec3 b,Vec3 interior) {
+    double coordinate_scale=std::max({1.0,std::abs(a.x),std::abs(a.y),
+        std::abs(b.x),std::abs(b.y),std::abs(interior.x),std::abs(interior.y)});
+    for(const auto& point:landing.footprint)
+        coordinate_scale=std::max({coordinate_scale,std::abs(point.x),std::abs(point.y)});
+    const double contact_tolerance=eps+32*std::numeric_limits<double>::epsilon()*coordinate_scale;
+    const double elevation_tolerance=eps+32*std::numeric_limits<double>::epsilon()*
+        std::max({1.0,std::abs(a.z),std::abs(b.z),std::abs(landing.elevation)});
+    if(std::abs(a.z-landing.elevation)>elevation_tolerance || std::abs(b.z-landing.elevation)>elevation_tolerance)
+        invalid("Landing flight contact elevation disagrees");
+    std::optional<std::pair<std::size_t,StairLandingEdgeInterval>> result;
+    for(std::size_t e=0;e<4;++e) {
+        const auto p=landing.footprint[e],q=landing.footprint[(e+1)%4];
+        const auto length=std::hypot(q.x-p.x,q.y-p.y);
+        // A half-turn landing contains two bounded flight widths and a gap.
+        // Its derived edge need not fit the single-dimension authoring limit.
+        if(!std::isfinite(length)||length<=eps||length>3*max_dimension)
+            invalid("Stair landing edge must be positive and bounded");
+        const auto ux=(q.x-p.x)/length,uy=(q.y-p.y)/length;
+        const auto distance=[&](Vec3 v){return -(v.x-p.x)*uy+(v.y-p.y)*ux;};
+        if(std::abs(distance(a))>contact_tolerance || std::abs(distance(b))>contact_tolerance) continue;
+        const auto station=[&](Vec3 v){return (v.x-p.x)*ux+(v.y-p.y)*uy;};
+        const auto low=std::min(station(a),station(b)),high=std::max(station(a),station(b));
+        // A positive going may be smaller than twice the geometry tolerance.
+        // Its midpoint must be strictly outside, without requiring an extra
+        // tolerance-width strip of clearance. Wrong candidate edges are skipped.
+        if(high-low<=eps || low < -contact_tolerance || high > length+contact_tolerance || distance(interior)>=0)
+            continue;
+        if(result) invalid("Ambiguous landing flight boundary contact");
+        result=std::pair{e,StairLandingEdgeInterval{low<=contact_tolerance?0.0:low/length,
+            length-high<=contact_tolerance?1.0:high/length}};
+    }
+    if(!result) invalid("Landing flight contact reconstruction failed");
+    return *result;
+}
 bool overlap(const StairPolygon& a,const StairPolygon& b) {
     for(const auto* poly:{&a,&b}) for(std::size_t i=0;i<4;++i) {
         const auto& p=(*poly)[i]; const auto& q=(*poly)[(i+1)%4]; const auto nx=q.y-p.y, ny=p.x-q.x, norm=std::hypot(nx,ny);
@@ -51,31 +90,81 @@ void validate_connection(const StairLevelConnection& c) {
 void basic_stair(const StairFlight& s) {
     coordinate(s.base_position);angle(s.orientation_radians);positive(s.total_rise);positive(s.going);positive(s.width);
     if(s.riser_count==0||s.riser_count>max_risers)invalid("Stair riser count outside range");
-    positive(s.total_rise/static_cast<double>(s.riser_count));positive(s.going*static_cast<double>(s.riser_count));
+    positive(s.total_rise/static_cast<double>(s.riser_count));
     if(s.level_connection)validate_connection(*s.level_connection);
     if(s.top_landing){positive(s.top_landing->depth);positive(s.top_landing->thickness);if(s.top_landing->thickness>s.total_rise)invalid("Top landing extends below stair base");}
-    if(s.flights.empty()){if(!s.landings.empty())invalid("Connecting landings require flights");return;}
+    if(s.flights.empty()){if(!s.landings.empty())invalid("Connecting landings require flights");positive(s.going*static_cast<double>(s.riser_count));return;}
     if(s.flights.size()>max_flights||s.landings.size()!=s.flights.size()-1)invalid("Stair topology size invalid");
     std::set<std::string> ids;std::size_t sum=0;
-    for(const auto& f:s.flights){identity(f.id);if(!ids.insert(f.id).second||f.riser_count==0||f.riser_count>max_risers-sum)invalid("Invalid flight identity/count");sum+=f.riser_count;}
+    for(const auto& f:s.flights){
+        identity(f.id);
+        if(!ids.insert(f.id).second||f.riser_count==0||f.riser_count>max_risers-sum)
+            invalid("Invalid flight identity/count");
+        positive(f.going.value_or(s.going));positive(f.width.value_or(s.width));
+        positive(f.going.value_or(s.going)*static_cast<double>(f.riser_count));
+        sum+=f.riser_count;
+    }
     if(sum!=s.riser_count)invalid("Aggregate riser count differs from ordered flight sum");
+    // Preserve historical shared-dimension bounds for unchanged encodings.
+    const bool shared_dimensions=std::none_of(s.flights.begin(),s.flights.end(),
+        [](const auto& f){return f.going||f.width;});
+    if(shared_dimensions)
+        positive(s.going*static_cast<double>(s.riser_count));
     double rise=0;const auto h=s.total_rise/static_cast<double>(sum);
-    for(std::size_t i=0;i<s.landings.size();++i){const auto& l=s.landings[i];identity(l.id);if(!ids.insert(l.id).second)invalid("Duplicate stair child identity");positive(l.depth);positive(l.thickness);rise+=static_cast<double>(s.flights[i].riser_count)*h;if(l.thickness>rise)invalid("Connecting landing extends below stair base");(void)turn_name(l.turn);if(l.turn!=StairTurn::straight&&l.depth+eps<s.width)invalid("Turning landing depth must accommodate full flight width");if(!std::isfinite(l.return_gap)||l.return_gap<0||l.return_gap>max_dimension)invalid("Invalid stair return gap");if(l.return_gap!=0&&l.turn!=StairTurn::left_half&&l.turn!=StairTurn::right_half)invalid("Return gap requires a half turn");}
+    for(std::size_t i=0;i<s.landings.size();++i){
+        const auto& l=s.landings[i];identity(l.id);
+        if(!ids.insert(l.id).second)invalid("Duplicate stair child identity");
+        positive(l.depth);positive(l.thickness);
+        rise+=static_cast<double>(s.flights[i].riser_count)*h;
+        if(l.thickness>rise)invalid("Connecting landing extends below stair base");
+        (void)turn_name(l.turn);
+        // At a quarter turn the outgoing width lies along the incoming run.
+        // Incoming width occupies the perpendicular landing span instead.
+        if((l.turn==StairTurn::left_quarter||l.turn==StairTurn::right_quarter)&&
+           l.depth+eps<s.flights[i+1].width.value_or(s.width))
+            invalid("Quarter-turn landing depth must accommodate outgoing flight width");
+        if(shared_dimensions && (l.turn==StairTurn::left_half||l.turn==StairTurn::right_half) &&
+           l.depth+eps<s.width)
+            invalid("Turning landing depth must accommodate full shared flight width");
+        if(!std::isfinite(l.return_gap)||l.return_gap<0||l.return_gap>max_dimension)
+            invalid("Invalid stair return gap");
+        if(l.return_gap!=0&&l.turn!=StairTurn::left_half&&l.turn!=StairTurn::right_half)
+            invalid("Return gap requires a half turn");
+    }
 }
 }
 
 StairLayout derive_stair_layout(const StairFlight& s) {
-    basic_stair(s); StairLayout result; Vec3 base=s.base_position; double yaw=s.orientation_radians;
+    basic_stair(s); StairLayout result; Vec3 base=s.base_position;
+    // Normalize the derived frame from the authored sine/cosine. Reducing a
+    // large yaw with an approximate 2*pi would give the first and later
+    // flights different trig frames at their shared landing. Keep authored yaw.
+    double yaw=std::atan2(std::sin(s.orientation_radians),std::cos(s.orientation_radians));
     const auto h=s.total_rise/static_cast<double>(s.riser_count);
     const std::vector<StairFlightRecord> legacy={{s.id,s.riser_count}};
     const auto& flights=s.flights.empty()?legacy:s.flights;
     for(std::size_t i=0;i<flights.size();++i){const auto& record=flights[i];
-        StairFlightLayout f;f.id=record.id;f.base_position=base;f.orientation_radians=yaw;f.run=static_cast<double>(record.riser_count)*s.going;f.rise=static_cast<double>(record.riser_count)*h;f.riser_height=h;f.end_position=local(base,yaw,f.run,0,f.rise);f.footprint=rectangle(base,yaw,0,0,f.run,s.width,0);
+        StairFlightLayout f;f.id=record.id;f.base_position=base;f.orientation_radians=yaw;
+        f.going=record.going.value_or(s.going);f.width=record.width.value_or(s.width);
+        f.run=static_cast<double>(record.riser_count)*f.going;
+        f.rise=static_cast<double>(record.riser_count)*h;f.riser_height=h;
+        f.end_position=local(base,yaw,f.run,0,f.rise);
+        f.footprint=rectangle(base,yaw,0,0,f.run,f.width,0);
         f.treads.reserve(record.riser_count);
-        for(std::size_t t=0;t<record.riser_count;++t){const double x=static_cast<double>(t)*s.going,z=static_cast<double>(t+1)*h;const auto polygon=rectangle(base,yaw,x,0,x+s.going,s.width,z);f.treads.push_back({polygon,polygon[0],polygon[3],base.z+z});}
+        for(std::size_t t=0;t<record.riser_count;++t){const double x=static_cast<double>(t)*f.going,z=static_cast<double>(t+1)*h;const auto polygon=rectangle(base,yaw,x,0,x+f.going,f.width,z);f.treads.push_back({polygon,polygon[0],polygon[3],base.z+z});}
         result.flights.push_back(std::move(f));base=result.flights.back().end_position;
-        if(i<s.landings.size()){const auto& l=s.landings[i]; double ymin=0,ymax=s.width,nx=l.depth,ny=0,turn=0;
-            switch(l.turn){case StairTurn::straight:break;case StairTurn::left_quarter:nx=l.depth;ny=s.width;turn=std::numbers::pi/2;break;case StairTurn::right_quarter:nx=l.depth-s.width;turn=-std::numbers::pi/2;break;case StairTurn::left_half:ymax=2*s.width+l.return_gap;nx=0;ny=ymax;turn=std::numbers::pi;break;case StairTurn::right_half:ymin=-s.width-l.return_gap;nx=0;ny=-l.return_gap;turn=-std::numbers::pi;break;}
+        if(i<s.landings.size()){
+            const auto& l=s.landings[i];
+            const auto incoming_width=result.flights.back().width;
+            const auto outgoing_width=flights[i+1].width.value_or(s.width);
+            double ymin=0,ymax=incoming_width,nx=l.depth,ny=0,turn=0;
+            switch(l.turn){
+            case StairTurn::straight:ymax=std::max(incoming_width,outgoing_width);break;
+            case StairTurn::left_quarter:ny=incoming_width;turn=std::numbers::pi/2;break;
+            case StairTurn::right_quarter:nx=l.depth-outgoing_width;turn=-std::numbers::pi/2;break;
+            case StairTurn::left_half:ymax=incoming_width+outgoing_width+l.return_gap;nx=0;ny=ymax;turn=std::numbers::pi;break;
+            case StairTurn::right_half:ymin=-outgoing_width-l.return_gap;nx=0;ny=-l.return_gap;turn=-std::numbers::pi;break;
+            }
             result.landings.push_back({l.id,rectangle(base,yaw,0,ymin,l.depth,ymax,0),base.z,l.thickness});base=local(base,yaw,nx,ny);
             // This is a derived frame, not a rewrite of the authored angle.
             // Keep accumulated turns bounded even at the authored yaw limit.
@@ -83,7 +172,26 @@ StairLayout derive_stair_layout(const StairFlight& s) {
                                2*std::numbers::pi);
         }
     }
-    if(s.top_landing)result.landings.push_back({{},rectangle(base,yaw,0,0,s.top_landing->depth,s.width,0),base.z,s.top_landing->thickness});
+    if(s.top_landing)result.landings.push_back({{},rectangle(base,yaw,0,0,s.top_landing->depth,result.flights.back().width,0),base.z,s.top_landing->thickness});
+    for(std::size_t i=0;i<result.landings.size();++i) {
+        const auto& landing=result.landings[i];
+        const auto& incoming=result.flights[i];
+        const auto& last=incoming.treads.back();
+        (void)landing_contact(landing,last.footprint[1],last.footprint[2],
+            {(last.footprint[0].x+last.footprint[2].x)/2,
+             (last.footprint[0].y+last.footprint[2].y)/2,last.elevation});
+        if(i<s.landings.size()) {
+            const auto& outgoing=result.flights[i+1];
+            if(std::abs(outgoing.base_position.z-landing.elevation)>eps ||
+               std::abs(outgoing.treads.front().elevation-landing.elevation-outgoing.riser_height)>eps)
+                invalid("Outgoing landing flight elevation disagrees");
+            auto a=outgoing.footprint[0],b=outgoing.footprint[3];
+            a.z=b.z=landing.elevation;
+            (void)landing_contact(landing,a,b,
+                {(outgoing.footprint[0].x+outgoing.footprint[2].x)/2,
+                 (outgoing.footprint[0].y+outgoing.footprint[2].y)/2,landing.elevation});
+        }
+    }
     // Check actual tread volumes rather than flight bounding boxes, which
     // would wrongly reject a landing safely above an earlier lower tread.
     struct Cell {StairPolygon p;double low,high;}; std::vector<Cell> cells;
@@ -137,7 +245,7 @@ void validate_railing(const Railing& r) {
 StairLandingEdgeLayout derive_stair_landing_edge(
     const StairFlight& s,const StairLandingRailingHost& host) {
     if (host.stair_id!=s.id || s.flights.empty() || host.edge_index>3)
-        invalid("Landing rail requires its canonical version-2 stair and edge");
+        invalid("Landing rail requires its canonical multi-flight stair and edge");
     const auto layout=derive_stair_layout(s);
     std::size_t index{};
     if (host.role==StairLandingRole::connecting) {
@@ -161,25 +269,8 @@ StairLandingEdgeLayout derive_stair_landing_edge(
     // one original boundary edge, at the surface elevation, with the flight
     // occupying the outside half-plane. Failure never turns into exposure.
     const auto contact=[&](Vec3 a,Vec3 b,Vec3 interior) {
-        if(std::abs(a.z-landing.elevation)>eps || std::abs(b.z-landing.elevation)>eps)
-            invalid("Landing flight contact elevation disagrees");
-        bool matched=false;
-        for(std::size_t e=0;e<4;++e) {
-            const auto p=polygon[e],q=polygon[(e+1)%4];
-            const auto length=std::hypot(q.x-p.x,q.y-p.y);
-            positive(length);
-            const auto ux=(q.x-p.x)/length,uy=(q.y-p.y)/length;
-            const auto distance=[&](Vec3 v){return -(v.x-p.x)*uy+(v.y-p.y)*ux;};
-            if(std::abs(distance(a))>eps || std::abs(distance(b))>eps) continue;
-            const auto station=[&](Vec3 v){return (v.x-p.x)*ux+(v.y-p.y)*uy;};
-            const auto low=std::min(station(a),station(b)),high=std::max(station(a),station(b));
-            if(high-low<=eps || low < -eps || high > length+eps || distance(interior)>=-eps)
-                invalid("Landing flight contact is not a full adjacent boundary contact");
-            if(matched) invalid("Ambiguous landing flight boundary contact");
-            matched=true;
-            blocked[e].push_back({low<=eps?0.0:low/length, length-high<=eps?1.0:high/length});
-        }
-        if(!matched) invalid("Landing flight contact reconstruction failed");
+        const auto [edge,interval]=landing_contact(landing,a,b,interior);
+        blocked[edge].push_back(interval);
     };
     const auto& incoming=layout.flights.at(index);
     const auto& last=incoming.treads.back();
@@ -260,16 +351,16 @@ HostedRailingLayout derive_hosted_railing_layout(const Railing& r,const StairFli
         return result;
     }
     if(!r.host||r.host->stair_id!=s.id)invalid("Railing requires its current host stair");const auto layout=derive_stair_layout(s);const auto found=std::find_if(layout.flights.begin(),layout.flights.end(),[&](const auto& f){return f.id==r.host->flight_id;});if(found==layout.flights.end())invalid("Hosted railing flight no longer exists");const auto& f=*found;
-    if(r.thickness>=s.going-eps||r.thickness>=s.width-eps)invalid("Railing posts do not fit the tread");const auto half=r.thickness/2;const auto domain=f.run-r.thickness;const auto start=half+r.host->start_fraction*domain,end=half+r.host->end_fraction*domain;
+    if(r.thickness>=f.going-eps||r.thickness>=f.width-eps)invalid("Railing posts do not fit the tread");const auto half=r.thickness/2;const auto domain=f.run-r.thickness;const auto start=half+r.host->start_fraction*domain,end=half+r.host->end_fraction*domain;
     if (end - start <= eps)
         invalid("Hosted railing stations must span a positive supported run");
-    const auto slope=f.treads.size()==1?0:f.riser_height/s.going;const auto factor=std::hypot(1.0,slope);const auto spacing=r.post_spacing/factor;
+    const auto slope=f.treads.size()==1?0:f.riser_height/f.going;const auto factor=std::hypot(1.0,slope);const auto spacing=r.post_spacing/factor;
     if(!std::isfinite(spacing)||std::ceil((end-start)/spacing)>static_cast<double>(max_posts-1))invalid("Too many hosted railing posts");
-    const auto supported=[&](double x){auto t=std::min(static_cast<std::size_t>(std::floor(x/s.going)),f.treads.size()-1);const auto low=static_cast<double>(t)*s.going+half,high=static_cast<double>(t+1)*s.going-half;return x>=low-eps&&x<=high+eps;};
+    const auto supported=[&](double x){auto t=std::min(static_cast<std::size_t>(std::floor(x/f.going)),f.treads.size()-1);const auto low=static_cast<double>(t)*f.going+half,high=static_cast<double>(t+1)*f.going-half;return x>=low-eps&&x<=high+eps;};
     if(!supported(start)||!supported(end))invalid("Railing endpoints require full tread support");
-    HostedRailingLayout result;result.orientation_radians=f.orientation_radians;const auto y=r.host->side==StairRailingSide::left?s.width-half:half;
+    HostedRailingLayout result;result.orientation_radians=f.orientation_radians;const auto y=r.host->side==StairRailingSide::left?f.width-half:half;
     const auto rail_point=[&](double x){return local(f.base_position,f.orientation_radians,x,y,f.riser_height+x*slope+r.height);};result.rail_start=rail_point(start);result.rail_end=rail_point(end);
-    const auto post=[&](double x){const auto t=std::min(static_cast<std::size_t>(std::floor(x/s.going)),f.treads.size()-1);const auto elevation=static_cast<double>(t+1)*f.riser_height;result.posts.push_back({local(f.base_position,f.orientation_radians,x,y,elevation),rail_point(x)});};post(start);
+    const auto post=[&](double x){const auto t=std::min(static_cast<std::size_t>(std::floor(x/f.going)),f.treads.size()-1);const auto elevation=static_cast<double>(t+1)*f.riser_height;result.posts.push_back({local(f.base_position,f.orientation_radians,x,y,elevation),rail_point(x)});};post(start);
     // Geometry tolerance identifies a support boundary, but it must not
     // enlarge the authored maximum spacing. Allow only floating roundoff in
     // the actual 3D pitch distance, including the final endpoint interval.
@@ -281,15 +372,15 @@ HostedRailingLayout derive_hosted_railing_layout(const Railing& r,const StairFli
     double x = start;
     while (!within_spacing(x, end)) {
         double next = std::min(end, x + spacing);
-        const auto t = std::min(static_cast<std::size_t>(std::floor(next / s.going)),
+        const auto t = std::min(static_cast<std::size_t>(std::floor(next / f.going)),
                                 f.treads.size() - 1);
-        const auto low = static_cast<double>(t) * s.going + half;
-        const auto high = static_cast<double>(t + 1) * s.going - half;
+        const auto low = static_cast<double>(t) * f.going + half;
+        const auto high = static_cast<double>(t + 1) * f.going - half;
         if (next < low) {
             // An exactly reachable boundary can round a few ULPs below low.
             // Clamp to it before measuring spacing rather than jumping back
             // to the previous tread, which can strand an otherwise valid rail.
-            next = low - next <= eps ? low : static_cast<double>(t) * s.going - half;
+            next = low - next <= eps ? low : static_cast<double>(t) * f.going - half;
         } else if (next > high) {
             next = high;
         }
@@ -303,15 +394,39 @@ HostedRailingLayout derive_hosted_railing_layout(const Railing& r,const StairFli
     return result;
 }
 
-Json encode_stair_properties(const StairFlight& s){validate_stair(s);Json p={{"version",s.flights.empty()?1:2},{"form",s.flights.empty()?"straight_stair_flight":"multi_flight_stair"},{"base_position_m",json_point(s.base_position)},{"orientation_rad",s.orientation_radians},{"riser_count",s.riser_count},{"total_rise_m",s.total_rise},{"going_m",s.going},{"width_m",s.width},{"top_landing",nullptr}};
+Json encode_stair_properties(const StairFlight& s){validate_stair(s);
+    const bool per_flight_dimensions=std::any_of(s.flights.begin(),s.flights.end(),
+        [](const auto& f){return f.going.has_value()||f.width.has_value();});
+    Json p={{"version",s.flights.empty()?1:(per_flight_dimensions?3:2)},{"form",s.flights.empty()?"straight_stair_flight":"multi_flight_stair"},{"base_position_m",json_point(s.base_position)},{"orientation_rad",s.orientation_radians},{"riser_count",s.riser_count},{"total_rise_m",s.total_rise},{"going_m",s.going},{"width_m",s.width},{"top_landing",nullptr}};
     if(s.top_landing)p["top_landing"]={{"depth_m",s.top_landing->depth},{"thickness_m",s.top_landing->thickness}};
     if(s.level_connection){const auto& c=*s.level_connection;p["level_connection"]={{"version",1},{"graph_id",c.graph_entity_id},{"link_id",c.link_id},{"lower_level_id",c.lower_level_id},{"upper_level_id",c.upper_level_id}};}
-    if(!s.flights.empty()){p["flights"]=Json::array();for(const auto& f:s.flights)p["flights"].push_back({{"id",f.id},{"riser_count",f.riser_count}});p["landings"]=Json::array();for(const auto& l:s.landings)p["landings"].push_back({{"id",l.id},{"depth_m",l.depth},{"thickness_m",l.thickness},{"turn",turn_name(l.turn)},{"return_gap_m",l.return_gap}});}return p;
+    if(!s.flights.empty()){
+        p["flights"]=Json::array();
+        for(const auto& f:s.flights){
+            Json record={{"id",f.id},{"riser_count",f.riser_count}};
+            if(f.going)record["going_m"]=*f.going;
+            if(f.width)record["width_m"]=*f.width;
+            p["flights"].push_back(std::move(record));
+        }
+        p["landings"]=Json::array();for(const auto& l:s.landings)p["landings"].push_back({{"id",l.id},{"depth_m",l.depth},{"thickness_m",l.thickness},{"turn",turn_name(l.turn)},{"return_gap_m",l.return_gap}});
+    }return p;
 }
-StairFlight decode_stair_properties(std::string_view id,const Json& p){identity(id);const auto& version=field(p,"version");const bool v2=version.is_number_integer()&&version==2;version_form(p,v2?2:1,v2?"multi_flight_stair":"straight_stair_flight");if(!v2&&(p.contains("flights")||p.contains("landings")))invalid("Stair topology requires version 2");StairFlight s{std::string(id),point(p,"base_position_m"),number(p,"orientation_rad"),count(p,"riser_count"),number(p,"total_rise_m"),number(p,"going_m"),number(p,"width_m")};
+StairFlight decode_stair_properties(std::string_view id,const Json& p){identity(id);const auto& version=field(p,"version");const bool v2=version.is_number_integer()&&version==2,v3=version.is_number_integer()&&version==3;const bool multi=v2||v3;version_form(p,v3?3:(v2?2:1),multi?"multi_flight_stair":"straight_stair_flight");if(!multi&&(p.contains("flights")||p.contains("landings")))invalid("Stair topology requires version 2 or 3");StairFlight s{std::string(id),point(p,"base_position_m"),number(p,"orientation_rad"),count(p,"riser_count"),number(p,"total_rise_m"),number(p,"going_m"),number(p,"width_m")};
     const auto& top=field(p,"top_landing");if(!top.is_null())s.top_landing=StairLanding{number(top,"depth_m"),number(top,"thickness_m")};
     if(p.contains("level_connection")){const auto& c=p.at("level_connection");const auto& v=field(c,"version");if(!v.is_number_integer()||v!=1)invalid("Invalid stair level connection version");s.level_connection=StairLevelConnection{text(c,"graph_id"),text(c,"link_id"),text(c,"lower_level_id"),text(c,"upper_level_id")};}
-    if(v2){const auto& fs=field(p,"flights");const auto& ls=field(p,"landings");if(!fs.is_array()||fs.empty()||fs.size()>max_flights||!ls.is_array()||ls.size()!=fs.size()-1)invalid("Invalid stair topology arrays");for(const auto& f:fs)s.flights.push_back({text(f,"id"),count(f,"riser_count")});for(const auto& l:ls)s.landings.push_back({text(l,"id"),number(l,"depth_m"),number(l,"thickness_m"),turn_value(text(l,"turn")),number(l,"return_gap_m")});}validate_stair(s);return s;
+    if(multi){
+        const auto& fs=field(p,"flights");const auto& ls=field(p,"landings");
+        if(!fs.is_array()||fs.empty()||fs.size()>max_flights||!ls.is_array()||ls.size()!=fs.size()-1)invalid("Invalid stair topology arrays");
+        for(const auto& f:fs){
+            if(!v3&&(f.contains("going_m")||f.contains("width_m")))
+                invalid("Per-flight stair dimensions require version 3");
+            StairFlightRecord record{text(f,"id"),count(f,"riser_count")};
+            if(f.contains("going_m"))record.going=number(f,"going_m");
+            if(f.contains("width_m"))record.width=number(f,"width_m");
+            s.flights.push_back(std::move(record));
+        }
+        for(const auto& l:ls)s.landings.push_back({text(l,"id"),number(l,"depth_m"),number(l,"thickness_m"),turn_value(text(l,"turn")),number(l,"return_gap_m")});
+    }validate_stair(s);return s;
 }
 Json encode_railing_properties(const Railing& r) {
     validate_railing(r);

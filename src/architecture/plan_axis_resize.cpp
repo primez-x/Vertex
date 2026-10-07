@@ -153,18 +153,21 @@ double building_frame(const BuildingObject& object) {
 
 void resize_stair(StairFlight& stair, const Resize& resize, double along, double across) {
     const auto before = derive_stair_layout(stair);
-    // All flights share one authored going and width. Parallel/return flights
-    // can retain those semantics under independent factors; a quarter turn
-    // would need different per-flight going/width when the factors differ.
-    for (const auto& flight : before.flights) {
-        const auto [flight_along,flight_across] = resize.local_factors(flight.orientation_radians);
-        if (!equal_factors(flight_along,along) || !equal_factors(flight_across,across))
-            throw std::invalid_argument(
-                "Independent plan-axis resizing of quarter-turn stairs requires per-flight going and width; this stair uses shared dimensions");
-    }
     resize.point(stair.base_position);
     stair.going *= along;
     stair.width *= across;
+    // Defaults follow the first flight's frame. Every ordered flight follows
+    // its own physical axes; quarter turns swap the requested plan factors.
+    // Keep inherited fields absent only when the new default is exactly the
+    // required dimension, and preserve every explicitly authored override.
+    for (std::size_t i=0; i<stair.flights.size(); ++i) {
+        auto& record=stair.flights[i];
+        const auto& flight=before.flights[i];
+        const auto [flight_along,flight_across]=resize.local_factors(flight.orientation_radians);
+        const double going=flight.going*flight_along,width=flight.width*flight_across;
+        if (record.going || going!=stair.going) record.going=going;
+        if (record.width || width!=stair.width) record.width=width;
+    }
     for (std::size_t i=0; i<stair.landings.size(); ++i) {
         const auto [landing_along,landing_across] =
             resize.local_factors(before.flights[i].orientation_radians);
@@ -287,7 +290,19 @@ Entity resize_building(const Entity& original, const Resize& resize) {
     const auto canonical = encode_building_entity(object,original.extensions);
     Entity result = original;
     for (const auto& [key,value] : canonical.properties.items()) {
-        if (key=="flights") continue; // Stable records and their metadata are unchanged.
+        if (key=="flights") {
+            // Patch only owned dimensions. Stable child identities, counts,
+            // order and opaque per-flight authoring metadata stay authored.
+            auto& flights=result.properties.at(key);
+            for (std::size_t i=0; i<value.size(); ++i)
+                for (const auto* dimension : {"going_m","width_m"}) {
+                    if (value[i].contains(dimension)) flights[i][dimension]=value[i].at(dimension);
+                    else flights[i].erase(dimension);
+                }
+            continue;
+        }
+        if (key=="version" && original.type=="stair" && value==2 &&
+            original.properties.at("version")==3) continue;
         if (key=="landings") {
             // Update only dimensions: child IDs, turns, thicknesses, order and
             // opaque per-landing authoring data retain their original values.

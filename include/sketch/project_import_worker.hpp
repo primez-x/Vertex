@@ -348,8 +348,18 @@ inline std::size_t native_stair_railing_work(const Entity& entity, const Entity*
             if (!p.at("landings").is_array() || p.at("landings").size() > 256) reject();
             landings = p.at("landings").size();
         }
-        if (p.contains("flights") && (!p.at("flights").is_array() || p.at("flights").empty() ||
-            p.at("flights").size() > 256)) reject();
+        if (p.contains("flights")) {
+            const auto& flights = p.at("flights");
+            if (!flights.is_array() || flights.empty() || flights.size() > 256) reject();
+            std::size_t risers = 0;
+            for (const auto& flight : flights) {
+                if (!flight.is_object() || !flight.contains("riser_count") ||
+                    !flight.at("riser_count").is_number_integer() || flight.at("riser_count") < 1 ||
+                    flight.at("riser_count") > 10000 - risers) reject();
+                risers += flight.at("riser_count").get<std::size_t>();
+            }
+            if (risers != p.at("riser_count").get<std::size_t>() || landings + 1 != flights.size()) reject();
+        }
         return p.at("riser_count").get<std::size_t>() + landings + 2;
     };
     if (entity.type == "stair") return stair_work(entity.properties);
@@ -367,14 +377,30 @@ inline std::size_t native_stair_railing_work(const Entity& entity, const Entity*
         if (!host || host->type != "stair") reject();
         work = stair_work(host->properties);
         const auto& s = host->properties;
-        length = s.at("riser_count").get<double>() * positive(s, "going_m") + positive(s, "total_rise_m");
+        const auto going = positive(s, "going_m"), width = positive(s, "width_m");
+        double maximum_width = 0;
+        length = positive(s, "total_rise_m");
+        if (s.contains("flights")) {
+            for (const auto& flight : s.at("flights")) {
+                const auto flight_going = flight.contains("going_m") ? positive(flight, "going_m") : going;
+                const auto flight_width = flight.contains("width_m") ? positive(flight, "width_m") : width;
+                length += flight.at("riser_count").get<double>() * flight_going;
+                maximum_width = std::max(maximum_width, flight_width);
+            }
+        } else {
+            length += s.at("riser_count").get<double>() * going;
+            maximum_width = width;
+        }
+        // Every landing edge is bounded by its depth or the sum of its actual
+        // adjacent flight widths plus the return gap. Maximum resolved width
+        // also covers straight/quarter-turn and final landing extents.
         if (s.contains("landings")) for (const auto& landing : s.at("landings")) {
             const auto gap = landing.contains("return_gap_m") ? number(landing, "return_gap_m") : 0.0;
             if (gap < 0 || gap > 1e6) reject();
-            length += positive(landing, "depth_m") + 2 * positive(s, "width_m") + gap;
+            length += positive(landing, "depth_m") + 2 * maximum_width + gap;
         }
         if (s.contains("top_landing") && !s.at("top_landing").is_null())
-            length += positive(s.at("top_landing"), "depth_m") + positive(s, "width_m");
+            length += positive(s.at("top_landing"), "depth_m") + maximum_width;
     } else length = positive(p, "length_m");
     const auto posts = std::ceil(length / spacing) + 3;
     if (!std::isfinite(posts) || posts <= 0 || posts > 10003) reject();
@@ -496,7 +522,7 @@ inline void validate(const ProjectImportCandidate& result) {
                 !p.at("version").is_number_integer() || !p.contains("form") || !p.at("form").is_string()) reject();
             const bool supported = entity.type == "stair"
                 ? (p.at("version") == 1 && p.at("form") == "straight_stair_flight") ||
-                    (p.at("version") == 2 && p.at("form") == "multi_flight_stair")
+                    ((p.at("version") == 2 || p.at("version") == 3) && p.at("form") == "multi_flight_stair")
                 : (p.at("version") == 1 && p.at("form") == "straight_railing") ||
                     (p.at("version") == 2 && p.at("form") == "stair_flight_railing") ||
                     (p.at("version") == 3 && p.at("form") == "stair_landing_railing");

@@ -1169,42 +1169,11 @@ bool detach_native_context(Json& properties) {
 // enters its pairwise landing checks. Hosted post bounds use a conservative
 // path length; exact supported stations are validated by the canonical decoder.
 std::size_t stair_railing_work(const Entity& entity, const Entity* host = nullptr) {
-    const auto stair_work = [](const Json& p) {
-        require(p.contains("riser_count") && p.at("riser_count").is_number_integer() &&
-            p.at("riser_count") > 0 && p.at("riser_count") <= 10000);
-        const auto n = p.at("riser_count").get<std::size_t>();
-        std::size_t l = 0;
-        if (p.contains("landings")) {
-            require(p.at("landings").is_array() && p.at("landings").size() <= 256);
-            l = p.at("landings").size();
-        }
-        return n + l + 2;
-    };
-    if (entity.type == "stair") return stair_work(entity.properties);
-    const auto& p = entity.properties;
-    const auto positive = [](const Json& value, const char* key) {
-        require(value.contains(key) && value.at(key).is_number());
-        const auto x = value.at(key).get<double>();
-        require(std::isfinite(x) && x > kTolerance && x <= 1e6);
-        return x;
-    };
-    const auto spacing = positive(p, "post_spacing_m");
-    double length = 0;
-    std::size_t work = 0;
-    if (p.contains("host")) {
-        require(host && host->type == "stair");
-        work = stair_work(host->properties);
-        const auto& s = host->properties;
-        length = s.at("riser_count").get<double>() * positive(s, "going_m") + positive(s, "total_rise_m");
-        // Landing coverage is shorter than this summed horizontal extent.
-        if (s.contains("landings")) for (const auto& l : s.at("landings"))
-            length += positive(l, "depth_m") + 2 * positive(s, "width_m") + l.value("return_gap_m", 0.0);
-        if (s.contains("top_landing") && s.at("top_landing").is_object())
-            length += positive(s.at("top_landing"), "depth_m") + positive(s, "width_m");
-    } else length = positive(p, "length_m");
-    const auto posts = std::ceil(length / spacing) + 3;
-    require(std::isfinite(posts) && posts > 0 && posts <= 10003);
-    return work + static_cast<std::size_t>(posts);
+    try {
+        return project_import_detail::native_stair_railing_work(entity, host);
+    } catch (const std::exception&) {
+        invalid();
+    }
 }
 
 // Imported topology receives fresh live identities. Compare those schema-owned
@@ -1213,8 +1182,10 @@ std::size_t stair_railing_work(const Entity& entity, const Entity* host = nullpt
 std::map<std::string, std::string, std::less<>> stair_comparison_child_remap(
     const Json& captured, const Json& current) {
     std::map<std::string, std::string, std::less<>> result;
-    if (!captured.is_object() || !current.is_object() || captured.value("version", 0) != 2 ||
-        current.value("version", 0) != 2 || captured.value("form", std::string{}) != "multi_flight_stair" ||
+    if (!captured.is_object() || !current.is_object() ||
+        (captured.value("version", 0) != 2 && captured.value("version", 0) != 3) ||
+        captured.value("version", 0) != current.value("version", 0) ||
+        captured.value("form", std::string{}) != "multi_flight_stair" ||
         current.value("form", std::string{}) != "multi_flight_stair") return result;
     for (const auto* key : {"flights", "landings"}) {
         if (!captured.contains(key) || !current.contains(key) || !captured.at(key).is_array() ||

@@ -437,7 +437,7 @@ void remap_clipboard_json(json& value,
 bool multi_flight_stair(const Entity& entity) {
     const auto& p = entity.properties;
     return entity.type == "stair" && p.is_object() && p.contains("version") &&
-        p.at("version").is_number_integer() && p.at("version") == 2 &&
+        p.at("version").is_number_integer() && (p.at("version") == 2 || p.at("version") == 3) &&
         p.contains("form") && p.at("form") == "multi_flight_stair";
 }
 
@@ -4651,16 +4651,19 @@ bool is_building_quantity_path(const std::string& pointer) {
              "/going_m", "/run_m", "/span_m", "/rise_m", "/overhang_m", "/thickness_m", "/length_m",
              "/post_spacing_m", "/top_landing/depth_m", "/top_landing/thickness_m"})
         if (pointer == scalar) return true;
-    if (pointer.starts_with("/landings/")) {
-        const auto separator = pointer.find('/', 10);
+    for (const std::string_view prefix : {"/landings/", "/flights/"}) {
+        if (!pointer.starts_with(prefix)) continue;
+        const auto separator = pointer.find('/', prefix.size());
         if (separator != std::string::npos) {
-            const auto index = pointer.substr(10, separator - 10);
+            const auto index = pointer.substr(prefix.size(), separator - prefix.size());
             std::size_t row{};
             const auto [end, error] = std::from_chars(index.data(), index.data() + index.size(), row);
             const auto key = pointer.substr(separator + 1);
+            const bool dimension = prefix == "/flights/" ? key == "going_m" || key == "width_m"
+                : key == "depth_m" || key == "thickness_m" || key == "return_gap_m";
             if (!index.empty() && (index.size() == 1 || index.front() != '0') &&
                 error == std::errc{} && end == index.data() + index.size() && row < 256 &&
-                (key == "depth_m" || key == "thickness_m" || key == "return_gap_m")) return true;
+                dimension) return true;
         }
     }
     for (const auto* vector : {"/base_center_m/", "/base_position_m/", "/start_m/", "/end_m/"}) {
@@ -4717,17 +4720,19 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
             continue;
         }
         auto original_pointer = pointer;
-        if (original && pointer.starts_with("/landings/") && is_building_quantity_path(pointer) &&
-            canonical_properties.contains("landings") && original->properties.contains("landings")) {
-            const auto separator = pointer.find('/', 10);
-            const auto row = static_cast<std::size_t>(std::stoul(pointer.substr(10, separator - 10)));
-            const auto& next = canonical_properties.at("landings");
-            const auto& before = original->properties.at("landings");
+        const auto child_key = pointer.starts_with("/flights/") ? "flights" : "landings";
+        const auto child_prefix = std::string("/") + child_key + "/";
+        if (original && pointer.starts_with(child_prefix) && is_building_quantity_path(pointer) &&
+            canonical_properties.contains(child_key) && original->properties.contains(child_key)) {
+            const auto separator = pointer.find('/', child_prefix.size());
+            const auto row = static_cast<std::size_t>(std::stoul(pointer.substr(child_prefix.size(), separator - child_prefix.size())));
+            const auto& next = canonical_properties.at(child_key);
+            const auto& before = original->properties.at(child_key);
             if (next.is_array() && row < next.size() && before.is_array()) {
                 const auto id = next.at(row).at("id");
                 for (std::size_t old_row = 0; old_row < before.size(); ++old_row)
                     if (before.at(old_row).is_object() && before.at(old_row).value("id", json{}) == id) {
-                        original_pointer = "/landings/" + std::to_string(old_row) + pointer.substr(separator);
+                        original_pointer = child_prefix + std::to_string(old_row) + pointer.substr(separator);
                         break;
                     }
             }
@@ -18976,6 +18981,13 @@ public:
                 if (candidate.type == "stair") {
                     for (const auto* key : {"top_landing", "level_connection", "flights", "landings"})
                         if (!canonical.properties.contains(key)) candidate.properties.erase(key);
+                    if (canonical.properties.contains("flights")) {
+                        const auto& flights=canonical.properties.at("flights");
+                        for (std::size_t row=0;row<flights.size();++row)
+                            for (const auto* dimension : {"going_m","width_m"})
+                                if (!flights.at(row).contains(dimension))
+                                    candidate.properties.at("flights").at(row).erase(dimension);
+                    }
                 }
                 if (candidate.type == "railing") {
                     if (!canonical.properties.contains("host")) candidate.properties.erase("host");

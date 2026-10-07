@@ -626,11 +626,14 @@
   height, rise and level placement. A resize that cannot be represented by the
   object's physical dimensions leaves the original unchanged and explains the
   conflict.</p>
-  <p>Straight and U-shaped stairs can change their plan run and width separately;
-  their connecting landings and return gaps follow the edit. Stair rise, riser
-  counts and floor connections stay fixed. A stair with quarter turns currently
-  shares its going and width across all flights, so use proportional plan sizing
-  for that layout. An unequal resize explains the shared-dimension conflict.</p>
+  <p>Straight, L-shaped and U-shaped stairs can change their plan run and width
+  separately. Each flight follows its own direction; connecting landings and
+  return gaps follow the edit. Stair rise, riser counts and floor connections
+  stay fixed. In the stair dimensions editor, each flight has optional
+  <strong>Going</strong> and <strong>Width</strong> entries. Leave an entry blank
+  to use <strong>Default going</strong> or <strong>Default width</strong>, or enter
+  an exact length or expression for that flight. The preview checks that the
+  flights still meet their landings and their railings remain supported.</p>
 
   <h2>Dimensions in plans, elevations and sections</h2>
   <p>In an Architectural view, right-click one wall, opening, room, slab, roof,

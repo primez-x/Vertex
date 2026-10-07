@@ -17,7 +17,13 @@ struct StairLevelConnection {
     bool operator==(const StairLevelConnection&) const = default;
 };
 enum class StairTurn { straight, left_quarter, right_quarter, left_half, right_half };
-struct StairFlightRecord { std::string id; std::size_t riser_count{}; };
+struct StairFlightRecord {
+    std::string id;
+    std::size_t riser_count{};
+    // Missing dimensions inherit the stair's authored defaults.
+    std::optional<double> going;
+    std::optional<double> width;
+};
 struct StairConnectingLanding {
     std::string id;
     double depth{};
@@ -81,6 +87,7 @@ struct StairFlightLayout {
     double orientation_radians{}, run{}, rise{}, riser_height{};
     StairPolygon footprint;
     std::vector<StairTreadLayout> treads;
+    double going{}, width{};
 };
 struct StairLandingLayout {
     std::string id;

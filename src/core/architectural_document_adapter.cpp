@@ -32,7 +32,13 @@ bool canonical_form(const Entity& entity, std::string_view type, int version, st
 
 bool canonical_stair(const Entity& entity) {
     return canonical_form(entity,"stair",1,"straight_stair_flight") ||
-        canonical_form(entity,"stair",2,"multi_flight_stair");
+        canonical_form(entity,"stair",2,"multi_flight_stair") ||
+        canonical_form(entity,"stair",3,"multi_flight_stair");
+}
+
+bool canonical_multi_flight_stair(const Entity& entity) {
+    return canonical_form(entity,"stair",2,"multi_flight_stair") ||
+        canonical_form(entity,"stair",3,"multi_flight_stair");
 }
 
 bool canonical_hosted_railing(const Entity& entity) {
@@ -244,6 +250,10 @@ BuildingObject transform_building_object(BuildingObject object,
                 value.total_rise *= transform.scale;
                 value.going *= transform.scale;
                 value.width *= transform.scale;
+                for (auto& flight : value.flights) {
+                    if (flight.going) *flight.going *= transform.scale;
+                    if (flight.width) *flight.width *= transform.scale;
+                }
                 if (value.top_landing) {
                     value.top_landing->depth *= transform.scale;
                     value.top_landing->thickness *= transform.scale;
@@ -664,13 +674,39 @@ std::vector<std::string> hosted_railing_ids(const EntityState& entities, const s
 void invalidate_changed_receipts(const Entity& before, Entity& after) {
     const auto entries=before.properties.find("quantity_entries");
     if (entries==before.properties.end() || !entries->is_object()) return;
+    const auto current_entries=after.properties.find("quantity_entries");
+    if (current_entries==after.properties.end() || !current_entries->is_object()) return;
     for (const auto& [pointer,value] : entries->items()) {
         (void)value;
         try {
+            if (canonical_multi_flight_stair(before) && canonical_multi_flight_stair(after)) {
+                bool flight_dimension=false;
+                const auto& old_flights=before.properties.at("flights");
+                const auto& flights=after.properties.at("flights");
+                for (std::size_t old_row=0; old_row<old_flights.size() && !flight_dimension; ++old_row) {
+                    for (const auto* field : {"going_m","width_m"}) {
+                        if (pointer!="/flights/"+std::to_string(old_row)+"/"+field) continue;
+                        flight_dimension=true;
+                        const auto& old=old_flights.at(old_row);
+                        for (std::size_t row=0; row<flights.size(); ++row) {
+                            const auto& current=flights.at(row);
+                            if (current.at("id")!=old.at("id")) continue;
+                            if (geometry_fields_changed(old,current,{field}))
+                                current_entries->erase("/flights/"+std::to_string(row)+"/"+field);
+                            break;
+                        }
+                        // A removed flight's position may now describe another
+                        // child. Its editor already dropped/remapped receipts;
+                        // never erase the surviving child's entry by old index.
+                        break;
+                    }
+                }
+                if (flight_dimension) continue;
+            }
             const nlohmann::json::json_pointer path(pointer);
             if (before.properties.contains(path) &&
                 (!after.properties.contains(path) || before.properties.at(path)!=after.properties.at(path)))
-                after.properties["quantity_entries"].erase(pointer);
+                current_entries->erase(pointer);
         } catch (const nlohmann::json::exception&) { /* Preserve opaque legacy paths. */ }
     }
 }
@@ -692,7 +728,7 @@ EntityState apply_operations(const DocumentSnapshot& source,
     for (const auto& operation : transaction.operations()) {
         const auto original=entities.find(operation.object_id);
         if (operation.action==ArchitecturalAction::duplicate && original!=entities.end() &&
-            canonical_form(original->second,"stair",2,"multi_flight_stair"))
+            canonical_multi_flight_stair(original->second))
             ++stair_clone_counts[operation.object_id];
     }
     for (const auto& operation : transaction.operations()) {
@@ -785,7 +821,7 @@ EntityState apply_operations(const DocumentSnapshot& source,
                 value.instance.id = copy.id;
                 copy = encode_document_assembly_instance(copy, value);
             }
-            if (canonical_form(copy,"stair",2,"multi_flight_stair")) {
+            if (canonical_multi_flight_stair(copy)) {
                 std::map<std::string,std::string,std::less<>> children;
                 for (const auto* key : {"flights","landings"}) {
                     for (auto& record : copy.properties.at(key)) {

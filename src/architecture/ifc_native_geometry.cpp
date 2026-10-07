@@ -372,24 +372,17 @@ std::vector<IfcNativeMesh> ifc_native_railing_mesh(const Entity& entity,
         if (!resolved_stair || resolved_stair->type != "stair")
             throw std::invalid_argument("ifc_native_railing_host_missing");
         // The host preflight runs before its decoder's topology work.
-        const auto& p = resolved_stair->properties;
-        if (!p.contains("riser_count") || !p.at("riser_count").is_number_integer() ||
-            p.at("riser_count") <= 0 || p.at("riser_count") > 10000 ||
-            p.at("riser_count") > std::min(vertices, triangles) / 64)
+        std::size_t work{}, railing_work{};
+        try {
+            work = project_import_detail::native_stair_railing_work(*resolved_stair);
+            railing_work = project_import_detail::native_stair_railing_work(entity, resolved_stair);
+        } catch (const std::exception&) {
             throw std::invalid_argument("ifc_mesh_budget_exceeded");
-        const auto risers = p.at("riser_count").get<std::size_t>();
-        const auto landings = p.contains("landings") && p.at("landings").is_array() ? p.at("landings").size() : 0;
-        const auto work = risers + landings + 2;
-        if (landings > 256 || 4 * work * (work - 1) / 2 > project_import_geometry_pair_limit)
+        }
+        if (railing_work > std::min(vertices, triangles) / 64 ||
+            4 * work * (work - 1) / 2 > project_import_geometry_pair_limit)
             throw std::invalid_argument("ifc_mesh_budget_exceeded");
-        const auto stair = decode_stair_properties(resolved_stair->id, p);
-        double length = stair.riser_count * stair.going + stair.total_rise;
-        for (const auto& landing : stair.landings)
-            length += landing.depth + 2 * stair.width + landing.return_gap;
-        if (stair.top_landing) length += stair.top_landing->depth + stair.width;
-        const auto posts = std::ceil(length / railing.post_spacing) + 3;
-        if (!std::isfinite(posts) || posts > static_cast<double>(std::min(vertices, triangles) / 64))
-            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        const auto stair = decode_stair_properties(resolved_stair->id, resolved_stair->properties);
         const auto layout = derive_hosted_railing_layout(railing, stair);
         if (layout.posts.size() + 1 > std::min(vertices, triangles) / 64)
             throw std::invalid_argument("ifc_mesh_budget_exceeded");

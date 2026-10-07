@@ -7,6 +7,33 @@ claimed by this record.
 
 ## Current delivery state
 
+### October 7 per-flight stair implementation
+
+The stair model now stores optional going/width per ordered flight and derives
+its actual plan, treads, solid and supported railing geometry from those values.
+L-shaped plan-axis resizing can therefore swap the factors for perpendicular
+flights instead of refusing the whole edit. Landing contacts use adjacent
+widths, and the exact resize proof retains every elevation, rise, riser count,
+floor connection and stable child identity.
+
+The dimensions editor exposes unit-aware per-flight entries with blank meaning
+inheritance. Reorder, duplication, transforms and level changes retain their
+typed dimensions and metadata. Schedules show resolved shared values or readable
+per-flight values. Import and IFC geometry use the same bounded railing work
+preflight and actual host dimensions. Native format 63 and extraction 61 protect
+version-3 stairs across all retained history; older unchanged forms retain their
+existing reader floors. This batch is source implementation only. No builds,
+tests, probes, native jobs, packages or installations ran; the installed candidate
+remains unchanged and manual checks remain Not tested.
+
+Independent source review identified and closed the editor commit-path gaps:
+flight expressions are admitted and receipts follow stable child IDs; clearing
+an override cannot restore its previous value during metadata merging. Legacy
+shared-dimension bounds remain intact. Contact comparisons account for coordinate
+roundoff without excluding valid short goings, and derived stair yaw starts in
+one bounded frame while preserving the authored orientation. The corrected
+batch was approved from source review; compilation and runtime remain unverified.
+
 ### October 7 exact side-handle implementation
 
 Architectural side-handle resizing now requests a candidate document projection
