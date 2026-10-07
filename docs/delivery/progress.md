@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site opening-width worker and practical jamb editing
+
+Door, window and doorway jamb drags now share captured source, camera, authority
+and immutable retained geometry across Measurement, horizontal Architectural
+plans and Site. Site width proposals use the existing opening worker and captured
+presentation frames; the synchronous timer lane and release-time replacement
+command are removed. A release applies the exact admitted proposal, including a
+proposal still completing in the worker. Site generations, input identities,
+navigation, focus, source and request serials fence late completion.
+
+With Snap enabled, jamb widths use the same zoom-relative imperial/metric length
+increments as wall drawing. Shift permits a fine width; Snap off and raw-point
+input remain free. The effective width drives the displayed jamb and measurement,
+and the opposite jamb stays fixed on straight and curved hosts. No-motion width
+is preserved and crossing the fixed jamb remains invalid. Independent source
+review accepted captures, worker lifetime, exact release, cancellation and shared
+input snapping. These source changes have not been built or run; the installed
+candidate is unchanged.
+
 ### October 7 shared corner preview and canvas label lookup
 
 Measured-line and identified-area corner drags now capture the same immutable

@@ -2965,7 +2965,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             (position - m_left_start).manhattanLength() >= QApplication::startDragDistance())
             m_left_dragging = true;
         if (m_left_dragging && m_opening_width_handle) {
-            updateOpeningWidthPreview(position);
+            updateOpeningWidthPreview(position, modifiers);
             update();
         }
     } else if (m_left_gesture == LeftGesture::selection_axis_resize) {
@@ -3121,7 +3121,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             m_left_gesture == LeftGesture::selection_resize ||
             m_left_gesture == LeftGesture::selection_rotate ||
             (m_left_gesture == LeftGesture::opening_width_resize &&
-             (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position)) ||
+             (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position ||
+              m_opening_width_preview_fine != modifiers.testFlag(Qt::ShiftModifier))) ||
             (m_left_gesture == LeftGesture::vertex_move &&
              (!m_boundary_vertex_preview_pointer || *m_boundary_vertex_preview_pointer != position))) {
             const QPointer<PlanCanvas> guard(this);
@@ -3186,8 +3187,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto vertex_handle = m_vertex_move_handle;
         const auto opening_handle = m_opening_width_handle;
         const auto opening_scale = m_opening_width_scale_preview;
-        // Pending projection is not admission. The document command below
-        // performs final native validation; basic inverse widths never reach it.
+        // Pending projection is not admission. Only its exact admitted command
+        // may complete the released gesture; basic inverse widths never reach it.
         const auto opening_valid = m_opening_width_preview_valid ||
             (m_opening_width_preview_pending && std::isfinite(opening_scale) &&
              opening_scale > 0.0);
@@ -3195,8 +3196,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         // threshold without an intermediate move event. Commit its snapped,
         // grab-offset-adjusted target in the local callback path as well.
         const auto vertex_target = m_vertex_move_preview;
-        // Pending exact geometry is not trusted for admission. The document
-        // command recomputes the final target; a known invalid result rejects.
+        // Pending exact geometry is not trusted for admission. Release retains
+        // the target until its captured preview is admitted; invalid results reject.
         const bool vertex_valid = vertex_target && std::isfinite(vertex_target->x) &&
             std::isfinite(vertex_target->y) && (!m_boundary_vertex_preview_requested ||
                 m_boundary_vertex_preview_valid || m_boundary_vertex_preview_pending);
@@ -3346,6 +3347,7 @@ void PlanCanvas::resetGesture() {
     m_opening_width_preview_pending = false;
     m_opening_width_preview_request_in_progress = false;
     m_opening_width_preview_pointer.reset();
+    m_opening_width_preview_fine = false;
     if (m_space_pan_armed) {
         setCursor(Qt::OpenHandCursor);
     } else if (m_last_mouse_position) {
@@ -4202,7 +4204,7 @@ std::optional<PlanCanvas::OpeningWidthHandleHit> PlanCanvas::openingWidthHandleA
     return OpeningWidthHandleHit{entity->id, controls, end_distance < start_distance};
 }
 
-void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
+void PlanCanvas::updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers modifiers) {
     if (!m_opening_width_handle) return;
     const auto serial = ++m_opening_width_preview_serial;
     const auto handle = *m_opening_width_handle;
@@ -4211,6 +4213,7 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
     m_opening_width_preview_pending = false;
     m_opening_width_preview_request_in_progress = false;
     m_opening_width_preview_pointer = point;
+    m_opening_width_preview_fine = modifiers.testFlag(Qt::ShiftModifier);
     m_opening_width_entities_preview.clear();
     m_opening_width_labels_preview.clear();
     m_opening_width_scale_preview = std::numeric_limits<double>::quiet_NaN();
@@ -4228,6 +4231,17 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
         m_opening_width_pointer_station = station;
         const auto displacement = station - *m_opening_width_press_station;
         width = original_width + (handle.keep_start_jamb ? displacement : -displacement);
+        // Use the same zoom-relative construction lengths as wall drawing.
+        // Preserve the captured width at zero displacement, including halo
+        // grabs; reject a crossed jamb before rounding can change its sign.
+        if (!std::isfinite(original_width) || original_width <= 1e-6 ||
+            !std::isfinite(width)) return;
+        if (width > 1e-6 && std::abs(displacement) > 1e-12 &&
+            m_snap_enabled && !m_raw_point_input && !m_opening_width_preview_fine) {
+            const auto step = drawingLengthIncrementMetres();
+            if (!std::isfinite(step) || step <= 0.0) return;
+            width = std::round(width / step) * step;
+        }
         const auto moving_station = handle.keep_start_jamb
             ? offset + width : offset + original_width - width;
         const auto moving_jamb = point_at_host_station(host, moving_station);

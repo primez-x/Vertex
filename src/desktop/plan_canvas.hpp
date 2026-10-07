@@ -748,7 +748,7 @@ private:
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
     void finishEntityTransformPreview(std::uint64_t serial);
     void finishBoundaryVertexPreview(std::uint64_t serial);
-    void updateOpeningWidthPreview(QPointF point);
+    void updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers modifiers);
     bool applyOpeningWidthPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
@@ -1074,6 +1074,7 @@ private:
     bool m_opening_width_preview_request_in_progress{};
     std::uint64_t m_opening_width_preview_serial{};
     std::optional<QPointF> m_opening_width_preview_pointer;
+    bool m_opening_width_preview_fine{};
     bool m_space_pan_armed{false};
     Qt::MouseButton m_gesture_button{Qt::NoButton};
     QPointF m_right_start;

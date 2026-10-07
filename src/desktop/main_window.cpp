@@ -5172,13 +5172,15 @@ class MainWindow::Impl {
         QString entity_id;
         double scale{};
         bool keep_start{};
-        std::vector<CanvasEntity> retained;
+        std::shared_ptr<const std::vector<CanvasEntity>> retained;
         std::shared_ptr<std::optional<std::vector<CanvasEntity>>> result;
         std::shared_ptr<const SourceEditAuthority> authority;
         std::shared_ptr<const ArchitecturalViewContext> view_context;
         std::shared_ptr<std::optional<Command>> command;
         std::shared_ptr<std::vector<CanvasLabel>> labels;
         bool metric_units{false};
+        std::shared_ptr<const SiteEndpointPreviewInput> site_input;
+        std::uint64_t site_generation{};
     };
     struct VertexPreviewProjection {
         std::vector<CanvasEntity> entities;
@@ -21734,6 +21736,52 @@ public:
             std::move(site_input)});
     }
 
+    void clearOpeningWidthCapture() {
+        m_opening_preview_source.reset(); m_opening_preview_authority.reset();
+        m_opening_preview_view_context.reset(); m_opening_preview_retained.reset();
+        m_opening_preview_site_input.reset();
+        m_opening_preview_site_generation=0;
+        m_opening_preview_command.reset(); m_opening_preview_release_pending=false;
+        m_opening_preview_latest_serial=0;
+        m_opening_preview_canvas.clear(); m_opening_preview_document.reset();
+    }
+
+    void captureOpeningWidthEdit(PlanCanvas* canvas, const QString& id,
+        std::shared_ptr<const DocumentSnapshot> source) {
+        clearOpeningWidthCapture();
+        const auto& entity=source->entities().at(id.toStdString());
+        if (entity.type!="opening") return;
+        const auto host_id=entity.properties.at("wall_id").get<std::string>();
+        const bool site=siteCanvas(canvas);
+        const auto view=site ? std::optional<ArchitecturalViewContext>{}
+            : boundaryVertexViewContext(canvas,*source);
+        auto retained=std::make_shared<std::vector<CanvasEntity>>();
+        const auto& geometry=site ? m_site_edit_local_geometry : canvas->entities();
+        for (const auto& item:geometry)
+            if (item.id==id || item.id.toStdString()==host_id || item.type==QStringLiteral("wall"))
+                retained->push_back(item);
+        auto authority=site ? std::shared_ptr<const SourceEditAuthority>{}
+            : std::make_shared<const SourceEditAuthority>(captureSourceEditAuthority(*source));
+        if (site) {
+            requireSiteEditCurrent();
+            (void)siteEditFrame({id});
+            authority=std::make_shared<const SourceEditAuthority>(*m_site_edit_authority);
+            auto input=std::make_shared<SiteEndpointPreviewInput>();
+            input->frames=m_site_edit_frames;
+            m_opening_preview_site_input=std::move(input);
+            m_opening_preview_site_generation=m_site_edit_generation;
+        }
+        m_opening_preview_view_context=view ? std::make_shared<const ArchitecturalViewContext>(*view) : nullptr;
+        m_opening_preview_center=canvas->viewCenter(); m_opening_preview_zoom=canvas->viewScale();
+        m_opening_preview_size=canvas->size(); m_opening_preview_dpr=canvas->devicePixelRatioF();
+        m_opening_preview_navigation_generation=canvas->navigationGeneration();
+        m_opening_preview_had_focus=canvas->hasFocus();
+        m_opening_preview_source=std::move(source);
+        m_opening_preview_authority=std::move(authority);
+        m_opening_preview_retained=std::move(retained);
+        m_opening_preview_document=m_document; m_opening_preview_canvas=canvas;
+    }
+
     bool planEndpointCaptureCurrent(const std::shared_ptr<const PlanEndpointCapture>& capture) const noexcept {
         try {
             if (!capture || capture != m_plan_endpoint_capture || !capture->canvas ||
@@ -22499,12 +22547,25 @@ public:
         const auto command=request.command;
         const auto labels=request.labels;
         const auto metric_units=request.metric_units;
+        const auto site_input=request.site_input;
         m_opening_preview_sequence = m_opening_preview_queue.enqueue(
-            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units]
+            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units,site_input]
             (const RegenerationCancellationToken& cancellation) {
                 if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(), {}};
-                *result = computeOpeningWidthPreview(*source, retained, id, scale, keep_start,
+                *result = computeOpeningWidthPreview(*source, *retained, id, scale, keep_start,
                     view_context.get(), command.get(), metric_units, labels.get());
+                if (*result && site_input && !cancellation.is_cancelled()) {
+                    std::erase_if(**result,[&](const auto& item){return !site_input->frames.contains(item.id);});
+                    for (auto& item:**result) {
+                        if (cancellation.is_cancelled()) break;
+                        item=site_presented_canvas_entity(item,site_input->frames.at(item.id));
+                    }
+                    std::erase_if(*labels,[&](const auto& item){return !site_input->frames.contains(item.id);});
+                    for (auto& item:*labels) {
+                        if (cancellation.is_cancelled()) break;
+                        item=site_presented_canvas_label(item,site_input->frames.at(item.id));
+                    }
+                }
                 return RegenerationReceipt{source->revision(), {}};
             });
         m_running_opening_preview = std::move(request);
@@ -22521,67 +22582,48 @@ public:
             canvas->navigationGeneration()==m_opening_preview_navigation_generation;
     }
 
+    bool openingPreviewCaptureCurrent(PlanCanvas* canvas) const noexcept {
+        try {
+            if (!openingPreviewCanvasCurrent(canvas) || !m_opening_preview_source ||
+                !m_opening_preview_authority || !m_opening_preview_retained ||
+                m_opening_preview_document!=m_document ||
+                !sourceEditAuthorityCurrent(*m_opening_preview_authority)) return false;
+            if (m_opening_preview_site_input) {
+                requireSiteEditCurrent();
+                return siteCanvas(canvas) && m_opening_preview_source==m_site_edit_source &&
+                    m_opening_preview_site_generation==m_site_edit_generation;
+            }
+            return !siteCanvas(canvas) && (canvas!=m_architecturalCanvas || m_opening_preview_view_context);
+        } catch (...) { return false; }
+    }
+
     std::optional<std::vector<CanvasEntity>> previewOpeningWidthFromCanvas(
         PlanCanvas* canvas, const QString& requested_id, double scale,
         bool keep_start_jamb, std::uint64_t revision) {
-        if (siteCanvas(canvas) && !m_site_preview_dispatching) {
-            const auto serial=canvas->openingWidthPreviewSerial();
-            if (!sitePreviewContextCurrent() || !canvas->markOpeningWidthPreviewPending(serial)) return std::vector<CanvasEntity>{};
-            const auto generation=m_site_edit_generation;
-            queueSitePreview([this,target=QPointer<PlanCanvas>(canvas),requested_id,scale,keep_start_jamb,revision,serial,generation] {
-                if (!target || generation!=m_site_edit_generation) return;
-                auto result=previewOpeningWidthFromCanvas(target,requested_id,scale,keep_start_jamb,revision);
-                (void)target->completeOpeningWidthPreview(serial,std::move(result));
-            });
-            return std::nullopt;
-        }
-        if (siteCanvas(canvas)) {
-            try {
-                if (!m_site_edit_source || m_site_edit_source->revision()!=revision) throw std::invalid_argument("The Site Plan gesture source is unavailable.");
-                (void)siteEditFrame({requested_id});
-                const auto command=hosted_opening_width_resize_command(*m_site_edit_source,requested_id.toStdString(),scale,keep_start_jamb);
-                (void)Document::preview_command(*m_site_edit_source,command);
-                auto proposed=computeOpeningWidthPreview(*m_site_edit_source,m_site_edit_local_geometry,requested_id,scale,keep_start_jamb);
-                if(!proposed) throw std::invalid_argument("The exact opening preview is unavailable.");
-                for(auto& item:*proposed) item=site_presented_canvas_entity(item,m_site_edit_frames.at(item.id));
-                return proposed;
-            } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return std::vector<CanvasEntity>{}; }
-        }
         if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
             m_selected_ids.front()!=requested_id || m_boundary_session || m_pending_wall_start ||
             !m_pending_symbol_id.isEmpty() || m_linework_drawing ||
             !m_opening_preview_source || !m_opening_preview_authority || m_opening_preview_canvas != canvas ||
             m_opening_preview_source->revision() != revision || !sourceEditAuthorityCurrent(*m_opening_preview_authority) ||
-            !std::isfinite(scale) || scale<=0) return std::nullopt;
+            !std::isfinite(scale) || scale<=0) return std::vector<CanvasEntity>{};
         // The jamb press owns source and view. Never renew either at a later
         // pointer event, even if an ID/revision happens to match publication.
-        const auto published = captureCanvasGeometrySource(canvas, revision);
-        if(!openingPreviewCanvasCurrent(canvas)) {
-            m_opening_preview_source.reset();m_opening_preview_authority.reset();
-            m_opening_preview_view_context.reset();m_opening_preview_command.reset();
-            m_opening_preview_release_pending=false;
+        if(!openingPreviewCaptureCurrent(canvas)) {
+            clearOpeningWidthCapture();
             return std::vector<CanvasEntity>{};
         }
-        if (m_opening_preview_document!=m_document ||
-            fullSnapshotDigest(*m_opening_preview_source)!=fullSnapshotDigest(*published) ||
-            (canvas==m_architecturalCanvas && !m_opening_preview_view_context))
-            return std::vector<CanvasEntity>{};
-        const auto& entity=m_opening_preview_source->entities().at(requested_id.toStdString());
-        const auto host_id=entity.properties.at("wall_id").get<std::string>();
-        std::vector<CanvasEntity> retained;
-        for (const auto& item:canvas->entities())
-            if (item.id==requested_id || item.id.toStdString()==host_id ||
-                item.type==QStringLiteral("wall")) retained.push_back(item);
         const auto serial=canvas->openingWidthPreviewSerial();
         if (!canvas->markOpeningWidthPreviewPending(serial)) return std::nullopt;
         PendingOpeningPreview request{canvas, serial, m_document, m_opening_preview_source,
-            requested_id, scale, keep_start_jamb, std::move(retained),
+            requested_id, scale, keep_start_jamb, m_opening_preview_retained,
             std::make_shared<std::optional<std::vector<CanvasEntity>>>()};
         request.authority=m_opening_preview_authority;
         request.view_context=m_opening_preview_view_context;
         request.command=std::make_shared<std::optional<Command>>();
         request.labels=std::make_shared<std::vector<CanvasLabel>>();
         request.metric_units=m_metric_units;
+        request.site_input=m_opening_preview_site_input;
+        request.site_generation=m_opening_preview_site_generation;
         m_opening_preview_command.reset();m_opening_preview_release_pending=false;
         m_opening_preview_latest_serial=serial;m_opening_preview_id=requested_id;
         m_opening_preview_scale=scale;m_opening_preview_keep_start=keep_start_jamb;
@@ -22597,9 +22639,10 @@ public:
         const auto capture_current = [&](const PendingOpeningPreview& request) noexcept {
             try {
                 return request.canvas && request.source && request.document==m_document && request.authority &&
-                    request.authority==m_opening_preview_authority && openingPreviewCanvasCurrent(request.canvas) &&
+                    request.authority==m_opening_preview_authority && openingPreviewCaptureCurrent(request.canvas) &&
                     request.source==m_opening_preview_source && request.canvas==m_opening_preview_canvas &&
-                    request.view_context==m_opening_preview_view_context && sourceEditAuthorityCurrent(*request.authority) &&
+                    request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
+                    request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation &&
                     !m_boundary_session && !m_linework_drawing && !m_pending_wall_start &&
                     m_pending_symbol_id.isEmpty() && m_pending_opening_kind.isEmpty() &&
                     fullSnapshotDigest(*request.source)==request.authority->source_digest;
@@ -22619,7 +22662,8 @@ public:
             const bool captured_current=capture_current(request);
             const bool same_capture=request.source==m_opening_preview_source &&
                 request.authority==m_opening_preview_authority && request.canvas==m_opening_preview_canvas &&
-                request.view_context==m_opening_preview_view_context;
+                request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
+                request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation;
             if(request.canvas) (void)request.canvas->completeOpeningWidthPreview(request.serial,std::nullopt);
             if(same_capture && request.serial==m_opening_preview_latest_serial) {
                 m_opening_preview_command.reset();
@@ -22631,9 +22675,7 @@ public:
             // Invalid dimensions can recover within the same owned drag.
             // Only a stale/cancelled capture retires the press source and view.
             if(!captured_current && same_capture && request.serial==m_opening_preview_latest_serial) {
-                m_opening_preview_source.reset();m_opening_preview_authority.reset();
-                m_opening_preview_view_context.reset();m_opening_preview_command.reset();
-                m_opening_preview_release_pending=false;
+                clearOpeningWidthCapture();
             }
         };
         for(auto& completion:m_opening_preview_queue.take_completed()) {
@@ -22779,46 +22821,30 @@ public:
             if (!m_document->is_editable() || m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
                 m_selected_ids.size() != 1 || m_selected_ids.front() != requested_id)
                 throw std::invalid_argument("Select one opening and finish the active drawing command before resizing.");
-            if (!siteCanvas(canvas) && (!m_opening_preview_source || !m_opening_preview_authority ||
-                m_opening_preview_canvas != canvas || m_opening_preview_document != m_document ||
-                !sourceEditAuthorityCurrent(*m_opening_preview_authority)))
+            if (!openingPreviewCaptureCurrent(canvas))
                 throw std::invalid_argument("The opening drag source or editing context changed.");
-            const auto source = siteCanvas(canvas) ? authoringSnapshot() : *m_opening_preview_source;
+            const auto& source = *m_opening_preview_source;
             if (source.revision() != revision)
                 throw std::invalid_argument("The project changed during the drag. Select the opening again.");
-            if (siteCanvas(m_architecturalCanvas)) (void)siteEditFrame({requested_id});
-            if(!siteCanvas(canvas) && canvas==m_architecturalCanvas && !m_opening_preview_view_context)
-                throw std::invalid_argument("The opening's captured horizontal plan is unavailable.");
-            if(!siteCanvas(canvas)) {
-                if(!openingPreviewCanvasCurrent(canvas))
-                    throw std::invalid_argument("The opening canvas camera or input ownership changed. Start again.");
-                if(requested_id!=m_opening_preview_id || scale!=m_opening_preview_scale ||
-                    keep_start_jamb!=m_opening_preview_keep_start ||
-                    canvas->openingWidthPreviewSerial()!=m_opening_preview_latest_serial+1)
-                    throw std::invalid_argument("The exact opening width preview changed. Start again.");
-                if(m_opening_preview_command) {
-                    const auto admitted=*m_opening_preview_command;
-                    if(!sourceEditAuthorityCurrent(*m_opening_preview_authority))
-                        throw std::invalid_argument("The opening source or view changed before commit.");
-                    applyAuthoredCommand(admitted);clearError();refresh();return true;
-                }
-                const auto matching=[&](const auto& request) {
-                    return request && request->serial==m_opening_preview_latest_serial &&
-                        request->canvas==canvas && request->authority==m_opening_preview_authority &&
-                        request->view_context==m_opening_preview_view_context &&
-                        request->source==m_opening_preview_source && request->entity_id==requested_id &&
-                        request->scale==scale && request->keep_start==keep_start_jamb;
-                };
-                if(!matching(m_running_opening_preview) && !matching(m_pending_opening_preview))
-                    throw std::invalid_argument("The admitted opening width proposal is unavailable. Start again.");
-                m_opening_preview_release_pending=true;return true;
+            if(requested_id!=m_opening_preview_id || scale!=m_opening_preview_scale ||
+                keep_start_jamb!=m_opening_preview_keep_start ||
+                canvas->openingWidthPreviewSerial()!=m_opening_preview_latest_serial+1)
+                throw std::invalid_argument("The exact opening width preview changed. Start again.");
+            if(m_opening_preview_command) {
+                const auto admitted=*m_opening_preview_command;
+                applyAuthoredCommand(admitted);clearError();refresh();return true;
             }
-            const auto command = hosted_opening_width_resize_command(
-                source, requested_id.toStdString(), scale, keep_start_jamb);
-            applyDocumentCommand(command);
-            clearError();
-            refresh();
-            return true;
+            const auto matching=[&](const auto& request) {
+                return request && request->serial==m_opening_preview_latest_serial &&
+                    request->canvas==canvas && request->authority==m_opening_preview_authority &&
+                    request->view_context==m_opening_preview_view_context && request->retained==m_opening_preview_retained &&
+                    request->site_input==m_opening_preview_site_input && request->site_generation==m_opening_preview_site_generation &&
+                    request->source==m_opening_preview_source && request->entity_id==requested_id &&
+                    request->scale==scale && request->keep_start==keep_start_jamb;
+            };
+            if(!matching(m_running_opening_preview) && !matching(m_pending_opening_preview))
+                throw std::invalid_argument("The admitted opening width proposal is unavailable. Start again.");
+            m_opening_preview_release_pending=true;return true;
         } catch (const Standard_Failure& error) {
             setError(QStringLiteral("Resize opening: %1").arg(QString::fromUtf8(error.GetMessageString())));
             refresh();
@@ -38003,39 +38029,29 @@ private:
         });
         canvas->setEntityEditGestureStarted([this,canvas](QString id) {
             m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
+            clearOpeningWidthCapture();
             if (siteCanvas(canvas)) {
-                try {captureSiteEdit(canvas);capturePlanEndpointEdit(canvas,id,m_site_edit_source);}
-                catch(const std::exception& error){clearSitePublication();setError(QString::fromUtf8(error.what()));}
+                try {
+                    captureSiteEdit(canvas);
+                    captureOpeningWidthEdit(canvas,id,m_site_edit_source);
+                    capturePlanEndpointEdit(canvas,id,m_site_edit_source);
+                } catch(const std::exception& error) {
+                    clearOpeningWidthCapture();clearSitePublication();setError(QString::fromUtf8(error.what()));
+                }
                 return;
             }
             // This existing callback fires at jamb/vertex press, before the
             // first preview. Retire the previous gesture's capture even if its
             // revision and IDs happen to match the new one.
-            m_opening_preview_source.reset(); m_opening_preview_authority.reset();
-            m_opening_preview_view_context.reset();
-            m_opening_preview_command.reset();m_opening_preview_release_pending=false;
-            m_opening_preview_latest_serial=0;
-            m_opening_preview_canvas.clear();
             m_vertex_preview_source.reset(); m_vertex_preview_authority.reset();
             try {
                 const auto source=captureCanvasGeometrySource(canvas);
-                if (source->entities().at(id.toStdString()).type == "opening") {
-                    const auto view=boundaryVertexViewContext(canvas,*source);
-                    m_opening_preview_view_context=view ? std::make_shared<ArchitecturalViewContext>(*view) : nullptr;
-                    m_opening_preview_center=canvas->viewCenter();m_opening_preview_zoom=canvas->viewScale();
-                    m_opening_preview_size=canvas->size();m_opening_preview_dpr=canvas->devicePixelRatioF();
-                    m_opening_preview_navigation_generation=canvas->navigationGeneration();
-                    m_opening_preview_had_focus=canvas->hasFocus();
-                    m_opening_preview_source=source;
-                    m_opening_preview_authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
-                    m_opening_preview_document=m_document;
-                    m_opening_preview_canvas=canvas;
-                } else captureConstraintGeometryPreview(canvas,source->revision());
+                if (source->entities().at(id.toStdString()).type == "opening")
+                    captureOpeningWidthEdit(canvas,id,source);
+                else captureConstraintGeometryPreview(canvas,source->revision());
                 capturePlanEndpointEdit(canvas,id,source);
             } catch (const std::exception& error) {
-                m_opening_preview_source.reset(); m_opening_preview_authority.reset();
-                m_opening_preview_view_context.reset();
-                m_opening_preview_command.reset();m_opening_preview_release_pending=false;
+                clearOpeningWidthCapture();
                 m_vertex_preview_source.reset(); m_vertex_preview_authority.reset();
                 m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
                 setError(QString::fromUtf8(error.what()));
@@ -38667,11 +38683,7 @@ private:
             m_wall_drawing_authority.reset();
             m_wall_drawing_frame.reset();
             m_wall_drawing_endpoints.clear();
-            m_opening_preview_authority.reset();
-            m_opening_preview_source.reset();
-            m_opening_preview_view_context.reset();
-            m_opening_preview_command.reset();m_opening_preview_release_pending=false;
-            m_opening_preview_canvas.clear();
+            clearOpeningWidthCapture();
             m_pending_opening_preview.reset();
             if (m_running_opening_preview)
                 (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
@@ -40343,6 +40355,7 @@ private:
     }
 
     void clearSitePublication() {
+        if (m_opening_preview_site_input) clearOpeningWidthCapture();
         m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
         ++m_site_publication_generation;
         ++m_site_edit_generation;
@@ -40882,17 +40895,12 @@ private:
         // or revision. Every refreshed scene needs a new immutable preview source.
         m_plan_publication_source.reset();
         m_plan_publication_authority.reset();
-        m_opening_preview_authority.reset();
-        m_opening_preview_canvas.clear();
+        clearOpeningWidthCapture();
         m_vertex_preview_authority.reset();
         m_wall_move_authority.reset();
         m_wall_move_frame.reset();
         m_wall_move_ids.clear();
         m_entity_transform_frame.reset();
-        m_opening_preview_source.reset();
-        m_opening_preview_view_context.reset();
-        m_opening_preview_command.reset();m_opening_preview_release_pending=false;
-        m_opening_preview_document.reset();
         m_pending_opening_preview.reset();
         if (m_running_opening_preview)
             (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
@@ -48967,6 +48975,9 @@ private:
     std::optional<BuildingViewFrame> m_entity_transform_frame;
     std::shared_ptr<const DocumentSnapshot> m_opening_preview_source;
     std::shared_ptr<const ArchitecturalViewContext> m_opening_preview_view_context;
+    std::shared_ptr<const std::vector<CanvasEntity>> m_opening_preview_retained;
+    std::shared_ptr<const SiteEndpointPreviewInput> m_opening_preview_site_input;
+    std::uint64_t m_opening_preview_site_generation{};
     Vec2 m_opening_preview_center{};
     double m_opening_preview_zoom{};
     QSize m_opening_preview_size;
