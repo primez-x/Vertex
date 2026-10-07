@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 library drag preview
+
+Library drag entry and movement now display the real SVG footprint or hosted
+door/window plan geometry at the same resolved point used by drop. Furniture
+artwork is captured once per source and placement context; hosted openings use
+the shared visible-wall search, station, fit and sibling checks, assembly and
+door operation. Horizontal plan and Site presentation each apply once.
+
+The drag ghost is separate from an armed click-placement component. A valid
+drag with no suitable host hides unrelated armed artwork without changing that
+placement state. Leaving, cancelling, dropping, navigation and scene changes
+clear the drag ghost. Strict bounded payload decoding and copied, guarded
+callbacks cover enter, move and drop. Preview ink stays out of committed
+geometry and output. Source changes remain uncompiled and untested under the
+current implementation-only steering; the installed candidate is unchanged.
+Independent source review accepted the payload, callback lifetime, preview
+isolation and shared placement geometry paths. Curved-host preview generation
+still uses the existing synchronous path and has no timing qualification.
+
 ### October 7 ordinary plan model movement and prepared publication
 
 Ordinary Measurement and horizontal Architectural model drags now capture

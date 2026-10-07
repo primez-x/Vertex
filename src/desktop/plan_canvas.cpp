@@ -10,6 +10,7 @@
 #include <QCryptographicHash>
 #include <QDialog>
 #include <QDragEnterEvent>
+#include <QDragLeaveEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QJsonDocument>
@@ -66,6 +67,29 @@ constexpr double minimum_scale = 0.0001;
 constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
+
+constexpr auto symbol_drag_mime_type = "application/x-vertex-symbol";
+struct SymbolDragPayload {
+    QString id;
+    double scale{};
+};
+
+std::optional<SymbolDragPayload> decode_symbol_drag(const QMimeData* mime) {
+    if (!mime || !mime->hasFormat(symbol_drag_mime_type)) return std::nullopt;
+    const auto payload = mime->data(symbol_drag_mime_type);
+    if (payload.isEmpty() || payload.size() > 4096) return std::nullopt;
+    const auto document = QJsonDocument::fromJson(payload);
+    if (!document.isObject()) return std::nullopt;
+    const auto object = document.object();
+    const auto id_value = object.value(QStringLiteral("id"));
+    const auto scale_value = object.value(QStringLiteral("scale"));
+    if (!id_value.isString() || !scale_value.isDouble()) return std::nullopt;
+    const auto id = id_value.toString();
+    const auto scale = scale_value.toDouble();
+    if (id.isEmpty() || id.size() > 256 || !std::isfinite(scale) || scale <= 0.0 || scale > 100.0)
+        return std::nullopt;
+    return SymbolDragPayload{id, scale};
+}
 
 double practical_resize_scale(double factor, double extent, double step) noexcept {
     // Snap a physical dimension, retaining uniform scaling and the captured
@@ -815,6 +839,7 @@ void PlanCanvas::setGridEnabled(bool enabled) {
 
 void PlanCanvas::setSnapEnabled(bool enabled) {
     if (m_snap_enabled == enabled) return;
+    clearSymbolDragPreview();
     m_snap_enabled = enabled;
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
@@ -1019,6 +1044,7 @@ void PlanCanvas::setComponentPlacementPreview(std::optional<CanvasEntity> previe
 }
 
 void PlanCanvas::clearPreview() {
+    clearSymbolDragPreview();
     m_pending_dimension_space_tap.reset();
     m_boundary_preview.clear();
     m_wall_preview.reset();
@@ -1248,6 +1274,7 @@ void PlanCanvas::setNavigationChanged(std::function<void(Vec2, double)> callback
 void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_scale) {
     if (m_view_center.x == previous_center.x && m_view_center.y == previous_center.y &&
         m_scale == previous_scale) return;
+    clearSymbolDragPreview();
     // Hosted station captures belong to the pressed view. Navigation must
     // invalidate a drag or released pending admission before it can reappear.
     if (m_opening_move_active) resetGesture();
@@ -1732,10 +1759,12 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     // Transient overlays belong to the interactive canvas only. Both fitted
     // and explicitly scaled output must contain document entities alone.
     if (interactive) {
-        if (m_component_placement_preview) {
+        const auto& placement_preview = m_symbol_drag_active
+            ? m_symbol_drag_preview : m_component_placement_preview;
+        if (placement_preview) {
             painter.save();
             painter.setOpacity(painter.opacity() * 0.6);
-            drawEntity(painter, *m_component_placement_preview, false, background,
+            drawEntity(painter, *placement_preview, false, background,
                        paper_pixels_per_mm);
             painter.restore();
         }
@@ -2520,36 +2549,105 @@ void PlanCanvas::setAreaClassCaption(QString caption) {m_area_class_caption=std:
 
 void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
                                  std::function<bool(const QString&)> uses_raw_point) {
+    clearSymbolDragPreview();
     m_symbol_dropped = std::move(callback);
     m_symbol_drop_uses_raw_point = std::move(uses_raw_point);
+}
+
+void PlanCanvas::setSymbolDragPreviewRequested(
+    std::function<std::optional<CanvasEntity>(const QString&, double, Vec2)> callback) {
+    clearSymbolDragPreview();
+    m_symbol_drag_preview_requested = std::move(callback);
+}
+
+void PlanCanvas::clearSymbolDragPreview() {
+    ++m_symbol_drag_preview_serial;
+    if (!m_symbol_drag_active && !m_symbol_drag_preview) return;
+    m_symbol_drag_active = false;
+    m_symbol_drag_preview.reset();
+    update();
+}
+
+std::optional<Vec2> PlanCanvas::symbolDropPoint(const QString& id, QPointF position) {
+    const auto raw = toModel(position, rect());
+    if (!std::isfinite(raw.x) || !std::isfinite(raw.y)) return std::nullopt;
+    const auto uses_raw_point = m_symbol_drop_uses_raw_point;
+    const QPointer<PlanCanvas> guard(this);
+    bool project_onto_host = false;
+    try {
+        project_onto_host = uses_raw_point && uses_raw_point(id);
+    } catch (...) {
+        if (guard) clearSymbolDragPreview();
+        return std::nullopt;
+    }
+    if (!guard) return std::nullopt;
+    const auto point = project_onto_host ? raw : snapped(raw);
+    return std::isfinite(point.x) && std::isfinite(point.y) ? std::optional{point} : std::nullopt;
+}
+
+bool PlanCanvas::updateSymbolDragPreview(const QMimeData* mime, QPointF position) {
+    clearSymbolDragPreview();
+    const auto payload = decode_symbol_drag(mime);
+    if (!m_symbol_dropped || !payload) return false;
+    const auto serial = m_symbol_drag_preview_serial;
+    const auto callback = m_symbol_drag_preview_requested;
+    const QPointer<PlanCanvas> guard(this);
+    const auto point = symbolDropPoint(payload->id, position);
+    if (!guard || serial != m_symbol_drag_preview_serial || !point) return false;
+    // A valid library drag can enter away from a suitable host. An absent
+    // proposal clears its ink while allowing later moves to find a host.
+    std::optional<CanvasEntity> preview;
+    try {
+        if (callback) preview = callback(payload->id, payload->scale, *point);
+    } catch (...) {
+        if (guard) clearSymbolDragPreview();
+        return false;
+    }
+    if (!guard || serial != m_symbol_drag_preview_serial) return false;
+    if (preview) preview->selected = false;
+    m_symbol_drag_active = true;
+    m_symbol_drag_preview = std::move(preview);
+    update();
+    return true;
 }
 
 void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
     m_pending_dimension_space_tap.reset();
     if(event->mimeData()->hasFormat(area_class_mime_type)) {
+        clearSymbolDragPreview();
         if(m_area_class_dropped && decode_area_class_drag(event->mimeData()))event->acceptProposedAction();else event->ignore();
         return;
     }
-    if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol") &&
-        event->mimeData()->data("application/x-vertex-symbol").size() <= 4096)
-        event->acceptProposedAction();
+    const QPointer<PlanCanvas> guard(this);
+    const bool accepted = updateSymbolDragPreview(event->mimeData(), event->position());
+    if (guard && accepted) event->acceptProposedAction();
+    else event->ignore();
 }
 
 void PlanCanvas::dragMoveEvent(QDragMoveEvent* event) {
     m_pending_dimension_space_tap.reset();
     if(event->mimeData()->hasFormat(area_class_mime_type)) {
+        clearSymbolDragPreview();
         if(m_area_class_dropped && decode_area_class_drag(event->mimeData()))event->acceptProposedAction();else event->ignore();
         return;
     }
-    if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol")) {
-        updateCursor(event->position());
-        event->acceptProposedAction();
-    }
+    const QPointer<PlanCanvas> guard(this);
+    const bool accepted = updateSymbolDragPreview(event->mimeData(), event->position());
+    if (guard && accepted) event->acceptProposedAction();
+    else event->ignore();
+}
+
+void PlanCanvas::dragLeaveEvent(QDragLeaveEvent* event) {
+    clearSymbolDragPreview();
+    event->accept();
 }
 
 void PlanCanvas::dropEvent(QDropEvent* event) {
     m_pending_dimension_space_tap.reset();
-    if (!admitInteraction()) { event->ignore(); return; }
+    clearSymbolDragPreview();
+    const QPointer<PlanCanvas> guard(this);
+    const bool admitted = admitInteraction();
+    if (!guard || !admitted) { event->ignore(); return; }
     if(event->mimeData()->hasFormat(area_class_mime_type)) {
         const auto classification=decode_area_class_drag(event->mimeData());
         if(!classification && m_area_class_drop_rejected)m_area_class_drop_rejected();
@@ -2557,18 +2655,26 @@ void PlanCanvas::dropEvent(QDropEvent* event) {
         else event->ignore();
         return;
     }
-    if (!m_symbol_dropped) return;
-    const auto payload = event->mimeData()->data("application/x-vertex-symbol");
-    if (payload.size() > 4096) return;
-    const auto document = QJsonDocument::fromJson(payload);
-    if (!document.isObject()) return;
-    const auto object = document.object();
-    const auto id = object.value("id").toString();
-    const auto scale = object.value("scale").toDouble(0.0);
-    if (id.isEmpty() || id.size() > 256 || !std::isfinite(scale) || scale <= 0.0 || scale > 100.0) return;
-    const auto raw = toModel(event->position(), rect());
-    const bool project_onto_host = m_symbol_drop_uses_raw_point && m_symbol_drop_uses_raw_point(id);
-    m_symbol_dropped(id, scale, project_onto_host ? raw : snapped(raw));
+    const auto payload = decode_symbol_drag(event->mimeData());
+    const auto callback = m_symbol_dropped;
+    if (!callback || !payload) { event->ignore(); return; }
+    const auto serial = m_symbol_drag_preview_serial;
+    const auto point = symbolDropPoint(payload->id, event->position());
+    if (!guard) { event->ignore(); return; }
+    if (serial != m_symbol_drag_preview_serial || !point) {
+        clearSymbolDragPreview();
+        event->ignore();
+        return;
+    }
+    try {
+        callback(payload->id, payload->scale, *point);
+    } catch (...) {
+        if (guard) clearSymbolDragPreview();
+        event->ignore();
+        return;
+    }
+    if (!guard) { event->ignore(); return; }
+    clearSymbolDragPreview();
     event->acceptProposedAction();
 }
 
@@ -2691,6 +2797,7 @@ bool PlanCanvas::event(QEvent* event) {
         resetTabletInput();
         break;
     case QEvent::Leave:
+        clearSymbolDragPreview();
         // Leave retires only the hover image. The placement command remains
         // armed and the next admitted cursor update supplies its new preview.
         if (m_component_placement_preview) {
@@ -3450,6 +3557,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::resetGesture() {
+    clearSymbolDragPreview();
     m_pending_dimension_space_tap.reset();
     ++m_opening_width_preview_serial;
     ++m_boundary_vertex_preview_serial;
@@ -5391,6 +5499,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_Escape) {
+        clearSymbolDragPreview();
         m_drawing_witnesses.clear();
         update();
         if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_vertex_release_pending || m_transform_frame_start) {
@@ -5466,7 +5575,10 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void PlanCanvas::resizeEvent(QResizeEvent* event) {
-    if (event->oldSize() != event->size()) ++m_navigation_generation;
+    if (event->oldSize() != event->size()) {
+        clearSymbolDragPreview();
+        ++m_navigation_generation;
+    }
     m_pending_dimension_space_tap.reset();
     QWidget::resizeEvent(event);
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
@@ -6727,6 +6839,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlappi
 }
 
 void PlanCanvas::invalidateRetainedPresentation() {
+    clearSymbolDragPreview();
     m_content_bounds_cache = {};
     m_overview_geometry_cache = {};
     m_retained_selection_ready = false;

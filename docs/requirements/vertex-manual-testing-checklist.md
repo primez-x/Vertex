@@ -726,7 +726,9 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U113 — Drag a symbol from the library onto the drawing**
-  - Expected: A placement preview appears and dropping inserts the intended symbol.
+  - Steps: Drag a sofa from Library onto the plan, move it before dropping, then repeat with a library door or window over a wall. Move the opening away from its host and back. Drag another item out of the canvas and cancel it.
+  - Expected: The actual artwork follows the pointer translucently at its placement size. Furniture uses the same snap position as the drop; a door or window previews its real opening at the intended wall station. An invalid host shows no placement. Leaving or cancelling clears the drag preview and adds nothing. Dropping inserts the intended item once; pending previews are absent from print and export.
+  - Also try: Repeat in a rotated horizontal plan and Site Plan. Arm a different click-to-place component first, then drag from Library; hovering must not move, replace or place the armed component.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

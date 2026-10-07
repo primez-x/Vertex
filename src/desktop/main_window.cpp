@@ -5202,6 +5202,22 @@ class MainWindow::Impl {
         SelectionMoveIntent intent;
         std::shared_ptr<PreparedPlanMove> prepared;
     };
+    struct LibraryDragPreviewCapture {
+        QPointer<PlanCanvas> canvas;
+        std::shared_ptr<const DocumentSnapshot> source;
+        std::shared_ptr<const SourceEditAuthority> authority;
+        QString catalog_id;
+        double scale{};
+        std::optional<BuildingViewFrame> plan_frame;
+        std::optional<SitePresentationPlacement> site_frame;
+        CanvasEntity artwork;
+    };
+    struct VisibleOpeningHost {
+        Entity owner;
+        Wall wall;
+        double offset{};
+        std::optional<SitePresentationPlacement> site_frame;
+    };
 
     struct PlanEndpointCapture {
         QPointer<PlanCanvas> canvas;
@@ -33110,15 +33126,10 @@ public:
         return true;
     }
 
-    std::shared_ptr<DocumentSnapshot> symbolPlacementSource() {
-        if(!m_pending_symbol_id.isEmpty()) {
-            try {requireSymbolPlacementCurrent();}
-            catch(...) {cancelSymbolPlacement();throw;}
-            return m_symbol_placement_source;
-        }
+    std::shared_ptr<const DocumentSnapshot> symbolPlacementPublication() const {
         if(siteCanvas(m_architecturalCanvas)) {
             requireSitePublicationCurrent();
-            return std::make_shared<DocumentSnapshot>(*m_site_publication_source);
+            return m_site_publication_source;
         }
         if(!m_document->is_editable() || !m_plan_publication_source || !m_plan_publication_authority ||
             m_plan_publication_authority->context.document!=m_document ||
@@ -33131,7 +33142,16 @@ public:
             m_plan_publication_authority->named_view_owner!=m_active_named_view_owner ||
             fullSnapshotDigest(*m_plan_publication_source)!=fullSnapshotDigest(authoringSnapshot()))
             throw std::invalid_argument("Refresh the current editable plan before placing a component.");
-        return std::make_shared<DocumentSnapshot>(*m_plan_publication_source);
+        return m_plan_publication_source;
+    }
+
+    std::shared_ptr<DocumentSnapshot> symbolPlacementSource() {
+        if(!m_pending_symbol_id.isEmpty()) {
+            try {requireSymbolPlacementCurrent();}
+            catch(...) {cancelSymbolPlacement();throw;}
+            return m_symbol_placement_source;
+        }
+        return std::make_shared<DocumentSnapshot>(*symbolPlacementPublication());
     }
 
     void requireSymbolPlacementCurrent() const {
@@ -33140,6 +33160,131 @@ public:
             !sourceEditAuthorityCurrent(*m_symbol_placement_authority) || !publication ||
             fullSnapshotDigest(*publication)!=m_symbol_placement_authority->source_digest)
             throw std::invalid_argument("The component source, selection, layer or view changed. Cancel and start again.");
+    }
+
+    static std::optional<VisibleOpeningHost> visibleOpeningHostAt(
+        const DocumentSnapshot& source,const std::vector<CanvasEntity>& visible_entities,
+        Vec2 model_point,Vec2 displayed_point,double width,const std::string& layer_id,
+        const std::optional<DrawingContext>& architectural_context,
+        const std::map<QString,SitePresentationPlacement>* site_frames=nullptr) {
+        std::map<std::string,std::vector<const Entity*>,std::less<>> openings;
+        for (const auto& [id,entity]:source.entities()) {
+            (void)id;
+            if (entity.type=="opening")
+                if (const auto host=read_string(entity.properties,"wall_id")) openings[*host].push_back(&entity);
+        }
+        std::optional<VisibleOpeningHost> result;
+        auto nearest=std::numeric_limits<double>::infinity();
+        for (const auto& visible:visible_entities) {
+            const auto owner=source.entities().find(visible.id.toStdString());
+            if (owner==source.entities().end() || owner->second.type!="wall" ||
+                read_string(owner->second.properties,"layer_id")!=std::optional{layer_id} ||
+                (architectural_context && read_string(owner->second.properties,"floor_id")!=
+                    std::optional{architectural_context->floor_id})) continue;
+            Wall candidate;std::string diagnostic;
+            if (!read_document_wall(owner->second,openings[owner->first],candidate,diagnostic)) continue;
+            if (architectural_context) {
+                // A cropped wall owner does not authorize an invisible part
+                // of its baseline as a placement target.
+                auto separation=std::numeric_limits<double>::infinity();
+                for (const auto& edge:visible.segments) {
+                    try {
+                        const auto length=segment_length(edge);
+                        const auto station=std::clamp(project_host_station(edge,displayed_point,length*.5),0.0,length);
+                        const auto point=point_at_host_station(edge,station);
+                        separation=std::min(separation,std::hypot(displayed_point.x-point.x,displayed_point.y-point.y));
+                    } catch (const std::exception&) { /* An unsafe edge proves no visible host. */ }
+                }
+                if (separation>std::max(.15,candidate.thickness*.5)+1e-7) continue;
+            }
+            auto point=model_point;
+            std::optional<SitePresentationPlacement> frame;
+            if (site_frames) {
+                const auto found=site_frames->find(visible.id);
+                if (found==site_frames->end()) continue;
+                frame=found->second;point=site_source_plan_point(displayed_point,*frame);
+            }
+            const auto& baseline=candidate.baseline;
+            const auto distance=[&](double fraction) {
+                const auto target=point_at_segment(baseline,fraction).value();
+                return std::hypot(point.x-target.x,point.y-target.y);
+            };
+            double fraction{};
+            if (baseline.sweep_radians==0.0) {
+                const auto dx=baseline.end.x-baseline.start.x,dy=baseline.end.y-baseline.start.y;
+                fraction=std::clamp(((point.x-baseline.start.x)*dx+(point.y-baseline.start.y)*dy)/(dx*dx+dy*dy),0.0,1.0);
+            } else {
+                for (int index=1;index<=64;++index)
+                    if (distance(index/64.0)<distance(fraction)) fraction=index/64.0;
+                auto low=std::max(0.0,fraction-1.0/64.0),high=std::min(1.0,fraction+1.0/64.0);
+                for (int iteration=0;iteration<40;++iteration) {
+                    const auto a=std::lerp(low,high,1.0/3.0),b=std::lerp(low,high,2.0/3.0);
+                    if (distance(a)<distance(b)) high=b;else low=a;
+                }
+                fraction=std::midpoint(low,high);
+            }
+            const auto separation=distance(fraction);
+            if (separation>std::max(.15,candidate.thickness*.5) || separation>=nearest) continue;
+            nearest=separation;
+            const auto offset=fraction*segment_length(baseline)-width*.5;
+            result=VisibleOpeningHost{owner->second,std::move(candidate),offset,std::move(frame)};
+        }
+        return result;
+    }
+
+    static Boundary openingPlacementPlan(const Wall& host,const HostedOpening& opening,
+        const OpeningAssembly& assembly,const std::optional<DoorOperation>& operation,
+        std::pair<std::string,Boundary>& cache) {
+        if (host.baseline.sweep_radians!=0.0)
+            return project_hosted_opening_plan(host,opening,assembly,operation);
+        const auto key=json{{"width",opening.width},{"height",opening.height},{"sill",opening.sill},
+            {"thickness",host.thickness},{"assembly",opening_assembly_json(assembly)},
+            {"operation",operation ? encode_door_operation(*operation) : json{}}}.dump();
+        if (cache.first!=key) {
+            HostedOpening local{"placement",1.0,opening.width,opening.sill,opening.height};
+            Wall wall{"placement-host",{{0,0},{opening.width+2.0,0},0.0},host.thickness,
+                std::max(host.height,opening.sill+opening.height+1.0),0.0,{local}};
+            cache={key,project_hosted_opening_plan(wall,local,assembly,operation)};
+        }
+        const auto start=point_at_host_station(host.baseline,opening.offset);
+        const auto angle=std::atan2(host.baseline.end.y-host.baseline.start.y,host.baseline.end.x-host.baseline.start.x);
+        const PlanarTransform transform{{},angle,false,false,{start.x-std::cos(angle),start.y-std::sin(angle)}};
+        Boundary result;result.reserve(cache.second.size());
+        for (const auto& edge:cache.second) result.push_back(transform_segment(edge,transform));
+        return result;
+    }
+
+    static std::pair<SymbolInstance,CanvasEntity> symbolPlacementArtwork(
+        const SymbolDefinition& definition,double scale,const std::string& layer_id) {
+        if (!std::isfinite(scale) || scale<=0.0 || scale>100.0)
+            throw std::invalid_argument("Component scale must be greater than zero and no more than 100.");
+        SymbolInstance symbol;
+        symbol.id=new_id("symbol-preview");symbol.symbol_id=definition.id;symbol.definition=definition;
+        symbol.placement.scale=scale;symbol.placement.layer_id=layer_id;symbol.model_plan=true;
+        CanvasEntity geometry{QStringLiteral("placement-preview"),QStringLiteral("symbol"),{},0,false};
+        geometry.model_plan=symbol.model_plan;
+        for (const auto& stroke:transformed_symbol_preview(definition,symbol))
+            geometry.segments.push_back({stroke.start,stroke.end,0});
+        geometry.stroke_color=QColor(QString::fromStdString(symbol.style.stroke_color));
+        if(geometry.stroke_color==QColor(Qt::black)) geometry.dark_stroke_color=QColor(210,226,239);
+        geometry.stroke_width_metres=symbol.style.stroke_width_metres;geometry.output_stroke_width_mm=.25;
+        geometry.fill_color=QColor(QString::fromStdString(symbol.style.fill_color));
+        geometry.fill_opacity=symbol.style.fill_opacity;geometry.line_pattern=QString::fromStdString(symbol.style.line_pattern);
+        geometry.hatch_pattern=QString::fromStdString(symbol.style.fill_pattern);
+        geometry.filled=symbol.style.fill_pattern!="none" && geometry.fill_color.isValid();
+        geometry.resize_frame=CanvasSelectionFrame{{},0,definition.width_metres*scale,definition.depth_metres*scale};
+        if(definition.svg_asset) {
+            const auto& asset=*definition.svg_asset;
+            CanvasSvgSymbol svg;
+            svg.catalog_id=QString::fromStdString(definition.id);svg.document=load_symbol_svg(asset);validate_svg_document(svg.document);
+            symbol.pinned_svg=svg.document.toStdString();
+            svg.artwork_sha256=QCryptographicHash::hash(svg.document,QCryptographicHash::Sha256).toHex();
+            svg.view_box=QRectF(asset.view_box[0],asset.view_box[1],asset.view_box[2],asset.view_box[3]);
+            svg.footprint_view_box=QRectF(asset.footprint_view_box[0],asset.footprint_view_box[1],asset.footprint_view_box[2],asset.footprint_view_box[3]);
+            svg.width_metres=definition.width_metres*scale;svg.depth_metres=definition.depth_metres*scale;
+            geometry.svg_symbol=std::move(svg);
+        }
+        return {std::move(symbol),std::move(geometry)};
     }
 
     bool beginGenericSymbolPlacement(const QString& id,double scale) {
@@ -33158,33 +33303,7 @@ public:
         const auto definition=std::find_if(catalog.begin(),catalog.end(),[&](const auto& value){return value.id==id.toStdString();});
         if(definition==catalog.end() || is_hosted_opening_symbol(*definition))
             throw std::invalid_argument("Choose a furniture component from the library.");
-        SymbolInstance symbol;
-        symbol.id=new_id("symbol-preview");symbol.symbol_id=definition->id;symbol.definition=*definition;
-        symbol.placement.scale=scale;symbol.placement.layer_id=context->layer_id;
-        symbol.model_plan=true;
-        CanvasEntity geometry{QStringLiteral("placement-preview"),QStringLiteral("symbol"),{},0,false};
-        geometry.model_plan=symbol.model_plan;
-        for(const auto& stroke:transformed_symbol_preview(*definition,symbol))
-            geometry.segments.push_back({stroke.start,stroke.end,0});
-        geometry.stroke_color=QColor(QString::fromStdString(symbol.style.stroke_color));
-        if(geometry.stroke_color==QColor(Qt::black)) geometry.dark_stroke_color=QColor(210,226,239);
-        geometry.stroke_width_metres=symbol.style.stroke_width_metres;geometry.output_stroke_width_mm=.25;
-        geometry.fill_color=QColor(QString::fromStdString(symbol.style.fill_color));
-        geometry.fill_opacity=symbol.style.fill_opacity;geometry.line_pattern=QString::fromStdString(symbol.style.line_pattern);
-        geometry.hatch_pattern=QString::fromStdString(symbol.style.fill_pattern);
-        geometry.filled=symbol.style.fill_pattern!="none" && geometry.fill_color.isValid();
-        geometry.resize_frame=CanvasSelectionFrame{{},0,definition->width_metres*scale,definition->depth_metres*scale};
-        if(definition->svg_asset) {
-            const auto& asset=*definition->svg_asset;
-            CanvasSvgSymbol svg;
-            svg.catalog_id=id;svg.document=load_symbol_svg(asset);validate_svg_document(svg.document);
-            symbol.pinned_svg=svg.document.toStdString();
-            svg.artwork_sha256=QCryptographicHash::hash(svg.document,QCryptographicHash::Sha256).toHex();
-            svg.view_box=QRectF(asset.view_box[0],asset.view_box[1],asset.view_box[2],asset.view_box[3]);
-            svg.footprint_view_box=QRectF(asset.footprint_view_box[0],asset.footprint_view_box[1],asset.footprint_view_box[2],asset.footprint_view_box[3]);
-            svg.width_metres=definition->width_metres*scale;svg.depth_metres=definition->depth_metres*scale;
-            geometry.svg_symbol=std::move(svg);
-        }
+        auto [symbol,geometry]=symbolPlacementArtwork(*definition,scale,context->layer_id);
         const auto site_frame=site ? std::optional{siteAnnotationCreationFrame(*source,*context)} : std::nullopt;
         AnnotationState addition;addition.symbols.push_back(symbol);
         const auto encoded=encode_annotation_state(addition,desktop_symbol_catalog());
@@ -33218,6 +33337,71 @@ public:
         requireSymbolPlacementCurrent();
         if(m_site_symbol_frame) return site_source_plan_point(point,*m_site_symbol_frame);
         return m_symbol_placement_frame ? unproject_plan_point(point,*m_symbol_placement_frame) : point;
+    }
+
+    std::optional<CanvasEntity> symbolLibraryDragPreview(PlanCanvas* canvas,
+        const QString& id,double scale,Vec2 point) {
+        const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        if (canvas!=active || !m_document->is_editable() || m_boundary_session || m_linework_drawing ||
+            (m_pending_wall_start && !m_wall_chain_has_segments) ||
+            !std::isfinite(point.x) || !std::isfinite(point.y)) return std::nullopt;
+        if (!m_pending_symbol_id.isEmpty()) requireSymbolPlacementCurrent();
+        const auto& catalog=desktop_placeable_symbol_catalog();
+        const auto definition=std::find_if(catalog.begin(),catalog.end(),[&](const auto& value){return value.id==id.toStdString();});
+        if (definition==catalog.end() || !std::isfinite(scale) || scale<=0.0 || scale>100.0) return std::nullopt;
+        const bool hosted=is_hosted_opening_symbol(*definition),site=siteCanvas(canvas);
+        const auto source=symbolPlacementPublication();
+        const auto context=projectOrganization(*source)->drawing_context(m_active_layer_id.toStdString());
+        if (!context || !context->complete()) return std::nullopt;
+        if (!m_library_drag_capture || m_library_drag_capture->canvas!=canvas ||
+            m_library_drag_capture->catalog_id!=id || m_library_drag_capture->scale!=scale ||
+            !sourceEditAuthorityCurrent(*m_library_drag_capture->authority) ||
+            !source->shares_full_snapshot_with(*m_library_drag_capture->source)) {
+            LibraryDragPreviewCapture capture;
+            capture.canvas=canvas;capture.source=source;
+            capture.authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
+            capture.catalog_id=id;capture.scale=scale;
+            if (!site) capture.plan_frame=canvasTransformPlanFrame(*source);
+            if (site && !hosted) capture.site_frame=siteAnnotationCreationFrame(*source,*context);
+            if (!hosted) capture.artwork=symbolPlacementArtwork(*definition,scale,context->layer_id).second;
+            m_library_drag_capture=std::move(capture);
+        }
+        const auto& capture=*m_library_drag_capture;
+        if (hosted) {
+            const bool window=definition->category=="10_windows";
+            const auto kind=window ? QStringLiteral("window") : QStringLiteral("door");
+            const auto width=catalog_opening_width(*definition)*scale;
+            const auto model=capture.plan_frame ? unproject_plan_point(point,*capture.plan_frame) : point;
+            const auto placement=visibleOpeningHostAt(*source,canvas->entities(),model,point,width,
+                context->layer_id,capture.plan_frame ? context : std::nullopt,site ? &m_site_plan_frames : nullptr);
+            if (!placement) return std::nullopt;
+            auto host=placement->wall;
+            const auto length=segment_length(host.baseline);
+            if (width>length || placement->offset<0.0 || placement->offset+width>length) return std::nullopt;
+            const HostedOpening opening{"library-drag-opening",placement->offset,width,window ? .9 : 0.0,window ? 1.2 : 2.1};
+            host.openings.push_back(opening);validate_wall_semantics(host);
+            auto assembly=catalog_opening_assembly(kind,id);
+            if (assembly.window_layout==WindowLayoutKind::bay) assembly.window_bay_projection_m*=scale;
+            const auto operation=catalog_door_operation(*definition);
+            CanvasEntity geometry{QStringLiteral("library-drag-preview"),QStringLiteral("opening"),
+                openingPlacementPlan(host,opening,assembly,operation,m_library_drag_opening_cache),0,false};
+            geometry.stroke_color=QColor(Qt::black);geometry.dark_stroke_color=QColor(210,226,239);
+            geometry.output_stroke_width_mm=.25;
+            if (placement->site_frame) geometry=site_presented_canvas_entity(geometry,*placement->site_frame);
+            else if (capture.plan_frame) geometry.segments=project_plan_path(std::move(geometry.segments),*capture.plan_frame);
+            return geometry;
+        }
+        const auto model=capture.site_frame ? site_source_plan_point(point,*capture.site_frame) :
+            capture.plan_frame ? unproject_plan_point(point,*capture.plan_frame) : point;
+        auto geometry=capture.artwork;
+        for (auto& edge:geometry.segments) {
+            edge.start.x+=model.x;edge.start.y+=model.y;edge.end.x+=model.x;edge.end.y+=model.y;
+        }
+        if (geometry.resize_frame) geometry.resize_frame->center=model;
+        if (geometry.svg_symbol) geometry.svg_symbol->position=model;
+        if (capture.site_frame) geometry=site_presented_canvas_entity(geometry,*capture.site_frame);
+        else if (capture.plan_frame) project_model_plan_symbol(geometry,*capture.plan_frame);
+        return geometry;
     }
 
     void updateSymbolPlacementPreview(Vec2 point) {
@@ -39155,6 +39339,10 @@ private:
                 [&](const auto& candidate) { return candidate.id == id.toStdString(); });
             return definition != catalog.end() && is_hosted_opening_symbol(*definition);
         });
+        canvas->setSymbolDragPreviewRequested([this,canvas](const QString& id,double scale,Vec2 point) {
+            try {return symbolLibraryDragPreview(canvas,id,scale,point);}
+            catch (const std::exception&) {m_library_drag_capture.reset();return std::optional<CanvasEntity>{};}
+        });
         canvas->setEntitiesSelected([this,canvas](QStringList ids, bool additive) {
             try {
                 try { if (siteCanvas(canvas)) requireSitePublicationCurrent(false); }
@@ -41923,6 +42111,7 @@ private:
         // or revision. Every refreshed scene needs a new immutable preview source.
         m_plan_publication_source.reset();
         m_plan_publication_authority.reset();
+        m_library_drag_capture.reset();
         clearOpeningWidthCapture();
         m_vertex_preview_authority.reset();
         m_wall_move_authority.reset();
@@ -46282,76 +46471,12 @@ private:
             const auto snapshot = site ? *m_site_opening_source : *m_plan_opening_source;
             const auto active_context=architectural ? organize_project(snapshot).drawing_context(m_active_layer_id.toStdString()) : std::optional<DrawingContext>{};
             if (architectural && !active_context) throw std::invalid_argument("The captured opening layer is unavailable.");
-            std::optional<Entity> host_entity;
-            Wall host;
-            double offset = 0.0;
-            double nearest = std::numeric_limits<double>::infinity();
-            for (const auto& visible : canvas->entities()) {
-                const auto it = snapshot.entities().find(visible.id.toStdString());
-                if (it == snapshot.entities().end() || it->second.type != "wall") continue;
-                if (read_string(it->second.properties, "layer_id") != std::optional<std::string>{m_active_layer_id.toStdString()}) continue;
-                if (architectural && read_string(it->second.properties, "floor_id") != std::optional<std::string>{active_context->floor_id}) continue;
-                std::vector<const Entity*> openings;
-                for (const auto& [id, entity] : snapshot.entities()) {
-                    if (entity.type == "opening" && read_string(entity.properties, "wall_id") == std::optional<std::string>{it->first})
-                        openings.push_back(&entity);
-                }
-                Wall candidate;
-                std::string diagnostic;
-                if (!read_document_wall(it->second, openings, candidate, diagnostic)) continue;
-                if (architectural) {
-                    // A cropped plan can retain the owner ID while only part
-                    // of its physical outline is displayed. Do not choose an
-                    // undisplayed continuation of the full source baseline.
-                    double displayed_separation=std::numeric_limits<double>::infinity();
-                    for (const auto& edge : visible.segments) {
-                        try {
-                            const auto length=segment_length(edge);
-                            const auto station=std::clamp(project_host_station(edge,displayed_point,length*0.5),0.0,length);
-                            const auto target=point_at_host_station(edge,station);
-                            displayed_separation=std::min(displayed_separation,
-                                std::hypot(displayed_point.x-target.x,displayed_point.y-target.y));
-                        } catch (const std::exception&) { /* Unsafe display edges cannot prove a visible host. */ }
-                    }
-                    if (displayed_separation > std::max(0.15,candidate.thickness*0.5)+1e-7) continue;
-                }
-                std::optional<SitePresentationPlacement> candidate_frame;
-                auto host_point = point;
-                if (site) {
-                    candidate_frame = m_site_opening_frames.at(visible.id);
-                    host_point = site_source_plan_point(point, *candidate_frame);
-                }
-                const auto& baseline = candidate.baseline;
-                const auto distance = [&](double fraction) {
-                    const auto p = point_at_segment(baseline, fraction).value();
-                    return std::hypot(host_point.x - p.x, host_point.y - p.y);
-                };
-                double fraction = 0;
-                if (baseline.sweep_radians == 0.0) {
-                    const auto dx = baseline.end.x - baseline.start.x;
-                    const auto dy = baseline.end.y - baseline.start.y;
-                    fraction = std::clamp(((host_point.x - baseline.start.x) * dx + (host_point.y - baseline.start.y) * dy) / (dx * dx + dy * dy), 0.0, 1.0);
-                } else {
-                    // Locate the nearest arc interval, then refine against the analytical curve.
-                    for (int i = 1; i <= 64; ++i) if (distance(i / 64.0) < distance(fraction)) fraction = i / 64.0;
-                    double low = std::max(0.0, fraction - 1.0 / 64.0);
-                    double high = std::min(1.0, fraction + 1.0 / 64.0);
-                    for (int i = 0; i < 40; ++i) {
-                        const auto a = std::lerp(low, high, 1.0 / 3.0);
-                        const auto b = std::lerp(low, high, 2.0 / 3.0);
-                        if (distance(a) < distance(b)) high = b; else low = a;
-                    }
-                    fraction = (low + high) * 0.5;
-                }
-                const auto separation = distance(fraction);
-                if (separation > std::max(0.15, candidate.thickness * 0.5) || separation >= nearest) continue;
-                nearest = separation;
-                offset = fraction * segment_length(baseline) - width * 0.5;
-                host = std::move(candidate);
-                host_entity = it->second;
-                preview_frame = std::move(candidate_frame);
-            }
-            if (host_entity) {
+            const auto placement=visibleOpeningHostAt(snapshot,canvas->entities(),point,displayed_point,width,
+                m_active_layer_id.toStdString(),active_context,site ? &m_site_opening_frames : nullptr);
+            if (placement) {
+                auto host=placement->wall;
+                const auto offset=placement->offset;
+                preview_frame=placement->site_frame;
                 const auto length = segment_length(host.baseline);
                 if (width > length)
                     throw std::invalid_argument("This opening is wider than the wall. Reduce its width or choose a longer wall.");
@@ -46377,35 +46502,13 @@ private:
                                                               : m_pending_opening_door_operation
                         : std::nullopt;
                     const auto& opening = host.openings.back();
-                    if (host.baseline.sweep_radians == 0.0) {
-                        // A straight-host placement is a rigid copy of one
-                        // admitted local assembly, so pointer motion needs no
-                        // solid rebuild and shows the actual leaf/track geometry.
-                        const auto key = json{{"width", width}, {"height", height}, {"sill", sill},
-                            {"thickness", host.thickness}, {"assembly", opening_assembly_json(assembly)},
-                            {"operation", operation ? encode_door_operation(*operation) : json{}}}.dump();
-                        if (m_opening_preview_profile_cache.first != key) {
-                            HostedOpening local_opening{"placement", 1.0, width, sill, height};
-                            Wall local_host{"placement-host", {{0,0}, {width+2.0,0}, 0.0}, host.thickness,
-                                std::max(host.height, sill+height+1.0), 0.0, {local_opening}};
-                            auto local = project_hosted_opening_plan(local_host, local_opening, assembly, operation);
-                            m_opening_preview_profile_cache = {key, std::move(local)};
-                        }
-                        const double angle = std::atan2(b.y-a.y, b.x-a.x);
-                        const PlanarTransform transform{{}, angle, false, false,
-                            {a.x-std::cos(angle), a.y-std::sin(angle)}};
-                        preview.segments.clear();
-                        for (const auto& edge : m_opening_preview_profile_cache.second)
-                            preview.segments.push_back(transform_segment(edge, transform));
-                    } else {
-                        preview.segments = project_hosted_opening_plan(host, opening, assembly, operation);
-                    }
+                    preview.segments=openingPlacementPlan(host,opening,assembly,operation,m_opening_preview_profile_cache);
                 }
                 preview.instruction = QStringLiteral("Click to place %1 • offset %2").arg(m_pending_opening_kind, format_length(offset, m_metric_units));
                 if (commit) {
                     if (plan) requirePlanOpeningPlacementCurrent();
                     const auto previous = m_selected_id;
-                    m_selected_id = id_from(host_entity->id);
+                    m_selected_id = id_from(placement->owner.id);
                     std::optional<DoorOperation> door_operation;
                     if (m_pending_opening_kind == QStringLiteral("door")) {
                         door_operation = m_pending_opening_symbol_id.isEmpty()
@@ -50182,6 +50285,8 @@ private:
     std::optional<BuildingViewFrame> m_symbol_placement_frame;
     std::optional<SymbolInstance> m_symbol_placement_instance;
     std::optional<CanvasEntity> m_symbol_placement_preview;
+    std::optional<LibraryDragPreviewCapture> m_library_drag_capture;
+    std::pair<std::string,Boundary> m_library_drag_opening_cache;
     QPushButton* m_drawing_measurement_button{};
     QAction* m_architectural_view_control_action{};
     std::vector<QAction*> m_architectural_actions;

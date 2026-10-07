@@ -36,6 +36,7 @@ class QPaintDevice;
 class QSvgRenderer;
 class QTouchEvent;
 class QPointingDevice;
+class QMimeData;
 
 namespace sketch::desktop {
 
@@ -620,6 +621,10 @@ public:
         std::function<bool(QString, QString, Vec2, std::uint64_t)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
                           std::function<bool(const QString&)> uses_raw_point = {});
+    // Pure, screen-only geometry at the same raw or snapped point used by drop.
+    // Hovering never invokes the armed click-placement command.
+    void setSymbolDragPreviewRequested(
+        std::function<std::optional<CanvasEntity>(const QString&, double, Vec2)> callback);
     void setAreaClassDropped(std::function<bool(QString, Vec2)> callback,
         std::function<void()> malformed_drop_rejected = {});
     // Interaction projection only; authoritative geometry is never changed.
@@ -672,11 +677,15 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
 private:
     [[nodiscard]] bool admitInteraction(bool context = false);
     void notifyNavigationChanged(Vec2 previous_center, double previous_scale);
+    void clearSymbolDragPreview();
+    [[nodiscard]] bool updateSymbolDragPreview(const QMimeData* mime, QPointF position);
+    [[nodiscard]] std::optional<Vec2> symbolDropPoint(const QString& id, QPointF position);
     using PerformanceClock = std::chrono::steady_clock;
     std::function<void(PerformanceMetric, PerformanceClock::duration)> m_performance_measured;
     std::vector<std::pair<PerformanceMetric, PerformanceClock::time_point>> m_pending_measurements;
@@ -1006,6 +1015,9 @@ private:
     std::vector<DrawingWitness> m_drawing_witnesses;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;
     std::optional<CanvasEntity> m_component_placement_preview;
+    std::optional<CanvasEntity> m_symbol_drag_preview;
+    bool m_symbol_drag_active{};
+    std::uint64_t m_symbol_drag_preview_serial{};
     CanvasTool m_tool{CanvasTool::select};
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
@@ -1171,6 +1183,8 @@ private:
     std::function<bool(QString, QString, Vec2, std::uint64_t)>
         m_boundary_vertex_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
+    std::function<std::optional<CanvasEntity>(const QString&, double, Vec2)>
+        m_symbol_drag_preview_requested;
     std::function<bool(QString, Vec2)> m_area_class_dropped;
     std::function<void()> m_area_class_drop_rejected;
     QString m_area_class_caption;
