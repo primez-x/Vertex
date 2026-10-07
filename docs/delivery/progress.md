@@ -14,6 +14,18 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 shared editor source capture
+
+The shared modal/input context now retains an immutable authoring snapshot instead
+of treating its revision number as content identity. Shared authoring history is
+the exact fast path; detached comparison uses the complete version-2 proof domain,
+including geometry-edit receipts and assets. Replaced content with the same
+document identity/revision is refused, while a Save-marker-only change is allowed.
+Missing or unavailable captures refuse edits inside signal callbacks rather than
+letting snapshot exceptions escape. Existing stronger view/selection authorities
+remain in place. Independent source review accepted the shared change. No native
+builds, tests, probes, packages or installations ran.
+
 ### October 7 tangent-preserving wall splits and distance entry
 
 The next source change retains v5 tangent contact/other pairs when their physical

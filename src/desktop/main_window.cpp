@@ -46764,6 +46764,7 @@ private:
         QString selected_id;
         QString layer_id;
         bool metric_units;
+        std::optional<DocumentSnapshot> source;
     };
 
     struct WorkspaceAuthorityToken {
@@ -46958,17 +46959,40 @@ private:
     };
 
     ModalContext captureModalContext() const {
-        return {m_document, m_document->revision(), m_selected_id, m_active_layer_id, m_metric_units};
+        ModalContext context{m_document, m_document->revision(), m_selected_id, m_active_layer_id, m_metric_units, {}};
+        try { context.source=authoringSnapshot(); }
+        catch (const std::exception&) {
+            // Signal handlers may capture focus/input context without an
+            // exception boundary. An unavailable source creates no authority;
+            // admission below refuses this absent capture without throwing.
+        }
+        return context;
     }
 
     bool modalContextUnchanged(const ModalContext& context) {
-        if (m_document != context.document || m_document->revision() != context.revision ||
-            m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
-            m_metric_units != context.metric_units) {
-            setError(QStringLiteral("The project, selection, drawing layer or units changed while the dialog was open. Reopen the tool to use the current context."));
+        try {
+            if (!context.source || m_document != context.document || m_document->revision() != context.revision ||
+                m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
+                m_metric_units != context.metric_units) {
+                setError(QStringLiteral("The project, selection, drawing layer or units changed while the dialog was open. Reopen the tool to use the current context."));
+                return false;
+            }
+            const auto current=authoringSnapshot();
+            // Save markers do not change the authored source. Shared immutable
+            // history is an exact fast path; detached sources compare the
+            // complete v2 proof domain, including geometry-edit receipts.
+            if (current.is_editable()!=context.source->is_editable() ||
+                current.read_only_reason()!=context.source->read_only_reason() ||
+                (!current.shares_authoring_source_with(*context.source) &&
+                 document_authoring_source_digest_v2(current)!=document_authoring_source_digest_v2(*context.source))) {
+                setError(QStringLiteral("The editing source changed while the tool was open. Reopen it to review the current project."));
+                return false;
+            }
+            return true;
+        } catch (const std::exception&) {
+            setError(QStringLiteral("The editing source is unavailable. Reopen the tool after restoring the current project."));
             return false;
         }
-        return true;
     }
 
 public:
