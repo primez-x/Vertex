@@ -740,6 +740,12 @@ private:
     [[nodiscard]] std::optional<OpeningWidthHandleHit> openingWidthHandleAt(
         QPointF point, const QRectF& viewport) const;
     [[nodiscard]] const CanvasEntity& interactiveEntity(const CanvasEntity& entity) const;
+    using EntityPresentationIndex = QHash<QString, QHash<QString, std::size_t>>;
+    static void rebuildEntityPresentationIndex(EntityPresentationIndex& index,
+        const std::vector<CanvasEntity>& entities);
+    [[nodiscard]] static const CanvasEntity* indexedPreviewEntity(
+        const CanvasEntity& entity, const std::vector<CanvasEntity>& previews,
+        const EntityPresentationIndex& index);
     [[nodiscard]] const CanvasReference& interactiveReference(const CanvasReference& reference) const;
     bool applyEntitiesMovePreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
@@ -1014,6 +1020,9 @@ private:
     QStringList m_move_ids;
     std::optional<Vec2> m_move_preview_delta;
     std::vector<CanvasEntity> m_move_entities_preview;
+    // Owned preview replacements rebuild exact presentation lookup. Positions
+    // preserve the first duplicate and never retain pointers into these vectors.
+    EntityPresentationIndex m_move_entities_preview_index;
     std::vector<CanvasLabel> m_move_labels_preview;
     std::uint64_t m_move_preview_serial{};
     bool m_move_preview_exact{};
@@ -1043,6 +1052,7 @@ private:
     bool m_selection_controls_visible{true};
     Vec2 m_transform_pivot{};
     std::vector<CanvasEntity> m_transform_entities_preview;
+    EntityPresentationIndex m_transform_entities_preview_index;
     std::vector<CanvasLabel> m_transform_labels_preview;
     std::uint64_t m_transform_preview_serial{};
     bool m_transform_preview_exact{};
@@ -1054,6 +1064,7 @@ private:
     std::optional<Vec2> m_vertex_move_press_pointer;
     std::optional<Vec2> m_vertex_move_preview;
     std::vector<CanvasEntity> m_boundary_vertex_entities_preview;
+    EntityPresentationIndex m_boundary_vertex_entities_preview_index;
     std::vector<CanvasLabel> m_boundary_vertex_labels_preview;
     std::optional<CanvasBoundaryPreviewMetrics> m_boundary_vertex_metrics_preview;
     bool m_boundary_vertex_preview_valid{};
@@ -1067,6 +1078,7 @@ private:
     std::optional<double> m_opening_width_pointer_station;
     std::optional<Vec2> m_opening_width_jamb_preview;
     std::vector<CanvasEntity> m_opening_width_entities_preview;
+    EntityPresentationIndex m_opening_width_entities_preview_index;
     std::vector<CanvasLabel> m_opening_width_labels_preview;
     double m_opening_width_scale_preview{1.0};
     bool m_opening_width_preview_valid{};

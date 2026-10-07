@@ -5140,6 +5140,17 @@ class MainWindow::Impl {
         QFont label_font;
     };
 
+    struct SiteTransformPreviewCapture {
+        std::shared_ptr<const SiteEndpointPreviewInput> input;
+        std::uint64_t generation{};
+        Vec2 view_center;
+        double zoom{};
+        QSize size;
+        double dpr{};
+        std::uint64_t navigation_generation{};
+        bool had_focus{};
+    };
+
     struct PlanEndpointCapture {
         QPointer<PlanCanvas> canvas;
         std::shared_ptr<Document> document;
@@ -5215,6 +5226,7 @@ class MainWindow::Impl {
         std::optional<std::pair<double,double>> axis_resize_scales;
         double axis_resize_model_angle{};
         std::shared_ptr<std::optional<Command>> axis_resize_command;
+        std::shared_ptr<const SiteTransformPreviewCapture> site_transform_capture;
     };
 
 public:
@@ -21567,7 +21579,8 @@ public:
         const auto entities_move_candidate=request.entities_move_candidate;
         const auto rigid_transform=request.rigid_transform;
         const auto endpoint_command=request.plan_endpoint_command;
-        const auto site_input=request.plan_endpoint_capture ? request.plan_endpoint_capture->site_input : nullptr;
+        const auto site_input=request.site_transform_capture ? request.site_transform_capture->input
+            : request.plan_endpoint_capture ? request.plan_endpoint_capture->site_input : nullptr;
         const auto axis_scales=request.axis_resize_scales;
         const auto axis_angle=request.axis_resize_model_angle;
         const auto axis_command=request.axis_resize_command;
@@ -21940,16 +21953,34 @@ public:
     }
 
     bool entityTransformContextUnchanged() {
-        return m_entity_transform_context && sourceEditAuthorityCurrent(*m_entity_transform_context) &&
+        const bool current=m_entity_transform_context && sourceEditAuthorityCurrent(*m_entity_transform_context) &&
             m_entity_transform_document==m_document && m_entity_transform_source &&
             fullSnapshotDigest(*m_entity_transform_source)==m_entity_transform_context->source_digest &&
             m_entity_transform_selection==m_selected_ids && m_entity_transform_workspace==m_workspace &&
             m_entity_transform_named_view==m_active_named_view && m_entity_transform_named_owner==m_active_named_view_owner && m_entity_transform_view_kind==m_architectural_view_kind &&
             !m_boundary_session && !m_linework_drawing && !m_pending_wall_start && m_pending_symbol_id.isEmpty() && m_pending_opening_kind.isEmpty();
+        if (!current || !m_entity_transform_site_capture) return current;
+        try {
+            requireSiteEditCurrent();
+            const auto& capture=*m_entity_transform_site_capture;
+            const auto* canvas=m_entity_transform_canvas.data();
+            if (!canvas || !siteCanvas(canvas) || !canvas->isVisible() ||
+                (capture.had_focus && !canvas->hasFocus()) || m_entity_transform_source!=m_site_edit_source ||
+                capture.generation!=m_site_edit_generation) return false;
+            const auto center=canvas->viewCenter();
+            return center.x==capture.view_center.x && center.y==capture.view_center.y &&
+                canvas->viewScale()==capture.zoom && canvas->size()==capture.size &&
+                canvas->devicePixelRatioF()==capture.dpr &&
+                canvas->navigationGeneration()==capture.navigation_generation;
+        } catch (...) { return false; }
     }
 
     void captureEntityTransformFromCanvas(PlanCanvas* canvas,const QString& id) {
-        m_entity_transform_source=captureCanvasGeometrySource(canvas);
+        m_entity_transform_site_capture.reset();
+        if (siteCanvas(canvas)) {
+            requireSiteEditCurrent();
+            m_entity_transform_source=m_site_edit_source;
+        } else m_entity_transform_source=captureCanvasGeometrySource(canvas);
         m_entity_transform_frame.reset();
         if (!siteCanvas(canvas)) {
             const auto wanted=id.toStdString();
@@ -21971,6 +22002,19 @@ public:
         m_entity_transform_canvas=canvas;
         m_entity_transform_id=id;
         m_entity_transform_context=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*m_entity_transform_source));
+        if (siteCanvas(canvas)) {
+            const auto found=m_entity_transform_source->entities().find(id.toStdString());
+            if (found!=m_entity_transform_source->entities().end() && physicalPlanAxisResizeFamily(found->second.type)) {
+                requireSiteEditCurrent();
+                auto input=std::make_shared<SiteEndpointPreviewInput>();
+                input->geometry=m_site_edit_local_geometry; input->labels=m_site_edit_local_labels;
+                input->frames=m_site_edit_frames; input->appraisal_area_ids=m_plan_appraisal_area_ids;
+                input->label_font=canvas->font();
+                m_entity_transform_site_capture=std::make_shared<SiteTransformPreviewCapture>(SiteTransformPreviewCapture{
+                    std::move(input),m_site_edit_generation,canvas->viewCenter(),canvas->viewScale(),canvas->size(),
+                    canvas->devicePixelRatioF(),canvas->navigationGeneration(),canvas->hasFocus()});
+            }
+        }
         m_entity_transform_selection=m_selected_ids;
         m_entity_transform_workspace=m_workspace;
         m_entity_transform_named_view=m_active_named_view;
@@ -22009,28 +22053,28 @@ public:
                 throw std::invalid_argument("The project, selection or view changed during this resize. Start again.");
             const auto angle=plan_axis_resize_frame(found->second);
             if (siteCanvas(canvas)) {
-                if (!sitePreviewContextCurrent())
+                const auto capture=m_entity_transform_site_capture;
+                if (!capture || !capture->input || !sitePreviewContextCurrent())
                     throw std::invalid_argument("The Site Plan resize source changed. Start again.");
-                if (!m_site_preview_dispatching) {
-                    if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
-                    const auto generation=m_site_edit_generation;
-                    queueSitePreview([this,target=QPointer<PlanCanvas>(canvas),id,scale_x,scale_y,canvas_anchor,serial,generation] {
-                        if (!target || generation!=m_site_edit_generation ||
-                            target->entityTransformPreviewSerial()!=serial) return;
-                        auto proposed=previewEntityAxisResizeFromCanvas(target,id,scale_x,scale_y,canvas_anchor,serial);
-                        if (!target->completeEntityTransformPreview(serial,std::move(proposed),m_site_preview_labels,m_site_preview_references))
-                            m_entity_transform_ready=false;
-                    });
-                    return std::nullopt;
-                }
-                const auto anchor=site_source_plan_point(canvas_anchor,siteEditFrame({id}));
-                auto command=augmentAuthoredCommand(plan_axis_resize_command(*m_site_edit_source,id.toStdString(),
-                    scale_x,scale_y,anchor,angle),*m_site_edit_source);
-                const auto candidate=Document::preview_command(*m_site_edit_source,command);
-                auto proposed=sitePreviewGeometry(candidate,{id},SiteEditTransform{{},0.0,1.0});
-                m_entity_transform_command=std::move(command);
-                m_entity_transform_ready=true;
-                return proposed;
+                const auto& input=capture->input;
+                const auto anchor=site_source_plan_point(canvas_anchor,input->frames.at(id));
+                if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
+                const auto geometry=std::shared_ptr<const std::vector<CanvasEntity>>(input,&input->geometry);
+                PendingVertexPreview request{canvas,serial,m_document,m_entity_transform_source,geometry,geometry,
+                    std::shared_ptr<const std::vector<CanvasLabel>>(input,&input->labels),
+                    std::shared_ptr<const std::set<std::string,std::less<>>>(input,&input->appraisal_area_ids),
+                    std::shared_ptr<const std::map<QString,QRectF>>(input,&input->label_footprints),
+                    std::shared_ptr<const std::vector<Bounds2>>(input,&input->component_bounds),
+                    m_metric_units,id,{},anchor,std::nullopt,std::make_shared<std::optional<VertexPreviewProjection>>()};
+                request.authority=m_entity_transform_context; request.label_font=input->label_font;
+                request.entity_transform_preview=true; request.axis_resize_scales=std::pair{scale_x,scale_y};
+                request.axis_resize_model_angle=angle; request.axis_resize_command=std::make_shared<std::optional<Command>>();
+                request.site_transform_capture=capture;
+                if (m_running_vertex_preview) {
+                    (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+                    m_pending_vertex_preview=std::move(request);
+                } else startVertexPreviewJob(std::move(request));
+                return std::nullopt;
             }
             captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
             if (!m_vertex_preview_source || !m_vertex_preview_authority ||
@@ -22474,6 +22518,10 @@ public:
                     if (request.source != request.plan_endpoint_capture->source ||
                         request.canvas != request.plan_endpoint_capture->canvas ||
                         request.authority != request.plan_endpoint_capture->authority) return false;
+                } else if (request.site_transform_capture) {
+                    if (request.site_transform_capture!=m_entity_transform_site_capture ||
+                        request.source!=m_entity_transform_source || request.canvas!=m_entity_transform_canvas ||
+                        request.authority!=m_entity_transform_context) return false;
                 } else if (request.source != m_vertex_preview_source || request.canvas != m_vertex_preview_canvas) return false;
                 if (request.entity_transform_preview)
                     return request.serial==m_entity_transform_serial &&
@@ -38313,10 +38361,12 @@ private:
             });
         canvas->setEntityTransformStarted([this,canvas](QString id) {
             m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
+            m_entity_transform_site_capture.reset();
             m_entity_transform_source.reset(); m_entity_transform_context.reset();
             try { captureSiteEdit(canvas); captureEntityTransformFromCanvas(canvas,id); }
             catch (const std::exception& error) {
                 clearSitePublication(); m_entity_transform_source.reset(); m_entity_transform_context.reset();
+                m_entity_transform_site_capture.reset();
                 setError(QString::fromUtf8(error.what()));
             }
         });
@@ -38697,6 +38747,7 @@ private:
             m_wall_move_source.reset();
             m_wall_move_frame.reset();
             m_wall_move_ids.clear();
+            m_entity_transform_site_capture.reset();
             m_entity_transform_context.reset();
             m_entity_transform_source.reset();
             m_entity_transform_frame.reset();
@@ -40356,6 +40407,11 @@ private:
 
     void clearSitePublication() {
         if (m_opening_preview_site_input) clearOpeningWidthCapture();
+        if (m_entity_transform_site_capture) {
+            m_entity_transform_site_capture.reset();
+            m_entity_transform_context.reset(); m_entity_transform_source.reset();
+            m_entity_transform_command.reset(); m_entity_transform_ready=false;
+        }
         m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
         ++m_site_publication_generation;
         ++m_site_edit_generation;
@@ -48973,6 +49029,7 @@ private:
     std::optional<BuildingViewFrame> m_wall_move_frame;
     QStringList m_wall_move_ids;
     std::optional<BuildingViewFrame> m_entity_transform_frame;
+    std::shared_ptr<const SiteTransformPreviewCapture> m_entity_transform_site_capture;
     std::shared_ptr<const DocumentSnapshot> m_opening_preview_source;
     std::shared_ptr<const ArchitecturalViewContext> m_opening_preview_view_context;
     std::shared_ptr<const std::vector<CanvasEntity>> m_opening_preview_retained;

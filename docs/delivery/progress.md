@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site physical side-handle worker and geometry lookup
+
+Physical side-handle resizing in Site now runs through the existing vertex
+preview worker, using the actual published Site source and one captured local
+scene. Typed resize admission, geometry, dependent labels and the object's
+selection frame are regenerated before captured Site presentation is applied
+once. Source, camera, navigation, focus, Site generation and request identities
+fence completion. Release keeps the admitted command, and publication clearing
+retires the captured source and ready command.
+
+Canvas preview geometry uses exact owner/presentation indices prepared when a
+proposal is accepted. Painting and hit handling no longer scan every proposal
+for every retained object. The indices keep the original precedence and first
+duplicate behavior and clear with every rejected, replaced or retired preview.
+No builds, tests, native jobs, packages or installations ran. Compilation,
+runtime interaction and responsiveness remain unverified; other Site transform
+and move families retain their current execution lanes. Independent source review
+accepted the capture, worker/release path and index invalidation coverage.
+
 ### October 7 Site opening-width worker and practical jamb editing
 
 Door, window and doorway jamb drags now share captured source, camera, authority

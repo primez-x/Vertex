@@ -2251,6 +2251,7 @@ bool PlanCanvas::markEntitiesMovePreviewPending(std::uint64_t serial) {
     m_move_preview_valid = false;
     m_move_preview_pending = true;
     m_move_entities_preview.clear();
+    m_move_entities_preview_index.clear();
     m_move_labels_preview.clear(); m_move_references_preview.clear();
     return true;
 }
@@ -2269,6 +2270,7 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     m_move_preview_request_in_progress = false;
     m_move_preview_pending = false;
     m_move_preview_exact = true;
+    m_move_entities_preview_index.clear();
     m_move_entities_preview = result ? std::move(*result) : std::vector<CanvasEntity>{};
     m_move_labels_preview = std::move(labels);
     m_move_references_preview = std::move(references);
@@ -2290,7 +2292,11 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
         unambiguous_entity_presentations(m_move_entities_preview, m_entities) &&
         std::all_of(m_move_ids.begin(), m_move_ids.end(),
             [&](const auto& id) { return admitted_ids.contains(id); });
-    if (!m_move_preview_valid) { m_move_entities_preview.clear(); m_move_labels_preview.clear(); m_move_references_preview.clear(); }
+    if (!m_move_preview_valid) {
+        m_move_entities_preview.clear();
+        m_move_entities_preview_index.clear();
+        m_move_labels_preview.clear(); m_move_references_preview.clear();
+    }
     // Preserve the retained root's selection without rescanning the entire
     // drawing for every dependent body in a compound move proposal.
     if (!m_move_entities_preview.empty()) {
@@ -2300,6 +2306,8 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
             if (const auto selected = retained_selection.constFind(proposed.id); selected != retained_selection.cend())
                 proposed.selected = selected.value();
     }
+    if (m_move_preview_valid)
+        rebuildEntityPresentationIndex(m_move_entities_preview_index, m_move_entities_preview);
     setCursor(m_move_preview_valid ? Qt::ClosedHandCursor : Qt::ForbiddenCursor);
     update();
     if (m_move_release_pending) {
@@ -2932,6 +2940,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             m_move_preview_delta = dragDelta(position);
             const auto serial = ++m_move_preview_serial;
             m_move_entities_preview.clear();
+            m_move_entities_preview_index.clear();
             m_move_labels_preview.clear(); m_move_references_preview.clear();
             m_move_preview_pending = false;
             m_move_preview_exact = false;
@@ -3301,6 +3310,7 @@ void PlanCanvas::resetGesture() {
     m_move_preview_delta.reset();
     ++m_move_preview_serial;
     m_move_entities_preview.clear();
+    m_move_entities_preview_index.clear();
     m_move_labels_preview.clear(); m_move_references_preview.clear();
     m_move_preview_exact = false;
     m_move_preview_valid = false;
@@ -3315,6 +3325,7 @@ void PlanCanvas::resetGesture() {
     ++m_transform_preview_serial;
     m_transform_source_id.clear();
     m_transform_entities_preview.clear();
+    m_transform_entities_preview_index.clear();
     m_transform_labels_preview.clear(); m_transform_references_preview.clear();
     m_transform_preview_exact = false;
     m_transform_preview_valid = false;
@@ -3329,6 +3340,7 @@ void PlanCanvas::resetGesture() {
     m_vertex_move_press_pointer.reset();
     m_vertex_move_preview.reset();
     m_boundary_vertex_entities_preview.clear();
+    m_boundary_vertex_entities_preview_index.clear();
     m_boundary_vertex_labels_preview.clear();
     m_boundary_vertex_metrics_preview.reset();
     m_boundary_vertex_preview_valid = false;
@@ -3341,6 +3353,7 @@ void PlanCanvas::resetGesture() {
     m_opening_width_pointer_station.reset();
     m_opening_width_jamb_preview.reset();
     m_opening_width_entities_preview.clear();
+    m_opening_width_entities_preview_index.clear();
     m_opening_width_labels_preview.clear();
     m_opening_width_scale_preview = 1.0;
     m_opening_width_preview_valid = false;
@@ -4163,22 +4176,44 @@ const CanvasEntity* PlanCanvas::selectedOpening() const {
     return nullptr;
 }
 
+void PlanCanvas::rebuildEntityPresentationIndex(EntityPresentationIndex& index,
+    const std::vector<CanvasEntity>& entities) {
+    index.clear();
+    for (std::size_t position = 0; position < entities.size(); ++position) {
+        const auto& entity = entities[position];
+        auto& presentations = index[entity.id];
+        // Anonymous duplicates are admitted by the existing proposal contract;
+        // retain the same first match as the original ordered vector lookup.
+        if (!presentations.contains(entity.presentation_key))
+            presentations.insert(entity.presentation_key, position);
+    }
+}
+
+const CanvasEntity* PlanCanvas::indexedPreviewEntity(const CanvasEntity& entity,
+    const std::vector<CanvasEntity>& previews, const EntityPresentationIndex& index) {
+    const auto root = index.constFind(entity.id);
+    if (root == index.cend()) return nullptr;
+    const auto presentation = root.value().constFind(entity.presentation_key);
+    if (presentation == root.value().cend()) return nullptr;
+    return &previews[presentation.value()];
+}
+
 const CanvasEntity& PlanCanvas::interactiveEntity(const CanvasEntity& entity) const {
     if (m_transform_preview_valid) {
-        for (const auto& preview : m_transform_entities_preview)
-            if (same_entity_presentation(preview, entity)) return preview;
+        if (const auto* preview = indexedPreviewEntity(entity,
+                m_transform_entities_preview, m_transform_entities_preview_index)) return *preview;
     }
     if (m_move_preview_valid) {
-        for (const auto& preview : m_move_entities_preview)
-            if (same_entity_presentation(preview, entity)) return preview;
+        if (const auto* preview = indexedPreviewEntity(entity,
+                m_move_entities_preview, m_move_entities_preview_index)) return *preview;
     }
     if (m_vertex_move_handle && m_boundary_vertex_preview_valid) {
-        for (const auto& preview : m_boundary_vertex_entities_preview)
-            if (same_entity_presentation(preview, entity)) return preview;
+        if (const auto* preview = indexedPreviewEntity(entity,
+                m_boundary_vertex_entities_preview, m_boundary_vertex_entities_preview_index)) return *preview;
     }
     if (m_opening_width_handle && m_opening_width_preview_valid) {
-        for (const auto& preview : m_opening_width_entities_preview)
-            if (same_entity_presentation(preview, entity)) return preview;
+        if (const auto* preview = indexedPreviewEntity(entity,
+                m_opening_width_entities_preview, m_opening_width_entities_preview_index)) return *preview;
     }
     return entity;
 }
@@ -4215,6 +4250,7 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers 
     m_opening_width_preview_pointer = point;
     m_opening_width_preview_fine = modifiers.testFlag(Qt::ShiftModifier);
     m_opening_width_entities_preview.clear();
+    m_opening_width_entities_preview_index.clear();
     m_opening_width_labels_preview.clear();
     m_opening_width_scale_preview = std::numeric_limits<double>::quiet_NaN();
     if (!m_opening_width_press_station || !m_opening_width_pointer_station) return;
@@ -4268,6 +4304,7 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers 
             m_opening_width_preview_pending = false;
             m_opening_width_preview_valid = false;
             m_opening_width_entities_preview.clear();
+            m_opening_width_entities_preview_index.clear();
             m_opening_width_labels_preview.clear();
         }
         return;
@@ -4305,6 +4342,7 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
     m_opening_width_preview_pending = false;
     m_opening_width_preview_valid = false;
     m_opening_width_entities_preview.clear();
+    m_opening_width_entities_preview_index.clear();
     m_opening_width_labels_preview.clear();
     // Exact projection must contain the captured opening. Further geometry
     // constraints belong to the document projection and final resize command.
@@ -4357,6 +4395,7 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
         if (original != m_entities.end()) entity.selected = original->selected;
     }
     m_opening_width_entities_preview = std::move(*result);
+    rebuildEntityPresentationIndex(m_opening_width_entities_preview_index, m_opening_width_entities_preview);
     m_opening_width_labels_preview = std::move(admitted_labels);
     m_opening_width_preview_valid = true;
     update();
@@ -4414,6 +4453,7 @@ void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
     m_boundary_vertex_preview_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
     m_boundary_vertex_entities_preview.clear();
+    m_boundary_vertex_entities_preview_index.clear();
     m_boundary_vertex_labels_preview.clear();
     m_boundary_vertex_metrics_preview.reset();
     const auto snapped_target = *m_vertex_move_preview;
@@ -4430,6 +4470,7 @@ void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
             m_boundary_vertex_preview_pending = false;
             m_boundary_vertex_preview_valid = false;
             m_boundary_vertex_entities_preview.clear();
+            m_boundary_vertex_entities_preview_index.clear();
             m_boundary_vertex_labels_preview.clear();
             m_boundary_vertex_metrics_preview.reset();
         }
@@ -4471,6 +4512,7 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     m_boundary_vertex_preview_pending = false;
     m_boundary_vertex_preview_valid = false;
     m_boundary_vertex_entities_preview.clear();
+    m_boundary_vertex_entities_preview_index.clear();
     m_boundary_vertex_labels_preview.clear();
     m_boundary_vertex_metrics_preview.reset();
     // Native projection owns geometric validation. An absent captured owner
@@ -4512,6 +4554,7 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
         m_boundary_vertex_labels_preview.push_back(std::move(label));
     }
     m_boundary_vertex_entities_preview = std::move(*result);
+    rebuildEntityPresentationIndex(m_boundary_vertex_entities_preview_index, m_boundary_vertex_entities_preview);
     m_boundary_vertex_metrics_preview = metrics;
     m_boundary_vertex_preview_valid = true;
     update();
@@ -6678,6 +6721,7 @@ void PlanCanvas::setEntityTransformPreviewRequested(
 void PlanCanvas::updateEntityTransformPreview() {
     const auto serial = ++m_transform_preview_serial;
     m_transform_entities_preview.clear();
+    m_transform_entities_preview_index.clear();
     m_transform_labels_preview.clear(); m_transform_references_preview.clear();
     m_transform_preview_exact = false;
     m_transform_preview_valid = false;
@@ -6748,6 +6792,7 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
         for (auto& proposed : m_transform_references_preview)
             proposed.selected = selected_references.contains(proposed.id);
     }
+    m_transform_entities_preview_index.clear();
     m_transform_entities_preview = m_transform_preview_valid
         ? std::move(*result) : std::vector<CanvasEntity>{};
     m_transform_labels_preview = m_transform_preview_valid
@@ -6761,6 +6806,8 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
         for (auto& proposed : m_transform_entities_preview)
             proposed.selected = selected_entities.contains(proposed.id);
     }
+    if (m_transform_preview_valid)
+        rebuildEntityPresentationIndex(m_transform_entities_preview_index, m_transform_entities_preview);
     if (!m_transform_labels_preview.empty()) {
         QHash<QString, QSet<QString>> selected_labels;
         for (const auto& retained : m_labels)
