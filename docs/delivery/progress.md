@@ -339,6 +339,24 @@ review approved the candidate except for the read-only input gate, which root
 corrected and reviewed. No application build or test was run; runtime and
 numeric results remain unobserved and the installed candidate is unchanged.
 
+Horizontal architectural plans now support direct mouse wall chains instead of
+switching to the Measurement workspace. The first anchor captures the displayed
+source and plan axes; subsequent input, preview, creation and own-history renewal
+retain that authority. Walls use the active layer and physical admission in one
+command, preserving connected constraints and exterior-measurement consequences.
+Returning to the original endpoint closes a chain; Enter or cancellation retains
+completed walls. Sloped walls use the Library thickness and height fields, and
+Undo can cancel their first uncommitted anchor.
+
+Ordinary and named horizontal plans now publish actual wall-baseline magnets on
+the active floor. Crop limits and finite-depth wall-top/opening support restrict
+targets to displayed portions. Original endpoints remain exact; endpoint lookup
+is retained per captured source and frame rather than scanning all walls for each
+pointer event. Independent source review found missing targets, Undo enablement,
+finite-depth support and unsafe derived spans; root corrected those findings.
+No application build, test, package or installed cutover was performed. Numeric,
+visual, interaction and performance outcomes remain unobserved.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

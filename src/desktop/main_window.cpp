@@ -4017,6 +4017,84 @@ TopoDS_Shape clip_architectural_view_shape(const TopoDS_Shape& shape,
     return clipped;
 }
 
+struct VisibleWallSnapSpans {
+    Boundary segments;
+    bool start_visible{};
+    bool end_visible{};
+};
+
+VisibleWallSnapSpans horizontal_wall_snap_spans(const Wall& wall, const BuildingViewDepth& depth) {
+    if (std::isinf(depth.far_depth_m)) return {{wall.baseline}, true, true};
+    // The horizontal-plan depth operation retains the near half-space of its
+    // far plane. Derive centreline support from the same wall top and full-depth
+    // hosted cuts, rather than making invisible projected faces into magnets.
+    if (depth.direction.x != 0.0 || depth.direction.y != 0.0 || depth.direction.z == 0.0)
+        return {};
+    const auto length = segment_length(wall.baseline);
+    const auto authored_rise = wall.slope_rise.value_or(0.0);
+    const auto rise = std::abs(authored_rise) <= default_geometry_tolerance_metres ? 0.0 : authored_rise;
+    const auto plane_z = depth.origin.z + depth.direction.z * depth.far_depth_m;
+    if (!std::isfinite(length) || length <= 0.0 || !std::isfinite(plane_z)) return {};
+    std::vector<double> stations{0.0, length};
+    const auto add_station = [&](double station) {
+        if (std::isfinite(station) && station > 0.0 && station < length) stations.push_back(station);
+    };
+    const auto add_top_crossing = [&](double z) {
+        if (rise != 0.0) add_station((z - wall.elevation - wall.height) / rise * length);
+    };
+    add_top_crossing(plane_z);
+    std::vector<const HostedOpening*> openings;
+    openings.reserve(wall.openings.size());
+    for (const auto& opening : wall.openings) {
+        add_station(opening.offset);
+        add_station(opening.offset + opening.width);
+        add_top_crossing(wall.elevation + opening.sill);
+        add_top_crossing(wall.elevation + opening.sill + opening.height);
+        openings.push_back(&opening);
+    }
+    std::sort(openings.begin(), openings.end(), [](const auto* left, const auto* right) {
+        return left->sill < right->sill;
+    });
+    std::sort(stations.begin(), stations.end());
+    stations.erase(std::unique(stations.begin(), stations.end()), stations.end());
+    const auto has_material = [&](double station) {
+        const auto top = wall.elevation + wall.height + rise * (station / length);
+        auto lower = depth.direction.z < 0.0 ? std::max(wall.elevation, plane_z) : wall.elevation;
+        const auto upper = depth.direction.z > 0.0 ? std::min(top, plane_z) : top;
+        if (upper <= lower) return false;
+        for (const auto* opening : openings) {
+            if (station < opening->offset || station > opening->offset + opening->width) continue;
+            const auto cut_start = wall.elevation + opening->sill;
+            const auto cut_end = cut_start + opening->height;
+            if (cut_end <= lower) continue;
+            if (cut_start > lower) return true;
+            lower = std::max(lower, cut_end);
+            if (lower >= upper) return false;
+        }
+        return lower < upper;
+    };
+    std::vector<std::pair<double, double>> spans;
+    for (std::size_t index = 1; index < stations.size(); ++index) {
+        const auto from = stations[index - 1], to = stations[index];
+        if (!has_material(from + (to - from) * 0.5)) continue;
+        if (!spans.empty() && spans.back().second == from) spans.back().second = to;
+        else spans.emplace_back(from, to);
+    }
+    VisibleWallSnapSpans result;
+    for (const auto& [from, to] : spans) {
+        if (to - from <= default_geometry_tolerance_metres) continue;
+        try {
+            result.segments.push_back(hosted_opening_span(wall.baseline, from, to - from));
+            result.start_visible = result.start_visible || from == 0.0;
+            result.end_visible = result.end_visible || to == length;
+        } catch (const std::invalid_argument&) {
+            // A tiny or unrepresentable derived magnet cannot remove the
+            // already admitted wall from the drawing or its other targets.
+        }
+    }
+    return result;
+}
+
 std::optional<Boundary> project_architectural_view_shape(const TopoDS_Shape& shape,
     BuildingViewKind kind, const ArchitecturalViewContext& context) {
     const auto clipped = clip_architectural_view_shape(shape, context);
@@ -10557,12 +10635,16 @@ public:
         }
     }
 
-    std::optional<DrawingContext> requireDrawingContext() {
-        const auto organization = organize_project(m_document->snapshot());
+    std::optional<DrawingContext> requireDrawingContext(const DocumentSnapshot& source) {
+        const auto organization = organize_project(source);
         const auto context = organization.drawing_context(m_active_layer_id.toStdString());
         if (!context)
             setError(QStringLiteral("Choose an existing drawing layer before creating geometry."));
         return context;
+    }
+
+    std::optional<DrawingContext> requireDrawingContext() {
+        return requireDrawingContext(m_document->snapshot());
     }
 
     bool assignDrawingContext(json& properties) {
@@ -17891,203 +17973,247 @@ public:
                                json extensions = json::object(),
                                const std::optional<QStringList>& closing_chain = std::nullopt,
                                WallChainMeasurementCompletion* measurement_completion = nullptr) {
-        const auto start = baseline.start;
-        const auto end = baseline.end;
-        const auto revision = expected_revision.value_or(m_document->revision());
-        const auto drawing_context = requireDrawingContext();
-        if (!drawing_context) return {};
-        if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(end.x) ||
-            !std::isfinite(end.y) || std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
-            setError(QStringLiteral("Wall endpoints must be finite and distinct."));
-            return {};
-        }
-        double thickness = 0.14;
-        double height = 2.4384;
         try {
-            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
-            if (m_wall_draw_thickness) thickness = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
-            if (m_wall_draw_height) height = parse_quantity(m_wall_draw_height->text().toStdString(), unit).metres;
-            validate_wall_semantics(Wall{"", baseline, thickness, height, 0.0, {}});
-        } catch (const std::exception& error) {
-            setError(QStringLiteral("Wall dimensions: %1").arg(QString::fromUtf8(error.what())));
-            return {};
-        }
-        const auto entity_id = new_id("wall");
-        const auto id = id_from(entity_id);
-        auto properties = json{{"floor_id", drawing_context->floor_id},
-                               {"layer_id", drawing_context->layer_id},
-                               {"baseline", segment_json(baseline)},
-                               {"thickness_m", thickness},
-                               {"height_m", height},
-                               {"elevation_m", 0.0},
-                               {"classification", classification.toStdString()}};
-        add_default_level_placement(properties, *drawing_context);
-        try {
-            if (original_input) {
-                const auto replay_context = original_context.value_or(ConstructionReplayContext{
-                    start, std::nullopt, std::nullopt, default_geometry_tolerance_metres});
-                const auto replay = replay_construction_receipt(*original_input,
-                    replay_context);
-                if (replay.segment.start.x != start.x || replay.segment.start.y != start.y ||
-                    replay.segment.end.x != end.x || replay.segment.end.y != end.y ||
-                    replay.segment.sweep_radians != baseline.sweep_radians)
-                    throw std::invalid_argument("The original drawing input does not match the wall baseline.");
-                auto receipt = replay.receipt;
-                receipt.segment_id = entity_id;
-                // Historical input provenance, never a second geometry authority.
-                properties["original_drawing_input"] = encode_construction_receipt(receipt);
-                properties["original_drawing_input_context"] = json{
-                    {"version", 1}, {"expected_start", point_json(replay_context.expected_start)},
-                    {"previous_segment", replay_context.previous_segment
-                        ? segment_json(*replay_context.previous_segment) : json(nullptr)},
-                    {"closure_anchor", replay_context.closure_anchor
-                        ? point_json(*replay_context.closure_anchor) : json(nullptr)},
-                    {"tolerance_metres", replay_context.tolerance_metres}};
-            }
+            const auto start = baseline.start;
+            const auto end = baseline.end;
             const auto source = authoringSnapshot();
-            const Entity wall{entity_id, "wall", properties, false, std::move(extensions)};
-            ApplyEntityChanges command{revision, {EntityChange::upsert(wall)}, {},
-                baseline.sweep_radians == 0.0 ? "create straight wall" : "create curved wall"};
-            const auto candidate = Document::preview_command(source, command);
-            const auto visible = visible_project_entities_with_phase(source, ProjectViewFilter{});
-            using EndpointKey = std::pair<std::string, int>;
-            std::map<EndpointKey, EndpointKey> components;
-            const auto key = [](const WallEndpointBinding& binding) {
-                return EndpointKey{binding.owner_id, static_cast<int>(binding.role)};
-            };
-            const auto root = [&](EndpointKey endpoint) {
-                while (components.contains(endpoint) && components.at(endpoint) != endpoint)
-                    endpoint = components.at(endpoint);
-                return endpoint;
-            };
-            const auto join = [&](EndpointKey left, EndpointKey right) {
-                components[root(right)] = root(left);
-            };
-            for (const auto& [old_id, entity] : source.entities()) {
-                (void)old_id;
-                if (entity.type != "constraint") continue;
-                const auto decoded = decode_constraint_entity(entity);
-                if (!decoded.supported() || decoded.constraint->relation != ConstraintRelationKind::coincident ||
-                    decoded.constraint->bindings.size() != 2) continue;
-                const auto& bindings = decoded.constraint->bindings;
-                if (bindings[0].segment_id.empty() && bindings[0].vertex_id.empty() &&
-                    bindings[1].segment_id.empty() && bindings[1].vertex_id.empty())
-                    join(key(bindings[0]), key(bindings[1]));
+            const auto authority = captureSourceEditAuthority(source);
+            if (ordinaryArchitecturalWallDrawing()) {
+                (void)canvasTransformPlanFrame(source);
+                if (m_pending_wall_start) requireArchitecturalWallDrawingCurrent();
             }
-            ConstraintAuthoringIntent intent;
-            for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
-                const auto point = role == WallEndpointRole::start ? start : end;
-                const WallEndpointBinding new_binding{entity_id, role};
-                for (const auto& [old_id, entity] : source.entities()) {
-                    if (entity.type != "wall" || !visible.contains(old_id) ||
-                        read_string(entity.properties, "floor_id") != std::optional<std::string>{drawing_context->floor_id} ||
-                        read_string(entity.properties, "layer_id") != std::optional<std::string>{drawing_context->layer_id}) continue;
-                    Wall existing;
-                    std::string diagnostic;
-                    if (!read_document_wall(entity, {}, existing, diagnostic)) continue;
-                    for (const auto old_role : {WallEndpointRole::start, WallEndpointRole::end}) {
-                        const auto old_point = old_role == WallEndpointRole::start ? existing.baseline.start : existing.baseline.end;
-                        // A snap establishes the exact coordinate. Do not infer a
-                        // joint from nearby, but intentionally distinct, endpoints.
-                        if (point.x != old_point.x || point.y != old_point.y) continue;
-                        const WallEndpointBinding old_binding{old_id, old_role};
-                        if (root(key(old_binding)) == root(key(new_binding))) continue;
-                        PersistentConstraint relation;
-                        relation.id = new_id("constraint");
-                        relation.relation = ConstraintRelationKind::coincident;
-                        relation.bindings = {old_binding, new_binding};
-                        intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(std::move(relation)));
-                        join(key(old_binding), key(new_binding));
-                    }
-                }
+            const auto revision = expected_revision.value_or(source.revision());
+            if (revision != source.revision())
+                throw std::invalid_argument("The wall source changed before creation. Start again.");
+            const auto drawing_context = requireDrawingContext(source);
+            if (!drawing_context) return {};
+            if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(end.x) ||
+                !std::isfinite(end.y) || std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
+                setError(QStringLiteral("Wall endpoints must be finite and distinct."));
+                return {};
             }
-            if (!intent.relation_mutations.empty()) {
-                const auto preview = preview_constraint_authoring(candidate, intent);
-                if (!preview.accepted()) throw std::invalid_argument(preview.diagnostics().empty()
-                    ? "The wall endpoint connection could not be validated." : preview.diagnostics().front());
-                if (!preview.changed_walls().empty() || !preview.changed_boundaries().empty())
-                    throw std::invalid_argument("Creating a wall must not move existing geometry.");
-                for (const auto& mutation : intent.relation_mutations)
-                    command.entity_changes.push_back(EntityChange::upsert(encode_constraint_entity(mutation.constraint)));
+            double thickness = 0.14;
+            double height = 2.4384;
+            try {
+                const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+                if (m_wall_draw_thickness) thickness = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
+                if (m_wall_draw_height) height = parse_quantity(m_wall_draw_height->text().toStdString(), unit).metres;
+                validate_wall_semantics(Wall{"", baseline, thickness, height, 0.0, {}});
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Wall dimensions: %1").arg(QString::fromUtf8(error.what())));
+                return {};
             }
-            WallChainMeasurementCompletion completion;
-            if (closing_chain) {
-                const auto completed_walls=Document::preview_command(source,Command{command});
-                // Only optional automatic measurement preparation may fail while
-                // retaining a valid wall. Final command admission remains atomic.
-                try {
-                    auto [measurement,changes]=prepareAutomaticWallMeasurement(
-                        completed_walls,*drawing_context,*closing_chain,entity_id);
-                    completion.measurement_id=std::move(measurement);
-                    command.entity_changes.insert(command.entity_changes.end(),
-                        std::make_move_iterator(changes.begin()),std::make_move_iterator(changes.end()));
-                } catch (const std::exception& error) {
-                    completion.diagnostic=QString::fromUtf8(error.what());
-                }
-            }
-            const auto authored = augmentAuthoredCommand(Command{command});
-            const auto verified=Document::preview_command(source, authored);
-            if (!completion.measurement_id.isEmpty()) {
-                const auto measured=verified.entities().find(completion.measurement_id.toStdString());
-                if (measured==verified.entities().end() || !wall_measurement_source_current(verified,measured->second))
-                    throw std::invalid_argument("The completed wall command does not retain a current exterior measurement.");
-            }
-            applyAuthoredCommand(authored);
-            if (measurement_completion) *measurement_completion=std::move(completion);
-            clearError();
-        } catch (const std::exception& error) {
-            setError(QStringLiteral("Create wall: %1").arg(QString::fromUtf8(error.what())));
-            return {};
-        }
-        m_selected_id = id;
-        refresh();
-        return id;
-    }
-
-    QString createSlopedWall(Vec2 start, Vec2 end, const QString& rise_expression,
-                             const QString& classification,
-                             std::optional<Revision> expected_revision = std::nullopt) {
-        const auto revision = expected_revision.value_or(m_document->revision());
-        const auto drawing_context = requireDrawingContext();
-        if (!drawing_context) return {};
-        try {
-            if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
-                !std::isfinite(end.x) || !std::isfinite(end.y) ||
-                std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
-                throw std::invalid_argument("Wall endpoints must be finite and distinct.");
-            }
-            const auto expression = rise_expression.trimmed();
-            if (expression.isEmpty()) {
-                throw std::invalid_argument("Wall slope rise is required.");
-            }
-            const auto rise = parse_quantity(
-                expression.toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
-            if (!std::isfinite(rise) || std::abs(rise) <= 1e-7) {
-                throw std::invalid_argument("Wall slope rise must be finite and nonzero.");
-            }
-            Wall wall{"", Segment{start, end, 0.0}, 0.14, 2.4384, 0.0, {}};
-            wall.slope_rise = rise;
-            validate_wall_semantics(wall);
             const auto entity_id = new_id("wall");
             const auto id = id_from(entity_id);
             auto properties = json{{"floor_id", drawing_context->floor_id},
                                    {"layer_id", drawing_context->layer_id},
-                                   {"baseline", segment_json(wall.baseline)},
-                                   {"thickness_m", wall.thickness},
-                                   {"height_m", wall.height},
-                                   {"elevation_m", wall.elevation},
-                                   {"slope_rise_m", rise},
-                                   {"classification", classification.trimmed().isEmpty()
-                                                           ? std::string("interior")
-                                                           : classification.trimmed().toStdString()}};
+                                   {"baseline", segment_json(baseline)},
+                                   {"thickness_m", thickness},
+                                   {"height_m", height},
+                                   {"elevation_m", 0.0},
+                                   {"classification", classification.toStdString()}};
             add_default_level_placement(properties, *drawing_context);
-            if (!applyEntity(Entity{entity_id, "wall", properties, false, json::object()},
-                             "create sloped wall", revision)) {
+            try {
+                if (original_input) {
+                    const auto replay_context = original_context.value_or(ConstructionReplayContext{
+                        start, std::nullopt, std::nullopt, default_geometry_tolerance_metres});
+                    const auto replay = replay_construction_receipt(*original_input,
+                        replay_context);
+                    if (replay.segment.start.x != start.x || replay.segment.start.y != start.y ||
+                        replay.segment.end.x != end.x || replay.segment.end.y != end.y ||
+                        replay.segment.sweep_radians != baseline.sweep_radians)
+                        throw std::invalid_argument("The original drawing input does not match the wall baseline.");
+                    auto receipt = replay.receipt;
+                    receipt.segment_id = entity_id;
+                    // Historical input provenance, never a second geometry authority.
+                    properties["original_drawing_input"] = encode_construction_receipt(receipt);
+                    properties["original_drawing_input_context"] = json{
+                        {"version", 1}, {"expected_start", point_json(replay_context.expected_start)},
+                        {"previous_segment", replay_context.previous_segment
+                            ? segment_json(*replay_context.previous_segment) : json(nullptr)},
+                        {"closure_anchor", replay_context.closure_anchor
+                            ? point_json(*replay_context.closure_anchor) : json(nullptr)},
+                        {"tolerance_metres", replay_context.tolerance_metres}};
+                }
+                const Entity wall{entity_id, "wall", properties, false, std::move(extensions)};
+                ApplyEntityChanges command{revision, {EntityChange::upsert(wall)}, {},
+                    baseline.sweep_radians == 0.0 ? "create straight wall" : "create curved wall"};
+                const auto candidate = Document::preview_command(source, command);
+                const auto visible = visible_project_entities_with_phase(source, ProjectViewFilter{});
+                using EndpointKey = std::pair<std::string, int>;
+                std::map<EndpointKey, EndpointKey> components;
+                const auto key = [](const WallEndpointBinding& binding) {
+                    return EndpointKey{binding.owner_id, static_cast<int>(binding.role)};
+                };
+                const auto root = [&](EndpointKey endpoint) {
+                    while (components.contains(endpoint) && components.at(endpoint) != endpoint)
+                        endpoint = components.at(endpoint);
+                    return endpoint;
+                };
+                const auto join = [&](EndpointKey left, EndpointKey right) {
+                    components[root(right)] = root(left);
+                };
+                for (const auto& [old_id, entity] : source.entities()) {
+                    (void)old_id;
+                    if (entity.type != "constraint") continue;
+                    const auto decoded = decode_constraint_entity(entity);
+                    if (!decoded.supported() || decoded.constraint->relation != ConstraintRelationKind::coincident ||
+                        decoded.constraint->bindings.size() != 2) continue;
+                    const auto& bindings = decoded.constraint->bindings;
+                    if (bindings[0].segment_id.empty() && bindings[0].vertex_id.empty() &&
+                        bindings[1].segment_id.empty() && bindings[1].vertex_id.empty())
+                        join(key(bindings[0]), key(bindings[1]));
+                }
+                ConstraintAuthoringIntent intent;
+                for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
+                    const auto point = role == WallEndpointRole::start ? start : end;
+                    const WallEndpointBinding new_binding{entity_id, role};
+                    for (const auto& [old_id, entity] : source.entities()) {
+                        if (entity.type != "wall" || !visible.contains(old_id) ||
+                            read_string(entity.properties, "floor_id") != std::optional<std::string>{drawing_context->floor_id} ||
+                            read_string(entity.properties, "layer_id") != std::optional<std::string>{drawing_context->layer_id}) continue;
+                        Wall existing;
+                        std::string diagnostic;
+                        if (!read_document_wall(entity, {}, existing, diagnostic)) continue;
+                        for (const auto old_role : {WallEndpointRole::start, WallEndpointRole::end}) {
+                            const auto old_point = old_role == WallEndpointRole::start ? existing.baseline.start : existing.baseline.end;
+                            // A snap establishes the exact coordinate. Do not infer a
+                            // joint from nearby, but intentionally distinct, endpoints.
+                            if (point.x != old_point.x || point.y != old_point.y) continue;
+                            const WallEndpointBinding old_binding{old_id, old_role};
+                            if (root(key(old_binding)) == root(key(new_binding))) continue;
+                            PersistentConstraint relation;
+                            relation.id = new_id("constraint");
+                            relation.relation = ConstraintRelationKind::coincident;
+                            relation.bindings = {old_binding, new_binding};
+                            intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(std::move(relation)));
+                            join(key(old_binding), key(new_binding));
+                        }
+                    }
+                }
+                if (!intent.relation_mutations.empty()) {
+                    const auto preview = preview_constraint_authoring(candidate, intent);
+                    if (!preview.accepted()) throw std::invalid_argument(preview.diagnostics().empty()
+                        ? "The wall endpoint connection could not be validated." : preview.diagnostics().front());
+                    if (!preview.changed_walls().empty() || !preview.changed_boundaries().empty())
+                        throw std::invalid_argument("Creating a wall must not move existing geometry.");
+                    for (const auto& mutation : intent.relation_mutations)
+                        command.entity_changes.push_back(EntityChange::upsert(encode_constraint_entity(mutation.constraint)));
+                }
+                WallChainMeasurementCompletion completion;
+                if (closing_chain) {
+                    const auto completed_walls=Document::preview_command(source,Command{command});
+                    // Only optional automatic measurement preparation may fail while
+                    // retaining a valid wall. Final command admission remains atomic.
+                    try {
+                        auto [measurement,changes]=prepareAutomaticWallMeasurement(
+                            completed_walls,*drawing_context,*closing_chain,entity_id);
+                        completion.measurement_id=std::move(measurement);
+                        command.entity_changes.insert(command.entity_changes.end(),
+                            std::make_move_iterator(changes.begin()),std::make_move_iterator(changes.end()));
+                    } catch (const std::exception& error) {
+                        completion.diagnostic=QString::fromUtf8(error.what());
+                    }
+                }
+                const auto authored = augmentAuthoredCommand(Command{command}, source);
+                const auto verified=Document::preview_command(source, authored);
+                if (!completion.measurement_id.isEmpty()) {
+                    const auto measured=verified.entities().find(completion.measurement_id.toStdString());
+                    if (measured==verified.entities().end() || !wall_measurement_source_current(verified,measured->second))
+                        throw std::invalid_argument("The completed wall command does not retain a current exterior measurement.");
+                }
+                if (!sourceEditAuthorityCurrent(authority))
+                    throw std::invalid_argument("The wall source or drawing context changed before creation.");
+                applyAuthoredCommand(authored);
+                if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start) {
+                    m_wall_drawing_expected_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+                    m_wall_drawing_expected_authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*m_wall_drawing_expected_source));
+                }
+                if (measurement_completion) *measurement_completion=std::move(completion);
+                clearError();
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Create wall: %1").arg(QString::fromUtf8(error.what())));
                 return {};
             }
             m_selected_id = id;
             refresh();
             return id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Create wall: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    QString createSlopedWall(Vec2 start, Vec2 end, const QString& rise_expression,
+                             const QString& classification,
+                             std::optional<Revision> expected_revision = std::nullopt) {
+        try {
+            const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
+            if (ordinaryArchitecturalWallDrawing()) {
+                (void)canvasTransformPlanFrame(source);
+                if (m_pending_wall_start) requireArchitecturalWallDrawingCurrent();
+            }
+            const auto revision = expected_revision.value_or(source.revision());
+            if (revision != source.revision())
+                throw std::invalid_argument("The sloped wall source changed before creation. Start again.");
+            const auto drawing_context = requireDrawingContext(source);
+            if (!drawing_context) return {};
+            try {
+                if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+                    !std::isfinite(end.x) || !std::isfinite(end.y) ||
+                    std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
+                    throw std::invalid_argument("Wall endpoints must be finite and distinct.");
+                }
+                const auto expression = rise_expression.trimmed();
+                if (expression.isEmpty()) {
+                    throw std::invalid_argument("Wall slope rise is required.");
+                }
+                const auto rise = parse_quantity(
+                    expression.toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
+                if (!std::isfinite(rise) || std::abs(rise) <= 1e-7) {
+                    throw std::invalid_argument("Wall slope rise must be finite and nonzero.");
+                }
+                const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+                const auto thickness = m_wall_draw_thickness
+                    ? parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres : 0.14;
+                const auto height = m_wall_draw_height
+                    ? parse_quantity(m_wall_draw_height->text().toStdString(), unit).metres : 2.4384;
+                Wall wall{"", Segment{start, end, 0.0}, thickness, height, 0.0, {}};
+                wall.slope_rise = rise;
+                validate_wall_semantics(wall);
+                const auto entity_id = new_id("wall");
+                const auto id = id_from(entity_id);
+                auto properties = json{{"floor_id", drawing_context->floor_id},
+                                       {"layer_id", drawing_context->layer_id},
+                                       {"baseline", segment_json(wall.baseline)},
+                                       {"thickness_m", wall.thickness},
+                                       {"height_m", wall.height},
+                                       {"elevation_m", wall.elevation},
+                                       {"slope_rise_m", rise},
+                                       {"classification", classification.trimmed().isEmpty()
+                                                               ? std::string("interior")
+                                                               : classification.trimmed().toStdString()}};
+                add_default_level_placement(properties, *drawing_context);
+                const auto authored = augmentAuthoredCommand(ApplyEntityChanges{revision,
+                    {EntityChange::upsert(Entity{entity_id, "wall", properties, false, json::object()})},
+                    {}, "create sloped wall"}, source);
+                (void)Document::preview_command(source, authored);
+                if (!sourceEditAuthorityCurrent(authority))
+                    throw std::invalid_argument("The sloped wall source or drawing context changed before creation.");
+                applyAuthoredCommand(authored);
+                if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start) {
+                    m_wall_drawing_expected_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+                    m_wall_drawing_expected_authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*m_wall_drawing_expected_source));
+                }
+                clearError();
+                m_selected_id = id;
+                refresh();
+                return id;
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Sloped wall: %1").arg(QString::fromUtf8(error.what())));
+                return {};
+            }
         } catch (const std::exception& error) {
             setError(QStringLiteral("Sloped wall: %1").arg(QString::fromUtf8(error.what())));
             return {};
@@ -25186,7 +25312,9 @@ public:
             if (changed) { clearError(); boundaryDraftChanged(); }
             return changed;
         }
-        if (m_tool == CanvasTool::wall && m_pending_wall_start && !m_wall_chain_has_segments) {
+        if ((m_tool == CanvasTool::wall ||
+             (ordinaryArchitecturalWallDrawing() && m_tool == CanvasTool::sloped_wall)) &&
+            m_pending_wall_start && !m_wall_chain_has_segments) {
             // The uncommitted anchor belongs to drawing, not document history.
             finishWallChain();
             return true;
@@ -25196,6 +25324,8 @@ public:
             return false;
         }
         try {
+            if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start)
+                requireArchitecturalWallDrawingCurrent();
             const auto selection_before = m_selected_id;
             if (m_recovery_ledger.empty()) {
                 measureDocumentEdit([&] { m_document->undo(m_document->revision()); });
@@ -25204,7 +25334,12 @@ public:
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_undo();
                 commitWorkspaceEdit(edit);
-                restoreWorkspaceBoundaryDraft(true);
+                if (!(ordinaryArchitecturalWallDrawing() && m_pending_wall_start))
+                    restoreWorkspaceBoundaryDraft(true);
+            }
+            if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start) {
+                m_wall_drawing_expected_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+                m_wall_drawing_expected_authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*m_wall_drawing_expected_source));
             }
             // Keep the inspector context across edits that leave the selected
             // entity in the document. Creation and deletion commands already
@@ -25218,8 +25353,13 @@ public:
             }
             clearError();
             synchronizeLineworkWithHistory(false);
-            synchronizeWallChainWithHistory();
-            refresh();
+            if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start) {
+                refresh();
+                synchronizeWallChainWithHistory();
+            } else {
+                synchronizeWallChainWithHistory();
+                refresh();
+            }
             return true;
         } catch (const std::exception& error) {
             if (m_linework_drawing) finishMeasurementLinework();
@@ -25229,6 +25369,8 @@ public:
     }
 
     bool redoCommand() {
+        if (ordinaryArchitecturalWallDrawing() && m_tool == CanvasTool::sloped_wall && m_pending_wall_start)
+            finishWallChain();
         if (m_drawing_parked) {
             if (m_linework_drawing) finishMeasurementLinework();
             else finishWallChain();
@@ -25254,6 +25396,8 @@ public:
             return false;
         }
         try {
+            if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start)
+                requireArchitecturalWallDrawingCurrent();
             const auto selection_before = m_selected_id;
             if (m_recovery_ledger.empty()) {
                 measureDocumentEdit([&] { m_document->redo(m_document->revision()); });
@@ -25262,7 +25406,12 @@ public:
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_redo();
                 commitWorkspaceEdit(edit);
-                restoreWorkspaceBoundaryDraft(true);
+                if (!(ordinaryArchitecturalWallDrawing() && m_pending_wall_start))
+                    restoreWorkspaceBoundaryDraft(true);
+            }
+            if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start) {
+                m_wall_drawing_expected_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+                m_wall_drawing_expected_authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*m_wall_drawing_expected_source));
             }
             if (!selection_before.isEmpty() &&
                 historySelectionExists(m_document->snapshot(),selection_before)) {
@@ -25272,8 +25421,13 @@ public:
             }
             clearError();
             synchronizeLineworkWithHistory(true);
-            synchronizeWallChainWithHistory();
-            refresh();
+            if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start) {
+                refresh();
+                synchronizeWallChainWithHistory();
+            } else {
+                synchronizeWallChainWithHistory();
+                refresh();
+            }
             return true;
         } catch (const std::exception& error) {
             if (m_linework_drawing) finishMeasurementLinework();
@@ -33478,6 +33632,7 @@ private:
                                  m_active_named_view = m_architecturalViewCombo->itemData(index, Qt::UserRole + 1).toString();
                                  m_active_named_view_owner = m_architecturalViewCombo->itemData(index, Qt::UserRole + 2).toString();
                                  refreshCanvases();
+                                 syncToolControls();
                                  if (m_workspace == Workspace::architectural) m_architecturalCanvas->fitView();
                                  break;
                              }
@@ -33836,11 +33991,11 @@ private:
                 if (!m_pending_opening_kind.isEmpty()) cancelTool();
                 // Keep Site input in its presented frame; other projected
                 // views use the conventional world-XY placement canvas.
-                if (!siteCanvas(m_architecturalCanvas)) {
+                if (kind != QStringLiteral("Wall") && !siteCanvas(m_architecturalCanvas)) {
                     setWorkspace(Workspace::measurement);
                     if (m_workspace != Workspace::measurement) return;
                 }
-                if (!siteCanvas(m_architecturalCanvas) && m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
+                if (m_workspace == Workspace::measurement && !siteCanvas(m_architecturalCanvas) && m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
                 if (m_tool != CanvasTool::wall) setTool(CanvasTool::wall);
                 if (m_tool != CanvasTool::wall) return;
                 if (kind == QStringLiteral("Door") || kind == QStringLiteral("Window")) {
@@ -35696,9 +35851,14 @@ private:
             const auto* active = m_workspace == Workspace::measurement
                                      ? m_measurementCanvas : m_architecturalCanvas;
             if (canvas != active) return;
+            if (m_refreshing && ordinaryArchitecturalWallDrawing() && m_pending_wall_start) return;
             clearDrawingAlignment(false);
             refreshCursorLabel(point);
-            try { if (siteCanvas(canvas) && m_pending_opening_kind.isEmpty()) point=siteInputPoint(point,false); }
+            try {
+                if (siteCanvas(canvas) && m_pending_opening_kind.isEmpty()) point=siteInputPoint(point,false);
+                else if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start)
+                    point=architecturalWallModelPoint(point);
+            }
             catch (const std::exception& error) {
                 // Layout and selection refreshes also emit cursor updates.
                 // An idle pointer does not attempt authoring; keep its stale
@@ -35984,6 +36144,12 @@ private:
             // for ordinary geometry edits or asynchronous preview completion.
             m_plan_publication_source.reset();
             m_plan_publication_authority.reset();
+            m_wall_drawing_source.reset();
+            m_wall_drawing_expected_source.reset();
+            m_wall_drawing_expected_authority.reset();
+            m_wall_drawing_authority.reset();
+            m_wall_drawing_frame.reset();
+            m_wall_drawing_endpoints.clear();
             m_opening_preview_authority.reset();
             m_opening_preview_source.reset();
             m_opening_preview_canvas.clear();
@@ -38348,6 +38514,44 @@ private:
             for (const auto& [id, entity] : snapshot.entities())
                 if ((entity.type == "roof" || entity.type == "roof_join") &&
                     !joined_presentation.contains(id)) architectural_hidden_ids.insert(id);
+            const auto& frame = view_context.frame;
+            const auto snap_organization = projectOrganization(snapshot);
+            const auto retain_wall_snap_targets = [&](CanvasEntity& retained, const Entity& source,
+                                                       const Wall* physical = nullptr) {
+                // Magnets use the authored baseline, never the thick wall's
+                // projected faces. Only the active floor can supply targets.
+                retained.snap_points.clear();
+                retained.snap_segments.clear();
+                retained.drawing_alignment_segments.clear();
+                if (kind != BuildingViewKind::plan || !horizontal_plan_frame(frame) ||
+                    !scene_options.active_context) return;
+                const auto context = snap_organization->drawing_context(source.id);
+                const auto& active = *scene_options.active_context;
+                if (!context || context->property_id != active.property_id ||
+                    context->building_id != active.building_id || context->floor_id != active.floor_id) return;
+                const auto baseline = read_required_segment(source.properties, "baseline");
+                if (!baseline) return;
+                const auto support = physical ? horizontal_wall_snap_spans(*physical, view_context.depth)
+                                              : VisibleWallSnapSpans{{*baseline}, true, true};
+                auto projected = project_plan_path(support.segments, frame);
+                std::optional<Bounds2> crop;
+                if (view_context.crop) {
+                    crop = Bounds2{{view_context.crop->min_horizontal_m, view_context.crop->min_vertical_m},
+                                   {view_context.crop->max_horizontal_m, view_context.crop->max_vertical_m}};
+                    projected = clip_boundary_to_bounds(projected, *crop);
+                }
+                retained.snap_segments = projected;
+                retained.drawing_alignment_segments = std::move(projected);
+                for (const auto& [endpoint, supported] : {
+                        std::pair{baseline->start, support.start_visible},
+                        std::pair{baseline->end, support.end_visible}}) {
+                    if (!supported) continue;
+                    const auto point = project_plan_point(endpoint, frame);
+                    if (!crop || (point.x >= crop->minimum.x && point.x <= crop->maximum.x &&
+                                  point.y >= crop->minimum.y && point.y <= crop->maximum.y))
+                        retained.snap_points.push_back(point);
+                }
+            };
             // Conventional plans retain analytical boundaries and annotations;
             // other frames/depth limits use the shape projection below.
             if (analytical_plan_context(kind, view_context)) {
@@ -38370,6 +38574,10 @@ private:
                             clip_plan_entity(retained, crop_bounds);
                             if (retained.segments.empty() && retained.holes.empty()) continue;
                         }
+                        if (retained.type == QStringLiteral("wall")) {
+                            const auto source = snapshot.entities().find(retained.id.toStdString());
+                            if (source != snapshot.entities().end()) retain_wall_snap_targets(retained, source->second);
+                        }
                         if (!retained.paper_stroke_width_on_screen)
                             retained.output_stroke_width_mm = view_context.presentation.projection_line_mm;
                         filtered.push_back(std::move(retained));
@@ -38379,7 +38587,6 @@ private:
             }
             std::vector<CanvasEntity> result;
             result.reserve(snapshot.entities().size());
-            const auto& frame = view_context.frame;
             const auto& depth = view_context.depth;
             const auto clip_to_view = [&](const TopoDS_Shape& shape) {
                 return clip_architectural_view_shape(shape, view_context);
@@ -38567,15 +38774,19 @@ private:
                                 clip_plan_entity(retained, {{crop.min_horizontal_m, crop.min_vertical_m},
                                                            {crop.max_horizontal_m, crop.max_vertical_m}});
                             }
-                            if (!retained.segments.empty())
+                            if (!retained.segments.empty()) {
+                                retain_wall_snap_targets(retained, entity, &wall);
                                 result.push_back(decorate_projection(std::move(retained)));
+                            }
                             continue;
                         }
                         const auto projection = cached_projection(id, [&] { return make_wall(wall); });
-                        if (!projection) continue;
-                        result.push_back(decorate_projection(CanvasEntity{
+                        if (!projection || projection->empty()) continue;
+                        CanvasEntity retained{
                             id_from(id), QStringLiteral("wall"), *projection, *thickness,
-                            id_from(id) == m_selected_id}));
+                            id_from(id) == m_selected_id};
+                        retain_wall_snap_targets(retained, entity, &wall);
+                        result.push_back(decorate_projection(std::move(retained)));
                         continue;
                     }
                     if (entity.type == "slab") {
@@ -41468,7 +41679,9 @@ private:
     }
 
     void refreshActions() {
-        const bool wall_anchor = m_tool == CanvasTool::wall && m_pending_wall_start.has_value();
+        const bool wall_anchor = m_pending_wall_start.has_value() &&
+            (m_tool == CanvasTool::wall ||
+             (ordinaryArchitecturalWallDrawing() && m_tool == CanvasTool::sloped_wall));
         const bool linework_anchor = m_linework_drawing && m_linework_drawing->has_anchor;
         m_undo_action->setEnabled(m_document->is_editable() && (wall_anchor || linework_anchor ||
             (m_boundary_session ? m_boundary_session->can_undo() :
@@ -42636,11 +42849,118 @@ private:
         return found == m_boundary_dimension_choices.end() ? std::nullopt : std::optional{found->second};
     }
 
+    bool ordinaryArchitecturalWallDrawing() const {
+        return m_workspace == Workspace::architectural && !siteCanvas(m_architecturalCanvas);
+    }
+
+    bool architecturalWallDrawingEligible() const noexcept {
+        try {
+            return ordinaryArchitecturalWallDrawing() && canvasTransformPlanFrame(authoringSnapshot()).has_value();
+        } catch (const std::exception&) { return false; }
+    }
+
+    using ProjectedWallEndpoints = std::map<std::pair<double, double>, Vec2>;
+
+    static ProjectedWallEndpoints architecturalWallEndpoints(const DocumentSnapshot& source,
+                                                             const BuildingViewFrame& frame) {
+        ProjectedWallEndpoints endpoints;
+        for (const auto& [id, entity] : source.entities()) {
+            (void)id;
+            if (entity.type != "wall") continue;
+            const auto baseline = read_required_segment(entity.properties, "baseline");
+            if (!baseline) continue;
+            for (const auto model : {baseline->start, baseline->end}) {
+                if (!std::isfinite(model.x) || !std::isfinite(model.y)) continue;
+                const auto displayed = project_plan_point(model, frame);
+                if (std::isfinite(displayed.x) && std::isfinite(displayed.y))
+                    endpoints.try_emplace(std::pair{displayed.x, displayed.y}, model);
+            }
+        }
+        return endpoints;
+    }
+
+    void beginArchitecturalWallDrawing() {
+        const auto source = captureCanvasGeometrySource(m_architecturalCanvas);
+        const auto frame = canvasTransformPlanFrame(*source);
+        if (!frame || !requireDrawingContext(*source))
+            throw std::invalid_argument("Choose a complete drawing layer in a horizontal architectural plan.");
+        const auto authority = std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
+        auto endpoints = architecturalWallEndpoints(*source, *frame);
+        m_wall_drawing_source=source;
+        m_wall_drawing_expected_source.reset();
+        m_wall_drawing_expected_authority.reset();
+        m_wall_drawing_authority=authority;
+        m_wall_drawing_frame=frame;
+        m_wall_drawing_endpoints=std::move(endpoints);
+    }
+
+    void requireArchitecturalWallDrawingCurrent() const {
+        if (!m_wall_drawing_source || !m_wall_drawing_authority || !m_wall_drawing_frame ||
+            !sourceEditAuthorityCurrent(*m_wall_drawing_authority) || !m_plan_publication_source ||
+            fullSnapshotDigest(*m_plan_publication_source) != m_wall_drawing_authority->source_digest)
+            throw std::invalid_argument("The wall drawing source, layer, selection or plan view changed. Press Esc and start again.");
+    }
+
+    Vec2 architecturalWallModelPoint(Vec2 point) const {
+        requireArchitecturalWallDrawingCurrent();
+        if (!std::isfinite(point.x) || !std::isfinite(point.y))
+            throw std::invalid_argument("The wall point must be finite.");
+        // Retain exact authored coordinates when a projected endpoint is the
+        // snapped input. An inverse rotation need not round-trip bit exactly.
+        const auto matches = [&](Vec2 model) {
+            const auto displayed = project_plan_point(model,*m_wall_drawing_frame);
+            return displayed.x == point.x && displayed.y == point.y;
+        };
+        if (m_wall_chain_anchor && matches(*m_wall_chain_anchor)) return *m_wall_chain_anchor;
+        if (m_pending_wall_start && matches(*m_pending_wall_start)) return *m_pending_wall_start;
+        const auto endpoint = m_wall_drawing_endpoints.find({point.x, point.y});
+        if (endpoint != m_wall_drawing_endpoints.end()) return endpoint->second;
+        const auto model = unproject_plan_point(point,*m_wall_drawing_frame);
+        if (!std::isfinite(model.x) || !std::isfinite(model.y))
+            throw std::invalid_argument("The wall point could not be resolved in the captured plan frame.");
+        return model;
+    }
+
+    void renewArchitecturalWallDrawing() {
+        // Only called after our own admitted wall command or explicit Undo/Redo.
+        // Keep the first anchor's inverse; verify the freshly published frame.
+        const auto source = authoringSnapshot();
+        const auto frame = canvasTransformPlanFrame(source);
+        const auto same = [](Vec3 a, Vec3 b) { return a.x==b.x && a.y==b.y && a.z==b.z; };
+        if (!m_wall_drawing_authority || !m_wall_drawing_expected_source || !m_wall_drawing_expected_authority ||
+            !m_document->is_editable() || !m_selected_id.isEmpty() || !m_selected_ids.isEmpty() ||
+            m_wall_drawing_expected_authority->workspace_token != workspaceAuthorityToken() ||
+            m_wall_drawing_expected_authority->recovery_authority != !m_recovery_ledger.empty() ||
+            m_wall_drawing_authority->context.document != m_document ||
+            m_wall_drawing_authority->context.layer_id != m_active_layer_id ||
+            m_wall_drawing_authority->context.metric_units != m_metric_units ||
+            m_wall_drawing_authority->workspace != m_workspace ||
+            m_wall_drawing_authority->visibility != m_view_filter ||
+            m_wall_drawing_authority->view_kind != m_architectural_view_kind ||
+            m_wall_drawing_authority->named_view != m_active_named_view ||
+            m_wall_drawing_authority->named_view_owner != m_active_named_view_owner ||
+            fullSnapshotDigest(source) != fullSnapshotDigest(*m_wall_drawing_expected_source) ||
+            !m_wall_drawing_frame || !frame ||
+            !same(frame->origin,m_wall_drawing_frame->origin) ||
+            !same(frame->direction,m_wall_drawing_frame->direction) ||
+            !same(frame->up,m_wall_drawing_frame->up) || !m_plan_publication_source ||
+            fullSnapshotDigest(*m_plan_publication_source) != fullSnapshotDigest(source))
+            throw std::invalid_argument("The wall's horizontal plan changed or could not be refreshed. Press Esc and start again.");
+        auto endpoints = architecturalWallEndpoints(*m_plan_publication_source, *m_wall_drawing_frame);
+        const auto authority = std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(source));
+        m_wall_drawing_source=m_plan_publication_source;
+        m_wall_drawing_authority=authority;
+        m_wall_drawing_endpoints=std::move(endpoints);
+        m_wall_drawing_expected_source.reset();
+        m_wall_drawing_expected_authority.reset();
+    }
+
     void onCanvasPoint(Vec2 point, std::optional<Revision> expected_revision = std::nullopt,
                        std::optional<ConstructionReceipt> original_input = std::nullopt,
                        std::optional<BoundaryDimensionPresentation> presentation = std::nullopt) {
         clearDrawingAlignment();
-        if (expected_revision && m_document->revision() != *expected_revision) {
+        const bool wall_input = m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall;
+        if (expected_revision && (wall_input ? authoringSnapshot().revision() : m_document->revision()) != *expected_revision) {
             setError(QStringLiteral("The project changed before this drawing input could be applied."));
             return;
         }
@@ -42672,14 +42992,10 @@ private:
             return;
         }
         if (m_tool == CanvasTool::select) {
-            if (m_workspace != Workspace::measurement && !siteCanvas(m_architecturalCanvas)) {
-                owner->statusBar()->showMessage(
-                    QStringLiteral("Wall and measurement drawing uses the conventional 2D world-XY canvas."), 4000);
-                return;
-            }
-            if (!siteCanvas(m_architecturalCanvas) && m_creation_mode == DrawingMode::measured_lines) {
+
+            if (!ordinaryArchitecturalWallDrawing() && !siteCanvas(m_architecturalCanvas) && m_creation_mode == DrawingMode::measured_lines) {
                 if (!beginMeasurementLinework()) return;
-            } else if (!siteCanvas(m_architecturalCanvas) && m_creation_mode == DrawingMode::measurement) {
+            } else if (!ordinaryArchitecturalWallDrawing() && !siteCanvas(m_architecturalCanvas) && m_creation_mode == DrawingMode::measurement) {
                 if (!beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, {})) return;
                 (void)selectEntity({}, false);
             } else {
@@ -42746,7 +43062,23 @@ private:
             return;
         }
         if (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall) {
+            if (ordinaryArchitecturalWallDrawing()) {
+                if (original_input)
+                    throw std::invalid_argument("Use the 2D workspace for recorded construction input.");
+                if (!m_pending_wall_start) beginArchitecturalWallDrawing();
+                point = architecturalWallModelPoint(point);
+                expected_revision = m_wall_drawing_source->revision();
+            }
+            if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+                setError(QStringLiteral("Wall points must be finite."));
+                return;
+            }
+            if (!m_document->is_editable()) {
+                setError(QStringLiteral("The current document is read-only."));
+                return;
+            }
             if (!m_pending_wall_start.has_value()) {
+                m_last_cursor = point;
                 m_pending_wall_start = point;
                 m_wall_chain_anchor = point;
                 m_wall_chain_has_segments = false;
@@ -42761,23 +43093,28 @@ private:
             QString id;
             WallChainMeasurementCompletion measurement_completion;
             if (m_tool == CanvasTool::sloped_wall) {
-                const auto context = captureModalContext();
+                const auto source = authoringSnapshot();
+                const auto authority = captureSourceEditAuthority(source);
                 bool accepted = false;
                 const auto rise = QInputDialog::getText(
                     owner, QStringLiteral("Create sloped wall"),
                     QStringLiteral("Signed top rise from start to end:"), QLineEdit::Normal,
                     m_metric_units ? QStringLiteral("0.3 m") : QStringLiteral("1 ft"),
                     &accepted);
-                if (!accepted || !modalContextUnchanged(context)) {
-                    m_pending_wall_start.reset();
+                if (!accepted) {
                     clearPreview();
                     return;
                 }
+                if (!sourceEditAuthorityCurrent(authority)) {
+                    setError(QStringLiteral("The sloped wall source or drawing context changed. Press Esc and start again."));
+                    return;
+                }
                 id = createSlopedWall(*m_pending_wall_start, point, rise,
-                                      QStringLiteral("interior"), context.revision);
+                                      QStringLiteral("interior"), source.revision());
             } else {
                 try {
-                    const auto previous = previousWallSegment(m_document->snapshot());
+                    const auto source = authoringSnapshot();
+                    const auto previous = previousWallSegment(source);
                     const ConstructionReplayContext replay_context{
                         *m_pending_wall_start,
                         original_input && original_input->kind == BoundaryConstructionKind::line_relative_turn
@@ -42788,7 +43125,7 @@ private:
                     const bool closes=m_wall_chain_has_segments && m_wall_chain_anchor &&
                         point.x==m_wall_chain_anchor->x && point.y==m_wall_chain_anchor->y;
                     const auto closing_chain=closes
-                        ? std::optional<QStringList>{liveWallChainOwners(m_document->snapshot())} : std::nullopt;
+                        ? std::optional<QStringList>{liveWallChainOwners(source)} : std::nullopt;
                     id = createPhysicalWall(Segment{*m_pending_wall_start, point, 0.0},
                         QStringLiteral("interior"), expected_revision, std::move(original_input),
                         replay_context,json::object(),closing_chain,&measurement_completion);
@@ -42806,7 +43143,7 @@ private:
                 const auto chain_anchor = m_wall_chain_anchor;
                 const auto preferences = m_wall_input_preferences;
                 auto chain_owners = m_wall_chain_owner_ids;
-                const auto current = m_document->snapshot();
+                const auto current = authoringSnapshot();
                 chain_owners.removeIf([&](const QString& owner_id) {
                     return !current.entities().contains(owner_id.toStdString());
                 });
@@ -42819,14 +43156,24 @@ private:
                 }
                 // The next wall needs the same focused length editor. Hiding
                 // it here can queue a navigator property pick before it reopens.
+                const auto wall_frame = m_wall_drawing_frame;
+                const auto wall_authority = m_wall_drawing_authority;
+                const auto wall_expected_source = m_wall_drawing_expected_source;
+                const auto wall_expected_authority = m_wall_drawing_expected_authority;
                 clearPreview(true, m_tool == CanvasTool::wall);
                 if (m_tool == CanvasTool::wall) {
+                    m_wall_drawing_frame = wall_frame;
+                    m_wall_drawing_authority = wall_authority;
+                    m_wall_drawing_expected_source = wall_expected_source;
+                    m_wall_drawing_expected_authority = wall_expected_authority;
                     m_pending_wall_start = point;
                     m_wall_chain_anchor = chain_anchor;
                     m_wall_chain_has_segments = true;
                     m_wall_chain_previous_id = id;
                     m_wall_chain_owner_ids = std::move(chain_owners);
                     m_wall_input_preferences = preferences;
+                    if (ordinaryArchitecturalWallDrawing()) renewArchitecturalWallDrawing();
+                    clearError();
                     refreshWallPreview(point);
                     owner->statusBar()->showMessage(QStringLiteral("Click the next wall end • Esc finishes the chain"));
                 } else {
@@ -42837,6 +43184,11 @@ private:
     }
 
     void finishTool(QString commit_message = {}) {
+        if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start &&
+            (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall)) {
+            finishWallChain();
+            return;
+        }
         if (m_linework_drawing) { finishMeasurementLinework(); return; }
         if (m_tool != CanvasTool::boundary || !m_boundary_session) return;
         if (!m_document->is_editable() || m_workspace != Workspace::measurement ||
@@ -43432,7 +43784,7 @@ private:
         resetDrawingInputContext();
         if (m_drawing_input) m_drawing_input->clearInput();
         try {
-            const auto snapshot = m_document->snapshot();
+            const auto snapshot = authoringSnapshot();
             const auto live = liveWallChainOwners(snapshot);
             auto endpoint = *m_wall_chain_anchor;
             for (const auto& id : live) {
@@ -43444,6 +43796,7 @@ private:
             m_pending_wall_start = endpoint;
             m_wall_chain_previous_id = live.isEmpty() ? QString{} : live.back();
             m_wall_chain_has_segments = !live.isEmpty();
+            if (ordinaryArchitecturalWallDrawing()) renewArchitecturalWallDrawing();
             refreshWallPreview(m_last_cursor);
         } catch (const std::exception& error) {
             // Undo/redo already succeeded. End only its invalid authoring context.
@@ -43625,6 +43978,15 @@ private:
     }
 
     void setTool(CanvasTool tool) {
+        if (ordinaryArchitecturalWallDrawing() &&
+            (tool == CanvasTool::wall || tool == CanvasTool::sloped_wall)) {
+            try { (void)canvasTransformPlanFrame(authoringSnapshot()); }
+            catch (const std::exception& error) {
+                setError(QStringLiteral("Wall drawing needs a horizontal architectural plan: %1")
+                    .arg(QString::fromUtf8(error.what())));
+                return;
+            }
+        }
         cancelAreaClass();
         if (m_linework_drawing) {
             if (tool == m_tool) return;
@@ -43640,9 +44002,7 @@ private:
             return;
         }
         cancelSymbolPlacement();
-        if (m_workspace != Workspace::measurement &&
-            (!siteCanvas(m_architecturalCanvas) || tool==CanvasTool::boundary) &&
-            (tool == CanvasTool::wall || tool == CanvasTool::sloped_wall || tool == CanvasTool::boundary)) {
+        if (m_workspace != Workspace::measurement && tool == CanvasTool::boundary) {
             setWorkspace(Workspace::measurement);
             if (m_workspace != Workspace::measurement) { syncToolControls(); return; }
         }
@@ -43671,7 +44031,7 @@ private:
             m_drawing_mode_combo->setEnabled(world_xy);
             m_drawing_mode_combo->setToolTip(world_xy
                 ? QStringLiteral("Choose walls, measured areas, or loose measured lines. Walls/lines: J jumps or arms travel; Enter lifts the pen; arrows walk corners. Selection and panning remain available.")
-                : QStringLiteral("Wall and measurement authoring uses the conventional 2D world-XY canvas. Switch to the 2D workspace first."));
+                : QStringLiteral("Draw walls directly in a horizontal architectural plan. Measured areas and loose lines use the 2D workspace."));
         }
         m_measurementCanvas->setTool(m_tool);
         m_architecturalCanvas->setTool(m_tool);
@@ -43684,7 +44044,11 @@ private:
             (m_tool == CanvasTool::select || m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall ||
              m_tool == CanvasTool::boundary);
         m_measurementCanvas->setWallSnapEnabled(geometry_snapping);
-        m_architecturalCanvas->setWallSnapEnabled(siteCanvas(m_architecturalCanvas) && m_pending_opening_kind.isEmpty());
+        const bool architectural_snapping = architecturalWallDrawingEligible() &&
+            m_pending_opening_kind.isEmpty() && m_pending_symbol_id.isEmpty() &&
+            (m_tool == CanvasTool::select || m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall);
+        m_architecturalCanvas->setWallSnapEnabled(
+            (siteCanvas(m_architecturalCanvas) && m_pending_opening_kind.isEmpty()) || architectural_snapping);
     }
 
     void setGrid(bool enabled) {
@@ -43754,6 +44118,12 @@ private:
         m_boundary_context.reset();
         m_boundary_document.reset();
         m_pending_wall_start.reset();
+        m_wall_drawing_source.reset();
+        m_wall_drawing_expected_source.reset();
+        m_wall_drawing_expected_authority.reset();
+        m_wall_drawing_authority.reset();
+        m_wall_drawing_frame.reset();
+        m_wall_drawing_endpoints.clear();
         m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
         m_wall_chain_previous_id.clear();
@@ -43764,6 +44134,15 @@ private:
     }
 
     void refreshWallPreview(Vec2 end, bool semantic_change = true) {
+        if (ordinaryArchitecturalWallDrawing() && m_pending_wall_start && !m_refreshing) {
+            try { requireArchitecturalWallDrawingCurrent(); }
+            catch (const std::exception& error) {
+                m_measurementCanvas->setWallPreview(std::nullopt);
+                m_architecturalCanvas->setWallPreview(std::nullopt);
+                setError(QString::fromUtf8(error.what()));
+                return;
+            }
+        }
         if (m_drawing_parked) { refreshParkedDrawing(); return; }
         updateDrawingInput();
         refreshDrawingWitnesses(semantic_change);
@@ -43791,6 +44170,10 @@ private:
             preview.start=site_presented_plan_point(preview.start,*m_site_drawing_frame);
             preview.end=site_presented_plan_point(preview.end,*m_site_drawing_frame);
         }
+        else if (ordinaryArchitecturalWallDrawing() && m_wall_drawing_frame) {
+            preview.start=project_plan_point(preview.start,*m_wall_drawing_frame);
+            preview.end=project_plan_point(preview.end,*m_wall_drawing_frame);
+        }
         m_architecturalCanvas->setWallPreview(std::move(preview));
     }
 
@@ -43800,6 +44183,12 @@ private:
         if (!m_pending_wall_start) return;
         const bool kept_segments = m_wall_chain_has_segments;
         m_pending_wall_start.reset();
+        m_wall_drawing_source.reset();
+        m_wall_drawing_expected_source.reset();
+        m_wall_drawing_expected_authority.reset();
+        m_wall_drawing_authority.reset();
+        m_wall_drawing_frame.reset();
+        m_wall_drawing_endpoints.clear();
         m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
         m_wall_chain_previous_id.clear();
@@ -46158,6 +46547,12 @@ private:
     struct PaletteDetectedTarget {QString stroke;std::size_t index{};Boundary boundary;bool physical{};std::vector<Boundary> holes;};
     std::map<QString,PaletteDetectedTarget> m_area_detected_targets;
     std::optional<Vec2> m_pending_wall_start;
+    std::shared_ptr<const DocumentSnapshot> m_wall_drawing_source;
+    std::shared_ptr<const DocumentSnapshot> m_wall_drawing_expected_source;
+    std::shared_ptr<const SourceEditAuthority> m_wall_drawing_expected_authority;
+    std::shared_ptr<const SourceEditAuthority> m_wall_drawing_authority;
+    std::optional<BuildingViewFrame> m_wall_drawing_frame;
+    ProjectedWallEndpoints m_wall_drawing_endpoints;
     std::optional<DrawingAlignmentProposal> m_drawing_alignment;
     std::optional<DocumentSnapshot> m_drawing_alignment_scene_source;
     std::shared_ptr<Document> m_drawing_alignment_scene_document;

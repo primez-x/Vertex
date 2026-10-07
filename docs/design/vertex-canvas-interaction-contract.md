@@ -15,7 +15,7 @@ classification and manual dimension placement before the outline is complete.
 | Gesture | Measurement plan | Architectural plan | 3D |
 |---|---|---|---|
 | Left click on object | Select the top visible hit | Select the top visible hit | Select the visible object |
-| Left click on empty canvas | Clear a retained selection first; otherwise start/place a point for the Draw choice (Wall by default, Area, or Measured lines); returning to the original node closes an eligible chain | Clear a retained selection; conventional wall authoring uses the 2D workspace | Clear selection |
+| Left click on empty canvas | Clear a retained selection first; otherwise start/place a point for the Draw choice (Wall by default, Area, or Measured lines); returning to the original node closes an eligible chain | Clear a retained selection first; otherwise start/place a wall endpoint in a horizontal plan; returning to the original endpoint closes the chain | Clear selection |
 | Left drag from empty canvas | Pan without placing a node | Pan without placing a wall point | No model edit |
 | Left drag from selected object | Move the selected object or compatible selected group in one undoable transaction | Move the selected object or compatible selected group in one undoable transaction | Reserved for an explicitly armed Move command |
 | Left drag from unselected object | Pan; click first if the object should move | Pan; click first if the object should move | Select only |
@@ -57,6 +57,8 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Each click places the next measured-boundary node. Clicking the highlighted first node closes a valid outline.
 - Component placement is a distinct pending state. Escape or the drawing context menu cancels it.
 - Wall previews follow the effective snapped pointer after the first endpoint.
+- Architectural wall clicks retain the displayed horizontal plan's source and axes. Connected endpoints snap to authored baselines on the active floor, including in shifted or rotated named plans. Cropped endpoints outside the view are not snap targets. Elevation and section views refuse new wall points with an explanation.
+- A committed wall continues the chain in the same architectural plan. A changed source, layer or view refuses the next point; cancellation keeps already committed walls. Area and loose measured-line construction remain available in the Measurement workspace.
 - Right click is evaluated on stationary release. Crossing the drag threshold prevents the menu.
 - An unmodified object double click opens the same contextual editor as right click → Properties. Ctrl-double-click only performs the first selection toggle. Active drawing and placement consume the second press so they cannot add a duplicate point or place two components.
 - Pan, zoom, fit, and overview navigation refresh the effective cursor position used by measurements and contextual UI.
@@ -67,7 +69,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 | Key | Behavior |
 |---|---|
 | Escape | Cancel the active gesture or explicit Move; otherwise cancel the pending tool step or clear selection |
-| Enter | Finish a valid boundary; no effect for other tools |
+| Enter | Finish a valid boundary or end an architectural mouse wall chain, keeping its committed segments |
 | F | Fit drawing or model content |
 | D | Open precise boundary input while drawing |
 | Ctrl+Z / Ctrl+Y | Undo or redo through the current document or draft route |

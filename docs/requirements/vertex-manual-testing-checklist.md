@@ -952,7 +952,9 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U156 — Draw a straight architectural wall**
   - Steps: Start a new project. Confirm Wall is the drawing mode without choosing a separate Draw tool. Enter thickness and height in the Library tab, then click the start and end. Click two more endpoints to extend the chain, then press Escape. Drag empty canvas to pan. Select a wall, drag inside its selection to move it, then click outside once to deselect before starting another wall. Choose Area and draw a closed appraisal boundary.
+  - Also try: Switch to the Architectural workspace's plan. Draw a connected wall chain without leaving that view. Repeat in a saved plan with a shifted origin and rotated axes, snapping to an existing wall endpoint. End one chain with Enter and close another by clicking its first endpoint. Try beginning a wall in an elevation or section view. During a pending chain, change its layer or view and attempt another point.
   - Expected: Both wall faces appear at the entered thickness during preview and after placement, with a live length and retained wall measurements. Escape keeps completed walls. Preview and committed endpoints agree. Area creates a measured boundary rather than another wall. 3D shows the same physical walls. Changing thickness later updates the footprint; wall length labels agree in print/export and after save/reopen.
+  - Architectural check: Horizontal-plan clicks place walls in the same model coordinates as the preview. Endpoint magnets connect the walls exactly. Elevation, section or stale-context input explains the refusal and adds no point or wall; already completed walls remain.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -968,6 +970,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U159 — Create a sloped wall**
+  - Steps: In a horizontal architectural plan, begin a sloped wall and cancel its uncommitted start with Undo. Repeat, place the second endpoint and enter its rise. Inspect plan and 3D, then Undo and Redo the completed wall.
   - Expected: The entered height/rise is visible in the correct direction.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
