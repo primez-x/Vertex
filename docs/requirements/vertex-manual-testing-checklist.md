@@ -1246,8 +1246,9 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U203 — Add annotations or detail to a view**
-  - Steps: Open **Named elevations and sections**, select a section, and add a dimension annotation. Choose a wall under **Measure object**, choose **Width** or **Height**, and enter the line offset. Save, then change that wall's length or height.
-  - Expected: The dimension line, witnesses, and value follow the wall's new size. Changing the offset moves the dimension without changing its value. Undo/redo and save/reopen retain the binding; PDF uses the same value. Choose **Detached** to retain an independent endpoint measurement, then delete its former wall: the detached dimension remains.
+  - Steps: In Architectural Plan, right-click one wall or slab and choose **Add view dimension**. Choose **Horizontal extent**, enter an offset, and add it. Repeat with **Vertical extent**. Drag a wall endpoint or slab vertex, then accept the change. Repeat in a rotated saved plan, an elevation and a section, using the object's properties to change its size there.
+  - Expected: The dimension line, witnesses and value follow the object's size and the view's axes. Plan vertex-edit previews update the value before committing. Changing the offset moves the line without changing its value. A crop retains the complete object measurement. Cancel and Undo restore the previous drawing; redo, save/reopen and PDF retain the same binding and value. An independent 2D room can be dimensioned in a horizontal plan without acquiring height or 3D volume.
+  - Annotation check: Open **Saved plans, elevations and sections**, select each kind of view, and add text or a detail line under **View annotations**. Add a dimension there with **Measure object** and **Horizontal extent** or **Vertical extent**. Choose **Detached** to keep an independent endpoint measurement, then delete its former wall: the detached dimension remains.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1692,7 +1693,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U281 — Create and edit named elevations and sections**
-  - Expected: Open **Named elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions, depth limits and model crop extents. Confirm model geometry crossing the left/right/bottom/top crop is clipped while geometry outside it is absent; doors/windows inside or crossing the crop retain appropriate view detail. Plan-only area labels must not appear in elevation or section sheet viewports. Place the views on sheets, edit one frame/crop, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and the same cropped geometry on canvas, print and export.
+  - Expected: Open **Saved plans, elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions, depth limits and model crop extents. Confirm model geometry crossing the left/right/bottom/top crop is clipped while geometry outside it is absent; doors/windows inside or crossing the crop retain appropriate view detail. Plan-only area labels must not appear in elevation or section sheet viewports. Place the views on sheets, edit one frame/crop, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and the same cropped geometry on canvas, print and export.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

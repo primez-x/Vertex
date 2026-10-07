@@ -6,7 +6,7 @@
 namespace sketch {
 
 struct ResolvedSectionDimension {
-    // Actual silhouette support points for bound dimensions, explicit
+    // Actual source silhouette support points for bound dimensions, explicit
     // endpoints for detached dimensions. Extension lines start here.
     std::array<double, 2> start_m;
     std::array<double, 2> end_m;
@@ -25,9 +25,13 @@ struct SectionDimensionResolution {
 };
 
 // Pure derived measurement: resolves complete authoritative source geometry
-// and level placement in the owning section frame, with no crop, depth,
-// visibility, detail or cut-plane filtering. Does not modify source quantities.
+// and level placement in the owning plan, elevation or section frame, with no
+// crop, depth, visibility, detail or cut-plane filtering. Does not modify source
+// quantities.
 // Binding minimum/maximum handles remain semantic across source edits.
+// Independent analytical rooms are supported only in horizontal plan frames;
+// other frames require explicit, valid physical volume geometry. The legacy
+// section name is retained for existing callers and persisted overlay types.
 [[nodiscard]] SectionDimensionResolution resolve_section_dimension(
     const DocumentSnapshot& source, const CoordinatedView& view,
     const SectionOverlay& overlay);

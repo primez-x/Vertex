@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v60
+# Vertex project formats v1 through v61
+
+## Annotations and linked dimensions in every saved view (v61)
+
+Native format 61 and JSON/assets extraction version 59 protect sheet/view model
+version 8. Plans and elevations can retain the same text, detail-line and
+dimension annotations as sections. The writer selects model v8 when any
+non-section view has an overlay; section-only content keeps its existing
+conditional model v6/v7 encoding. Model versions 1 through 7 continue to reject
+plan/elevation overlays. Public `SectionOverlay` and `SectionDimensionBinding`
+type names and persisted keys remain unchanged for compatibility.
+
+A bound dimension stores its object identity, horizontal/vertical axis in the
+owning view, and line offset. Its value and witness points derive from the
+complete source geometry and level placement in that view's frame. Model crop,
+far depth, hidden objects and displayed detail do not shorten the measured
+extent. The offset changes line placement, never the measured value. Native
+solids support plans, elevations and sections. An independent room without
+explicit volume measurements supports horizontal plans through its validated
+line/arc footprint; no height, elevation or 3D volume is inferred. Other frames
+require valid physical geometry. Missing or unsupported bound sources remain
+unresolved and never fall back to saved detached endpoints.
+
+Canvas geometry, dimension values and sheet output share the same projection
+and source resolution. Candidate vertex/movement edits resolve their displayed
+dimensions from the proposed source; an unresolved candidate clears an obsolete
+captured line/value. Detached annotations retain their view-plane coordinates.
+Section cut-plane displacement is applied once when resolving the view frame.
+
+The reader floor includes every retained revision, including undone annotation
+creation, deleted view graphs and abandoned history branches. Such content
+cannot be relabelled below native v61 or extraction v59 merely because the
+current head no longer contains it. Earlier projects retain their existing
+reader floors. Recovery archives retain their independent recovery contract.
 
 ## Model-plan furniture and equipment symbols (v60)
 
@@ -1748,7 +1781,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `60`, according to the
+`format_version` are equal and range from `1` through `61`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 

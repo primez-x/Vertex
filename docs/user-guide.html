@@ -594,6 +594,28 @@
   hidden. The numeric constraint dialog uses separate before/after comparison
   colors; Cancel leaves the drawing unchanged.</p>
 
+  <h2>Dimensions in plans, elevations and sections</h2>
+  <p>In an Architectural view, right-click one wall, opening, room, slab, roof,
+  stair, railing, column, beam, join or placed assembly and choose
+  <strong>Add view dimension…</strong>. Choose <strong>Horizontal extent</strong>
+  or <strong>Vertical extent</strong>, then enter the offset above or to the
+  right of the object. Bare numbers use feet in Imperial and metres in Metric;
+  explicit units such as <code>6 in</code> or <code>15 cm</code> also work.
+  The measured value comes from the full object, and editing the offset only
+  moves its dimension line. Add dimension creates one undoable annotation in
+  the current saved view.</p>
+  <p>A plan's vertical extent measures depth on the plan; an elevation's or
+  section's vertical extent measures height in that view. Bound lines, witness
+  points and values follow model edits, including a plan vertex-edit preview.
+  Cropping or hiding part of an object does not change its complete measured
+  extent. A 2D room can be dimensioned in a horizontal plan without inventing a
+  height. Give it measured volume dimensions before using an elevation or
+  section dimension.</p>
+  <p>Use <strong>Saved plans, elevations and sections…</strong> to manage text,
+  detail lines and dimensions under <strong>View annotations</strong>. Choose
+  <strong>Detached</strong> under Measure object to use independent endpoints.
+  Save/reopen retains object bindings and printed sheets use the same values.</p>
+
   <h2>References and assistance</h2>
   <p>Import a PDF, PNG, JPEG, BMP, or TIFF reference from <strong>More</strong>, select the page when
   needed, and calibrate it from a known distance. Transform and visibility changes keep

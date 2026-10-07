@@ -4249,30 +4249,6 @@ CoordinatedView dimension_view(const CoordinatedView& view) {
     return resolved;
 }
 
-std::vector<CanvasLabel> section_overlay_labels(const DocumentSnapshot& snapshot,
-                                               const CoordinatedView& view, bool metric_units) {
-    std::vector<CanvasLabel> result;
-    for (const auto& overlay : view.overlays) {
-        if (!section_overlay_visible(overlay, view.presentation.detail) ||
-            overlay.kind == SectionOverlayKind::detail_line) continue;
-        const bool dimension = overlay.kind == SectionOverlayKind::dimension;
-        std::optional<ResolvedSectionDimension> measured;
-        if (dimension) {
-            measured = resolve_section_dimension(snapshot, dimension_view(view), overlay).dimension;
-            if (!measured) continue;
-        }
-        const auto text = dimension
-            ? PlanCanvas::drawingLengthText(measured->measured_metres, metric_units)
-            : QString::fromStdString(overlay.text);
-        CanvasLabel label{QString::fromStdString(view.id + "/overlay/" + overlay.id),
-            {dimension ? (measured->line_start_m[0] + measured->line_end_m[0]) / 2 : overlay.start_m[0],
-             dimension ? (measured->line_start_m[1] + measured->line_end_m[1]) / 2 : overlay.start_m[1]}, text};
-        label.paper_height_mm = overlay.text_height_mm;
-        result.push_back(std::move(label));
-    }
-    return result;
-}
-
 BuildingViewKind architectural_view_kind(CoordinatedViewKind kind) {
     switch (kind) {
     case CoordinatedViewKind::plan: return BuildingViewKind::plan;
@@ -4367,6 +4343,93 @@ const char* architectural_view_name(BuildingViewKind kind) {
     case BuildingViewKind::section: return "section";
     }
     throw std::invalid_argument("unknown architectural view kind");
+}
+
+struct CoordinatedOverlayProjection {
+    std::vector<CanvasEntity> entities;
+    std::vector<CanvasLabel> labels;
+    std::vector<QString> diagnostics;
+};
+
+CoordinatedOverlayProjection project_view_overlays(const DocumentSnapshot& snapshot,
+    BuildingViewKind kind, const ArchitecturalViewContext& context, bool metric_units,
+    bool retain_unresolved = false) {
+    CoordinatedOverlayProjection result;
+    if (context.presentation.appearance && !context.presentation.appearance->visible) return result;
+    CoordinatedView resolved;
+    resolved.id = context.view_id.empty() ? "coordinated-dimension-view" : context.view_id;
+    resolved.name = architectural_view_name(kind);
+    switch (kind) {
+    case BuildingViewKind::plan: resolved.kind = CoordinatedViewKind::plan; break;
+    case BuildingViewKind::elevation: resolved.kind = CoordinatedViewKind::elevation; break;
+    case BuildingViewKind::section: resolved.kind = CoordinatedViewKind::section; break;
+    }
+    // The context already incorporates a section's cut-plane displacement.
+    // Resolution consumes that exact frame without applying the displacement twice.
+    resolved.origin_m = {context.frame.origin.x, context.frame.origin.y, context.frame.origin.z};
+    resolved.direction = {context.frame.direction.x, context.frame.direction.y, context.frame.direction.z};
+    resolved.up = {context.frame.up.x, context.frame.up.y, context.frame.up.z};
+    resolved.presentation = context.presentation;
+    resolved.object_ids = context.object_ids;
+    resolved.restrict_to_objects = context.restrict_to_objects;
+    resolved.overlays = context.overlays;
+    for (const auto& overlay : context.overlays) {
+        if (!section_overlay_visible(overlay, context.presentation.detail)) continue;
+        const auto id = QString::fromStdString(context.view_id + "/overlay/" + overlay.id);
+        if (overlay.kind == SectionOverlayKind::text) {
+            CanvasLabel label{id, {overlay.start_m[0], overlay.start_m[1]},
+                QString::fromStdString(overlay.text)};
+            label.paper_height_mm = overlay.text_height_mm;
+            result.labels.push_back(std::move(label));
+            continue;
+        }
+        Boundary segments;
+        if (overlay.kind == SectionOverlayKind::dimension) {
+            const auto measured = resolve_section_dimension(snapshot, resolved, overlay);
+            if (!measured.dimension) {
+                result.diagnostics.push_back(QString::fromStdString(measured.diagnostic));
+                // Candidate overrides must erase a captured line/value that has
+                // become unresolved, rather than leave an obsolete measurement visible.
+                if (retain_unresolved) {
+                    result.entities.push_back(CanvasEntity{id, QStringLiteral("section_overlay"), {}, 0.0});
+                    result.labels.push_back(CanvasLabel{id, {}, QString{}});
+                }
+                continue;
+            }
+            const auto& dimension = *measured.dimension;
+            if (dimension.associative) {
+                for (const auto& pair : {std::pair{dimension.start_m, dimension.line_start_m},
+                                        std::pair{dimension.end_m, dimension.line_end_m}}) {
+                    if (pair.first != pair.second)
+                        segments.push_back({{pair.first[0], pair.first[1]},
+                                            {pair.second[0], pair.second[1]}, 0.0});
+                }
+            }
+            // The canvas puts end ticks on the final segment; witnesses precede it.
+            segments.push_back({{dimension.line_start_m[0], dimension.line_start_m[1]},
+                                {dimension.line_end_m[0], dimension.line_end_m[1]}, 0.0});
+            CanvasLabel label{id,
+                {std::midpoint(dimension.line_start_m[0], dimension.line_end_m[0]),
+                 std::midpoint(dimension.line_start_m[1], dimension.line_end_m[1])},
+                PlanCanvas::drawingLengthText(dimension.measured_metres, metric_units)};
+            label.paper_height_mm = overlay.text_height_mm;
+            result.labels.push_back(std::move(label));
+        } else {
+            segments.push_back({{overlay.start_m[0], overlay.start_m[1]},
+                                {overlay.end_m[0], overlay.end_m[1]}, 0.0});
+        }
+        CanvasEntity line{id, QStringLiteral("section_overlay"), std::move(segments), 0.0};
+        line.output_stroke_width_mm = overlay.line_width_mm;
+        line.dimension_end_ticks = overlay.kind == SectionOverlayKind::dimension;
+        result.entities.push_back(std::move(line));
+    }
+    return result;
+}
+
+std::vector<CanvasLabel> coordinated_overlay_labels(const DocumentSnapshot& snapshot,
+    const CoordinatedView& view, bool metric_units) {
+    return project_view_overlays(snapshot, architectural_view_kind(view.kind),
+        architectural_view_context(view), metric_units).labels;
 }
 
 std::size_t architectural_view_index(BuildingViewKind kind) {
@@ -20464,6 +20527,15 @@ public:
                     result.labels.push_back(std::move(proposed));
                 }
             }
+            if (view_context && !view_context->overlays.empty()) {
+                // Edit proposals retain this exact view identity/frame. Resolve
+                // its bound measurements from the proposed document, not the
+                // captured pre-edit linework and labels.
+                auto overlays = project_view_overlays(candidate_snapshot, BuildingViewKind::plan,
+                    *view_context, metric_units, true);
+                for (auto& entity : overlays.entities) result.entities.push_back(std::move(entity));
+                for (auto& label : overlays.labels) result.labels.push_back(std::move(label));
+            }
             return result;
         } catch (const std::exception&) { return std::nullopt; }
     }
@@ -26490,7 +26562,7 @@ public:
                         labels.push_back(label);
                 if (view_kind == BuildingViewKind::plan)
                     project_plan_model_labels(labels, snapshot, architectural_view_context(*view).frame);
-                for (auto& label : section_overlay_labels(snapshot, *view, m_metric_units)) labels.push_back(std::move(label));
+                for (auto& label : coordinated_overlay_labels(snapshot, *view, m_metric_units)) labels.push_back(std::move(label));
                 temporary_canvas->setLabels(std::move(labels));
                 std::vector<CanvasReference> references;
                 for (const auto& reference : m_sheet_plan_references)
@@ -29460,9 +29532,143 @@ public:
         }
     }
 
+    void showObjectViewDimension(const QString& requested_id) {
+        try {
+            if (m_workspace != Workspace::architectural || siteCanvas(m_architecturalCanvas))
+                throw std::invalid_argument("Choose an architectural plan, elevation or section first.");
+            if (!m_document->is_editable() || m_boundary_session || m_pending_wall_start ||
+                m_linework_drawing || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("Finish or cancel the pending placement before adding a dimension.");
+            if (m_selected_ids.size() != 1 || m_selected_ids.front() != requested_id)
+                throw std::invalid_argument("Select one architectural object before adding its dimension.");
+            const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
+            const auto object = source.entities().find(requested_id.toStdString());
+            if (object == source.entities().end()) throw std::invalid_argument("The selected object is unavailable.");
+            std::optional<SheetModelRecord> record;
+            // Default views use the first matching kind across all typed graphs,
+            // exactly as the canvas does. A graph containing only elevations
+            // must not take ownership of a plan supplied by a later graph.
+            for (const auto& [id, entity] : source.entities()) {
+                if (entity.type != kSheetViewEntityType ||
+                    (!m_active_named_view.isEmpty() && !m_active_named_view_owner.isEmpty() &&
+                     id != m_active_named_view_owner.toStdString())) continue;
+                auto model = decode_sheet_view_entity(entity);
+                if (std::any_of(model.views().begin(), model.views().end(), [&](const auto& value) {
+                        return architectural_view_kind(value.kind) == m_architectural_view_kind &&
+                            (m_active_named_view.isEmpty() || value.id == m_active_named_view.toStdString());
+                    })) {
+                    record = SheetModelRecord{id, std::move(model)};
+                    break;
+                }
+            }
+            if (!record) throw std::invalid_argument("No drawing views are defined.");
+            const auto view = std::find_if(record->model.views().begin(), record->model.views().end(),
+                [&](const auto& value) {
+                    return architectural_view_kind(value.kind) == m_architectural_view_kind &&
+                        (m_active_named_view.isEmpty() || value.id == m_active_named_view.toStdString());
+                });
+            if (view == record->model.views().end()) throw std::invalid_argument("The current saved view is unavailable.");
+            if (view->presentation.appearance && !view->presentation.appearance->visible)
+                throw std::invalid_argument("Show this view before adding a dimension.");
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
+            dialog.setObjectName(QStringLiteral("objectViewDimensionDialog"));
+            dialog.setWindowTitle(QStringLiteral("Add view dimension"));
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* form = new QFormLayout;
+            const auto object_name = read_string(object->second.properties, "name").value_or(object->first);
+            form->addRow(QStringLiteral("Object"), new QLabel(QString::fromStdString(object_name), &dialog));
+            form->addRow(QStringLiteral("View"), new QLabel(QString::fromStdString(view->name), &dialog));
+            auto* axis = new QComboBox(&dialog);
+            axis->setObjectName(QStringLiteral("objectViewDimensionAxis"));
+            axis->addItem(QStringLiteral("Horizontal extent"), static_cast<int>(SectionDimensionAxis::horizontal));
+            axis->addItem(QStringLiteral("Vertical extent"), static_cast<int>(SectionDimensionAxis::vertical));
+            auto* offset = new QLineEdit(m_metric_units ? QStringLiteral("0.3 m") : QStringLiteral("1 ft"), &dialog);
+            offset->setObjectName(QStringLiteral("objectViewDimensionOffset"));
+            auto* measured = new QLabel(&dialog);
+            measured->setObjectName(QStringLiteral("objectViewDimensionValue"));
+            auto* offset_label = new QLabel(QStringLiteral("Offset above object"), &dialog);
+            form->addRow(QStringLiteral("Direction"), axis);
+            form->addRow(offset_label, offset);
+            form->addRow(QStringLiteral("Measured extent"), measured);
+            layout->addLayout(form);
+            auto* error = new QLabel(&dialog);
+            error->setObjectName(QStringLiteral("objectViewDimensionError"));
+            error->setWordWrap(true);
+            layout->addWidget(error);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+            buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("Add dimension"));
+            layout->addWidget(buttons);
+            const auto overlay_id = new_id("dimension");
+            const auto candidate_view = [&] {
+                auto candidate = *view;
+                SectionOverlay overlay;
+                overlay.id = overlay_id;
+                overlay.kind = SectionOverlayKind::dimension;
+                overlay.minimum_detail = ViewDetail::coarse;
+                overlay.object_id = object->first;
+                overlay.dimension_binding = SectionDimensionBinding{object->first,
+                    static_cast<SectionDimensionAxis>(axis->currentData().toInt()),
+                    parse_quantity(offset->text().trimmed().toStdString(),
+                        m_metric_units ? Unit::metre : Unit::foot).metres};
+                if ((candidate.restrict_to_objects || !candidate.object_ids.empty()) &&
+                    std::find(candidate.object_ids.begin(), candidate.object_ids.end(), object->first) == candidate.object_ids.end())
+                    candidate.object_ids.push_back(object->first);
+                candidate.overlays.push_back(std::move(overlay));
+                return candidate;
+            };
+            const auto update_value = [&] {
+                offset_label->setText(axis->currentData().toInt() == static_cast<int>(SectionDimensionAxis::horizontal)
+                    ? QStringLiteral("Offset above object") : QStringLiteral("Offset right of object"));
+                try {
+                    const auto candidate = candidate_view();
+                    const auto resolution = resolve_section_dimension(source, dimension_view(candidate), candidate.overlays.back());
+                    if (!resolution.dimension) throw std::invalid_argument(resolution.diagnostic);
+                    measured->setText(PlanCanvas::drawingLengthText(resolution.dimension->measured_metres, m_metric_units));
+                    error->clear();
+                    buttons->button(QDialogButtonBox::Save)->setEnabled(true);
+                } catch (const std::exception& exception) {
+                    measured->clear();
+                    error->setText(QString::fromUtf8(exception.what()));
+                    buttons->button(QDialogButtonBox::Save)->setEnabled(false);
+                }
+            };
+            QObject::connect(axis, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, update_value);
+            QObject::connect(offset, &QLineEdit::editingFinished, &dialog, update_value);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+                try {
+                    if (!sourceEditAuthorityCurrent(authority))
+                        throw std::invalid_argument("The project or active view changed. Reopen Add view dimension.");
+                    auto candidate = candidate_view();
+                    const auto resolution = resolve_section_dimension(source, dimension_view(candidate), candidate.overlays.back());
+                    if (!resolution.dimension) throw std::invalid_argument(resolution.diagnostic);
+                    const auto replacement = record->model.with_view(std::move(candidate));
+                    auto updated = source.entities().at(record->entity_id);
+                    updated.properties = make_sheet_view_entity(updated.id, replacement).properties;
+                    const ApplyEntityChanges command{source.revision(), {EntityChange::upsert(std::move(updated))}, {}, "Add linked view dimension"};
+                    (void)Document::preview_command(source, command);
+                    applyDocumentCommand(command);
+                    clearError();
+                    dialog.accept();
+                    refresh();
+                } catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); }
+            });
+            update_value();
+            dialog.resize(390, dialog.sizeHint().height());
+            dialog.exec();
+        } catch (const std::exception& exception) {
+            setError(QStringLiteral("View dimension: %1").arg(QString::fromUtf8(exception.what())));
+        }
+    }
+
     void showNamedViews() {
         const auto context = captureModalContext();
+        try {
         const auto source = authoringSnapshot();
+        const auto source_authority = captureSourceEditAuthority(source);
         auto record = decode_sheet_model(source);
         if (!m_active_named_view_owner.isEmpty()) {
             const auto found=source.entities().find(m_active_named_view_owner.toStdString());
@@ -29477,7 +29683,7 @@ public:
         QDialog dialog(owner);
         if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
         dialog.setObjectName(QStringLiteral("namedViewsDialog"));
-        dialog.setWindowTitle(QStringLiteral("Named elevations and sections"));
+        dialog.setWindowTitle(QStringLiteral("Saved plans, elevations and sections"));
         styleDialog(dialog);
         auto* form = new QFormLayout(&dialog);
         auto* selection = new QComboBox(&dialog);
@@ -29519,17 +29725,17 @@ public:
             QStringLiteral("X m"), QStringLiteral("Y m"), QStringLiteral("End X m"),
             QStringLiteral("End Y m"), QStringLiteral("Text"), QStringLiteral("Minimum detail"),
             QStringLiteral("Measure object"), QStringLiteral("Extent"), QStringLiteral("Offset m")});
-        overlays->setToolTip(QStringLiteral("Section-plane metres. Kind: text, detail_line, dimension. "
-            "Detail: coarse, medium, fine. Choose an object and Width or Height for a dimension that follows model edits. "
+        overlays->setToolTip(QStringLiteral("Coordinates are metres in this view. Kind: text, detail_line, dimension. "
+            "Detail: coarse, medium, fine. Choose an object and a horizontal or vertical extent for a dimension that follows model edits. "
             "Offset positions its dimension line; Detached uses the explicit endpoint coordinates. "
             "Coarse sections omit hatching; higher levels include overlays at or below that detail."));
-        form->addRow(QStringLiteral("Section annotations"), overlays);
+        form->addRow(QStringLiteral("View annotations"), overlays);
         auto* add_overlay = new QPushButton(QStringLiteral("Add annotation"), &dialog);
         add_overlay->setObjectName(QStringLiteral("addSectionOverlay"));
         auto* remove_overlay = new QPushButton(QStringLiteral("Remove selected annotation"), &dialog);
         remove_overlay->setObjectName(QStringLiteral("removeSectionOverlay"));
         form->addRow(add_overlay, remove_overlay);
-        const auto annotation_source = m_document->snapshot();
+        const auto& annotation_source = source;
         const auto append_overlay = [&](const SectionOverlay& overlay) {
             const auto row = overlays->rowCount(); overlays->insertRow(row);
             const QStringList cells{QString::fromStdString(overlay.id),
@@ -29548,14 +29754,14 @@ public:
                 if (entity.type != "wall" && entity.type != "opening" && entity.type != "room" &&
                     entity.type != "slab" && entity.type != "roof" && entity.type != "stair" &&
                     entity.type != "railing" && entity.type != "column" && entity.type != "beam" &&
-                    entity.type != "wall_join" && entity.type != "roof_join") continue;
+                    entity.type != "wall_join" && entity.type != "roof_join" && entity.type != "assembly_instance") continue;
                 const auto label = entity.properties.value("name", id);
                 source->addItem(QStringLiteral("%1 (%2)").arg(QString::fromStdString(label),
                     QString::fromStdString(entity.type)), QString::fromStdString(id));
             }
             auto* axis = new QComboBox(overlays);
-            axis->addItem(QStringLiteral("Width"), static_cast<int>(SectionDimensionAxis::horizontal));
-            axis->addItem(QStringLiteral("Height"), static_cast<int>(SectionDimensionAxis::vertical));
+            axis->addItem(QStringLiteral("Horizontal extent"), static_cast<int>(SectionDimensionAxis::horizontal));
+            axis->addItem(QStringLiteral("Vertical extent"), static_cast<int>(SectionDimensionAxis::vertical));
             overlays->setCellWidget(row, 8, source);
             overlays->setCellWidget(row, 9, axis);
             overlays->setItem(row, 10, new QTableWidgetItem(QString::number(
@@ -29622,7 +29828,10 @@ public:
                 if(active_owner!=m_active_named_view_owner || active_view!=m_active_named_view) {
                     error->setText(QStringLiteral("The selected saved view changed. Reopen named views."));return;
                 }
-                if (!modalContextUnchanged(context)) { error->setText(lastError()); return; }
+                if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(source_authority)) {
+                    error->setText(QStringLiteral("The project or active view changed. Reopen saved views."));
+                    return;
+                }
                 const auto scalar = [](const QString& text) {
                     bool ok = false; const auto number = text.trimmed().toDouble(&ok);
                     if (!ok || !std::isfinite(number)) throw std::invalid_argument("Enter finite numeric coordinates and depths.");
@@ -29672,9 +29881,9 @@ public:
                     else if (cell(7) == "medium") overlay.minimum_detail = ViewDetail::medium;
                     else if (cell(7) == "fine") overlay.minimum_detail = ViewDetail::fine;
                     else throw std::invalid_argument("Minimum detail must be coarse, medium, or fine.");
-                    const auto* source = qobject_cast<QComboBox*>(overlays->cellWidget(row, 8));
+                    const auto* source_picker = qobject_cast<QComboBox*>(overlays->cellWidget(row, 8));
                     const auto* axis = qobject_cast<QComboBox*>(overlays->cellWidget(row, 9));
-                    const auto target = source->currentData().toString().toStdString();
+                    const auto target = source_picker->currentData().toString().toStdString();
                     if (target.empty()) {
                         if (overlay.dimension_binding) overlay.object_id.clear();
                         overlay.dimension_binding.reset();
@@ -29688,7 +29897,7 @@ public:
                         if ((value.restrict_to_objects || !value.object_ids.empty()) &&
                             std::find(value.object_ids.begin(), value.object_ids.end(), target) == value.object_ids.end())
                             value.object_ids.push_back(target);
-                        const auto measured = resolve_section_dimension(m_document->snapshot(), dimension_view(value), overlay);
+                        const auto measured = resolve_section_dimension(source, dimension_view(value), overlay);
                         if (!measured.dimension) throw std::invalid_argument(measured.diagnostic);
                     }
                     value.overlays.push_back(std::move(overlay));
@@ -29713,6 +29922,9 @@ public:
             } catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); }
         });
         dialog.exec();
+        } catch (const std::exception& exception) {
+            setError(QStringLiteral("Saved views: %1").arg(QString::fromUtf8(exception.what())));
+        }
     }
 
     void showAppraisalReporting(const QString& requested_property_id = {}) {
@@ -32544,7 +32756,7 @@ public:
             {QStringLiteral("Edit sheet layout"), [this] { showSheetLayoutManager(); }},
             {QStringLiteral("Edit architectural view settings"),
              [this] { showArchitecturalViewSettings(); }},
-            {QStringLiteral("Create or edit named elevations and sections"), [this] { showNamedViews(); }},
+            {QStringLiteral("Create or edit saved plans, elevations and sections"), [this] { showNamedViews(); }},
             {QStringLiteral("Join selected walls"), [this] { (void)joinSelected(ArchitecturalJoinKind::wall); }},
             {QStringLiteral("Unjoin selected walls"), [this] { (void)unjoinSelected(ArchitecturalJoinKind::wall); }},
             {QStringLiteral("Join selected roofs"), [this] { (void)joinSelected(ArchitecturalJoinKind::roof); }},
@@ -34145,7 +34357,7 @@ private:
                          [this] { (void)joinSelected(ArchitecturalJoinKind::roof); });
         authoring_action("unjoinRoofs", QStringLiteral("Unjoin selected roofs"),
                          [this] { (void)unjoinSelected(ArchitecturalJoinKind::roof); });
-        authoring_action("manageNamedViews", QStringLiteral("Named elevations and sections…"),
+        authoring_action("manageNamedViews", QStringLiteral("Saved plans, elevations and sections…"),
                          [this] { showNamedViews(); });
         auto* dimension_action = more_menu->addAction(QStringLiteral("Add length, chain, angle or area dimension…"));
         dimension_action->setObjectName(QStringLiteral("dimensionCreator"));
@@ -36992,6 +37204,18 @@ private:
                             QObject::connect(constraints, &QAction::triggered, owner,
                                              [this] { showConstraintEditor(); });
                         }
+                        if (entity && canvas == m_architecturalCanvas && !siteCanvas(canvas) &&
+                            (entity->type == "wall" || entity->type == "opening" || entity->type == "room" ||
+                             entity->type == "slab" || entity->type == "roof" || entity->type == "stair" ||
+                             entity->type == "railing" || entity->type == "column" || entity->type == "beam" ||
+                             entity->type == "wall_join" || entity->type == "roof_join" || entity->type == "assembly_instance")) {
+                            auto* dimension = menu.addAction(QStringLiteral("Add view dimension…"));
+                            dimension->setObjectName(QStringLiteral("addObjectViewDimensionContextAction"));
+                            dimension->setEnabled(m_document->is_editable());
+                            const auto selected_id = m_selected_id;
+                            QObject::connect(dimension, &QAction::triggered, owner,
+                                [this, selected_id] { showObjectViewDimension(selected_id); });
+                        }
                         if(entity && (entity->type=="measurement_linework" || can_recognize_boundary_entity_type(entity->type))) {
                             auto* dimension=owner->findChild<QAction*>(QStringLiteral("dimensionCreator"));
                             if(dimension){menu.addAction(dimension);dimension->setEnabled(m_document->is_editable());}
@@ -39603,6 +39827,13 @@ private:
                 if ((entity.type == "roof" || entity.type == "roof_join") &&
                     !joined_presentation.contains(id)) architectural_hidden_ids.insert(id);
             const auto& frame = view_context.frame;
+            const auto append_view_overlays = [&](std::vector<CanvasEntity>& geometry) {
+                auto overlays = project_view_overlays(snapshot, kind, view_context, m_metric_units);
+                for (const auto& diagnostic : overlays.diagnostics)
+                    append_geometry_error(QStringLiteral("%1: %2")
+                        .arg(QString::fromLatin1(architectural_view_name(kind)), diagnostic));
+                for (auto& entity : overlays.entities) geometry.push_back(std::move(entity));
+            };
             const auto snap_organization = projectOrganization(snapshot);
             const auto retain_wall_snap_targets = [&](CanvasEntity& retained, const Entity& source,
                                                        const Wall* physical = nullptr) {
@@ -39696,6 +39927,7 @@ private:
                         filtered.push_back(std::move(retained));
                     }
                 }
+                append_view_overlays(filtered);
                 return filtered;
             }
             std::vector<CanvasEntity> result;
@@ -40071,53 +40303,9 @@ private:
                     }
                 }
             }
-            // Analytical source validation and solid projection above remain
-            // unconditional. Hidden presentation annotations must not resolve
-            // or publish diagnostics that block an otherwise visible sheet.
-            if(view_context.presentation.appearance && !view_context.presentation.appearance->visible)return result;
-            for (const auto& overlay : view_context.overlays) {
-                if (!section_overlay_visible(overlay, view_context.presentation.detail) ||
-                    overlay.kind == SectionOverlayKind::text) continue;
-                Boundary segments{Segment{{overlay.start_m[0], overlay.start_m[1]},
-                                          {overlay.end_m[0], overlay.end_m[1]}, 0.0}};
-                if (overlay.kind == SectionOverlayKind::dimension) {
-                    CoordinatedView source_view;
-                    source_view.id = view_context.view_id.empty() ? "section-dimension-view" : view_context.view_id;
-                    source_view.name = "Section";
-                    source_view.kind = CoordinatedViewKind::section;
-                    source_view.object_ids = view_context.object_ids;
-                    source_view.restrict_to_objects = view_context.restrict_to_objects;
-                    source_view.origin_m = {frame.origin.x, frame.origin.y, frame.origin.z};
-                    source_view.direction = {frame.direction.x, frame.direction.y, frame.direction.z};
-                    source_view.up = {frame.up.x, frame.up.y, frame.up.z};
-                    const auto measured = resolve_section_dimension(snapshot, source_view, overlay);
-                    if (!measured.dimension) {
-                        append_geometry_error(QStringLiteral("Dimension %1: %2")
-                            .arg(QString::fromStdString(overlay.id),
-                                 QString::fromStdString(measured.diagnostic)));
-                        continue;
-                    }
-                    const auto& d = *measured.dimension;
-                    segments.clear();
-                    if (d.associative) {
-                        for (const auto& pair : {std::pair{d.start_m, d.line_start_m},
-                                                std::pair{d.end_m, d.line_end_m}}) {
-                            if (pair.first == pair.second) continue;
-                            segments.push_back({{pair.first[0], pair.first[1]},
-                                                {pair.second[0], pair.second[1]}, 0.0});
-                        }
-                    }
-                    // PlanCanvas applies dimension ticks to the last segment.
-                    // Witnesses precede the authoritative dimension line.
-                    segments.push_back({{d.line_start_m[0], d.line_start_m[1]},
-                                        {d.line_end_m[0], d.line_end_m[1]}, 0.0});
-                }
-                CanvasEntity line{QString::fromStdString(view_context.view_id + "/overlay/" + overlay.id),
-                    QStringLiteral("section_overlay"), std::move(segments), 0.0};
-                line.output_stroke_width_mm = overlay.line_width_mm;
-                line.dimension_end_ticks = overlay.kind == SectionOverlayKind::dimension;
-                result.push_back(std::move(line));
-            }
+            // Full source admission remains unconditional; annotation visibility
+            // and source-linked measurements use the same path in every view.
+            append_view_overlays(result);
             return result;
         };
         view_geometry[architectural_view_index(BuildingViewKind::plan)] =
@@ -40433,13 +40621,13 @@ private:
         if (m_architectural_view_kind != BuildingViewKind::plan) {
             std::erase_if(labels, [](const auto& label) { return label.plan_only || label.model_plan; });
         }
-        if (m_architectural_view_kind == BuildingViewKind::section) {
+        {
             if(const auto graph=snapshot.entities().find(active_key.first);graph!=snapshot.entities().end()) {
                 const auto model=decode_sheet_view_entity(graph->second);
                 for (const auto& view : model.views()) {
-                    if (view.id!=active_key.second || view.kind!=CoordinatedViewKind::section ||
+                    if (view.id!=active_key.second || architectural_view_kind(view.kind)!=m_architectural_view_kind ||
                         (view.presentation.appearance && !view.presentation.appearance->visible)) continue;
-                    for (auto& label : section_overlay_labels(snapshot, view, m_metric_units)) labels.push_back(std::move(label));
+                    for (auto& label : coordinated_overlay_labels(snapshot, view, m_metric_units)) labels.push_back(std::move(label));
                     break;
                 }
             }

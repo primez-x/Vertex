@@ -108,45 +108,43 @@ void validate_view(const CoordinatedView& view) {
             if (object.style) validate_appearance_style(*object.style);
         }
     }
-    require(view.overlays.size() <= 1000, "section overlay count exceeds 1000");
-    require(view.overlays.empty() || view.kind == CoordinatedViewKind::section,
-        "overlays belong only to section views");
+    require(view.overlays.size() <= 1000, "view overlay count exceeds 1000");
     for (const auto& overlay : view.overlays) {
         require(overlay.id.size() <= 128 && overlay.text.size() <= 4096,
-            "section overlay identity or text exceeds limit");
+            "view overlay identity or text exceeds limit");
         switch (overlay.kind) {
         case SectionOverlayKind::text: identifier(overlay.text); break;
         case SectionOverlayKind::detail_line: case SectionOverlayKind::dimension:
             require(overlay.dimension_binding || std::hypot(overlay.end_m[0] - overlay.start_m[0],
-                overlay.end_m[1] - overlay.start_m[1]) > 1e-9, "section overlay endpoints coincide"); break;
-        default: throw std::invalid_argument("unknown section overlay kind");
+                overlay.end_m[1] - overlay.start_m[1]) > 1e-9, "view overlay endpoints coincide"); break;
+        default: throw std::invalid_argument("unknown view overlay kind");
         }
         switch (overlay.minimum_detail) {
         case ViewDetail::coarse: case ViewDetail::medium: case ViewDetail::fine: break;
-        default: throw std::invalid_argument("unknown section overlay detail");
+        default: throw std::invalid_argument("unknown view overlay detail");
         }
         for (const auto& point : {overlay.start_m, overlay.end_m}) for (double v : point)
-            require(std::isfinite(v) && std::abs(v) <= 1e6, "section overlay coordinate outside finite bounds");
+            require(std::isfinite(v) && std::abs(v) <= 1e6, "view overlay coordinate outside finite bounds");
         require(std::isfinite(overlay.text_height_mm) && overlay.text_height_mm >= 0.5 &&
-            overlay.text_height_mm <= 20, "section overlay text height outside 0.5 to 20 mm");
+            overlay.text_height_mm <= 20, "view overlay text height outside 0.5 to 20 mm");
         require(std::isfinite(overlay.line_width_mm) && overlay.line_width_mm >= 0.05 &&
-            overlay.line_width_mm <= 5, "section overlay line width outside 0.05 to 5 mm");
+            overlay.line_width_mm <= 5, "view overlay line width outside 0.05 to 5 mm");
         require(overlay.object_id.empty() || (!view.restrict_to_objects && view.object_ids.empty()) || std::find(view.object_ids.begin(), view.object_ids.end(),
-            overlay.object_id) != view.object_ids.end(), "section overlay references object outside owning view");
+            overlay.object_id) != view.object_ids.end(), "view overlay references object outside owning view");
         if (overlay.dimension_binding) {
             const auto& binding = *overlay.dimension_binding;
             require(overlay.kind == SectionOverlayKind::dimension,
-                "only section dimensions may have associative bindings");
+                "only view dimensions may have associative bindings");
             identifier(binding.object_id);
             require(binding.object_id.size() <= 128 && ((!view.restrict_to_objects && view.object_ids.empty()) ||
                 std::find(view.object_ids.begin(), view.object_ids.end(), binding.object_id) != view.object_ids.end()),
-                "section dimension references object outside owning view");
+                "view dimension references object outside owning view");
             require(overlay.object_id.empty() || overlay.object_id == binding.object_id,
-                "section dimension source references disagree");
+                "view dimension source references disagree");
             require(binding.axis == SectionDimensionAxis::horizontal || binding.axis == SectionDimensionAxis::vertical,
-                "unknown section dimension axis");
+                "unknown view dimension axis");
             require(std::isfinite(binding.line_offset_m) && std::abs(binding.line_offset_m) <= 1e6,
-                "section dimension offset outside finite bounds");
+                "view dimension offset outside finite bounds");
         }
     }
 }
@@ -260,25 +258,25 @@ void to_json(nlohmann::json& value, const SectionOverlayKind& kind) {
     case SectionOverlayKind::detail_line: value = "detail_line"; return;
     case SectionOverlayKind::dimension: value = "dimension"; return;
     }
-    throw std::invalid_argument("unknown section overlay kind");
+    throw std::invalid_argument("unknown view overlay kind");
 }
 void from_json(const nlohmann::json& value, SectionOverlayKind& kind) {
     if (value == "text") kind = SectionOverlayKind::text;
     else if (value == "detail_line") kind = SectionOverlayKind::detail_line;
     else if (value == "dimension") kind = SectionOverlayKind::dimension;
-    else throw std::invalid_argument("unknown section overlay kind");
+    else throw std::invalid_argument("unknown view overlay kind");
 }
 void to_json(nlohmann::json& value, const SectionDimensionAxis& axis) {
     switch (axis) {
     case SectionDimensionAxis::horizontal: value = "horizontal"; return;
     case SectionDimensionAxis::vertical: value = "vertical"; return;
     }
-    throw std::invalid_argument("unknown section dimension axis");
+    throw std::invalid_argument("unknown view dimension axis");
 }
 void from_json(const nlohmann::json& value, SectionDimensionAxis& axis) {
     if (value == "horizontal") axis = SectionDimensionAxis::horizontal;
     else if (value == "vertical") axis = SectionDimensionAxis::vertical;
-    else throw std::invalid_argument("unknown section dimension axis");
+    else throw std::invalid_argument("unknown view dimension axis");
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SectionDimensionBinding, object_id, axis, line_offset_m)
 void to_json(nlohmann::json& value, const SectionOverlay& overlay) {
@@ -562,9 +560,12 @@ SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
 }
 
 nlohmann::json SheetViewModel::to_json() const {
+    const auto non_section_overlays = std::any_of(views_.begin(), views_.end(),
+        [](const auto& view) { return view.kind != CoordinatedViewKind::section && !view.overlays.empty(); });
     const auto explicit_appearance = std::any_of(views_.begin(), views_.end(),
         [](const auto& view) { return view.presentation.appearance.has_value(); });
-    return {{"schema", "sketch.sheet_view_model"}, {"version", explicit_appearance ? 7 : 6}, {"views", views_},
+    const auto version = non_section_overlays ? 8 : (explicit_appearance ? 7 : 6);
+    return {{"schema", "sketch.sheet_view_model"}, {"version", version}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}, {"sheet_order", sheet_order_}};
 }
 SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
@@ -573,7 +574,7 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
             value.at("version").is_number_integer() &&
             (value.at("version") == 1 || value.at("version") == 2 ||
              value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 5 ||
-             value.at("version") == 6 || value.at("version") == 7),
+             value.at("version") == 6 || value.at("version") == 7 || value.at("version") == 8),
             "unsupported sheet/view schema");
         auto normalized = value;
         if (value.at("version") < 7)
@@ -619,7 +620,12 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
                     if (!overlay.contains("dimension_binding")) overlay["dimension_binding"] = nullptr;
             }
         }
-        auto result = create(normalized.at("views").get<std::vector<CoordinatedView>>(),
+        auto views = normalized.at("views").get<std::vector<CoordinatedView>>();
+        if (value.at("version") < 8)
+            for (const auto& view : views)
+                require(view.overlays.empty() || view.kind == CoordinatedViewKind::section,
+                    "non-section view overlays require sheet/view schema 8");
+        auto result = create(std::move(views),
             normalized.at("sheets").get<std::vector<DrawingSheet>>(),
             normalized.at("schedule_ids").get<std::vector<std::string>>(),
             normalized.at("sheet_order").get<std::vector<std::string>>());

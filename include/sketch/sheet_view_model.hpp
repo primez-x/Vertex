@@ -12,8 +12,9 @@ enum class CoordinatedViewKind { plan, elevation, section };
 enum class ViewDetail { coarse, medium, fine };
 enum class SectionOverlayKind { text, detail_line, dimension };
 enum class SectionDimensionAxis { horizontal, vertical };
+// The legacy Section names also serve plan and elevation view overlays.
 // Stable semantic handles are the minimum and maximum of the full source
-// silhouette along this axis in the owning section's frame. No BRep topology
+// silhouette along this axis in the owning view's frame. No BRep topology
 // identity, cached geometry or measured quantity is persisted.
 struct SectionDimensionBinding {
     std::string object_id;
@@ -35,7 +36,8 @@ struct SectionOverlay {
     double line_width_mm{0.18};
     ViewDetail minimum_detail{ViewDetail::medium};
     // Optional source reference must occur in a restricted owning object_ids
-    // list. An empty list represents all document objects.
+    // list. An empty list represents all document objects only when the view
+    // does not explicitly restrict its source set.
     std::string object_id;
     std::optional<SectionDimensionBinding> dimension_binding;
     bool operator==(const SectionOverlay&) const = default;
@@ -98,6 +100,7 @@ struct CoordinatedView {
     // The list is persisted in canonical ID order and validated against the
     // owning Document when the sheet/view entity is admitted.
     std::vector<std::string> object_ids;
+    // Detached annotations and dimensions in this view's frame, for every kind.
     std::vector<SectionOverlay> overlays;
     // Retains an explicitly restricted, empty source set after deletion.
     // Nonempty object_ids also restrict the view for legacy callers.

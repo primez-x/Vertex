@@ -154,7 +154,9 @@ public:
     // proofs across current, deleted and undone history and require v59.
     // Annotation-v10 model-plan symbol anchors require v60 across every retained
     // revision, including deleted, undone and abandoned symbol presentation.
-    static constexpr std::uint32_t format_version = 60;
+    // Sheet/view model v8 annotations in plans/elevations require v61,
+    // including when retained only in history or a deleted view graph.
+    static constexpr std::uint32_t format_version = 61;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

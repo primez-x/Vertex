@@ -17,6 +17,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
+#include <numeric>
 #include <stdexcept>
 #include <sstream>
 
@@ -58,10 +60,11 @@ Circle circle(const Segment& segment) {
     const double dx = segment.end.x - segment.start.x, dy = segment.end.y - segment.start.y;
     const double chord = std::hypot(dx, dy);
     const double half_sweep = segment.sweep_radians * 0.5;
-    const double offset = chord / (2 * std::tan(half_sweep));
-    const Vec2 center{(segment.start.x + segment.end.x) * 0.5 - dy / chord * offset,
-                      (segment.start.y + segment.end.y) * 0.5 + dx / chord * offset};
-    return {center, chord / (2 * std::sin(std::abs(half_sweep))),
+    const bool half_turn = std::abs(segment.sweep_radians) == std::numbers::pi;
+    const double offset = half_turn ? 0.0 : chord / (2 * std::tan(half_sweep));
+    const Vec2 center{std::midpoint(segment.start.x, segment.end.x) - dy / chord * offset,
+                      std::midpoint(segment.start.y, segment.end.y) + dx / chord * offset};
+    return {center, chord / (2 * (half_turn ? 1.0 : std::sin(std::abs(half_sweep)))),
         std::atan2(segment.start.y - center.y, segment.start.x - center.x)};
 }
 Vec2 point_at(const Segment& segment, double fraction) {
@@ -145,8 +148,62 @@ TopoDS_Shape in_view_frame(const TopoDS_Shape& shape, const CoordinatedView& vie
         normal.x, normal.y, normal.z, translation(normal));
     BRepBuilderAPI_Transform operation(shape, transform, true);
     if (!operation.IsDone() || operation.Shape().IsNull())
-        throw std::invalid_argument("source geometry could not be transformed to the section frame");
+        throw std::invalid_argument("source geometry could not be transformed to the owning view frame");
     return operation.Shape();
+}
+
+bool horizontal_plan_frame(const CoordinatedView& view) {
+    return view.kind == CoordinatedViewKind::plan &&
+        std::abs(view.direction[0]) <= 1e-12 && std::abs(view.direction[1]) <= 1e-12 &&
+        std::abs(std::abs(view.direction[2]) - 1.0) <= 1e-12 && std::abs(view.up[2]) <= 1e-12;
+}
+
+Boundary plan_room_boundary(const Entity& input, const CoordinatedView& view) {
+    DocumentRoomFootprint footprint;
+    std::string error;
+    if (!read_document_room_footprint(input, footprint, error)) throw std::invalid_argument(error);
+    // Match the plan renderer's normalized XY up/right basis, including the
+    // horizontal reflection and signed arc reversal in an upward-looking plan.
+    // There is no Z coordinate to resolve or fabricate for an analytical room.
+    const PlanarTransform transform{{view.origin_m[0], view.origin_m[1]},
+        std::atan2(view.up[0], view.up[1]), view.direction[2] > 0.0, false,
+        {-view.origin_m[0], -view.origin_m[1]}};
+    for (auto& edge : footprint.boundary) edge = transform_segment(edge, transform);
+    // The decoder validates every hole's geometry and containment. Interior
+    // holes cannot extend the complete outer footprint's support bounds.
+    return std::move(footprint.boundary);
+}
+
+std::array<double, 2> support(const Boundary& boundary, bool horizontal,
+                            double extremum, bool maximum) {
+    std::optional<Vec2> result;
+    const auto coordinate = [&](Vec2 point) { return horizontal ? point.x : point.y; };
+    const auto perpendicular = [&](Vec2 point) { return horizontal ? point.y : point.x; };
+    const auto consider = [&](Vec2 point) {
+        if (coordinate(point) != extremum) return;
+        // Same stable handle policy as the native BRep path: exact support
+        // ties choose the maximum perpendicular coordinate, not edge order.
+        if (!result || perpendicular(point) > perpendicular(*result)) result = point;
+    };
+    for (const auto& edge : boundary) {
+        const auto bounds = segment_bounds(edge);
+        const auto local = coordinate(maximum ? bounds.maximum : bounds.minimum);
+        if (local != extremum) continue;
+        consider(edge.start);
+        consider(edge.end);
+        if (edge.sweep_radians == 0.0) continue;
+        // segment_bounds already determines whether the cardinal extremum is
+        // inside this signed arc, using its exact analytical geometry. A strict
+        // extension beyond both endpoints therefore has one interior witness.
+        const double endpoint = maximum ? std::max(coordinate(edge.start), coordinate(edge.end))
+                                        : std::min(coordinate(edge.start), coordinate(edge.end));
+        if (maximum ? local > endpoint : local < endpoint) {
+            const auto arc = circle(edge);
+            consider(horizontal ? Vec2{local, arc.center.y} : Vec2{arc.center.x, local});
+        }
+    }
+    if (!result) throw std::invalid_argument("analytical room extent has no resolvable support point");
+    return {result->x, result->y};
 }
 
 Bounds2 silhouette_bounds(const TopoDS_Shape& shape) {
@@ -215,10 +272,13 @@ void finite_coordinates(const std::array<double, 2>& point) {
 SectionDimensionResolution resolve_section_dimension(const DocumentSnapshot& source,
     const CoordinatedView& view, const SectionOverlay& overlay) {
     try {
-        if (view.kind != CoordinatedViewKind::section || overlay.kind != SectionOverlayKind::dimension)
-            throw std::invalid_argument("dimension resolution requires a section dimension");
+        if (overlay.kind != SectionOverlayKind::dimension)
+            throw std::invalid_argument("dimension resolution requires a coordinated view dimension");
         // Reuse the CAD-free persistence boundary to validate IDs, frame,
         // references and placement even for callers holding detached values.
+        // Admit the complete owning view before validating the supplied overlay;
+        // replacing its overlay list must not hide invalid unrelated content.
+        (void)SheetViewModel::create({view}, {});
         auto candidate = view; candidate.overlays = {overlay};
         (void)SheetViewModel::create({std::move(candidate)}, {});
         if (!overlay.dimension_binding) {
@@ -228,17 +288,26 @@ SectionDimensionResolution resolve_section_dimension(const DocumentSnapshot& sou
                 overlay.start_m, overlay.end_m, measured, false}, {}};
         }
         const auto& binding = *overlay.dimension_binding;
-        const auto shape = in_view_frame(source_shape(source, entity(source, binding.object_id)), view);
+        const auto& input = entity(source, binding.object_id);
+        std::optional<Boundary> analytical_boundary;
+        TopoDS_Shape shape;
+        if (input.type == "room" && !has_document_room_volume_fields(input) && horizontal_plan_frame(view))
+            analytical_boundary = plan_room_boundary(input, view);
+        else
+            shape = in_view_frame(source_shape(source, input), view);
         // A full source extent in view coordinates is independent of both
         // display clipping and the renderer's supported projected curves.
-        const auto bounds = silhouette_bounds(shape);
+        const auto bounds = analytical_boundary ? boundary_bounds(*analytical_boundary) : silhouette_bounds(shape);
         const bool horizontal = binding.axis == SectionDimensionAxis::horizontal;
         const double minimum = horizontal ? bounds.minimum.x : bounds.minimum.y;
         const double maximum = horizontal ? bounds.maximum.x : bounds.maximum.y;
         const double measured = maximum - minimum;
         if (!std::isfinite(measured) || measured <= tolerance)
             throw std::invalid_argument("source object has a degenerate projected extent");
-        const auto start = support(shape, horizontal, minimum, false), end = support(shape, horizontal, maximum, true);
+        const auto start = analytical_boundary ? support(*analytical_boundary, horizontal, minimum, false)
+                                               : support(shape, horizontal, minimum, false);
+        const auto end = analytical_boundary ? support(*analytical_boundary, horizontal, maximum, true)
+                                             : support(shape, horizontal, maximum, true);
         const double location = (horizontal ? bounds.maximum.y : bounds.maximum.x) + binding.line_offset_m;
         const auto line_start = horizontal ? std::array<double, 2>{minimum, location}
                                           : std::array<double, 2>{location, minimum};
@@ -248,11 +317,11 @@ SectionDimensionResolution resolve_section_dimension(const DocumentSnapshot& sou
         return {ResolvedSectionDimension{start, end, line_start, line_end, measured, true}, {}};
     } catch (const Standard_Failure& error) {
         const auto message = error.what();
-        return {std::nullopt, "section dimension " + overlay.id +
+        return {std::nullopt, "coordinated view dimension " + overlay.id +
             (overlay.dimension_binding ? " source " + overlay.dimension_binding->object_id : "") + ": " +
             (message ? std::string(message) : std::string("architectural geometry failed"))};
     } catch (const std::exception& error) {
-        return {std::nullopt, "section dimension " + overlay.id +
+        return {std::nullopt, "coordinated view dimension " + overlay.id +
             (overlay.dimension_binding ? " source " + overlay.dimension_binding->object_id : "") + ": " + error.what()};
     }
 }

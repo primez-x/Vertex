@@ -75,6 +75,28 @@ exact commit. This records source preservation, not an installed release.
 
 ### October 7 pointer, assistance and measurement implementation
 
+The following architectural documentation source batch adds text, detail lines
+and linked object dimensions to saved plans and elevations, retaining section
+behavior. One shared projection supplies canvas lines, witness points and
+values in each view's actual frame. Both ordinary analytical plans and physical
+projections append annotations. Vertex/connected-movement proposals refresh
+bound dimensions from their candidate document and clear obsolete unresolved
+values. Independent rooms without volume measurements use validated horizontal
+plan footprints; no physical height is inferred.
+
+Right-clicking an architectural object offers Add view dimension with direction,
+unit-aware offset and measured value. The command retains the current saved
+view's exact owner and commits one undoable annotation. Saved-view editing also
+uses the captured full authoring authority. Sheet/view schema v8, native format
+v61 and extraction v59 preserve non-section annotations across current, undone,
+deleted and abandoned history. Earlier semantics keep their existing floors.
+Independent source review caught a default-view owner lookup mismatch; it was
+corrected and the integrated source approved. No builds, tests, probes, native
+jobs, packages or installations ran for this batch. Compilation, runtime,
+save/reopen and output behavior remain unverified; the installed candidate is
+unchanged. The manual checklist and user guide describe the user-facing actions
+without recording them as passed.
+
 The next source batch retains an immutable architectural-view source instead
 of copying its complete entity map. Separate retained spatial indexes enumerate
 pointer-hit geometry and nearby actual snap endpoints/segments. Source-order
