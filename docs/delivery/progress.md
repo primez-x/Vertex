@@ -14,6 +14,23 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site model movement publication
+
+Site model drags now prepare a complete document or recovery-workspace edit in
+the preview worker. Release publishes that same admitted candidate rather
+than repeating native command application or creating a compatibility fork on
+the UI thread. A shared capture/preparation/publication path serves ordinary
+plan and Site moves while preserving their distinct view transforms.
+
+The captured recovery workspace and compatibility document remain tied to the
+full source and save state. Publication requires the current source authority,
+displayed context, selection, viewport and exact latest serial/delta. Returning
+to the origin prepares an empty proposal and release adds no history. Connected
+walls, openings, measured boundaries, label consequences and Site presentation
+retain the complete existing command/projection path. This is source-only work;
+independent review accepted the scoped source change. No build, test, probe,
+launch, package or installation ran; compilation and interaction are unverified.
+
 ### October 7 library drag preview
 
 Library drag entry and movement now display the real SVG footprint or hosted

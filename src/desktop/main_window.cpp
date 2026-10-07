@@ -5185,22 +5185,28 @@ class MainWindow::Impl {
         Vec2 local_delta;
         Vec2 canvas_delta;
     };
+    struct CanvasEditSourceCapture {
+        std::optional<WorkspaceEditCapture> workspace;
+        std::shared_ptr<const DocumentSnapshot> mirror;
+    };
+    struct PreparedCanvasEdit {
+        std::optional<PreparedDocumentEdit> document;
+        std::optional<PreparedWorkspaceEdit> workspace;
+        std::optional<Document> mirror;
+    };
     struct SiteWallMovePreviewCommand {
         std::shared_ptr<const SiteTransformPreviewCapture> capture;
         std::uint64_t serial{};
         SelectionMoveIntent intent;
-        Command command;
-    };
-    struct PreparedPlanMove {
-        std::optional<PreparedDocumentEdit> document;
-        std::optional<PreparedWorkspaceEdit> workspace;
-        std::optional<Document> mirror;
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source;
+        std::shared_ptr<PreparedCanvasEdit> prepared;
     };
     struct PlanMovePreviewCommand {
         std::shared_ptr<const TransformViewportCapture> capture;
         std::uint64_t serial{};
         SelectionMoveIntent intent;
-        std::shared_ptr<PreparedPlanMove> prepared;
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source;
+        std::shared_ptr<PreparedCanvasEdit> prepared;
     };
     struct LibraryDragPreviewCapture {
         QPointer<PlanCanvas> canvas;
@@ -5299,15 +5305,13 @@ class MainWindow::Impl {
         std::shared_ptr<const SiteTransformPreviewCapture> site_transform_capture;
         std::optional<SelectionMoveIntent> site_wall_move;
         std::shared_ptr<const SiteTransformPreviewCapture> site_wall_move_capture;
-        std::shared_ptr<std::optional<Command>> site_wall_move_command;
         std::shared_ptr<std::optional<Command>> physical_rotation_command;
         QStringList move_selection_ids;
         std::optional<SelectionMoveIntent> plan_move;
         std::shared_ptr<const TransformViewportCapture> plan_move_capture;
         std::shared_ptr<const std::vector<CanvasEntity>> component_sources;
-        std::optional<WorkspaceEditCapture> plan_move_workspace_source;
-        std::shared_ptr<const DocumentSnapshot> plan_move_mirror_source;
-        std::shared_ptr<PreparedPlanMove> plan_move_prepared;
+        std::shared_ptr<const CanvasEditSourceCapture> model_edit_source;
+        std::shared_ptr<PreparedCanvasEdit> model_edit_prepared;
     };
 
 public:
@@ -21873,6 +21877,26 @@ public:
                 projection.labels.push_back(label);
     }
 
+    static DocumentSnapshot prepareCanvasEdit(const DocumentSnapshot& source,
+        const Command& command,const std::shared_ptr<const CanvasEditSourceCapture>& capture,
+        PreparedCanvasEdit& prepared) {
+        if (!capture) throw std::invalid_argument("The canvas edit has no captured publication source.");
+        if (capture->workspace) {
+            if (!capture->mirror) throw std::invalid_argument("The recovered canvas edit has no compatibility source.");
+            auto edit=ProjectWorkspace::prepare_captured(*capture->workspace,command);
+            auto preview=edit.preview();
+            auto mirror=Document::fork(preview);
+            if (const auto saved=capture->mirror->saved_revision_optional()) mirror.mark_saved(*saved);
+            prepared.workspace.emplace(std::move(edit));
+            prepared.mirror.emplace(std::move(mirror));
+            return preview;
+        }
+        auto edit=Document::prepare_edit(source,command);
+        auto preview=edit.preview();
+        prepared.document.emplace(std::move(edit));
+        return preview;
+    }
+
     void startVertexPreviewJob(PendingVertexPreview request) {
         const auto source=request.source;
         const auto retained=request.retained;
@@ -21896,7 +21920,6 @@ public:
             : request.site_wall_move_capture ? request.site_wall_move_capture->input
             : request.plan_endpoint_capture ? request.plan_endpoint_capture->site_input : nullptr;
         const auto site_wall_move=request.site_wall_move;
-        const auto site_wall_command=request.site_wall_move_command;
         const auto axis_scales=request.axis_resize_scales;
         const auto axis_angle=request.axis_resize_model_angle;
         const auto axis_command=request.axis_resize_command;
@@ -21904,11 +21927,10 @@ public:
         const auto move_selection_ids=request.move_selection_ids;
         const auto plan_move=request.plan_move;
         const auto component_sources=request.component_sources;
-        const auto workspace_source=request.plan_move_workspace_source;
-        const auto mirror_source=request.plan_move_mirror_source;
-        const auto prepared_move=request.plan_move_prepared;
+        const auto edit_source=request.model_edit_source;
+        const auto prepared_move=request.model_edit_prepared;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,site_wall_command,rotation_command,move_selection_ids,plan_move,component_sources,workspace_source,mirror_source,prepared_move]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,component_sources,edit_source,prepared_move]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (plan_move && prepared_move) {
@@ -21920,22 +21942,7 @@ public:
                             : augmentAuthoredCommand(makeSelectionGeometryTranslationCommand(*source,
                                 plan_move->ids,plan_move->local_delta,{},plan_move->canvas_delta),*source);
                         if (!cancellation.is_cancelled()) {
-                            const auto candidate=[&] {
-                                if (workspace_source) {
-                                    if (!mirror_source) throw std::invalid_argument("The recovery move has no compatibility source.");
-                                    auto edit=ProjectWorkspace::prepare_captured(*workspace_source,command);
-                                    auto preview=edit.preview();
-                                    auto mirror=Document::fork(preview);
-                                    if (const auto saved=mirror_source->saved_revision_optional()) mirror.mark_saved(*saved);
-                                    prepared_move->workspace.emplace(std::move(edit));
-                                    prepared_move->mirror.emplace(std::move(mirror));
-                                    return preview;
-                                }
-                                auto edit=Document::prepare_edit(*source,command);
-                                auto preview=edit.preview();
-                                prepared_move->document.emplace(std::move(edit));
-                                return preview;
-                            }();
+                            const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
                             *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
                                 view_context,label_font,nullptr,component_sources.get());
@@ -21966,11 +21973,13 @@ public:
                                 }
                             } else result->reset();
                         }
-                    } else if (site_wall_move && site_wall_command) {
-                        auto command=augmentAuthoredCommand(makeSelectionGeometryTranslationCommand(*source,
-                            site_wall_move->ids,site_wall_move->local_delta,{},site_wall_move->local_delta),*source);
+                    } else if (site_wall_move && prepared_move) {
+                        Command command=site_wall_move->local_delta.x==0.0 && site_wall_move->local_delta.y==0.0
+                            ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
+                            : augmentAuthoredCommand(makeSelectionGeometryTranslationCommand(*source,
+                                site_wall_move->ids,site_wall_move->local_delta,{},site_wall_move->local_delta),*source);
                         if (!cancellation.is_cancelled()) {
-                            const auto candidate=Document::preview_command(*source,command);
+                            const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
                             *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
                                 view_context,label_font,site_input.get());
@@ -22016,7 +22025,6 @@ public:
                                         }
                                     }
                                 }
-                                *site_wall_command=std::move(command);
                             }
                             else result->reset();
                         }
@@ -22930,37 +22938,54 @@ public:
         } catch (...) { return false; }
     }
 
+    std::shared_ptr<const CanvasEditSourceCapture> captureCanvasEditSource() const {
+        CanvasEditSourceCapture capture;
+        if (!m_recovery_ledger.empty()) {
+            requireWorkspaceDocument();
+            capture.workspace=m_project_workspace->capture_edit_source();
+            capture.mirror=std::make_shared<DocumentSnapshot>(m_document->snapshot());
+        }
+        return std::make_shared<CanvasEditSourceCapture>(std::move(capture));
+    }
+
+    void publishPreparedCanvasEdit(const std::shared_ptr<PreparedCanvasEdit>& prepared,
+        const std::shared_ptr<const CanvasEditSourceCapture>& capture) {
+        if (!prepared || !capture) throw std::invalid_argument("The canvas edit has no admitted publication.");
+        if (m_recovery_ledger.empty()) {
+            if (capture->workspace || capture->mirror || !prepared->document || prepared->workspace || prepared->mirror)
+                throw std::invalid_argument("The canvas edit's document authority changed.");
+            measureDocumentEdit([&] { (void)m_document->commit_prepared(*prepared->document); });
+            return;
+        }
+        requireWorkspaceDocument();
+        if (!capture->workspace || !capture->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
+            throw std::invalid_argument("The canvas edit's recovery authority changed.");
+        const auto live_mirror=m_document->snapshot();
+        if (!live_mirror.shares_full_snapshot_with(*capture->mirror) &&
+            fullSnapshotDigest(live_mirror)!=fullSnapshotDigest(*capture->mirror))
+            throw std::invalid_argument("The project's save or recovery state changed during the edit.");
+        measureDocumentEdit([&] {
+            (void)m_project_workspace->commit(*prepared->workspace);
+            *m_document=std::move(*prepared->mirror);
+        });
+    }
+
     bool commitPlanMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
         const auto capture=m_plan_move_capture;
         if (!planMoveCaptureCurrent(capture) || canvas!=capture->canvas || ids!=m_wall_move_ids ||
             !m_plan_move_preview || m_plan_move_preview->capture!=capture ||
             m_plan_move_preview->intent.ids!=ids ||
+            m_plan_move_preview->edit_source!=m_model_move_edit_source ||
             m_plan_move_preview->serial==std::numeric_limits<std::uint64_t>::max() ||
             canvas->entitiesMovePreviewSerial()!=m_plan_move_preview->serial+1 ||
             delta.x!=m_plan_move_preview->intent.canvas_delta.x ||
             delta.y!=m_plan_move_preview->intent.canvas_delta.y)
             throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
         const auto prepared=m_plan_move_preview->prepared;
+        const auto edit_source=m_plan_move_preview->edit_source;
         m_plan_move_preview.reset();
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
-        if (!prepared) throw std::invalid_argument("The move has no admitted edit.");
-        if (m_recovery_ledger.empty()) {
-            if (!prepared->document || prepared->workspace)
-                throw std::invalid_argument("The move's document authority changed.");
-            measureDocumentEdit([&] { (void)m_document->commit_prepared(*prepared->document); });
-        } else {
-            requireWorkspaceDocument();
-            if (!prepared->workspace || !prepared->mirror || !m_plan_move_mirror_source)
-                throw std::invalid_argument("The move's recovery authority changed.");
-            const auto live_mirror=m_document->snapshot();
-            if (!live_mirror.shares_full_snapshot_with(*m_plan_move_mirror_source) &&
-                fullSnapshotDigest(live_mirror)!=fullSnapshotDigest(*m_plan_move_mirror_source))
-                throw std::invalid_argument("The project's save or recovery state changed during the move.");
-            measureDocumentEdit([&] {
-                (void)m_project_workspace->commit(*prepared->workspace);
-                *m_document=std::move(*prepared->mirror);
-            });
-        }
+        publishPreparedCanvasEdit(prepared,edit_source);
         clearError();refresh();return true;
     }
 
@@ -22987,15 +23012,17 @@ public:
         if (!siteWallMoveCaptureCurrent(capture) || canvas!=m_wall_move_canvas || ids!=m_wall_move_ids ||
             !m_site_wall_move_preview || m_site_wall_move_preview->capture!=capture ||
             m_site_wall_move_preview->intent.ids!=ids ||
+            m_site_wall_move_preview->edit_source!=m_model_move_edit_source ||
             m_site_wall_move_preview->serial==std::numeric_limits<std::uint64_t>::max() ||
             canvas->entitiesMovePreviewSerial()!=m_site_wall_move_preview->serial+1 ||
             delta.x!=m_site_wall_move_preview->intent.canvas_delta.x ||
             delta.y!=m_site_wall_move_preview->intent.canvas_delta.y)
             throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
-        const auto command=m_site_wall_move_preview->command;
+        const auto prepared=m_site_wall_move_preview->prepared;
+        const auto edit_source=m_site_wall_move_preview->edit_source;
         m_site_wall_move_preview.reset();
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
-        applyAuthoredCommand(command);
+        publishPreparedCanvasEdit(prepared,edit_source);
         clearError(); refresh(); return true;
     }
 
@@ -23021,9 +23048,8 @@ public:
             request.plan_move=SelectionMoveIntent{ids,local,delta};
             request.plan_move_capture=capture;
             request.component_sources=m_vertex_preview_components;
-            request.plan_move_workspace_source=m_plan_move_workspace_source;
-            request.plan_move_mirror_source=m_plan_move_mirror_source;
-            request.plan_move_prepared=std::make_shared<PreparedPlanMove>();
+            request.model_edit_source=m_model_move_edit_source;
+            request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
             clearError();
             if (m_running_vertex_preview) {
                 (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
@@ -23050,7 +23076,8 @@ public:
             request.label_font=input->label_font;
             request.site_wall_move=SelectionMoveIntent{ids,local,delta};
             request.site_wall_move_capture=capture;
-            request.site_wall_move_command=std::make_shared<std::optional<Command>>();
+            request.model_edit_source=m_model_move_edit_source;
+            request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
             clearError();
             if (m_running_vertex_preview) {
                 (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
@@ -23256,11 +23283,13 @@ public:
                     if (!planMoveCaptureCurrent(request.plan_move_capture) ||
                         request.source!=m_wall_move_source || request.canvas!=m_wall_move_canvas ||
                         request.authority!=m_wall_move_authority || !request.plan_move ||
+                        request.model_edit_source!=m_model_move_edit_source ||
                         request.plan_move->ids!=m_wall_move_ids) return false;
                 } else if (request.site_wall_move_capture) {
                     if (!siteWallMoveCaptureCurrent(request.site_wall_move_capture) ||
                         request.source!=m_wall_move_source || request.canvas!=m_wall_move_canvas ||
                         request.authority!=m_wall_move_authority || !request.site_wall_move ||
+                        request.model_edit_source!=m_model_move_edit_source ||
                         request.site_wall_move->ids!=m_wall_move_ids) return false;
                 } else if (request.site_transform_capture) {
                     if (request.site_transform_capture!=m_entity_transform_site_capture ||
@@ -23307,18 +23336,20 @@ public:
                 continue;
             }
             auto& projection=**request.result;
+            if ((request.plan_move || request.site_wall_move) &&
+                (!request.model_edit_source || !request.model_edit_prepared ||
+                 (!request.model_edit_prepared->document &&
+                  (!request.model_edit_prepared->workspace || !request.model_edit_prepared->mirror))))
+                { reject(request);continue; }
             if (request.plan_move) {
-                if (!request.plan_move_capture || !request.plan_move_prepared || (!request.plan_move_prepared->document &&
-                        (!request.plan_move_prepared->workspace || !request.plan_move_prepared->mirror)))
-                    { reject(request);continue; }
+                if (!request.plan_move_capture) { reject(request);continue; }
                 m_plan_move_preview=PlanMovePreviewCommand{request.plan_move_capture,request.serial,
-                    *request.plan_move,request.plan_move_prepared};
+                    *request.plan_move,request.model_edit_source,request.model_edit_prepared};
             }
             if (request.site_wall_move) {
-                if (!request.site_wall_move_capture || !request.site_wall_move_command ||
-                    !*request.site_wall_move_command) { reject(request); continue; }
+                if (!request.site_wall_move_capture) { reject(request); continue; }
                 m_site_wall_move_preview=SiteWallMovePreviewCommand{request.site_wall_move_capture,request.serial,
-                    *request.site_wall_move,std::move(**request.site_wall_move_command)};
+                    *request.site_wall_move,request.model_edit_source,request.model_edit_prepared};
             }
             if (request.plan_endpoint_capture) {
                 if (!request.plan_endpoint_command || !*request.plan_endpoint_command) { reject(request); continue; }
@@ -39363,7 +39394,7 @@ private:
             clearOpeningWidthCapture();
             m_wall_move_site_capture.reset(); m_site_wall_move_preview.reset(); m_site_wall_move_error.clear();
             m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
-            m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
+            m_model_move_edit_source.reset();
             m_wall_move_source.reset();
             m_wall_move_authority.reset();
             try {
@@ -39391,11 +39422,7 @@ private:
                     captureConstraintGeometryPreview(canvas,m_wall_move_source->revision());
                     if (m_vertex_preview_source!=m_wall_move_source)
                         throw std::invalid_argument("The displayed move source changed during capture.");
-                    if (!m_recovery_ledger.empty()) {
-                        requireWorkspaceDocument();
-                        m_plan_move_workspace_source=m_project_workspace->capture_edit_source();
-                        m_plan_move_mirror_source=std::make_shared<DocumentSnapshot>(m_document->snapshot());
-                    }
+                    m_model_move_edit_source=captureCanvasEditSource();
                     m_plan_move_capture=std::make_shared<TransformViewportCapture>(TransformViewportCapture{
                         canvas,canvas->viewCenter(),canvas->viewScale(),canvas->size(),canvas->devicePixelRatioF(),
                         canvas->navigationGeneration(),canvas->hasFocus()});
@@ -39413,6 +39440,7 @@ private:
                     (void)annotation_selection_owners(*m_wall_move_source,m_wall_move_ids);
                     (void)siteEditFrame(m_wall_move_ids);
                     auto input=captureSitePlanPreviewInput(canvas,m_wall_move_ids);
+                    m_model_move_edit_source=captureCanvasEditSource();
                     m_wall_move_site_capture=std::make_shared<SiteTransformPreviewCapture>(SiteTransformPreviewCapture{
                         std::move(input),m_site_edit_generation,canvas->viewCenter(),canvas->viewScale(),canvas->size(),
                         canvas->devicePixelRatioF(),canvas->navigationGeneration(),canvas->hasFocus()});
@@ -39420,7 +39448,7 @@ private:
             } catch (const std::exception& error) {
                 clearOpeningWidthCapture();clearSitePublication(); m_wall_move_source.reset(); m_wall_move_authority.reset();
                 m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
-                m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
+                m_model_move_edit_source.reset();
                 setError(QString::fromUtf8(error.what()));
             }
         });
@@ -39900,7 +39928,7 @@ private:
             m_wall_move_ids.clear();
             m_wall_move_site_capture.reset(); m_site_wall_move_preview.reset(); m_site_wall_move_error.clear();
             m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
-            m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
+            m_model_move_edit_source.reset();
             m_entity_transform_site_capture.reset();
             m_entity_transform_context.reset();
             m_entity_transform_source.reset();
@@ -41564,6 +41592,7 @@ private:
         if (m_opening_preview_site_input) clearOpeningWidthCapture();
         if (m_wall_move_site_capture) {
             m_wall_move_site_capture.reset(); m_site_wall_move_preview.reset(); m_site_wall_move_error.clear();
+            m_model_move_edit_source.reset();
             m_wall_move_source.reset(); m_wall_move_authority.reset();
         }
         if (m_entity_transform_site_capture) {
@@ -42118,7 +42147,7 @@ private:
         m_wall_move_frame.reset();
         m_wall_move_ids.clear();
         m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
-        m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
+        m_model_move_edit_source.reset();
         m_entity_transform_frame.reset();
         m_pending_opening_preview.reset();
         if (m_running_opening_preview)
@@ -50113,8 +50142,7 @@ private:
     std::shared_ptr<const TransformViewportCapture> m_plan_move_capture;
     std::optional<PlanMovePreviewCommand> m_plan_move_preview;
     QString m_plan_move_error;
-    std::optional<WorkspaceEditCapture> m_plan_move_workspace_source;
-    std::shared_ptr<const DocumentSnapshot> m_plan_move_mirror_source;
+    std::shared_ptr<const CanvasEditSourceCapture> m_model_move_edit_source;
     std::optional<BuildingViewFrame> m_entity_transform_frame;
     std::shared_ptr<const SiteTransformPreviewCapture> m_entity_transform_site_capture;
     std::optional<TransformViewportCapture> m_entity_transform_viewport;
