@@ -7,6 +7,7 @@
 #include "sketch/project_organization.hpp"
 
 #include <Standard_Failure.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -256,7 +257,30 @@ void append_layer_material_rows(
                 throw std::invalid_argument(error);
             }
             if (wall.layers.empty()) continue;
+            // The wall factory emits one direct child per authored layer,
+            // retaining its true baseline offset, sloped top and hosted cuts.
+            // Re-centering a thinner wall changes curved-layer quantities and
+            // discards the slope, so never reconstruct a material surrogate.
+            const auto composite_shape = make_wall(wall);
+            TopoDS_Iterator layer_shape(composite_shape);
+            std::vector<double> layer_volumes;
+            layer_volumes.reserve(wall.layers.size());
+            for (std::size_t index = 0; index < wall.layers.size(); ++index) {
+                if (!layer_shape.More())
+                    throw std::invalid_argument("wall layer solid identities are incomplete");
+                const auto volume = solid_volume(layer_shape.Value());
+                if (!std::isfinite(volume) || volume <= 0.0)
+                    throw std::invalid_argument("layer solid volume must be positive and finite");
+                layer_volumes.push_back(volume);
+                layer_shape.Next();
+            }
+            if (layer_shape.More())
+                throw std::invalid_argument("wall layer solid identities do not match the authored stack");
+            std::vector<ScheduleRow> layer_rows;
+            layer_rows.reserve(wall.layers.size());
+            std::size_t layer_index = 0;
             for (const auto& layer : wall.layers) {
+                const auto volume = layer_volumes[layer_index++];
                 if (!layer.material.has_value()) continue;
                 const auto& assignment = *layer.material;
                 if (!catalogs.contains(assignment.catalog_id)) {
@@ -305,23 +329,19 @@ void append_layer_material_rows(
                     {{id, source_prefix + ".material_assignment"}},
                     "Layer material identity"});
 
-                Wall homogeneous{id, wall.baseline, layer.thickness, wall.height,
-                                wall.elevation, wall.openings};
-                const auto shape = make_wall(homogeneous);
-                const auto volume = solid_volume(shape);
-                if (!std::isfinite(volume) || volume <= 0.0) {
-                    throw std::invalid_argument("layer solid volume must be positive and finite");
-                }
-                std::vector<ScheduleSourceRef> volume_sources{{id, "geometry"}};
+                std::vector<ScheduleSourceRef> volume_sources{{id, "geometry"}, {id, "layers"}};
                 for (const auto* opening : wall_openings) {
                     volume_sources.push_back({opening->id, "geometry"});
                 }
                 row.cells.emplace("volume", ScheduleCell{
                     ScheduleQuantity{volume, ScheduleUnit::cubic_metre}, false,
                     std::move(volume_sources),
-                    "Net layer solid volume after hosted openings"});
-                projection.snapshot.rows.push_back(std::move(row));
+                    "Actual offset layer solid volume, including sloped top and hosted openings"});
+                layer_rows.push_back(std::move(row));
             }
+            // A malformed later layer must not leave a partial wall takeoff.
+            projection.snapshot.rows.insert(projection.snapshot.rows.end(),
+                std::make_move_iterator(layer_rows.begin()), std::make_move_iterator(layer_rows.end()));
         } catch (const Standard_Failure& error) {
             projection.diagnostics.push_back(id + ": layer material volume unavailable: " +
                 (error.what() ? error.what() : "solid construction failed"));

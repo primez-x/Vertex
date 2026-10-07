@@ -294,6 +294,15 @@ Untouched coordinates and single-command history retain their existing paths.
 Independent source review approved these changes; application behavior has not
 been observed and the installed candidate remains unchanged.
 
+Composite-wall material quantities now use the wall factory's actual ordered
+layer solids. Curved offsets, sloped tops and hosted cuts therefore participate
+in each layer's volume instead of reconstructing thinner centered walls.
+Unassigned layers retain their positions in the stack; incomplete solids or
+invalid material references withhold the whole wall's material rows. Quantity
+provenance includes the authored layer stack. Independent source review approved
+the correction. No build, test, package or installed cutover was performed;
+numeric and application behavior remain unobserved.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and
