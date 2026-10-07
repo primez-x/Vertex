@@ -10,3 +10,8 @@
 assets/fonts/OFL.txt -text -whitespace
 third_party/nlohmann-json-LICENSE.MIT -text -whitespace
 third_party/planegcs/upstream/LICENSE -text -whitespace
+third_party/notices/native/**/*.txt -text -whitespace
+third_party/notices/native/**/COPYING.* -text -whitespace
+third_party/notices/qt-pdf/headers/*.txt -text -whitespace
+third_party/notices/qt-pdf/*/headers/*.txt -text -whitespace
+third_party/notices/qt-base/*/headers/*.txt -text -whitespace

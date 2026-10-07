@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/measurement_linework.hpp"
@@ -201,7 +202,7 @@ void modal_source_guards() {
         creator(window,[&](QDialog& dialog) {
             select_chain(dialog,"mixed","mixed:e1","mixed:e2");
             if(change<2) {
-                auto altered=source; auto& record=const_cast<std::vector<RevisionRecord>&>(altered.history()).front();
+                sketch::test::DetachedDocumentSnapshotFixture altered(source); auto& record=altered.history().front();
                 if(change==0) record.entities.at("mixed").extensions["replacement"]="same identity/revision";
                 else record.assets.at("opaque-asset")=Asset::create("opaque-asset","application/octet-stream",{std::byte{9}},{{"vendor","changed"}});
                 window.document()=Document::fork(altered);

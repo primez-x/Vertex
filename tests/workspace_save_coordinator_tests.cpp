@@ -47,6 +47,8 @@ void check_matching_and_replay() {
     ProjectWorkspace workspace(fixture().snapshot());
     edit(workspace);
     const auto captured = workspace.capture();
+    require(WorkspaceSaveCoordinator::describe(workspace) == WorkspaceSaveCoordinator::describe(captured),
+        "cheap owner descriptor differs from detached workspace fence");
     const auto before = document_snapshot_digest(captured.document());
     for (auto role : {ArchiveRole::ordinary, ArchiveRole::recovery_copy}) {
         auto target = binding(); target.role = role;
@@ -70,6 +72,16 @@ void check_matching_and_replay() {
     mutable_digest[0] = 'c';
     require(WorkspaceSaveCoordinator::accept(sealed, receipt(captured), captured, binding(), digest).acknowledged(),
             "ticket retained mutable caller binding or digest");
+    auto inspected = WorkspaceSaveCoordinator::capture(captured, binding(), digest);
+    require(WorkspaceSaveCoordinator::publication_valid(inspected, receipt(captured)),
+        "non-consuming file fact inspection refused matching receipt");
+    auto stale = WorkspaceSaveCoordinator::describe(workspace);
+    ++stale.epoch;
+    const auto stale_result = WorkspaceSaveCoordinator::accept(inspected, receipt(captured), stale, binding(), digest);
+    require(stale_result.status == SaveAcknowledgementStatus::stale_workspace && stale_result.publication_valid,
+        "descriptor path acknowledged stale counters or lost file fact");
+    require(!WorkspaceSaveCoordinator::publication_valid(inspected, receipt(captured)),
+        "consumed ticket retained publication authority");
 }
 void check_binding_and_receipt_rejections() {
     ProjectWorkspace workspace(fixture().snapshot());

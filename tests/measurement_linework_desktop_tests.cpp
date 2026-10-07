@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/measurement_linework.hpp"
@@ -188,8 +189,8 @@ void test_parked_public_input_rejects_replaced_head() {
         QApplication::sendEvent(&canvas,&enter); events();
         require(canvas.boundaryDraftPreview() && !canvas.boundaryDraftPreview()->rubber_band,
             "public-input fixture parks its native pen");
-        const auto source=window.document().snapshot(); auto altered=source;
-        auto& record=const_cast<std::vector<RevisionRecord>&>(altered.history()).front();
+        const auto source=window.document().snapshot(); sketch::test::DetachedDocumentSnapshotFixture altered(source);
+        auto& record=altered.history().front();
         if (change_asset) record.assets.at(asset.id)=Asset::create(asset.id,asset.media_type,{std::byte{2}});
         else record.entities.at(source_id).extensions["replacement_fixture"]=true;
         window.document()=Document::fork(altered);

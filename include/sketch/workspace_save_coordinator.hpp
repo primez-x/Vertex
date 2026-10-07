@@ -35,6 +35,16 @@ private:
     std::unique_ptr<State> state_;
 };
 
+// Only the fields used by acknowledgement. This is a fence, not authority or
+// an authoring equality proof, and never copies workspace auxiliary state.
+struct SaveAcknowledgementDescriptor {
+    std::string workspace_identity;
+    std::string document_id;
+    Revision revision{};
+    std::uint64_t epoch{}, edited_generation{}, checkpoint_generation{};
+    bool operator==(const SaveAcknowledgementDescriptor&) const = default;
+};
+
 enum class SaveAcknowledgementStatus {
     acknowledged,
     consumed_ticket,
@@ -63,6 +73,11 @@ struct SaveAcknowledgementResult {
 // is changed here, including for recovery_copy acknowledgements.
 class WorkspaceSaveCoordinator final {
 public:
+    [[nodiscard]] static SaveAcknowledgementDescriptor describe(const ProjectWorkspaceSnapshot&);
+    [[nodiscard]] static SaveAcknowledgementDescriptor describe(const ProjectWorkspace&);
+    // Non-consuming inspection of the actual queued receipt, for retention of
+    // a stale file fact while full owner acknowledgement is still pending.
+    [[nodiscard]] static bool publication_valid(const SavePublicationTicket&, const SaveReceipt&);
     // Invalid bindings/digests throw std::invalid_argument. The semantic
     // authoring digest is distinct from both the source-file and output hashes.
     [[nodiscard]] static SavePublicationTicket capture(
@@ -79,6 +94,9 @@ public:
         const ProjectWorkspaceSnapshot& current,
         const SavePublicationBinding& current_binding,
         std::string_view current_authoring_source_digest);
+    [[nodiscard]] static SaveAcknowledgementResult accept(
+        SavePublicationTicket&, const SaveReceipt&, const SaveAcknowledgementDescriptor&,
+        const SavePublicationBinding&, std::string_view current_authoring_source_digest);
 };
 
 }  // namespace sketch

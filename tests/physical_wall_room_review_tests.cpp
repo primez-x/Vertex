@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/physical_wall_room_review.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -171,12 +172,12 @@ void imported_intent_tampering(const DocumentSnapshot& source,const PreparedPhys
         [](auto& proof){proof.room_review_intent=nullptr;},
     };
     for (const auto& mutate:mutations) {
-        auto forged=accepted;mutate(*const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_constraint_changes);
+        sketch::test::DetachedDocumentSnapshotFixture forged(accepted);mutate(*forged.history().back().boundary_constraint_changes);
         const auto before=captured_state(forged);rejects([&]{(void)Document::fork(forged);});
         require(captured_state(forged)==before && captured_state(document.snapshot())==accepted_state,"import refusal changed forged or accepted complete snapshot");
     }
-    auto changed_asset=accepted;
-    auto& prefix=const_cast<std::vector<RevisionRecord>&>(changed_asset.history()).front();
+    sketch::test::DetachedDocumentSnapshotFixture changed_asset(accepted);
+    auto& prefix=changed_asset.history().front();
     const auto& asset=prefix.assets.begin()->second;prefix.assets.at(asset.id)=Asset::create(asset.id,asset.media_type,{std::byte{77}},asset.metadata);
     require(changed_asset.entities()==accepted.entities() && changed_asset.assets()==accepted.assets() && changed_asset.revision()==accepted.revision(),
         "prefix asset tampering must preserve exact visible head");
@@ -245,8 +246,8 @@ void split_and_cancel() {
     dedicated_command_refusals(document,source,prepared);
     imported_intent_tampering(source,prepared);
     auto split_document=Document::fork(source);lifecycle(split_document,source,prepared);
-    auto altered=source;
-    const_cast<std::vector<RevisionRecord>&>(altered.history()).front().assets.at(asset.id)=
+    sketch::test::DetachedDocumentSnapshotFixture altered(source);
+    altered.history().front().assets.at(asset.id)=
         Asset::create(asset.id,asset.media_type,{std::byte{2}});
     require(altered.document_id()==source.document_id() && altered.revision()==source.revision() && altered.entities()==source.entities(),
         "asset replacement fixture must retain exact same head and entities");
@@ -687,12 +688,12 @@ void retained_geometry_proof_tampering_is_bound_by_v2() {
     const auto source=document.snapshot();const auto report=physical_wall_room_correspondence(source,"bottom");
     auto intent=review(source,report);assign(intent.fresh.at(0),"proof-reviewed-room",PhysicalWallRoomFreshDisposition::create,report);
     const auto prepared=prepare_physical_wall_room_review(source,report,intent);
-    auto changed_source=source;const_cast<std::vector<RevisionRecord>&>(changed_source.history()).at(1).boundary_geometry_edit->target_position={98,100};
+    sketch::test::DetachedDocumentSnapshotFixture changed_source(source);changed_source.history().at(1).boundary_geometry_edit->target_position={98,100};
     require(changed_source.entities()==source.entities() && document_authoring_source_digest_v1(changed_source)==document_authoring_source_digest_v1(source) &&
         document_authoring_source_digest_v2(changed_source)!=document_authoring_source_digest_v2(source),"geometry proof fixture did not isolate the frozen-v1 omission");
     refuses_unchanged(document,[&]{(void)prepare_physical_wall_room_review(changed_source,report,intent);});
-    document.apply(command_for(source,prepared));const auto accepted=document.snapshot();auto forged=accepted;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).at(1).boundary_geometry_edit->target_position={98,100};
+    document.apply(command_for(source,prepared));const auto accepted=document.snapshot();sketch::test::DetachedDocumentSnapshotFixture forged(accepted);
+    forged.history().at(1).boundary_geometry_edit->target_position={98,100};
     require(forged.entities()==accepted.entities() && forged.revision()==accepted.revision(),"retained proof mutation changed visible head");
     const auto frozen=captured_state(forged);refuses_unchanged(document,[&]{(void)Document::fork(forged);});
     require(captured_state(forged)==frozen,"imported geometry-proof refusal mutated captured history");

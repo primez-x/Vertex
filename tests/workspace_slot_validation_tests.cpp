@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/workspace_slot_validation.hpp"
 #include "sketch/workspace_lifecycle_validation.hpp"
 #include "sketch/document_digest.hpp"
@@ -162,8 +163,8 @@ void finish_rectangle(ProjectWorkspace& w) {
 void check_historical_editability() {
     auto document = fixture(); const auto unknown_revision = add_abandoned_constraint(document);
     ProjectWorkspace w(document.snapshot()); finish_rectangle(w);
-    auto future = w.snapshot();
-    const_cast<std::vector<RevisionRecord>&>(future.history()).at(static_cast<std::size_t>(unknown_revision))
+    sketch::test::DetachedDocumentSnapshotFixture future(w.snapshot());
+    future.history().at(static_cast<std::size_t>(unknown_revision))
         .entities.at("horizontal-a").properties["version"] = 99;
     auto events = w.capture().lifecycle_history();
     auto& event = events.back(); auto input = *event.input->value;
@@ -178,8 +179,8 @@ void check_historical_editability() {
 
     auto earlier = fixture(); ProjectWorkspace good(earlier.snapshot()); finish_rectangle(good);
     auto later = Document::fork(good.snapshot()); const auto later_unknown = add_abandoned_constraint(later);
-    auto late_future = later.snapshot();
-    const_cast<std::vector<RevisionRecord>&>(late_future.history()).at(static_cast<std::size_t>(later_unknown))
+    sketch::test::DetachedDocumentSnapshotFixture late_future(later.snapshot());
+    late_future.history().at(static_cast<std::size_t>(later_unknown))
         .entities.at("horizontal-a").properties["version"] = 99;
     if (Document::fork(late_future).is_editable()) throw std::runtime_error("future history fixture must be read-only");
     validate_workspace_finish_deltas(late_future, good.capture().lifecycle_history());

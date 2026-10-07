@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/model_phases.hpp"
@@ -452,8 +453,8 @@ void correspondence_captured_evidence_and_budgets() {
     // The admitted Document limit rejects 65,537 use objects before query entry.
     // This nonconst, deeply copied snapshot is intentionally corrupted only in
     // the test to exercise the report's independent source-use budget boundary.
-    auto excessive_uses=source;
-    auto& uses=const_cast<Entity&>(excessive_uses.entities().at(id)).extensions["physical_wall_room"]["source_lineage"]["outer"]["edges"][0]["source_uses"];
+    sketch::test::DetachedDocumentSnapshotFixture excessive_uses(source);
+    auto& uses=excessive_uses.entities().at(id).extensions["physical_wall_room"]["source_lineage"]["outer"]["edges"][0]["source_uses"];
     const auto captured_use=uses[0]; uses=Json::array();
     for (std::size_t i=0;i<65537;++i) uses.push_back(captured_use);
     budget_error(excessive_uses,"room source uses exceed the correspondence budget");

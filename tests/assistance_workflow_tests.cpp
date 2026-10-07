@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/assistance_engine.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -82,8 +83,8 @@ void desktop_proposal_guards() {
             refuse(invalid);
         }
         for (int changed = 0; changed != 4; ++changed) {
-            auto replacement = source;
-            auto& history = const_cast<std::vector<RevisionRecord>&>(replacement.history());
+            sketch::test::DetachedDocumentSnapshotFixture replacement(source);
+            auto& history = replacement.history();
             if (changed == 0) history.back().entities.at(boundary.toStdString()).extensions["same_revision_replacement"] = true;
             else if (changed == 1) {
                 auto& organization = history.back().entities.at(window.activeLayerId().toStdString());
@@ -453,8 +454,8 @@ void pdf_dimension_import_workflow(const QString& directory) {
     for (const bool replace_asset : {false, true}) {
         window.document() = Document::fork(retained_source);
         const auto stale = generate().front();
-        auto replacement = window.document().snapshot();
-        auto& record = const_cast<std::vector<RevisionRecord>&>(replacement.history()).back();
+        sketch::test::DetachedDocumentSnapshotFixture replacement(window.document().snapshot());
+        auto& record = replacement.history().back();
         if (replace_asset) {
             require(!record.assets.empty(), "reference fixture must retain an asset for replacement fencing");
             auto& asset = record.assets.begin()->second;
@@ -531,8 +532,8 @@ void physical_wall_dimension_assistance_workflow(const QString& directory) {
         refuse(proposal);
     }
     for (int changed = 0; changed != 5; ++changed) {
-        auto replacement = source;
-        auto& record = const_cast<std::vector<RevisionRecord>&>(replacement.history()).back();
+        sketch::test::DetachedDocumentSnapshotFixture replacement(source);
+        auto& record = replacement.history().back();
         if (changed == 0) record.entities.at(straight.toStdString()).properties["baseline"]["end"] = {6, 8};
         else if (changed == 1) record.entities.at(reference_id.toStdString()).properties["source_text"] = "Wall: 13 ft";
         else if (changed == 2) record.entities.at(window.activeLayerId().toStdString()).properties["name"] = "Replaced layer";
@@ -555,8 +556,8 @@ void physical_wall_dimension_assistance_workflow(const QString& directory) {
                 document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(source),
             "wall association cannot accept a boundary segment selector");
     for (int malformed = 0; malformed != 3; ++malformed) {
-        auto replacement = source;
-        auto& wall = const_cast<std::vector<RevisionRecord>&>(replacement.history()).back().entities.at(curved.toStdString());
+        sketch::test::DetachedDocumentSnapshotFixture replacement(source);
+        auto& wall = replacement.history().back().entities.at(curved.toStdString());
         if (malformed == 0) wall.extensions["curve_input"]["version"] = 999;
         else if (malformed == 1) wall.extensions["curve_input"]["radians"] = 1.0;
         else wall.properties["thickness_m"] = -1.0;

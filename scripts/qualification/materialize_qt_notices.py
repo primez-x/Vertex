@@ -1,4 +1,4 @@
-"""Copy original notice bytes from pinned Qt 6.8.3 archives, without running code.
+"""Copy original notice bytes from pinned Qt release archives, without running code.
 
 This is a conservative notice superset, not binary/source derivation or licensing
 clearance. No downloads, extraction of the whole tree, or replacement of output.
@@ -16,6 +16,10 @@ import posixpath
 import re
 import stat
 import tarfile
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import qt_source_inputs as qt_inputs
 
 VERSION = "6.8.3"
 INDEX = "notice-index.json"
@@ -117,9 +121,9 @@ def initial_reasons(relative):
     return reasons
 
 
-def scan_archive(stream, module, selected_only=None):
+def scan_archive(stream, module, selected_only=None, version=VERSION):
     """Validate every entry, retaining only notice candidates or selected refs."""
-    prefix = f"{module}-everywhere-src-{VERSION}"
+    prefix = f"{module}-everywhere-src-{version}"
     members, case_names, payloads, count, expanded, retained = {}, set(), {}, 0, 0, 0
     stream.seek(0)
     with tarfile.open(fileobj=stream, mode="r|xz") as archive:
@@ -209,7 +213,7 @@ def select_references(module, members, payloads):
     return reasons, unresolved
 
 
-def read_archive(cache, module, pin):
+def read_archive(cache, module, pin, version=VERSION):
     path = no_links(cache / pin["name"])
     before = path.stat()
     require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size == pin["bytes"],
@@ -218,18 +222,21 @@ def read_archive(cache, module, pin):
         require(stamp(os.fstat(stream.fileno())) == stamp(before), "Archive changed before read")
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
         require(digest == pin["sha256"], "Pinned archive SHA-256 mismatch")
-        members, payloads, summary = scan_archive(stream, module)
+        members, payloads, summary = scan_archive(stream, module, version=version)
         mandatory = {".tag", "LICENSES/LGPL-3.0-only.txt", "LICENSES/GPL-3.0-only.txt"}
         if module == "qtsvg":
-            mandatory.add("src/svg/XSVG_LICENSE.txt")
+            # The selected 6.11.2 source renamed the original permission file.
+            # Historical archives retain their exact old member binding.
+            mandatory.add("src/svg/XSVG_LICENSE.txt" if version == VERSION else "src/svg/LICENSE.XSVG.txt")
         elif module == "qtwebengine":
             mandatory.update({"CHROMIUM_VERSION", "LICENSE.Chromium", CHROMIUM + "/LICENSE", PDFIUM_LICENSE})
-        require(mandatory.issubset(payloads) and all(payloads[name] for name in mandatory),
-                "Missing or empty mandatory Qt GNU/PDFium/XSVG notice or version record")
+        missing = sorted(name for name in mandatory if not payloads.get(name))
+        require(not missing,
+                f"Missing or empty mandatory Qt GNU/PDFium/XSVG notice or version record: {module} {version}: {missing}")
         reasons, unresolved = select_references(module, members, payloads)
         missing_bytes = set(reasons) - set(payloads)
         if missing_bytes:
-            _, additional, second_summary = scan_archive(stream, module, missing_bytes)
+            _, additional, second_summary = scan_archive(stream, module, missing_bytes, version=version)
             require(second_summary == summary and set(additional) == missing_bytes,
                     "Archive reference extraction changed")
             payloads.update(additional)
@@ -241,15 +248,17 @@ def read_archive(cache, module, pin):
     return payloads, reasons, unresolved, summary, before
 
 
-def materialize(cache_dir, output_root):
+def materialize(cache_dir, output_root, version=VERSION):
+    # Existing callers retain their historical 6.8.3 defaults and test fixtures.
+    pins = PINNED_ARCHIVES if version == VERSION else qt_inputs.selected_archives(Path(__file__).resolve().parents[2], version)
     cache, output = no_links(cache_dir), no_links(output_root)
     require(cache.is_dir() and output.parent.is_dir() and not output.exists(),
             "Expected existing cache/output parent and fresh nonexistent output")
     require(cache != output and not output.is_relative_to(cache) and not cache.is_relative_to(output),
             "Input/output roots must be disjoint")
     selected, archive_rows, unresolved, input_stamps = [], [], [], []
-    for module, pin in sorted(PINNED_ARCHIVES.items()):
-        payloads, reasons, gaps, summary, before = read_archive(cache, module, pin)
+    for module, pin in sorted(pins.items()):
+        payloads, reasons, gaps, summary, before = (read_archive(cache, module, pin) if version == VERSION else read_archive(cache, module, pin, version=version))
         input_stamps.append((cache / pin["name"], before))
         archive_rows.append({"module": module, **pin, **summary, "selected_files": len(payloads),
                              "selected_bytes": sum(map(len, payloads.values()))})
@@ -258,7 +267,7 @@ def materialize(cache_dir, output_root):
             # Short output names avoid Windows path limits; index retains full originals.
             path = f"texts/{module}/{position:04d}.txt"
             row = {"path": path, "archive": pin["name"],
-                   "archive_member": f"{module}-everywhere-src-{VERSION}/{relative}",
+                   "archive_member": f"{module}-everywhere-src-{version}/{relative}",
                    "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                    "selection_reasons": sorted(set(reasons[relative]))}
             selected.append((row, data))
@@ -267,7 +276,7 @@ def materialize(cache_dir, output_root):
     for path, before in input_stamps:
         no_links(path)
         require(stamp(path.stat()) == stamp(before), "Input changed before publication")
-    report = {"schema_version": 1, "qt_version": VERSION,
+    report = {"schema_version": 1, "qt_version": version,
         "selection": "conservative-source-notice-superset",
         "selected_qt_license_route": "LGPL-3.0-only",
         "application_license": "GPL-3.0-or-later",
@@ -278,7 +287,7 @@ def materialize(cache_dir, output_root):
             "Notice naming and attribution references cannot prove discovery of every inline source notice."],
         **{flag: False for flag in FLAGS}, "archives": archive_rows,
         "files": [row for row, _ in selected], "unresolved_references": unresolved}
-    overview = ("Qt 6.8.3 original notices\n\n"
+    overview = (f"Qt {version} original notices\n\n"
         "Selected Qt library route: LGPL-3.0-only (LGPL version 3).\n"
         "Vertex application license: GPL-3.0-or-later.\n"
         "Third-party copyright, license alternatives and disclaimers are preserved.\n"
@@ -315,9 +324,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-dir", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--qt-version", default=VERSION, help="Release to materialize; historical default is 6.8.3")
     args = parser.parse_args()
     try:
-        report = materialize(args.cache_dir, args.output_root)
+        report = materialize(args.cache_dir, args.output_root, args.qt_version)
     except (ValueError, OSError, tarfile.TarError, EOFError) as exc:
         parser.exit(1, f"Qt notice materialization failed: {exc}\n")
     print(f"Materialized {len(report['files'])} original notice/version files; "

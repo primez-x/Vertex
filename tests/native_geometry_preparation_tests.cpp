@@ -9,7 +9,10 @@
 #include "sketch/project_visibility.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/architecture.hpp"
+#include "sketch/site_frame.hpp"
 #include <BRepBndLib.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <Bnd_Box.hxx>
 #include "support/noninteractive_errors.hpp"
 #include <BRep_Tool.hxx>
@@ -110,6 +113,126 @@ void architectural_context(Entity& entity) {
 void update(Document& document, Entity entity) {
     document.apply(ApplyEntityChanges{document.revision(),
         {EntityChange::upsert(std::move(entity))}, {}, "geometry dependency regression"});
+}
+
+nlohmann::json native_site_frame() {
+    return {{"version",1},{"origin_m",{30.0,-12.0,7.0}},{"rotation_radians",0.3},
+        {"vertical_datum",{{"identifier","survey"},{"height_at_origin_m",100.0}}}};
+}
+nlohmann::json native_building_pose(double yaw=0.7) {
+    return {{"version",1},{"translation_m",{5.0,8.0,3.0}},{"rotation_radians",yaw}};
+}
+std::vector<Entity> native_site_context() {
+    return {{"site","property",{{"site_frame",native_site_frame()}}},
+        {"building","building",{{"property_id","site"}}},
+        {"floor","floor",{{"building_id","building"}}},
+        {"layer","layer",{{"floor_id","floor"}}}};
+}
+void check_shape_pose(const TopoDS_Shape& local, const TopoDS_Shape& world,
+                      const SiteRigidTransform& pose) {
+    // Compare actual topology vertices, rather than rotated AABB corners.
+    std::vector<Vec3> expected, actual;
+    for (TopExp_Explorer it(local,TopAbs_VERTEX);it.More();it.Next()) {
+        const auto p=BRep_Tool::Pnt(TopoDS::Vertex(it.Current()));
+        expected.push_back(site_transform_point({p.X(),p.Y(),p.Z()},pose));
+    }
+    for (TopExp_Explorer it(world,TopAbs_VERTEX);it.More();it.Next()) {
+        const auto p=BRep_Tool::Pnt(TopoDS::Vertex(it.Current()));
+        actual.push_back({p.X(),p.Y(),p.Z()});
+    }
+    check(expected.size()==actual.size(),"rigid placement preserves topology vertex count");
+    for (const auto& p:expected) {
+        const auto found=std::find_if(actual.begin(),actual.end(),[&](const auto& q) {
+            return std::abs(p.x-q.x)<1e-7 && std::abs(p.y-q.y)<1e-7 && std::abs(p.z-q.z)<1e-7;
+        });
+        check(found!=actual.end(),"actual native shape must receive authored-to-world pose exactly once");
+        actual.erase(found);
+    }
+    GProp_GProps local_area,world_area;
+    BRepGProp::SurfaceProperties(local,local_area); BRepGProp::SurfaceProperties(world,world_area);
+    check(std::abs(local_area.Mass()-world_area.Mass())<1e-7,
+          "rigid native placement preserves physical surface area");
+    // Terrain is an open triangulated surface, not a closed volumetric solid.
+    if (TopExp_Explorer(local,TopAbs_SOLID).More())
+        check(std::abs(solid_volume(local)-solid_volume(world))<1e-7,
+              "rigid native placement preserves cubic volume");
+}
+
+void test_native_site_pose_and_history() {
+    auto wall=walls(1).snapshot().entities().begin()->second; wall.id="wall";
+    architectural_context(wall);
+    Entity opening{"opening","opening",{{"wall_id","wall"},{"opening_kind","window"},
+        {"offset_m",1.0},{"width_m",1.0},{"sill_m",0.2},{"height_m",2.1},
+        {"opening_assembly",opening_assembly_json(default_opening_assembly(OpeningAssemblyKind::window))}}};
+    auto entities=native_site_context(); entities.push_back(wall); entities.push_back(opening);
+    auto document=Document::create(entities); const auto local=prepare(document);
+    auto building=document.snapshot().entities().at("building");
+    building.properties["site_placement"]=native_building_pose(); update(document,building);
+    const auto snapshot=document.snapshot(); const auto placed=prepare(document);
+    const auto pose=compose_site_transforms(decode_site_frame(native_site_frame()).to_world,
+                                           decode_building_site_placement(native_building_pose()));
+    for (const auto* id:{"wall","opening"}) {
+        check_shape_pose(local.solids.at(id).shape,placed.solids.at(id).shape,pose);
+        check(local.solids.at(id).content!=placed.solids.at(id).content,
+              "site dependency and pose changes invalidate cached host and opening shapes");
+        check(placed.solids.at(id).presentation_placement &&
+              placed.solids.at(id).presentation_placement->snapshot_revision==snapshot.revision(),
+              "prepared selection placement binds the captured snapshot");
+    }
+    check(document.snapshot().entities()==snapshot.entities(),"site preparation preserves authoritative local geometry");
+    document.undo(document.revision()); const auto undone=prepare(document);
+    check(undone.solids.at("wall").content==local.solids.at("wall").content,
+          "Undo restores the local geometry cache identity");
+    document.redo(document.revision()); const auto redone=prepare(document);
+    check(redone.solids.at("wall").content==placed.solids.at("wall").content,
+          "Redo restores the posed geometry cache identity");
+    auto second_pose=native_building_pose(-0.4); second_pose["translation_m"]={-14.0,20.0,-2.0};
+    building.properties["site_placement"]=second_pose; update(document,building);
+    const auto second=prepare(document);
+    check_shape_pose(local.solids.at("wall").shape,second.solids.at("wall").shape,
+        compose_site_transforms(decode_site_frame(native_site_frame()).to_world,
+                               decode_building_site_placement(second_pose)));
+}
+
+void test_native_terrain_site_datums() {
+    Entity terrain{"terrain","terrain_surface",{{"property_id","site"},{"model",
+        TerrainSurface("terrain",{{"a",0,0,101},{"b",2,0,102},{"c",0,2,101}},
+            {TerrainTriangle{{0,1,2}}}).to_json()}}};
+    auto entities=native_site_context(); entities.push_back(terrain);
+    auto document=Document::create(entities); const auto local=prepare(document);
+    terrain.properties["terrain_elevation_binding"]={{"version",1},{"mode","relative_site_origin"}};
+    update(document,terrain); const auto relative=prepare(document);
+    auto pose=decode_site_frame(native_site_frame()).to_world;
+    check_shape_pose(local.solids.at("terrain").shape,relative.solids.at("terrain").shape,pose);
+    terrain.properties["terrain_elevation_binding"]={{"version",1},{"mode","declared_absolute"},
+        {"datum_identifier","survey"}}; update(document,terrain);
+    const auto absolute=prepare(document); pose.translation_m.z-=100;
+    check_shape_pose(local.solids.at("terrain").shape,absolute.solids.at("terrain").shape,pose);
+    check(relative.solids.at("terrain").content!=absolute.solids.at("terrain").content,
+          "terrain absolute datum must invalidate relative geometry cache");
+}
+
+void test_native_site_frame_refusal() {
+    auto wall=walls(1).snapshot().entities().begin()->second; wall.id="wall";
+    architectural_context(wall);
+    auto entities=native_site_context(); entities.push_back(wall);
+    auto document=Document::create(entities);
+    const auto before=document.snapshot();
+    auto building=before.entities().at("building");
+    building.properties["site_placement"]={{"version",1},{"translation_m",{5,8}},
+        {"rotation_radians",0.7}};
+    bool refused=false;
+    try { update(document,building); } catch (const std::exception&) { refused=true; }
+    check(refused && document.snapshot().entities()==before.entities() && document.revision()==before.revision(),
+          "malformed explicit pose must refuse atomically instead of native identity fallback");
+    auto second=wall; second.id="second"; second.properties.erase("layer_id");
+    second.properties.erase("floor_id"); second.properties["building_id"]="other-building";
+    entities.push_back({"other-building","building",{{"property_id","site"},
+        {"site_placement",native_building_pose()}}}); entities.push_back(second);
+    entities.push_back({"join","wall_join",{{"version",1},{"style","fused"},{"wall_ids",{"wall","second"}}}});
+    refused=false;
+    try { (void)Document::create(entities); } catch (const std::exception&) { refused=true; }
+    check(refused,"cross-building/cross-frame join must refuse before local native boolean construction");
 }
 
 Entity retained_ifc_reference(std::string id, std::string native_type) {
@@ -386,6 +509,28 @@ void test_independent_assembly_profiles() {
     check(resized.solids.at(entity.id).content != translated.solids.at(entity.id).content &&
           std::abs(solid_volume(resized.solids.at(entity.id).shape)-12.8) < 1e-6,
           "nested type profile edits invalidate cached native geometry and regenerate every repeated profile");
+    auto framed_entities=native_site_context(); framed_entities.push_back(catalog);
+    architectural_context(entity); framed_entities.push_back(entity);
+    auto framed=Document::create(framed_entities); const auto world_default=prepare(framed);
+    auto building=framed.snapshot().entities().at("building");
+    building.properties["site_placement"]=native_building_pose(); update(framed,building);
+    const auto still_world=prepare(framed);
+    check_shape_pose(world_default.solids.at(entity.id).shape,still_world.solids.at(entity.id).shape,{});
+    entity.properties["presentation_frame"]={{"version",1},{"mode","building"}}; update(framed,entity);
+    const auto in_building=prepare(framed);
+    const auto building_pose=compose_site_transforms(decode_site_frame(native_site_frame()).to_world,
+        decode_building_site_placement(native_building_pose()));
+    check_shape_pose(still_world.solids.at(entity.id).shape,in_building.solids.at(entity.id).shape,building_pose);
+    for (std::size_t i=0;i<in_building.solids.at(entity.id).material_regions.size();++i)
+        check_shape_pose(still_world.solids.at(entity.id).material_regions[i].shape,
+            in_building.solids.at(entity.id).material_regions[i].shape,building_pose);
+    entity.properties["presentation_frame"]["mode"]="site"; update(framed,entity);
+    const auto in_site=prepare(framed);
+    check_shape_pose(still_world.solids.at(entity.id).shape,in_site.solids.at(entity.id).shape,
+        decode_site_frame(native_site_frame()).to_world);
+    check(in_site.solids.at(entity.id).content!=in_building.solids.at(entity.id).content &&
+        in_site.solids.at(entity.id).appearance_content==in_building.solids.at(entity.id).appearance_content,
+        "independent frame rebinding changes geometry cache while retaining profile appearance");
     std::size_t progress = 0;
     const auto cancelled = prepare_native_geometry(document.snapshot(),std::nullopt,
         [&] { return progress != 0; }, [&](std::size_t) { ++progress; });
@@ -434,6 +579,27 @@ void test_roof_join_material_regions_and_color_dependencies() {
     }
     check(std::abs(total-solid_volume(solid.shape)) < 1e-8,
         "meshed appearance regions conserve authoritative fused quantity");
+    auto framed_entities=native_site_context();
+    architectural_context(a); architectural_context(b);
+    framed_entities.insert(framed_entities.end(),{a,b,catalog,join});
+    auto framed=Document::create(framed_entities); const auto local_join=prepare(framed);
+    auto building=framed.snapshot().entities().at("building");
+    building.properties["site_placement"]=native_building_pose(); update(framed,building);
+    const auto world_join=prepare(framed);
+    const auto pose=compose_site_transforms(decode_site_frame(native_site_frame()).to_world,
+        decode_building_site_placement(native_building_pose()));
+    check_shape_pose(local_join.solids.at("join").shape,world_join.solids.at("join").shape,pose);
+    for (std::size_t i=0;i<solid.material_regions.size();++i) {
+        const auto& local=local_join.solids.at("join").material_regions[i];
+        const auto& world=world_join.solids.at("join").material_regions[i];
+        if (!local.shape.IsNull()) check_shape_pose(local.shape,world.shape,pose);
+        check(local.gross_volume==world.gross_volume && local.net_volume==world.net_volume &&
+              local.material_color==world.material_color,
+              "roof partition volumes and material bindings remain local authoritative facts");
+    }
+    // Keep the original unassigned fixture independent of the framed document.
+    for (auto* roof:{&a,&b}) for (const auto* key:{"property_id","building_id","floor_id","layer_id"})
+        roof->properties.erase(key);
     catalog.properties["model"] = AssemblyModel::create(
         {{"red","Red","#00ff00"},{"blue","Blue","#0000ff"}}, {}, {}).to_json();
     update(document,catalog);
@@ -571,6 +737,16 @@ void test_hosted_stair_dependencies(bool landing_guard=false) {
     double x0, y0, z0, x1, y1, z1;
     box.Get(x0, y0, z0, x1, y1, z1);
     check(z0 > 4.2 && z0 < 4.6, "hosted rail must use its raised upper flight, exactly once");
+    auto building=document.snapshot().entities().at("building");
+    auto property=document.snapshot().entities().at("site"); property.properties["site_frame"]=native_site_frame();
+    update(document,property); building.properties["site_placement"]=native_building_pose(); update(document,building);
+    const auto world=prepare(document);
+    const auto pose=compose_site_transforms(decode_site_frame(native_site_frame()).to_world,
+        decode_building_site_placement(native_building_pose()));
+    check_shape_pose(initial.solids.at("stair").shape,world.solids.at("stair").shape,pose);
+    check_shape_pose(initial.solids.at("rail").shape,world.solids.at("rail").shape,pose);
+    check_shape_pose(initial.solids.at(catalog.id+":instance:copy").shape,
+        world.solids.at(catalog.id+":instance:copy").shape,{});
     levels.properties["model"] = nlohmann::json::parse(
         VerticalLevelGraph({{"ground", 5.0}}).serialize());
     update(document, levels);
@@ -672,6 +848,9 @@ int main() {
         test_unresolved_ifc_references_remain_pending();
         test_assembly_identity();
         test_embedded_assembly_profiles();
+        test_native_site_pose_and_history();
+        test_native_terrain_site_datums();
+        test_native_site_frame_refusal();
         test_independent_assembly_profiles();
         test_empty_independent_assembly_reports_geometry_failure();
         test_roof_join_material_regions_and_color_dependencies();

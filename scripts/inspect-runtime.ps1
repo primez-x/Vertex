@@ -1,7 +1,9 @@
 param([string[]]$EntryPoints = @(), [string]$CadPayloadManifest = '')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$qtPrefix = Join-Path $projectRoot '.deps\qt\6.8.3\msvc2022_64'
+. (Join-Path $PSScriptRoot 'qt-selection.ps1')
+$qtSelection = Get-VertexQtSelection -ProjectRoot $projectRoot
+$qtPrefix = $qtSelection.prefix
 $releaseDirectory = Join-Path $projectRoot 'build\windows-release'
 
 function Get-VerifiedCadPayload {

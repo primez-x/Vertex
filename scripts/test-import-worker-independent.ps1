@@ -6,6 +6,7 @@ param(
     [switch]$CaptureSelfTest,
     [switch]$PincOnly,
     [switch]$IfcOnly,
+    [ValidateSet('site_plan_workflow', 'site_annotation_lifecycle', 'site_opening_frame')][string]$SiteFixture = '',
     [string]$CaptureDirectory,
     [string]$PackagedRuntimeRoot = ''
 )
@@ -19,6 +20,17 @@ if ($PincOnly -and $Configuration -ne 'Release') { throw 'PincOnly requires the 
 if ($IfcOnly -and ($PincOnly -or $CaptureSelfTest -or $PackagedRuntimeRoot -or $Configuration -ne 'Release')) {
     throw 'IfcOnly requires the inspected Release runtime and cannot be combined with other fixture modes.'
 }
+if ($SiteFixture -and ($PincOnly -or $IfcOnly -or $CaptureSelfTest -or $PackagedRuntimeRoot -or $Configuration -ne 'Release')) {
+    throw 'SiteFixture requires the inspected Release runtime and cannot be combined with other fixture modes.'
+}
+$immutableDesktopMode = $PincOnly -or [bool]$SiteFixture
+$desktopFixtureName = if ($SiteFixture) { $SiteFixture + '_desktop_tests.exe' } else { 'pinc_project_desktop_tests.exe' }
+$desktopSuccessMarker = switch ($SiteFixture) {
+    'site_plan_workflow' { 'Site Plan desktop workflow passed' }
+    'site_annotation_lifecycle' { 'Site annotation lifecycle passed' }
+    'site_opening_frame' { 'Site opening frame desktop workflow passed' }
+    default { 'Pinc project desktop tests passed' }
+}
 if ($PackagedRuntimeRoot) {
     if ($CaptureSelfTest -or $Configuration -ne 'Release') { throw 'Packaged CAD checking requires Release and no capture self-test.' }
     if ($PackagedRuntimeRoot -match '["\x00-\x1f]') { throw 'Invalid packaged runtime path.' }
@@ -28,13 +40,15 @@ if ($PackagedRuntimeRoot) {
     }
 }
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'qt-selection.ps1')
+$qtSelection = Get-VertexQtSelection -ProjectRoot $root
 $build = Join-Path $root ('build/windows-' + $Configuration.ToLowerInvariant())
 $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
            'assistance_workflow_tests.exe', 'assistance_ocr_isolation_tests.exe', 'dxf_desktop_workflow_tests.exe',
            'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe', 'vertex-import-worker.exe')
-if ($PincOnly) {
+if ($immutableDesktopMode) {
     $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
-               'pinc_project_desktop_tests.exe', 'vertex-import-worker.exe')
+               $desktopFixtureName, 'vertex-import-worker.exe')
 }
 $captureLimitBytes = 1MB
 function Get-BinaryEvidence {
@@ -53,7 +67,7 @@ function Get-OptionalFileHash([string]$Path) {
 }
 function Get-RuntimeEvidence([string]$RuntimeRoot) {
     $paths = @($RuntimeRoot)
-    if ($PincOnly) { $paths += Join-Path (Split-Path -Parent $RuntimeRoot) 'plugins' }
+    if ($immutableDesktopMode) { $paths += Join-Path (Split-Path -Parent $RuntimeRoot) 'plugins' }
     @(Get-ChildItem -LiteralPath $paths -File -Recurse | Sort-Object FullName | ForEach-Object {
         [ordered]@{ path = $_.FullName; bytes = $_.Length;
             sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
@@ -72,9 +86,9 @@ function Get-CaptureFailure($Stdout, $Stderr) {
 function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     $runtime = Join-Path $CaptureRoot 'immutable-desktop-runtime'
     $protectedRoot = $runtime
-    if ($PincOnly) { $runtime = Join-Path $runtime 'bin' }
+    if ($immutableDesktopMode) { $runtime = Join-Path $runtime 'bin' }
     $null = New-Item -ItemType Directory -Path $runtime -Force
-    $fixtureNames = if ($PincOnly) { @('pinc_project_desktop_tests.exe', 'vertex-import-worker.exe', 'vertex-planegcs.dll') }
+    $fixtureNames = if ($immutableDesktopMode) { @($desktopFixtureName, 'vertex-import-worker.exe', 'vertex-planegcs.dll') }
         else { @('assistance_ocr_isolation_tests.exe', 'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe',
                  'vertex-import-worker.exe', 'vertex-planegcs.dll') }
     foreach ($name in $fixtureNames) {
@@ -82,8 +96,8 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     }
     # The CAD bridge loads its pinned interpreter lazily from this exact sibling
     # directory. Include native extensions before assigning immutable ACLs.
-    if (!$PincOnly) { Copy-Item -LiteralPath (Join-Path $build 'cad-runtime') -Destination $runtime -Recurse }
-    if (!$PincOnly) {
+    if (!$immutableDesktopMode) { Copy-Item -LiteralPath (Join-Path $build 'cad-runtime') -Destination $runtime -Recurse }
+    if (!$immutableDesktopMode) {
         # OCR runs the real sibling worker against these pinned resources in
         # the same immutable root. It never searches the source checkout.
         foreach ($relative in @('assets/assistance/ocr-engine-v1.json', 'assets/assistance/ocr/eng.traineddata',
@@ -96,7 +110,7 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
         $null = New-Item -ItemType Directory -Path $fontDirectory -Force
         Copy-Item -LiteralPath (Join-Path $root 'assets/fonts/Inter.ttf') -Destination $fontDirectory
     }
-    $qtBin = Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin'
+    $qtBin = Join-Path $qtSelection.prefix 'bin'
     $qtSuffix = if ($Configuration -eq 'Debug') { 'd' } else { '' }
     foreach ($name in @("Qt6Core$qtSuffix.dll", "Qt6Gui$qtSuffix.dll",
                          "Qt6Network$qtSuffix.dll", "Qt6Pdf$qtSuffix.dll")) {
@@ -105,12 +119,12 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     # Native IFC reconstruction now uses the solid kernel inside the worker.
     # Stage its inspected DLL closure before making the fixture immutable.
     $entryPoints = @((Join-Path $build 'vertex-import-worker.exe'))
-    if ($PincOnly) {
+    if ($immutableDesktopMode) {
         $qtPrefix = Split-Path -Parent $qtBin
         foreach ($module in @('Widgets', 'PrintSupport', 'Svg', 'OpenGL', 'OpenGLWidgets')) {
             $entryPoints += Join-Path $qtBin "Qt6$module.dll"
         }
-        $entryPoints += Join-Path $build 'pinc_project_desktop_tests.exe'
+        $entryPoints += Join-Path $build $desktopFixtureName
         foreach ($plugin in @('platforms/qoffscreen.dll', 'platforms/qwindows.dll',
                              'styles/qmodernwindowsstyle.dll', 'imageformats/qgif.dll',
                              'imageformats/qico.dll', 'imageformats/qjpeg.dll', 'imageformats/qsvg.dll')) {
@@ -193,6 +207,7 @@ if ($Child) {
         capture_self_test = [bool]$CaptureSelfTest; capture_limit_bytes_per_stream = $captureLimitBytes;
         pinc_only = [bool]$PincOnly;
         ifc_only = [bool]$IfcOnly;
+        site_fixture = $SiteFixture;
         packaged_runtime_root = $PackagedRuntimeRoot;
         qualification_boundary = 'Development-host fixture evidence only; packaged CAD mode uses the supplied immutable installed bin directory; no clean-machine, complete compatibility or production qualification.' }
     try {
@@ -232,21 +247,21 @@ public static class BoundedWorkerCapture {
         }
         $report.host_in_job = $inJob
         $report.binaries_before = Get-BinaryEvidence
-        if (!$CaptureSelfTest -and !$PincOnly) {
+        if (!$CaptureSelfTest -and !$immutableDesktopMode) {
             & (Join-Path $root '.deps/cad-runtime/3.13.15/python.exe') -I -B (
                 Join-Path $root 'tests/generate_cad_library_worker_fixtures.py') (
                 Join-Path $CaptureDirectory 'cad-fixtures')
             if ($LASTEXITCODE -ne 0) { throw 'CAD library fixture generation failed.' }
         }
-        $desktopFixtureRoot = if ($PackagedRuntimeRoot -and $PincOnly) { $PackagedRuntimeRoot }
+        $desktopFixtureRoot = if ($PackagedRuntimeRoot -and $immutableDesktopMode) { $PackagedRuntimeRoot }
             elseif ($PackagedRuntimeRoot) { $build } elseif ($CaptureSelfTest) { $null } else {
             New-ImmutableDesktopFixtureRoot $CaptureDirectory
         }
-        if ($PincOnly) { $report.runtime_before = Get-RuntimeEvidence $desktopFixtureRoot }
-        if (!$PincOnly -and !$CaptureSelfTest -and !$PackagedRuntimeRoot) {
+        if ($immutableDesktopMode) { $report.runtime_before = Get-RuntimeEvidence $desktopFixtureRoot }
+        if (!$immutableDesktopMode -and !$CaptureSelfTest -and !$PackagedRuntimeRoot) {
             $report.runtime_before = Get-RuntimeEvidence $desktopFixtureRoot
         }
-        $cases = if ($PincOnly) { @('windows_import_worker_tests.exe', 'pinc_project_desktop_tests.exe') }
+        $cases = if ($immutableDesktopMode) { @('windows_import_worker_tests.exe', $desktopFixtureName) }
                  elseif ($IfcOnly) { @('ifc_desktop_workflow_tests.exe') }
                  elseif ($PackagedRuntimeRoot) { @('cad_library_worker_tests.exe') }
                  elseif ($CaptureSelfTest) { @('capture-stdout-overflow', 'capture-stderr-overflow', 'capture-at-limit',
@@ -255,7 +270,7 @@ public static class BoundedWorkerCapture {
                           'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe') }
         foreach ($name in $cases) {
             $executable = if ($CaptureSelfTest) { (Get-Process -Id $PID).Path }
-                elseif ($name -in @('pinc_project_desktop_tests.exe', 'assistance_ocr_isolation_tests.exe', 'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe')) {
+                elseif ($name -in @($desktopFixtureName, 'assistance_ocr_isolation_tests.exe', 'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe')) {
                     Join-Path $desktopFixtureRoot $name
                 } else { Join-Path $build $name }
             $info = [Diagnostics.ProcessStartInfo]::new($executable)
@@ -269,15 +284,15 @@ public static class BoundedWorkerCapture {
             $info.Environment['VERTEX_TEST_CAPTURE_DIR'] = $CaptureDirectory
             $info.Environment.Remove('VERTEX_TEST_RUNTIME_ROOT') | Out-Null
             if ($PackagedRuntimeRoot) { $info.Environment['VERTEX_TEST_RUNTIME_ROOT'] = $PackagedRuntimeRoot }
-            $info.Environment['QT_PLUGIN_PATH'] = Join-Path $root '.deps/qt/6.8.3/msvc2022_64/plugins'
+            $info.Environment['QT_PLUGIN_PATH'] = Join-Path $qtSelection.prefix 'plugins'
             $native = if ($Configuration -eq 'Debug') { 'debug/bin' } else { 'bin' }
-            $info.Environment['PATH'] = (Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin') + ';' +
+            $info.Environment['PATH'] = (Join-Path $qtSelection.prefix 'bin') + ';' +
                 (Join-Path $root ".deps/native/x64-windows/$native") + ';' + $env:PATH
-            if ($PincOnly -and $name -eq 'pinc_project_desktop_tests.exe') {
+            if ($immutableDesktopMode -and $name -eq $desktopFixtureName) {
                 $info.WorkingDirectory = $desktopFixtureRoot
                 $info.Environment['QT_PLUGIN_PATH'] = Join-Path (Split-Path -Parent $desktopFixtureRoot) 'plugins'
                 $info.Environment['PATH'] = $desktopFixtureRoot + ';' + [Environment]::SystemDirectory
-                $info.Environment['VERTEX_TEST_CAPTURE_DIR'] = Join-Path $CaptureDirectory 'pinc-desktop-captures'
+                $info.Environment['VERTEX_TEST_CAPTURE_DIR'] = Join-Path $CaptureDirectory $(if ($SiteFixture) { $SiteFixture + '-desktop-captures' } else { 'pinc-desktop-captures' })
             }
             if ($name -eq 'windows_import_worker_tests.exe') {
                 $info.ArgumentList.Add((Join-Path $build 'windows_import_worker_probe.exe'))
@@ -309,11 +324,16 @@ public static class BoundedWorkerCapture {
                 $watch = [Diagnostics.Stopwatch]::StartNew()
                 $timedOut = $false
                 $captureFailure = $null
+                # Site Plan now exercises five complete document/gesture
+                # lifecycles. Its observed passing runtime is close to the
+                # ordinary 60-second worker guard; retain a finite budget
+                # below the enclosing 240-second CTest deadline.
+                $deadlineMilliseconds = if ($SiteFixture -and $name -eq $desktopFixtureName) { 180000 } else { 60000 }
                 for (;;) {
                     $captureFailure = Get-CaptureFailure $stdout $stderr
                     if ($captureFailure) { break }
                     if ($process.WaitForExit(25)) { break }
-                    if ($watch.ElapsedMilliseconds -ge 60000) { $timedOut = $true; break }
+                    if ($watch.ElapsedMilliseconds -ge $deadlineMilliseconds) { $timedOut = $true; break }
                 }
                 if (($captureFailure -or $timedOut) -and !$process.HasExited) { $process.Kill($true) }
                 if (!$process.WaitForExit(5000)) { throw "Could not confirm termination of $name" }
@@ -323,7 +343,7 @@ public static class BoundedWorkerCapture {
                     timed_out = $timedOut; stdout = $stdoutPath; stderr = $stderrPath;
                     capture_failure = $captureFailure; termination_confirmed = $process.HasExited;
                     captured_stdout_bytes = $stdout.Result.Bytes; captured_stderr_bytes = $stderr.Result.Bytes;
-                    elapsed_ms = $watch.ElapsedMilliseconds;
+                    elapsed_ms = $watch.ElapsedMilliseconds; deadline_ms = $deadlineMilliseconds;
                     stdout_sha256 = Get-OptionalFileHash $stdoutPath;
                     stderr_sha256 = Get-OptionalFileHash $stderrPath }
             } finally {
@@ -332,22 +352,22 @@ public static class BoundedWorkerCapture {
             }
         }
         $report.binaries_after = Get-BinaryEvidence
-        if (!$PincOnly -and !$CaptureSelfTest -and !$PackagedRuntimeRoot) {
+        if (!$immutableDesktopMode -and !$CaptureSelfTest -and !$PackagedRuntimeRoot) {
             $report.runtime_after = Get-RuntimeEvidence $desktopFixtureRoot
             if (($report.runtime_before | ConvertTo-Json -Depth 5 -Compress) -cne
                 ($report.runtime_after | ConvertTo-Json -Depth 5 -Compress)) { throw 'Frozen worker runtime provenance changed during the run.' }
         }
-        if ($PincOnly) {
+        if ($immutableDesktopMode) {
             $report.runtime_after = Get-RuntimeEvidence $desktopFixtureRoot
             if (($report.runtime_before | ConvertTo-Json -Depth 5 -Compress) -cne
-                ($report.runtime_after | ConvertTo-Json -Depth 5 -Compress)) { throw 'Pinc runtime provenance changed during the run.' }
+                ($report.runtime_after | ConvertTo-Json -Depth 5 -Compress)) { throw $(if ($SiteFixture) { 'Site runtime provenance changed during the run.' } else { 'Pinc runtime provenance changed during the run.' }) }
             foreach ($test in $report.tests) {
                 $expected = if ($test.name -eq 'windows_import_worker_tests.exe') { 'windows import worker tests passed' }
-                    else { 'Pinc project desktop tests passed' }
+                    else { $desktopSuccessMarker }
                 $output = Get-Content -LiteralPath $test.stdout -Raw
                 if (!$test.termination_confirmed -or $test.exit_code -ne 0 -or $test.timed_out -or
                     $test.capture_failure -or $output -notmatch [regex]::Escape($expected) -or
-                    $output -match '(?i)\bskip(?:ped)?\b') { throw "Pinc fixture failed or produced incomplete evidence: $($test.name)" }
+                    $output -match '(?i)\bskip(?:ped)?\b') { throw "$(if ($SiteFixture) { 'Site' } else { 'Pinc' }) fixture failed or produced incomplete evidence: $($test.name)" }
             }
         }
         if (($report.binaries_before | ConvertTo-Json -Depth 5 -Compress) -cne
@@ -417,6 +437,7 @@ try {
     if ($CaptureSelfTest) { $command += ' -CaptureSelfTest' }
     if ($PincOnly) { $command += ' -PincOnly' }
     if ($IfcOnly) { $command += ' -IfcOnly' }
+    if ($SiteFixture) { $command += ' -SiteFixture ' + $SiteFixture }
     if ($PackagedRuntimeRoot) { $command += ' -PackagedRuntimeRoot "' + $PackagedRuntimeRoot + '"' }
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine = $command; CurrentDirectory = $root; ProcessStartupInformation = $startup }
@@ -452,7 +473,7 @@ finally {
 }
 Write-Output $CaptureDirectory
 if ($capture.error) { throw $capture.error }
-$expectedCount = if ($PincOnly) { 2 } elseif ($IfcOnly -or $PackagedRuntimeRoot) { 1 } elseif ($CaptureSelfTest) { 5 } else { 6 }
+$expectedCount = if ($immutableDesktopMode) { 2 } elseif ($IfcOnly -or $PackagedRuntimeRoot) { 1 } elseif ($CaptureSelfTest) { 5 } else { 6 }
 if (!$capture.termination_confirmed -or $capture.host_exit_code -ne 0 -or
     $result.error -or @($result.tests).Count -ne $expectedCount -or (!$CaptureSelfTest -and @($result.tests | Where-Object {
         $_.exit_code -ne 0 -or $_.timed_out -or $_.capture_failure }).Count)) {

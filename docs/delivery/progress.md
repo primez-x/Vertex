@@ -24,6 +24,50 @@ including the normal PNG reference decoder, persisted reference assets and
 stable project/2D/native-3D output hashes. This is developer-machine evidence;
 clean-machine, network-denied, hardware and human acceptance remain open.
 
+### October 7 responsiveness implementation
+
+The current source moves autosave preparation, legacy workspace rebuilding and
+full source proof into the existing FIFO worker. Save and shutdown settle the
+pending owner transaction before their final queue barrier. Build 38 completed
+successfully with unchanged inputs; it does not establish runtime acceptance.
+
+The subsequent production code batch retains model rows in the layer tree,
+updates changed row presentation, reparents surviving children before deleting
+retired containers, and restores expansion after attachment. It preserves both
+the user's visibility settings and the effective tracing/page filter. Property
+add menus are retained rather than recreated after every edit.
+
+Organization, physical-room and area-palette caches now retain complete immutable
+authoring snapshots. The palette no longer duplicates all entities and assets.
+Appraisal actions use the complete captured source; unchanged selection updates
+do not recalculate the report or its semantic mask. A drawing without an
+appraisal property avoids appraisal boundary/report work. Semantic failures
+continue to withhold totals. Legacy assembly host lookup is materialized only
+when needed, and completed scene vectors move into preview/canvas ownership.
+
+Canvas navigation retains selected IDs and indices, settled selection frames,
+and a compact device/layout key for unchanged label placement. A retained
+spatial index enumerates potentially visible committed geometry in its original
+painter order, including thick stroke envelopes, device widths and unsafe
+fallbacks. Same-ID/count source replacement invalidates retained data; active
+previews retain their existing content-sensitive path. Basic boundary decoding
+and validation reuse exact unchanged entities; failed scene publication clears
+partial cache updates. Independent source review identified an expansion
+regression, corrected before delivery, and approved the final source changes.
+These changes are not yet runtime verified or installed, and no speed
+improvement is asserted.
+The user's latest direction defers further test-suite runs while implementation
+proceeds. The existing candidate and rollback remain unchanged.
+The application-only compile in the existing Release tree exposed one missed
+pointer access in area-class assignment. That source call is corrected; the
+failed build receipt is preserved. No test-suite run was started.
+The resumed application-only compile completed successfully (build 40, unchanged
+tracked inputs). The current Release executable is runnable through
+`scripts/run.ps1 -Configuration Release`, which supplies the selected Qt/native
+runtime paths. This confirms compilation; runtime behavior and performance of
+the new batch remain unobserved. The installed desktop shortcut still targets
+the previous candidate and no package or installer was regenerated.
+
 ### Current implementation checkpoint
 
 The installed checkpoint includes editable appraisal room reporting, conditional
@@ -65,7 +109,7 @@ installed candidate above.
   declaration records throughout retained history. Older readers must refuse
   the elevated floor; old files remain readable without invented observations.
 
-The current source uses native format 57 and extraction format 55 for geometric
+The geometric-assembly source checkpoint uses native format 57 and extraction format 55 for geometric
 assembly catalogs, independent assembly entities, joined-roof material overrides
 and V2 living-unit reporting. Current, undone and deleted records retain the
 elevated floor; affected storage and exchange checks pass. Independent review
@@ -79,8 +123,212 @@ independent instances and catalog-owned geometric instances, including material
 changes, semantic picking, transform controls, Move and Undo. Root inspected
 the native material captures and compound canvas previews. Compound selections
 retain distinct profile geometry and colors and show one dimension callout.
-Site/building placement, terrain datums, annotation frames and joined IFC
-geometry are being integrated from separate private staging work.
+The later Site integration raises the formats to native 58 and extraction 56.
+It adds explicit property origins, building placements, terrain datums and
+annotation presentation frames without rewriting authored local geometry.
+The Site Plan workspace presents buildings together; floor plans and sheets
+retain their local coordinates. Canvas drawing, labels, references, native
+geometry and IFC use the same rigid-frame contract. Terrain absolute elevations
+require a matching vertical datum. IFC joined walls, roofs and nested assemblies
+retain their local source and receive the admitted placement once.
+
+The Site placement dialog previews before one atomic edit. Drawing, hosted
+openings, annotation edits and native transforms bind the captured source,
+selection and authoring context; rejected or cancelled edits preserve history.
+Undo/Redo now prunes annotation selection against the resulting document,
+including a disappearing non-primary child. An ordinary autosave mirror rebase
+does not invalidate unchanged drawing authority; an active recovery ledger
+retains its separate workspace fence. Idle cursor movement through a temporarily
+unavailable context produces no persistent authoring error, while actual drawing
+input still refuses an invalid context.
+
+The actual Release Site Plan workflow passes creation in an independently
+checked inverse frame, opening edits, reference Move/Rotate/Scale previews,
+repeated cancellation, commit, Undo/Redo and save/reopen, plus stale-source
+refusal before and during gestures. The annotation lifecycle also passes.
+A prior immutable run took 65.34 and 23.06 seconds respectively; its private
+receipt is `site-context-and-reference-checks-18.json`. Reference comparisons
+normalize only viewport raster sampling after an observed height change; source
+poses, image bytes and geometry remain independently checked. The native
+authority run `vertex-site-native-authority-actual05.json` passes actual OCCT
+publication, input-error recovery, reentrant cancellation and synchronous owner
+disposal during release, preparation and status/error callbacks. These focused
+developer-host observations are not installed or production qualification.
+
+The later identity checks pass ambiguous-child command refusal, ordinary Paste
+style remapping and Site annotation/model-ID collisions through Undo/Redo
+(`site-annotation-collision-and-clipboard-checks-24.json`). The broader run 25
+stopped on an outdated assembly-editor fixture route and the Site launcher's
+60-second inner deadline. The fixture now enters the actual nested editor;
+Site scenarios have flushed progress markers and a bounded 180-second inner
+deadline below CTest's 240-second limit. The later run 28 passes the full desktop
+workflow, standalone and embedded assembly workflows, drawing PDF, area callouts
+and output appearance. Two fixtures exposed stale expectations: the public
+scene renderer deliberately preserves committed labels, and the appraisal
+report now names above-grade finished area explicitly. Their corrected widget
+preview and report-title assertions await the selected-runtime rebuild. The
+updated Site launcher still needs its Release-configuration run.
+
+The first finite large-project diagnostic completed a byte-identical 50,000-object
+drawing storage round trip: two opens took 3.46/3.44 seconds and two saves took
+5.79/6.07 seconds on the observed development host. Desktop preparation remained
+CPU-bound for over ten minutes without its first interaction progress marker.
+Root stopped that exact task-owned diagnostic tree, preserving the failed,
+incomplete receipt and explicit operator-stop evidence. Source review found
+quadratic label-owner lookup, prior-label copying and collision scans. The
+current source replaces those scans with an owner index and exact incremental
+spatial queries, retaining candidate order, clearance and global fallback.
+The extracted production helper passes a frozen brute-force equivalence oracle,
+including 50,000 labels, holes, curves, manual offsets and global fallback.
+This is a real label-path improvement but does not resolve the bare 50,000
+triangle fixture, which creates no area callout text. The next diagnostic
+preserved a byte-identical storage round trip but exceeded its 300-second
+desktop deadline before ten interaction triplets. Its false/incomplete receipt
+is retained as `finite-performance-label-index-02.json`. The selected-runtime
+stage run (`qt6112-finite-large-plan-stages-14.json`) reaches its 300-second
+desktop deadline during the first edit triplet. Storage succeeds and the input
+is unchanged. Same-translation-unit markers identify repeated 45.62/49.16-second
+gaps between scene projection and canvas publication; the initial scene itself
+takes 3.13 seconds and painting takes 151 milliseconds. Frame preparation
+scans all 50,000 document entities for each triangle, doing 2.5 billion unrelated
+type checks. The source now scans a captured ordered list of actual assembly
+catalogs instead, preserving embedded-child collision priority, map order and
+snapshot lifetime. Narrow frame/report markers will verify its causal effect;
+painting and other refresh costs still need improvement. Entity counts and
+performance thresholds remain unchanged. No performance acceptance is claimed.
+
+The affected Qt 6.11.2 Release build passes
+(`qt6112-frame-autosave-diagnostic-build-15.json`). All nine frame, appraisal,
+label and Site checks pass in `qt6112-frame-site-affected-tests-16.json`, including
+the embedded-owner collision regression and the independent reference-worker
+Site drawing, annotation and opening lifecycles. The following 50,000-object
+run preserves its input but reaches the 300-second deadline during the second
+interaction triplet. The post-projection canvas gap falls from 45.62 seconds
+to 2.43 seconds; actual assembly frame attachment takes 28.48 milliseconds.
+Autosave source comparisons take 4.01 seconds initially and 22.08 seconds
+after retained history grows. A legacy mirror rebase takes 27.34 seconds even
+when the scheduler is not yet due. These are source-bound development-host
+observations, not qualifying responsiveness results.
+
+The next integrated source change shares immutable captured history while the
+editable Document retains its private vector. Successful appends invalidate a
+lazy capture cache; metadata remains freshly copied. Restoring and truncating
+history still require complete validation. The loader hydrates writable local
+records before publishing immutable storage. A detached test-only builder
+replaces 88 unsafe fixture mutations so adversarial tests cannot alter live
+cached history. Idle autosave now inspects metadata and scheduler generations;
+complete source checks and mirror reconstruction remain before an actual
+publication. Digest memoization retains the immutable source owner, identity,
+revision and names and preserves the frozen v1 domain. Full workspace snapshot
+publication checks remain unchanged. Independent review found no production
+authority defect and requested an actual capture-refusal/retry regression.
+That regression is integrated with a queue-join barrier before archive reading.
+The 42-file patch integration and the 1,706-file source allowlist check pass.
+The selected-runtime Release build passes in
+`qt6112-immutable-snapshot-autosave-build-19.json`; its preceding test-helper
+compilation failure remains recorded. The actual controller source-mismatch,
+refusal and retry check passes in `qt6112-autosave-source-controller-20.json`.
+The affected recovery/history run 21 passes 37 of 38 cases with unchanged
+tracked inputs. Its sole failure constructs a malformed canonical stair before
+the intended rejection assertion. The fixture now checks admission refusal,
+detached malformed-source refusal and full source preservation; its affected
+rerun passes in run 23. The complete original CTest log is preserved beside
+the run receipt.
+
+The canvas now retains exact model-space stroke and fill paths for a published
+interactive scene. Every scene publication invalidates the cache, including
+same-ID replacements. Selection styling stays at paint time; exact vertex and
+compound previews, floor ghosts and output retain their fresh geometry paths.
+Independent source review found no cache authority or lifetime defect and
+requested actual QWidget evidence for high DPI, selection and affine previews.
+The Release build passes in `qt6112-geometry-cache-stair-build-22.json`.
+The focused actual-widget checks pass in run 23, including DPR 1/2/3, warm
+selection/cosmetic strokes, translated/rotated/uniform/axis previews, exact
+vertex previews and committed output preservation. The corrected stair case
+also passes. Five of seven broader checks pass at that checkpoint. Subsequent
+diagnostics show that interactive grid/selection checks incorrectly called
+the committed output renderer; those fixtures now capture actual QWidget
+painting and use its DPI for hit coordinates. The PDF reader inserts a line
+break between rotated words. Its visible glyphs, embedded Unicode font maps,
+independent pypdf extraction and direct/recorded controls retain the words.
+The assertion now normalizes whitespace without removing any word or glyph.
+Actual drawing PDF export, navigation-independent composition, metric output,
+failure preservation and save/reopen pass in runs 31 and 33. The full canvas
+fixture reaches its later output-device text-size assertion, still unresolved;
+diagnostic captures are being added without changing its tolerances.
+
+The selected-runtime native geometry run 34 exposes an export arriving before
+the queued first camera fit after an initially hidden model becomes visible.
+Export now completes that pending fit against the settled native client, with
+owner-lifetime protection, or refuses a layout that is not ready. It does not
+refit an already navigated camera. The actual native geometry scenario passes
+at DPR 1 in run 36. Site native publication, gesture source authority and
+reentrant observer/disposal lifecycles pass in run 37. Those current-source
+developer-host checks have not replaced the installed candidate.
+
+Run 24 completes byte-identical 50,000-object storage round trips. Two opens
+take 2.69/2.42 seconds and two saves 4.26/4.32 seconds on this development host.
+Desktop capture completes four of 100 interaction triplets before the
+300-second deadline, preserving the original input. Actual due-autosave
+comparison takes 12.40 seconds and its validated legacy rebase takes 55.27
+seconds; a later pair takes 14.04 and 73.70 seconds. Idle scheduling is cheaper,
+but actual preparation still blocks the owner thread. Exact-path caching does
+not establish the navigation target. The next source work moves preparation
+and bounded completion proofs into the existing FIFO save queue, with final
+owner settlement before Save/transition/shutdown barriers. Independent review
+requires separate original/prepared authority fences and exactly-once failure
+settlement. No sampling, geometry approximation, workload reduction or relaxed
+target is introduced. No performance acceptance is claimed.
+
+The installed candidate's Qt 6.8.3 SVG parser has publisher-reported pattern and
+marker/mask faults reachable through project-pinned SVG artwork. Publisher
+patches and private backport recipes remain preserved. Current source selects
+the coherent public Qt 6.11.2 SDK and corresponding source archives instead.
+Actual release sources contain the reviewed QtBase ICC/temporary-path changes
+and both PDFium LCMS/libtiff backport guards; source correlation alone does not
+prove binary or import-worker behavior. Shared SVG admission now bounds bytes,
+nesting and estimated resource expansion before every project renderer,
+disables ambient trusted-source options, and selects raster decoders explicitly.
+Independent review found and corrected XML attribute-case, raw-versus-CSS URL,
+Unicode URL-whitespace and CSS type-case edge omissions. Missing resource IDs,
+cycles, ambiguous resource styles and over-budget artwork are explicitly refused;
+original pinned bytes are not rewritten. Optional composition-guide refusal no
+longer escapes painting; explicit output still refuses invalid artwork.
+The first all-target Qt 6.11.2 build stopped on two test-only enum-to-QChar
+conversions, now corrected explicitly. A later link exposed the document's
+missing building-codec dependency; that dependency is now explicit. The full
+Release build passes (`qt6112-dependency-svg-build-07.json`). All 345 supplied
+and adopted symbols pass palette/geometry preservation, transparent selected
+painting and reopened PDF colors. The corrected aggregate run
+(`qt6112-svg-corpus-native-13.json`) passes both palette and SVG admission,
+including actual optional-guide painting, explicit export refusal, persisted
+artwork and the full corpus. The selected native renderer supports the
+namespace-prefixed fixture previously expected to fail; that bounded form is
+now asserted as supported.
+Small native marker fixtures confirm exact XML attribute names, literal resource
+IDs, Unicode URL whitespace, bare internal references, lowercase stylesheet and
+inline styles. Qt's stylesheet name index misses the uppercase selector even
+though its later matcher is case-insensitive; admission conservatively counts
+that spelling. The original failed receipts remain preserved. No selected
+runtime or parser-security qualification is claimed by these fixture results.
+
+The current QtPdf notice snapshot adds 45 distinct original grant slices from
+77 current source members, with all member and slice hashes bound to the exact
+6.11.2 archive. The 47-file snapshot is separate from the preserved historical
+6.8.3 notices. It is now included in the current component inventory; the
+source-kit allowlist passed 1,705 of 1,705 tracked inputs at that checkpoint. Source provenance
+does not establish the selected binary's expanded inputs or license clearance.
+Do not promote a new candidate or treat the existing source/notice receipts as
+parser-security qualification before the selected remediation is integrated.
+
+The current QtBase notice supplement preserves eight original inline source
+excerpts for MD4, MD5, SHA-1, Emoji Segmenter and Khronos headers. Root re-read
+the pinned archive and verified every member and byte range before adding the
+ten notice/index/document files to the distribution inputs. Current CLDR files
+are already covered by the materialized index. SDK module selection remains
+separate from actual PE/package membership; this supplement establishes neither
+binary derivation nor licensing clearance.
+The refreshed source-kit allowlist passes 1,716 of 1,716 tracked inputs.
 
 Affected Release builds pass. The calculation, appraisal-document, reporting,
 Details, ANSI desktop lifecycle, partition, project-storage, exchange and native
@@ -247,15 +495,17 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Preserve the checked assembly, roof-material and unit-reporting checkpoint
-   with a scoped commit and verified remote ref.
-2. Integrate site/building placements, terrain datums and consistent
-   annotation/canvas/native/IFC coordinate consumers with atomic edits and
-   retained-history format coverage.
+1. Finish review of the integrated Site coordinate/authority batch, preserve it
+   with a scoped commit and verify the remote ref. The assembly, roof-material
+   and unit-reporting checkpoint is already committed as
+   `02f0ca51390811f9fdc1875fccdbca4bbf497bf8` with its remote ref verified.
+2. Compose the current runtime, exact notices, application source and dependency
+   source kit together. Preserve the active candidate and every rollback.
 3. Promote one coherent checked human-test package and retry the actual
    restricted architectural export route. Bind applicable evidence into the
    registry; continue the remaining locally actionable integrated checks.
-4. Continue D01 acquisition, D02 qualification and the remaining production
+4. Run the finite current-source large-project diagnostics, resolve observed
+   performance gaps, and continue D01 acquisition, D02 qualification and the remaining production
    gates. Candidate integrity and developer-machine checks do not substitute
    for clean offline installation, hardware or human acceptance.
 

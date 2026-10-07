@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/workspace_history_fence.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <iostream>
@@ -32,8 +33,8 @@ void check() {
     rejected([&] { validate_workspace_history_fence(current, bad); });
     bad = fence; bad.baseline_revision = current.revision() + 1;
     rejected([&] { validate_workspace_history_fence(current, bad); });
-    auto malformed = current;
-    const_cast<std::vector<RevisionRecord>&>(malformed.history()).back().undo_stack.push_back(999);
+    sketch::test::DetachedDocumentSnapshotFixture malformed(current);
+    malformed.history().back().undo_stack.push_back(999);
     rejected([&] { validate_workspace_history_fence(malformed, fence); });
     if (current.history().back().undo_stack != document.snapshot().history().back().undo_stack)
         throw std::runtime_error("fence validation mutated navigation");

@@ -226,7 +226,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_building_entities PUBLIC sketch_document_wall)
   target_sources(sketch_ifc_project_exchange PRIVATE src/architecture/ifc_native_geometry.cpp)
   target_compile_definitions(sketch_ifc_project_exchange PUBLIC SKETCH_IFC_NATIVE_GEOMETRY=1)
-  target_link_libraries(sketch_ifc_project_exchange PUBLIC sketch_architecture sketch_building_entities sketch_project_organization TKMesh)
+  target_link_libraries(sketch_ifc_project_exchange PUBLIC sketch_architecture sketch_building_entities sketch_project_organization sketch_assembly_geometry TKMesh)
 endif()
 if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_architecture PUBLIC sketch_hosted_opening_geometry sketch_wall_plan_junctions)
@@ -264,7 +264,7 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp
   src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp
   src/core/physical_wall_room_data.cpp src/core/stair_attachment_integrity.cpp
-  src/core/assembly_document_adapter.cpp)
+  src/core/assembly_document_adapter.cpp src/core/site_frame.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json sketch_stair_semantics PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
   sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
@@ -381,7 +381,9 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/physical_wall_room.cpp src/core/physical_wall_room_review.cpp
     src/core/physical_room_dimension_source.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_PHYSICAL_ROOM_REVIEW)
-  target_link_libraries(sketch_document PRIVATE sketch_architecture)
+  # Level edits validate the resulting stair/railing shapes through the shared
+  # building codec. Propagate its static link dependency to every document user.
+  target_link_libraries(sketch_document PRIVATE sketch_architecture sketch_building_entities)
   add_library(sketch_physical_wall_spaces INTERFACE)
   target_link_libraries(sketch_physical_wall_spaces INTERFACE sketch_document sketch_measurement_area_graph)
   add_library(sketch_physical_wall_room INTERFACE)
@@ -901,11 +903,23 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
 endif()
 
 if(SKETCH_BUILD_DESKTOP)
-  find_package(Qt6 6.8 CONFIG REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets PrintSupport Pdf Svg)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/qt-sdk.json" VERTEX_QT_SELECTION)
+  string(JSON VERTEX_QT_VERSION GET "${VERTEX_QT_SELECTION}" version)
+  string(JSON VERTEX_QT_DIRECTORY GET "${VERTEX_QT_SELECTION}" directory)
+  set(VERTEX_QT_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/.deps/qt/${VERTEX_QT_VERSION}/${VERTEX_QT_DIRECTORY}")
+  # EXACT rejects a stale cache; restricting Qt6_DIR prevents a global SDK fallback.
+  set(Qt6_DIR "${VERTEX_QT_PREFIX}/lib/cmake/Qt6" CACHE PATH "Pinned upstream Qt config" FORCE)
+  find_package(Qt6 ${VERTEX_QT_VERSION} EXACT CONFIG REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets PrintSupport Pdf Svg
+    PATHS "${VERTEX_QT_PREFIX}" NO_DEFAULT_PATH)
   find_package(Tesseract 5.5.2 EXACT CONFIG REQUIRED)
   get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
   get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
   get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
+  file(REAL_PATH "${VERTEX_QT_PREFIX}" VERTEX_QT_REAL_PREFIX)
+  file(REAL_PATH "${SKETCH_QT_PREFIX}" SKETCH_QT_REAL_PREFIX)
+  if(NOT SKETCH_QT_REAL_PREFIX STREQUAL VERTEX_QT_REAL_PREFIX)
+    message(FATAL_ERROR "Qt imported targets use a different prefix; configure a fresh selected-SDK build directory")
+  endif()
   add_library(sketch_reference_import src/desktop/reference_import.cpp)
   target_include_directories(sketch_reference_import PUBLIC src/desktop)
   target_link_libraries(sketch_reference_import PUBLIC sketch_windows_import_worker Qt6::Gui)
@@ -1003,10 +1017,11 @@ if(SKETCH_BUILD_DESKTOP)
     src/visualization/native_geometry_preparation.cpp)
   target_include_directories(sketch_visualization PUBLIC include)
   target_link_libraries(sketch_visualization PUBLIC sketch_architecture sketch_building_entities sketch_document sketch_assembly_geometry sketch_project_organization sketch_project_visibility sketch_architectural_workflow_contract Qt6::Widgets TKService TKV3d TKOpenGl TKMesh)
-  add_library(sketch_plan_canvas src/desktop/plan_canvas.cpp src/desktop/sketch_content_bounds.cpp src/desktop/symbol_svg_palette.cpp src/desktop/area_class_drag.cpp)
+  add_library(sketch_plan_canvas src/desktop/plan_canvas.cpp src/desktop/sketch_content_bounds.cpp src/desktop/symbol_svg_palette.cpp src/desktop/area_class_drag.cpp
+    src/desktop/site_canvas_presentation.cpp)
   target_include_directories(sketch_plan_canvas PUBLIC include PRIVATE src/desktop)
   target_link_libraries(sketch_plan_canvas PUBLIC Qt6::Widgets Qt6::Svg sketch_precision
-    sketch_reference_grid sketch_hosted_opening_geometry sketch_annotation_catalog)
+    sketch_reference_grid sketch_hosted_opening_geometry sketch_annotation_catalog sketch_document)
   add_library(sketch_boundary_input src/desktop/boundary_input_dialog.cpp)
   target_include_directories(sketch_boundary_input PUBLIC include)
   target_link_libraries(sketch_boundary_input PUBLIC sketch_boundary_authoring Qt6::Widgets)
@@ -1022,7 +1037,7 @@ if(SKETCH_BUILD_DESKTOP)
     src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
     src/desktop/text_library_panel.cpp
     src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp
-    src/desktop/assembly_authoring_dialog.cpp
+    src/desktop/assembly_authoring_dialog.cpp src/desktop/site_placement_dialog.cpp
     src/desktop/drawing_input_panel.cpp src/desktop/area_class_palette.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
   target_link_libraries(sketch_desktop PUBLIC sketch_floor_reference)
@@ -1125,6 +1140,14 @@ if(SKETCH_BUILD_DESKTOP)
     target_compile_definitions(symbol_svg_palette_tests PRIVATE
       VERTEX_SYMBOL_PALETTE_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets/symbols/architectural_v2/symbols")
     add_test(NAME symbol_svg_palette COMMAND symbol_svg_palette_tests)
+    add_executable(svg_admission_tests tests/svg_admission_tests.cpp)
+    target_link_libraries(svg_admission_tests PRIVATE sketch_plan_canvas sketch_annotation_catalog Qt6::Widgets Qt6::Svg)
+    add_test(NAME svg_admission COMMAND svg_admission_tests
+      "${CMAKE_SOURCE_DIR}/assets/symbols/architectural_v2/symbols")
+    set_tests_properties(svg_admission PROPERTIES
+      TIMEOUT 60
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(symbol_palette_desktop_tests tests/symbol_palette_desktop_tests.cpp)
     target_link_libraries(symbol_palette_desktop_tests PRIVATE sketch_desktop)
     qt_add_resources(symbol_palette_desktop_tests symbol_palette_test_fonts PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
@@ -1141,6 +1164,7 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(object_appearance_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(output_view_appearance_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(symbol_svg_palette_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(svg_admission_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(symbol_palette_desktop_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
     set_tests_properties(text_library text_library_desktop wall_dimension_desktop appraisal_report_desktop boundary_editing_desktop exterior_boundary_resize_desktop redraw_angle_removal_desktop object_appearance_desktop output_view_appearance_desktop symbol_svg_palette symbol_palette_desktop PROPERTIES
@@ -2204,6 +2228,12 @@ if(BUILD_TESTING)
   add_executable(assembly_document_adapter_tests tests/assembly_document_adapter_tests.cpp)
   target_link_libraries(assembly_document_adapter_tests PRIVATE sketch_document)
   add_test(NAME assembly_document_adapter COMMAND assembly_document_adapter_tests)
+  add_executable(site_frame_tests tests/site_frame_tests.cpp)
+  target_link_libraries(site_frame_tests PRIVATE sketch_document)
+  add_test(NAME site_frame COMMAND site_frame_tests)
+  if(MSVC)
+    target_compile_options(site_frame_tests PRIVATE /W4 /permissive- /utf-8)
+  endif()
   if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     add_executable(assembly_geometry_tests tests/assembly_geometry_tests.cpp)
     target_link_libraries(assembly_geometry_tests PRIVATE sketch_assembly_geometry)
@@ -2230,6 +2260,42 @@ if(BUILD_TESTING)
       target_compile_options(embedded_assembly_workflow_desktop_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
     set_tests_properties(assembly_authoring_dialog assembly_workflow_desktop embedded_assembly_workflow_desktop PROPERTIES ENVIRONMENT
+      "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    add_executable(site_canvas_presentation_tests tests/site_canvas_presentation_tests.cpp)
+    target_link_libraries(site_canvas_presentation_tests PRIVATE sketch_plan_canvas)
+    add_test(NAME site_canvas_presentation COMMAND site_canvas_presentation_tests)
+    add_executable(site_placement_dialog_tests tests/site_placement_dialog_tests.cpp)
+    target_link_libraries(site_placement_dialog_tests PRIVATE sketch_desktop)
+    add_test(NAME site_placement_dialog COMMAND site_placement_dialog_tests)
+    foreach(site_desktop_fixture IN ITEMS site_native_authority site_plan_workflow site_annotation_lifecycle site_opening_frame)
+      add_executable(${site_desktop_fixture}_desktop_tests tests/${site_desktop_fixture}_desktop_tests.cpp)
+      target_link_libraries(${site_desktop_fixture}_desktop_tests PRIVATE sketch_desktop)
+      qt_add_resources(${site_desktop_fixture}_desktop_tests ${site_desktop_fixture}_fonts
+        PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+      if(site_desktop_fixture STREQUAL "site_native_authority" OR NOT WIN32)
+        add_test(NAME ${site_desktop_fixture}_desktop COMMAND ${site_desktop_fixture}_desktop_tests)
+      else()
+        find_program(SKETCH_SITE_TEST_POWERSHELL7 NAMES pwsh REQUIRED)
+        add_dependencies(${site_desktop_fixture}_desktop_tests
+          vertex-import-worker windows_import_worker_tests windows_import_worker_probe)
+        add_test(NAME ${site_desktop_fixture}_desktop COMMAND "${SKETCH_SITE_TEST_POWERSHELL7}"
+          -NoProfile -NonInteractive -File "${CMAKE_SOURCE_DIR}/scripts/test-import-worker-independent.ps1"
+          -Configuration Release -SiteFixture "${site_desktop_fixture}" CONFIGURATIONS Release)
+        set_tests_properties(${site_desktop_fixture}_desktop PROPERTIES RUN_SERIAL TRUE)
+      endif()
+      set_tests_properties(${site_desktop_fixture}_desktop PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+      if(MSVC)
+        target_compile_options(${site_desktop_fixture}_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+      endif()
+    endforeach()
+    if(MSVC)
+      target_compile_options(site_canvas_presentation_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(site_placement_dialog_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    set_tests_properties(site_placement_dialog PROPERTIES ENVIRONMENT
       "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   endif()
@@ -2393,5 +2459,11 @@ if(BUILD_TESTING)
     # wall/source repair dialogs, copy and output. Observed Release execution
     # takes about 174 seconds; the ordinary focused-test guard truncates it.
     set_tests_properties(wall_measurement_desktop PROPERTIES TIMEOUT 300)
+    if(WIN32 AND TEST site_plan_workflow_desktop)
+      # These fixtures launch the actual reference decoder from a captured,
+      # immutable runtime. Preserve the independent runner's bounded deadline.
+      set_tests_properties(site_plan_workflow_desktop site_annotation_lifecycle_desktop
+        site_opening_frame_desktop PROPERTIES TIMEOUT 240)
+    endif()
   endif()
 endif()

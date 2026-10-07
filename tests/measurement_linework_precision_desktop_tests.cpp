@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/measurement_linework.hpp"
@@ -271,8 +272,8 @@ void test_stale_maps_layer_phase_and_workspace() {
         const auto source=window.document().snapshot();
         require(source.revision()==0, "valid source-map fixture has a create record only");
         input(window,canvas,[&](BoundaryInputDialog& dialog) {
-            auto altered=source;
-            auto& record=const_cast<std::vector<RevisionRecord>&>(altered.history()).front();
+            sketch::test::DetachedDocumentSnapshotFixture altered(source);
+            auto& record=altered.history().front();
             if (!asset_change) record.entities.begin()->second.extensions["precision_fixture"]="changed source map";
             else record.assets.emplace("precision-map-asset",Asset::create("precision-map-asset","application/octet-stream",{std::byte{1}}));
             auto replacement=Document::fork(altered);

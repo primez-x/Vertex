@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -776,8 +777,8 @@ void test_stale_foreign_same_revision_head_and_mutated_preview_are_rejected() {
     stale.apply(ApplyEntityChanges{stale.revision(), {EntityChange::upsert(renamed)}, {}, "advance"});
     require_rejected_unchanged(stale, stale_preview, "stale preview was applied to a newer head");
 
-    auto altered_snapshot = document.snapshot();
-    auto& altered_history = const_cast<std::vector<RevisionRecord>&>(altered_snapshot.history());
+    sketch::test::DetachedDocumentSnapshotFixture altered_snapshot(document.snapshot());
+    auto& altered_history = altered_snapshot.history();
     altered_history.at(static_cast<std::size_t>(altered_snapshot.revision()))
         .entities.at("wall-a").properties["classification"] = "forged same revision head";
     const auto altered_preview = preview_constraint_authoring(altered_snapshot, intent);
@@ -2229,8 +2230,8 @@ void test_curved_endpoint_relations_and_typed_propagation() {
     try { auto raw=Document::fork(wall_before); raw.apply(ApplyEntityChanges{raw.revision(),{EntityChange::upsert(raw_wall)}, {},"raw endpoint"}); }
     catch (const DocumentError&) { rejected=true; }
     require(rejected,"raw wall payload laundered a constrained curved endpoint solve");
-    auto missing=wall_after;
-    const_cast<std::vector<RevisionRecord>&>(missing.history()).back().boundary_constraint_changes.reset();
+    sketch::test::DetachedDocumentSnapshotFixture missing(wall_after);
+    missing.history().back().boundary_constraint_changes.reset();
     rejected=false;
     try { (void)Document::fork(missing); } catch (const DocumentError&) { rejected=true; }
     require(rejected,"history accepted curved endpoint deformation with missing proof");

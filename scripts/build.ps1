@@ -44,9 +44,11 @@ $nativePrefix = Join-Path $projectRoot '.deps\native\x64-windows'
 # for the now-default headless engine build.
 $configureArguments += @('-DSKETCH_BUILD_ARCHITECTURE=ON', "-DCMAKE_PREFIX_PATH=$nativePrefix")
 if ($Desktop) {
-    $qtPrefix = Join-Path $projectRoot '.deps\qt\6.8.3\msvc2022_64'
+    . (Join-Path $PSScriptRoot 'qt-selection.ps1')
+    $qtSelection = Get-VertexQtSelection -ProjectRoot $projectRoot
+    $qtPrefix = $qtSelection.prefix
     if (!(Test-Path -LiteralPath (Join-Path $qtPrefix 'lib\cmake\Qt6\Qt6Config.cmake'))) {
-        throw 'Pinned Qt 6.8.3 is missing. Run the documented Qt bootstrap first.'
+        throw "Pinned Qt $($qtSelection.version) is missing. Run the documented Qt bootstrap first."
     }
     $configureArguments += @('-DSKETCH_BUILD_DESKTOP=ON', "-DCMAKE_PREFIX_PATH=$qtPrefix;$nativePrefix")
     if ($CadRuntimeRoot) {

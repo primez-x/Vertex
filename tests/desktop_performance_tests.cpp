@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <chrono>
+#include <cstdio>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -22,6 +23,17 @@
 namespace {
 using json = nlohmann::json;
 using sketch::desktop::MainWindow;
+
+// Opt-in diagnostic only; acceptance metrics retain their existing boundaries.
+void capture_diagnostic_stage(const char* stage) {
+    if (!qEnvironmentVariableIsSet("VERTEX_CAPTURE_STAGES")) return;
+    static const auto started = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    std::fprintf(stderr, "capture stage: %s [%.3f ms since first TU marker]\n", stage, elapsed);
+    std::fflush(stderr);
+}
+
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -36,12 +48,18 @@ json report(const MainWindow& window) {
 json capture_interactions(MainWindow& window, int samples) {
     require(samples > 0 && samples <= 1000 && samples % 2 == 0,
             "capture count must be an even integer from 2 through 1000");
+    capture_diagnostic_stage("interactions.snapshot.begin");
     const auto original = window.document().snapshot();
+    capture_diagnostic_stage("interactions.snapshot.end");
     window.setAttribute(Qt::WA_DontShowOnScreen);
     window.setAttribute(Qt::WA_ShowWithoutActivating);
     window.resize(1200, 800);
+    capture_diagnostic_stage("interactions.show.begin");
     window.show();
+    capture_diagnostic_stage("interactions.show.end");
+    capture_diagnostic_stage("interactions.initial_events.begin");
     QApplication::processEvents();
+    capture_diagnostic_stage("interactions.initial_events.end");
     sketch::desktop::PlanCanvas* canvas = nullptr;
     for (auto* widget : window.findChildren<QWidget*>()) {
         auto* candidate = dynamic_cast<sketch::desktop::PlanCanvas*>(widget);
@@ -56,14 +74,21 @@ json capture_interactions(MainWindow& window, int samples) {
         {probe_id + "s0", probe_id + "v0", probe_id + "v1", {{0, 0}, {5, 0}, 0}},
         {probe_id + "s1", probe_id + "v1", probe_id + "v2", {{5, 0}, {0, 4}, 0}},
         {probe_id + "s2", probe_id + "v2", probe_id + "v0", {{0, 4}, {0, 0}, 0}}}};
+    capture_diagnostic_stage("interactions.probe_apply.begin");
     window.document().apply(sketch::ApplyEntityChanges{
         .expected_revision = window.document().revision(),
         .entity_changes = {sketch::EntityChange::upsert(sketch::encode_identified_boundary_entity(probe))},
         .message = "prepare temporary performance capture probe"});
+    capture_diagnostic_stage("interactions.probe_apply.end");
+    capture_diagnostic_stage("interactions.probe_undo.begin");
     if (!window.undoCommand())
         throw std::runtime_error("capture probe setup failed: " + window.lastError().toStdString());
+    capture_diagnostic_stage("interactions.probe_undo.end");
+    capture_diagnostic_stage("interactions.probe_events.begin");
     QApplication::processEvents();
+    capture_diagnostic_stage("interactions.probe_events.end");
     window.beginPerformanceRun();
+    capture_diagnostic_stage("interactions.measurement.begin");
     const auto wait_for_sample = [&](const char* metric, int expected) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         do {
@@ -76,20 +101,31 @@ json capture_interactions(MainWindow& window, int samples) {
         throw std::runtime_error(std::string("paint sample timeout: ") + metric);
     };
     for (int index = 0; index < samples; ++index) {
+        if (qEnvironmentVariableIsSet("VERTEX_CAPTURE_STAGES")) {
+            std::fprintf(stderr, "capture triplet: %d/%d\n", index + 1, samples);
+            std::fflush(stderr);
+        }
+        capture_diagnostic_stage("triplet.navigation.begin");
         canvas->zoomBy(index % 2 == 0 ? 1.01 : 1.0 / 1.01);
         wait_for_sample("navigation", index + 1);
+        capture_diagnostic_stage("triplet.navigation.end");
         const QPointF position(100 + index % 50, 100 + index % 37);
         QMouseEvent event(QEvent::MouseMove, position, position, Qt::NoButton,
                           Qt::NoButton, Qt::NoModifier);
+        capture_diagnostic_stage("triplet.input.begin");
         QApplication::sendEvent(canvas, &event);
         wait_for_sample("input", index + 1);
+        capture_diagnostic_stage("triplet.input.end");
+        capture_diagnostic_stage("triplet.edit.begin");
         require(index % 2 == 0 ? window.redoCommand() : window.undoCommand(),
                 "capture history command failed");
         wait_for_sample("edit", index + 1);
+        capture_diagnostic_stage("triplet.edit.end");
         if (samples >= 100 && (index + 1) % 10 == 0)
             std::cerr << "interaction capture: " << index + 1 << '/' << samples
                       << " navigation/input/edit triplets completed\n";
     }
+    capture_diagnostic_stage("interactions.integrity.begin");
     const auto after = window.document().snapshot();
     require(original.document_id() == after.document_id() &&
                 original.entities() == after.entities() && original.assets() == after.assets(),
@@ -106,6 +142,7 @@ json capture_interactions(MainWindow& window, int samples) {
         {"unresolved", {"native 3D and compositor/display timings", "sheet image decoding",
             "reference hardware agreement", "desktop open/save sample collection",
             "long-regeneration cancellation observation", "production qualification"}}};
+    capture_diagnostic_stage("interactions.integrity.end");
     window.document().mark_saved(window.document().revision());
     return result;
 }
@@ -253,6 +290,7 @@ int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
     if (application.arguments().contains(QStringLiteral("--capture"))) {
+        capture_diagnostic_stage("capture.enter");
         try {
             const auto args = application.arguments();
             require(args.size() == 4 && args[1] == QStringLiteral("--capture"),
@@ -260,14 +298,22 @@ int main(int argc, char** argv) {
             QFile output(args[3]);
             require(output.open(QIODevice::WriteOnly | QIODevice::NewOnly),
                     "capture output must be a writable new path");
+            capture_diagnostic_stage("capture.load.begin");
             auto loaded = sketch::ProjectStore::load(std::filesystem::path(args[2].toStdWString()));
+            capture_diagnostic_stage("capture.load.end");
+            capture_diagnostic_stage("capture.digest.begin");
             const auto source_digest = sketch::document_authoring_source_digest_v1(loaded.document.snapshot());
+            capture_diagnostic_stage("capture.digest.end");
+            capture_diagnostic_stage("capture.constructor.begin");
             MainWindow window(std::make_shared<sketch::Document>(std::move(loaded.document)));
+            capture_diagnostic_stage("capture.constructor.end");
             auto result = capture_interactions(window, 100);
+            capture_diagnostic_stage("capture.interactions.end");
             result["source_project_sha256"] = loaded.file_sha256;
             result["source_authoring_sha256"] = source_digest;
             const auto bytes = QByteArray::fromStdString(result.dump(2) + "\n");
             require(output.write(bytes) == bytes.size() && output.flush(), "capture output write failed");
+            capture_diagnostic_stage("capture.output.end");
             return 0;
         } catch (const std::exception& error) {
             std::cerr << "interaction capture: " << error.what() << '\n';

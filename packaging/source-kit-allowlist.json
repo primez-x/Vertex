@@ -3335,6 +3335,14 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/desktop/site_placement_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/svg_admission.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/desktop/symbol_svg_palette.hpp"
     },
     {
@@ -3647,6 +3655,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/site_frame.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/slab_semantics.hpp"
     },
     {
@@ -3676,6 +3688,10 @@
     {
       "category": "source",
       "path": "include/sketch/survey_source_version.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/svg_admission.hpp"
     },
     {
       "category": "source",
@@ -3963,6 +3979,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/qt-selection.ps1"
+    },
+    {
+      "category": "source",
       "path": "scripts/qualification/compose_controlled_cad_runtime.py"
     },
     {
@@ -3992,6 +4012,10 @@
     {
       "category": "source",
       "path": "scripts/qualification/native_wheel_source_inputs.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/qualification/qt_source_inputs.py"
     },
     {
       "category": "source",
@@ -4555,6 +4579,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/site_frame.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/slab_semantics.cpp"
     },
     {
@@ -4808,6 +4836,18 @@
     {
       "category": "source",
       "path": "src/desktop/sheet_layout_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/site_canvas_presentation.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/site_canvas_presentation.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/site_placement_dialog.cpp"
     },
     {
       "category": "source",
@@ -5771,6 +5811,34 @@
     },
     {
       "category": "source",
+      "path": "tests/site_annotation_lifecycle_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/site_canvas_presentation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/site_frame_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/site_native_authority_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/site_opening_frame_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/site_placement_dialog_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/site_plan_workflow_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/sketch_content_output_tests.cpp"
     },
     {
@@ -5796,6 +5864,10 @@
     {
       "category": "source",
       "path": "tests/support/boundary_recovery_oracle.hpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/support/detached_document_snapshot.hpp"
     },
     {
       "category": "source",
@@ -5828,6 +5900,10 @@
     {
       "category": "source",
       "path": "tests/survey_update_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/svg_admission_tests.cpp"
     },
     {
       "category": "source",
@@ -6251,6 +6327,458 @@
     },
     {
       "category": "source",
+      "path": "third_party/notices/native/libarchive/3.8.8/Apache-2.0.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/native/libarchive/3.8.8/archive_read_support_filter_compress-notice.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/native/libarchive/3.8.8/archive_write_add_filter_compress-notice.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/native/libarchive/3.8.8/BLAKE2-notice.txt"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.0BSD"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.GPLv2"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.GPLv3"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.LGPLv2.1"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/native/README.md"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtcore-md4-header-inline.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtcore-md4-inline.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtcore-md5-header-inline.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtcore-md5-inline.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtcore-sha1-inline.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtgui-emoji-segmenter-inline.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtgui-khronos-qopengles2ext-copyright.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/headers/qtgui-khronos-qopenglext-copyright.txt"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/notices/qt-base/6.11.2/notice-index.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-base/6.11.2/README.md"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/001.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/002.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/003.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/004.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/005.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/006.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/007.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/008.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/009.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/010.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/011.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/012.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/013.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/014.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/015.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/016.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/017.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/018.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/019.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/020.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/021.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/022.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/023.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/024.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/025.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/026.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/027.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/028.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/029.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/030.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/031.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/032.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/033.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/034.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/035.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/036.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/037.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/038.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/039.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/040.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/041.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/042.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/043.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/044.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/headers/045.txt"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/notices/qt-pdf/6.11.2/notice-index.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/6.11.2/README.md"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/001.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/002.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/003.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/004.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/005.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/006.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/007.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/008.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/009.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/010.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/011.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/012.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/013.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/014.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/015.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/016.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/017.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/018.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/019.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/020.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/021.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/022.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/023.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/024.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/025.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/026.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/027.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/028.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/029.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/030.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/031.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/032.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/033.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/034.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/035.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/036.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/037.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/038.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/039.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/040.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/041.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/042.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/043.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/044.txt"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/headers/045.txt"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/notices/qt-pdf/notice-index.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/notices/qt-pdf/README.md"
+    },
+    {
+      "category": "source",
       "path": "third_party/planegcs/SOURCE.md"
     },
     {
@@ -6320,6 +6848,10 @@
     {
       "category": "source",
       "path": "third_party/planegcs/upstream/src/Mod/Sketcher/SketcherGlobal.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/qt-sdk.json"
     },
     {
       "category": "source",

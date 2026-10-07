@@ -7,9 +7,16 @@
 #include "sketch/project_import_worker.hpp"
 
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <TopoDS_Compound.hxx>
 #include <Poly_Triangulation.hxx>
 #include <algorithm>
 #include <cmath>
@@ -92,6 +99,175 @@ std::vector<IfcNativeMesh> tessellate(const TopoDS_Shape& shape,
     return result;
 }
 } // namespace
+
+namespace {
+void join_preflight(std::size_t members, std::size_t vertices, std::size_t triangles) {
+    if (members < 2 || members > project_import_boundary_segment_limit ||
+        members * (members - 1) / 2 > project_import_geometry_pair_limit ||
+        members > std::min(vertices, triangles) / 64)
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+}
+IfcNativeJoinMesh join_mesh(const RoofJoinPartition& partition,
+    std::size_t vertices, std::size_t triangles) {
+    IfcNativeJoinMesh result{partition.fused_volume, {}};
+    for (const auto& region : partition.regions) {
+        IfcNativeJoinRegion output{region.source_roof_id, region.gross_volume, region.net_volume, {}};
+        if (!region.shape.IsNull()) {
+            output.meshes = tessellate(region.shape, vertices, triangles);
+            for (const auto& mesh : output.meshes) {
+                if (mesh.vertices.size() > vertices || mesh.triangles.size() > triangles)
+                    throw std::invalid_argument("ifc_mesh_budget_exceeded");
+                vertices -= mesh.vertices.size(); triangles -= mesh.triangles.size();
+            }
+        } else if (region.net_volume != 0) throw std::invalid_argument("ifc_native_join_region_invalid");
+        result.regions.push_back(std::move(output));
+    }
+    return result;
+}
+
+RoofJoinPartition ordered_wall_regions(const WallJoin& join,
+    const std::vector<TopoDS_Shape>& shapes, const TopoDS_Shape& fused) {
+    RoofJoinPartition partition{fused, solid_volume(fused), {}};
+    TopoDS_Shape earlier;
+    double total = 0;
+    for (std::size_t i = 0; i < shapes.size(); ++i) {
+        auto region = shapes[i];
+        const auto gross = solid_volume(region);
+        double overlap = 0;
+        if (!earlier.IsNull()) {
+            BRepAlgoAPI_Common common(region, earlier); common.Build();
+            if (!common.IsDone() || common.HasErrors()) throw std::invalid_argument("ifc_native_wall_join_partition_invalid");
+            overlap = solid_volume(common.Shape());
+            BRepAlgoAPI_Cut cut(region, earlier); cut.Build();
+            if (!cut.IsDone() || cut.HasErrors()) throw std::invalid_argument("ifc_native_wall_join_partition_invalid");
+            BRep_Builder builder; TopoDS_Compound solids; builder.MakeCompound(solids);
+            std::size_t count = 0;
+            for (TopExp_Explorer solid(cut.Shape(), TopAbs_SOLID); solid.More(); solid.Next()) {
+                builder.Add(solids, solid.Current()); ++count;
+            }
+            region = count ? TopoDS_Shape{solids} : TopoDS_Shape{};
+        }
+        const auto net = solid_volume(region), tolerance = 1e-8 * std::max(1.0, partition.fused_volume);
+        if (!std::isfinite(net) || net < 0 || std::abs(gross-overlap-net) > tolerance ||
+            (!region.IsNull() && !BRepCheck_Analyzer(region).IsValid()))
+            throw std::invalid_argument("ifc_native_wall_join_partition_invalid");
+        partition.regions.push_back({join.wall_ids[i], region, gross, net}); total += net;
+        if (earlier.IsNull()) earlier = shapes[i];
+        else {
+            BRepAlgoAPI_Fuse fuse(earlier, shapes[i]); fuse.Build();
+            if (!fuse.IsDone() || fuse.HasErrors() || fuse.Shape().IsNull() || !BRepCheck_Analyzer(fuse.Shape()).IsValid())
+                throw std::invalid_argument("ifc_native_wall_join_partition_invalid");
+            earlier = fuse.Shape();
+        }
+    }
+    if (std::abs(total-partition.fused_volume) > 1e-8 * std::max(1.0, partition.fused_volume))
+        throw std::invalid_argument("ifc_native_wall_join_partition_invalid");
+    return partition;
+}
+}
+
+IfcNativeJoinMesh ifc_native_wall_join_mesh(const WallJoin& join,
+    const std::vector<Wall>& walls, std::size_t vertices, std::size_t triangles) {
+    join_preflight(walls.size(), vertices, triangles);
+    std::size_t openings = 0, parts = 0, stations = 0;
+    for (const auto& wall : walls) {
+        preflight(wall, vertices, triangles);
+        openings += wall.openings.size();
+        parts += std::max(std::size_t{1}, wall.layers.size());
+        const auto angle = std::abs(wall.baseline.sweep_radians);
+        if (angle > 1e-7) {
+            const auto radius = std::hypot(wall.baseline.end.x-wall.baseline.start.x,
+                wall.baseline.end.y-wall.baseline.start.y) / (2*std::abs(std::sin(angle*.5))) + wall.thickness;
+            const auto step = 2*std::acos(std::clamp(1-ifc_native_mesh_deviation_m*.5/radius,-1.0,1.0));
+            const auto needed = std::ceil(angle/step) * std::max(std::size_t{1},wall.layers.size());
+            if (!std::isfinite(needed) || needed < 1 || needed > static_cast<double>(std::min(vertices,triangles)/64-stations))
+                throw std::invalid_argument("ifc_mesh_budget_exceeded");
+            stations += static_cast<std::size_t>(needed);
+        }
+        if (parts > 256 || parts > std::min(vertices, triangles) / 64 ||
+            openings > 256 || parts + openings + stations > std::min(vertices, triangles) / 64)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    }
+    // The wall factory supplies the authoritative connectivity and hosted-cut
+    // contract. Ordered subtraction assigns those same solids' overlap without
+    // introducing roof semantics or the roof factory's sixteen-member limit.
+    const auto fused = make_wall_join(join, walls);
+    std::vector<TopoDS_Shape> shapes;
+    for (const auto& id : join.wall_ids) {
+        const auto source = std::find_if(walls.begin(), walls.end(), [&](const Wall& wall) { return wall.id == id; });
+        if (source == walls.end()) throw std::invalid_argument("ifc_native_join_source_missing");
+        shapes.push_back(make_wall(*source));
+    }
+    const auto partition = ordered_wall_regions(join, shapes, fused);
+    // make_wall emits the actual cut layers as ordered direct compound
+    // children. Intersect those with the disjoint member region so layer
+    // bindings follow real geometry, including arcs, slopes and junction cuts.
+    RoofJoinPartition materials{partition.shape, partition.fused_volume, {}};
+    std::vector<std::optional<std::string>> layer_ids;
+    for (std::size_t i = 0; i < join.wall_ids.size(); ++i) {
+        const auto& source = *std::find_if(walls.begin(), walls.end(), [&](const Wall& wall) { return wall.id == join.wall_ids[i]; });
+        const auto& region = partition.regions[i];
+        if (source.layers.empty()) {
+            materials.regions.push_back(region); layer_ids.push_back(std::nullopt);
+            continue;
+        }
+        TopoDS_Iterator child(shapes[i]);
+        double sum = 0;
+        for (const auto& layer : source.layers) {
+            if (!child.More()) throw std::invalid_argument("ifc_native_wall_layer_partition_invalid");
+            const auto layer_shape = child.Value(); child.Next();
+            TopoDS_Shape net;
+            if (!region.shape.IsNull()) {
+                BRepAlgoAPI_Common common(layer_shape, region.shape);
+                common.Build();
+                if (!common.IsDone() || common.HasErrors()) throw std::invalid_argument("ifc_native_wall_layer_partition_invalid");
+                BRep_Builder builder; TopoDS_Compound solids; builder.MakeCompound(solids);
+                std::size_t count = 0;
+                for (TopExp_Explorer solid(common.Shape(), TopAbs_SOLID); solid.More(); solid.Next()) {
+                    builder.Add(solids, solid.Current()); ++count;
+                }
+                if (count) net = solids;
+                if (!net.IsNull() && !BRepCheck_Analyzer(net).IsValid())
+                    throw std::invalid_argument("ifc_native_wall_layer_partition_invalid");
+            }
+            const auto gross = solid_volume(layer_shape), volume = solid_volume(net);
+            if (!std::isfinite(volume) || volume < 0 || volume > gross + 1e-8 * std::max(1.0, gross))
+                throw std::invalid_argument("ifc_native_wall_layer_partition_invalid");
+            materials.regions.push_back({source.id, net, gross, volume});
+            layer_ids.push_back(layer.id); sum += volume;
+        }
+        if (child.More() || std::abs(sum - region.net_volume) > 1e-8 * std::max(1.0, region.net_volume))
+            throw std::invalid_argument("ifc_native_wall_layer_partition_invalid");
+    }
+    auto result = join_mesh(materials, vertices, triangles);
+    for (std::size_t i = 0; i < result.regions.size(); ++i) result.regions[i].layer_id = layer_ids[i];
+    return result;
+}
+
+IfcNativeJoinMesh ifc_native_roof_join_mesh(const RoofJoin& join,
+    const std::vector<Entity>& roofs, std::size_t vertices, std::size_t triangles) {
+    validate_roof_join_semantics(join);
+    if (roofs.size() != join.roof_ids.size()) throw std::invalid_argument("ifc_native_join_source_count_invalid");
+    join_preflight(roofs.size(), vertices, triangles);
+    std::vector<TopoDS_Shape> shapes;
+    std::size_t cuts = 0;
+    for (const auto& id : join.roof_ids) {
+        const auto source = std::find_if(roofs.begin(), roofs.end(), [&](const Entity& roof) { return roof.id == id; });
+        if (source == roofs.end() || source->type != "roof") throw std::invalid_argument("ifc_native_join_source_missing");
+        const auto openings = source->properties.find("roof_openings");
+        if (openings != source->properties.end()) {
+            if (!openings->is_array()) throw std::invalid_argument("ifc_native_roof_openings_invalid");
+            cuts += openings->size();
+        }
+        if (cuts > 256 || cuts > std::min(vertices, triangles) / 64)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    }
+    for (const auto& id : join.roof_ids) {
+        const auto source = std::find_if(roofs.begin(), roofs.end(), [&](const Entity& roof) { return roof.id == id; });
+        shapes.push_back(make_building_shape(decode_building_entity(*source)));
+    }
+    return join_mesh(make_roof_join_partition(join, shapes), vertices, triangles);
+}
 
 std::vector<IfcNativeMesh> ifc_native_wall_mesh(const Wall& wall,
     std::size_t vertices, std::size_t triangles) {

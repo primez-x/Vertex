@@ -1,4 +1,39 @@
-# Qt 6.8.3 notice materialization
+# Qt notice materialization
+
+## Selected Qt 6.11.2 source notices
+
+Current source selects the unmodified public Qt 6.11.2 SDK through
+`third_party/qt-sdk.json`. The root-owned notice materialization completed from
+all three checksum-verified corresponding source archives. It retained 3,033
+original member files, totalling 28,087,707 bytes: 191 QtBase files
+(17,983,266 bytes), 11 QtSVG files (89,686 bytes), and 2,831 QtWebEngine/PDF files
+(10,014,755 bytes). The complete index is `.deps/qt-notices/6.11.2/notice-index.json`.
+The selected Qt library route remains LGPL-3.0-only; Vertex remains
+GPL-3.0-or-later.
+
+QtSVG renamed its original XSVG permission file to `src/svg/LICENSE.XSVG.txt`.
+The scanner requires that exact member for this version, preserving the old
+6.8.3 path and refusing missing or empty permission text. Native QtBase/Pdf/Svg
+module selection uses actual Core/Pdf/Svg SPDX records; the earlier first-record
+fallback would have selected the 6.11.2 syncqt tool instead of Core. No old SDK
+binary hash override is applied to the new SDK.
+
+The actual release source includes the reviewed PDFium LCMS cube-size and TIFF
+JPEG precision backports. These source observations do not establish installed
+binary behavior. Fifty-five notice references remain explicitly unresolved;
+the index preserves their original metadata and reasons. Binary-to-SBOM
+agreement, transitive shipped-source binding, distribution rights and a clean
+offline source rebuild remain separate qualification obligations. All
+qualification flags remain false.
+
+```powershell
+python -B scripts/qualification/materialize_qt_notices.py --cache-dir .deps/downloads --output-root .deps/qt-notices/6.11.2 --qt-version 6.11.2
+```
+
+The output path must be fresh; original archives and prior materializations
+are preserved.
+
+## Historical Qt 6.8.3 source notices
 
 `scripts/qualification/materialize_qt_notices.py` creates a fresh, deterministic
 notice payload from the three checksum-pinned official release archives already
@@ -187,3 +222,30 @@ applicable static/transitive notice and alternative-license choices, final
 runtime/options/revision binding, corresponding-source delivery and offline
 rebuild verification. All licensing, shipped-notice-closure, binary/source,
 corresponding-source, rebuild and distribution qualification flags stay false.
+
+## PDFium original embedded grant supplement
+
+The bounded source review found three additional notice obligations outside the
+100 unresolved pointer records. PDFium's AGG 2.3, Little CMS 2.15 and OpenJPEG
+2.5.0 READMEs declare license names without License File references. The source
+production GN targets reference 78 source/header files; 77 contain original
+leading notices. The [supplement](../../third_party/notices/qt-pdf/README.md)
+retains 45 distinct original comment slices (64,924 bytes), with exact archive,
+member, slice and line-bound receipts. One generated OpenJPEG table header has no
+copyright/grant phrase; the receipt records it without inventing a notice.
+The OpenJPEG copy is PDFium's modified 2.5.0 source, separate from the native
+OpenJPEG runtime. Original README/license declarations remain unchanged.
+
+A private candidate-bound matrix separates the remaining comma-aware 100
+references into 69 Rust paths disabled by the exact Qt source recipe, three
+already-retained source notice naming/pointer discrepancies, twelve publisher
+Shipped: no records, and sixteen omitted optional-module source candidates.
+The recipe unconditionally passes enable_rust=false. JSZip's LICENSE.markdown,
+Vulkan Utility Libraries' LICENSE.md and Chromium's LICENSE already exist in the
+materialized payload; they are pointer reconciliation facts. The original
+selected root and composed source-kit remain .deps/qt-notices/6.8.3; the newer
+6.8.3-comma materialization preserves the same 2,380 original member hashes.
+Neither record is rewritten as cleared. Actual selected prebuilt expanded
+compile/link closure, complete embedded notice applicability, alternative
+license choices, eventual candidate delivery and offline rebuild remain open.
+All qualification flags remain false.

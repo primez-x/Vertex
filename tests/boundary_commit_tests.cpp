@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/area_subtraction.hpp"
 
@@ -304,9 +305,8 @@ void test_foreign_stale_altered_source_and_retired_id_reject() {
         (void)sketch::apply_boundary_commit(stale, stale_preview);
     }, "stale document revision must reject a boundary preview");
 
-    auto altered_snapshot = document.snapshot();
-    auto& altered_head = const_cast<std::vector<sketch::RevisionRecord>&>(
-        altered_snapshot.history());
+    sketch::test::DetachedDocumentSnapshotFixture altered_snapshot(document.snapshot());
+    auto& altered_head = altered_snapshot.history();
     altered_head.at(static_cast<std::size_t>(altered_snapshot.revision()))
         .entities.at("property-1").properties["name"] = "forged same revision";
     const auto altered_preview = sketch::preview_boundary_commit(

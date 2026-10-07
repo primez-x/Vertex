@@ -12,6 +12,7 @@
 #include <numbers>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace {
 using namespace sketch;
@@ -71,6 +72,34 @@ QRect colored_bounds(const QImage& image, bool red) {
     }
     return result;
 }
+// Isolate the authored red/blue glyphs from blue selection frames and size
+// readouts. The authored hue has equal secondary channels; UI blues (37,99,235
+// and 29,78,216) do not. Comparing the complete pixel mask also catches changed
+// text with the same overall bounds, as well as swapped roles or moved anchors.
+std::vector<QPoint> role_ink(const QImage& image, bool red) {
+    std::vector<QPoint> result;
+    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
+        const auto color = image.pixelColor(x, y);
+        const auto primary = red ? color.red() : color.blue();
+        const auto secondary = red ? color.blue() : color.red();
+        if (primary - secondary > 140 && primary - color.green() > 140 &&
+            std::abs(secondary - color.green()) < 8)
+            result.emplace_back(x, y);
+    }
+    return result;
+}
+
+void authored_role_ink_excludes_selection_feedback() {
+    QImage image(4, 1, QImage::Format_ARGB32_Premultiplied);
+    image.setPixelColor(0, 0, QColor(220, 20, 20));
+    image.setPixelColor(1, 0, QColor(20, 20, 220));
+    image.setPixelColor(2, 0, QColor(37, 99, 235));
+    image.setPixelColor(3, 0, QColor(29, 78, 216));
+    require(role_ink(image, true) == std::vector<QPoint>{{0, 0}} &&
+            role_ink(image, false) == std::vector<QPoint>{{1, 0}},
+            "authored role ink excludes selection frames and measurement text");
+}
+
 void mouse(PlanCanvas& canvas, QEvent::Type type, QPointF point) {
     QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()),
         type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
@@ -183,14 +212,18 @@ void distinct_roles_survive_exact_preview() {
         PlanCanvas expected;
         configure(expected);
         expected.setLabels({name, calculation});
-        const auto preview = render(canvas);
-        const auto expected_image = render(expected);
-        require(!colored_bounds(preview, false).isEmpty() &&
-                colored_bounds(preview, true) == colored_bounds(expected_image, true) &&
-                colored_bounds(preview, false) == colored_bounds(expected_image, false),
-                "exact preview preserves each role's own content and anchor, including a new role");
-        require(render(canvas, true) == committed_output,
-                "live callout previews never replace committed output");
+        // Public scene renderers preserve committed presentation. Only the
+        // widget paint path includes exact interaction previews and controls.
+        const auto preview = widget_render(canvas);
+        const auto expected_image = widget_render(expected);
+        const auto name_ink = role_ink(preview, true);
+        const auto calculation_ink = role_ink(preview, false);
+        require(!name_ink.empty() && !calculation_ink.empty() &&
+                name_ink == role_ink(expected_image, true) &&
+                calculation_ink == role_ink(expected_image, false),
+                "exact preview preserves each role's own content, color and anchor, including a new role");
+        require(render(canvas) == committed_output && render(canvas, true) == committed_output,
+                "live callout previews never replace committed public scene or scaled output");
         mouse(canvas, QEvent::MouseButtonRelease, start + QPointF(80, -40));
     }
 }
@@ -234,6 +267,7 @@ int main(int argc, char** argv) {
                 "bundled label font loads");
         application.setFont(QFont(QStringLiteral("Inter"), 10));
         aligned_anchors_paint_and_pick();
+        authored_role_ink_excludes_selection_feedback();
         distinct_roles_survive_exact_preview();
         ghost_and_content_recording_use_alignment();
         std::cout << "Canvas label presentation tests passed\n";

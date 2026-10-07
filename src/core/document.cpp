@@ -5,6 +5,7 @@
 #include "sketch/opening_assembly.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/site_frame.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/room_relationship_geometry.hpp"
@@ -1323,6 +1324,11 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
     catch (const std::exception& error) {
         document_error(DocumentErrorCode::invalid_entity,
             std::string("Invalid complete assembly graph: ") + error.what());
+    }
+    try { validate_document_site_frames(entities); }
+    catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity,
+            std::string("Invalid site presentation frames: ") + error.what());
     }
     // Separate records are one semantic graph. Deduplicate exact definitions,
     // then check physical aliases, cross-record cycles and driver conflicts.
@@ -4274,12 +4280,19 @@ bool DocumentSnapshot::dirty() const noexcept {
 bool DocumentSnapshot::is_editable() const noexcept { return editable_; }
 const std::string& DocumentSnapshot::read_only_reason() const noexcept { return read_only_reason_; }
 const std::map<std::string, Entity, std::less<>>& DocumentSnapshot::entities() const noexcept {
-    return history_.at(static_cast<std::size_t>(revision_)).entities;
+    return history().at(static_cast<std::size_t>(revision_)).entities;
 }
 const std::map<std::string, Asset, std::less<>>& DocumentSnapshot::assets() const noexcept {
-    return history_.at(static_cast<std::size_t>(revision_)).assets;
+    return history().at(static_cast<std::size_t>(revision_)).assets;
 }
-const std::vector<RevisionRecord>& DocumentSnapshot::history() const noexcept { return history_; }
+const std::vector<RevisionRecord>& DocumentSnapshot::history() const noexcept {
+    static const std::vector<RevisionRecord> empty;
+    return history_ ? *history_ : empty;
+}
+bool DocumentSnapshot::shares_authoring_source_with(const DocumentSnapshot& other) const noexcept {
+    return history_ && history_ == other.history_ && document_id_ == other.document_id_ &&
+        revision_ == other.revision_ && named_revisions_ == other.named_revisions_;
+}
 const std::map<std::string, Revision, std::less<>>& DocumentSnapshot::named_revisions() const noexcept {
     return named_revisions_;
 }
@@ -4313,6 +4326,7 @@ Document Document::create(std::vector<Entity> initial_entities, std::vector<Asse
     return document;
 }
 
+const std::string& Document::document_id() const noexcept { return document_id_; }
 Revision Document::revision() const noexcept { return head_revision_; }
 std::optional<Revision> Document::saved_revision_optional() const noexcept { return saved_revision_; }
 Revision Document::saved_revision() const noexcept { return saved_revision_.value_or(0); }
@@ -4339,7 +4353,9 @@ DocumentSnapshot Document::snapshot() const {
     snapshot.saved_revision_ = saved_revision_;
     snapshot.editable_ = editable_;
     snapshot.read_only_reason_ = read_only_reason_;
-    snapshot.history_ = history_;
+    if (!snapshot_history_cache_)
+        snapshot_history_cache_ = std::make_shared<const std::vector<RevisionRecord>>(history_);
+    snapshot.history_ = snapshot_history_cache_;
     snapshot.named_revisions_ = named_revisions_;
     return snapshot;
 }
@@ -4350,10 +4366,11 @@ Document Document::fork(const DocumentSnapshot& source) {
 
 Document Document::fork_at_revision(const DocumentSnapshot& source, Revision revision) {
     (void)fork(source);
-    if (revision >= source.history_.size())
+    if (revision >= source.history().size())
         document_error(DocumentErrorCode::invalid_history, "requested revision is not retained");
     auto prefix = source;
-    prefix.history_.resize(static_cast<std::size_t>(revision) + 1);
+    prefix.history_ = std::make_shared<const std::vector<RevisionRecord>>(
+        source.history().begin(), source.history().begin() + static_cast<std::size_t>(revision) + 1);
     prefix.revision_ = revision;
     if (prefix.saved_revision_ && *prefix.saved_revision_ > revision) prefix.saved_revision_.reset();
     for (auto it = prefix.named_revisions_.begin(); it != prefix.named_revisions_.end();) {
@@ -4558,6 +4575,7 @@ Revision Document::apply(const Command& command) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
             }
             history_.push_back(std::move(next));
+            snapshot_history_cache_.reset();
             boundary_identity_history_ = std::move(next_identity_history);
             stair_identity_history_ = std::move(next_stair_identity_history);
             head_revision_ = history_.back().revision;
@@ -4599,6 +4617,7 @@ Revision Document::undo(Revision expected_revision) {
     auto next_stair_identity_history = stair_identity_history_;
     next_stair_identity_history.reserve_state(next.entities);
     history_.push_back(std::move(next));
+    snapshot_history_cache_.reset();
     stair_identity_history_ = std::move(next_stair_identity_history);
     head_revision_ = history_.back().revision;
     update_editability();
@@ -4632,6 +4651,7 @@ Revision Document::redo(Revision expected_revision) {
     auto next_stair_identity_history = stair_identity_history_;
     next_stair_identity_history.reserve_state(next.entities);
     history_.push_back(std::move(next));
+    snapshot_history_cache_.reset();
     stair_identity_history_ = std::move(next_stair_identity_history);
     head_revision_ = history_.back().revision;
     update_editability();
@@ -4679,7 +4699,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
     if (!is_valid_identifier(snapshot.document_id_)) {
         document_error(DocumentErrorCode::invalid_history, "stored document id is invalid");
     }
-    if (snapshot.history_.empty() || snapshot.revision_ + 1 != snapshot.history_.size()) {
+    if (!snapshot.history_ || snapshot.history().empty() || snapshot.revision_ + 1 != snapshot.history().size()) {
         document_error(DocumentErrorCode::invalid_history, "stored revision history is incomplete");
     }
     if (snapshot.saved_revision_.has_value() && *snapshot.saved_revision_ > snapshot.revision_) {
@@ -4689,8 +4709,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
     std::optional<std::string> unsupported_constraint_history;
     BoundaryIdentityHistory identity_history;
     StairIdentityHistory stair_identity_history;
-    for (std::size_t index = 0; index < snapshot.history_.size(); ++index) {
-        const auto& record = snapshot.history_[index];
+    for (std::size_t index = 0; index < snapshot.history().size(); ++index) {
+        const auto& record = snapshot.history()[index];
         validate_action(record.action);
         if (record.revision != index) {
             document_error(DocumentErrorCode::invalid_history, "stored revisions are not contiguous");
@@ -4713,7 +4733,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             continue;
         }
 
-        const auto& previous = snapshot.history_[index - 1];
+        const auto& previous = snapshot.history()[index - 1];
         const auto boundary_proof_count =
             static_cast<unsigned>(record.boundary_translation.has_value()) +
             static_cast<unsigned>(record.boundary_transform.has_value()) +
@@ -4779,7 +4799,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 document_error(DocumentErrorCode::invalid_history,
                                "undo/redo source revision is not prior history");
             }
-            const auto& source = snapshot.history_[static_cast<std::size_t>(*record.source_revision)];
+            const auto& source = snapshot.history()[static_cast<std::size_t>(*record.source_revision)];
             if (!same_state(record, source)) {
                 document_error(DocumentErrorCode::invalid_history,
                                "undo/redo state does not match its source revision");
@@ -4825,7 +4845,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             if (!record.name) {
                 try {
                     stair_identity_history.initialize_if_needed(
-                        std::span<const RevisionRecord>(snapshot.history_.data(), index),
+                        std::span<const RevisionRecord>(snapshot.history().data(), index),
                         previous.entities, record.entities);
                     stair_identity_history.validate_transition(previous.entities, record.entities);
                 } catch (const std::exception& error) {
@@ -4897,7 +4917,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                                    "Boundary geometry edit action does not match proof");
                 auto expected = previous;
                 try {
-                    validate_split_dimension_lifetime(*record.boundary_geometry_edit, snapshot.history_, index);
+                    validate_split_dimension_lifetime(*record.boundary_geometry_edit, snapshot.history(), index);
                     expected.entities = replayed_boundary_entities(
                         previous.entities, *record.boundary_geometry_edit);
                     validate_boundary_identity_transition(
@@ -4919,14 +4939,14 @@ Document Document::restore(DocumentSnapshot snapshot) {
                                    "Boundary constraint transaction proof does not match revision");
                 auto expected = previous;
                 try {
-                    if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history_,index);
+                    if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history(),index);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     if (has_room_review_completion(proof)) {
                         const auto intent=decode_physical_wall_room_review_intent(proof.room_review_intent);
                         if (intent.source_authoring_digest!=document_authoring_source_digest_v2_at_revision(snapshot,previous.revision) ||
                             intent.source_snapshot_digest!=document_snapshot_digest_at_revision(snapshot,previous.revision,intent.source_saved_revision))
                             throw std::invalid_argument("Physical-room review retained source authority changed");
-                        validate_room_review_lifetime(proof.room_review_intent,snapshot.history_,index);
+                        validate_room_review_lifetime(proof.room_review_intent,snapshot.history(),index);
                     }
 #endif
                     expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, proof, true);
@@ -4956,7 +4976,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
     Document document(std::move(snapshot.document_id_));
     document.head_revision_ = snapshot.revision_;
     document.saved_revision_ = snapshot.saved_revision_;
-    document.history_ = std::move(snapshot.history_);
+    document.history_ = snapshot.history();
+    document.snapshot_history_cache_ = std::move(snapshot.history_);
     document.named_revisions_ = std::move(snapshot.named_revisions_);
     document.unsupported_constraint_history_reason_ = std::move(unsupported_constraint_history);
     if (!snapshot.editable_ && !snapshot.read_only_reason_.empty()) {

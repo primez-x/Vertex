@@ -444,6 +444,8 @@ def validate_manifest(manifest: Any) -> None:
                 _require_string(source.get("package_id"), f"{field}.source.package_id")
             if source_kind == "qt-spdx":
                 _require_string(source.get("module_version"), f"{field}.source.module_version")
+                if "module_name" in source:
+                    _require_string(source.get("module_name"), f"{field}.source.module_name")
             _validate_spdx_hash_overrides(source.get("hash_overrides"),
                                           f"{field}.source.hash_overrides")
         elif source_kind == "planegcs-provenance":
@@ -619,8 +621,15 @@ def _spdx_context(root: pathlib.Path, component: dict[str, Any]) -> tuple[dict[s
                           if isinstance(item, dict) and item.get("versionInfo") == module_version
                           and item.get("licenseConcluded") not in (None, "NOASSERTION")]
         _require(module_matches, f"component {component['id']} Qt SPDX lacks module version {module_version}")
-        selected_package = next((item for item in module_matches
-                                 if item.get("name") == expected_package["name"]), module_matches[0])
+        if "module_name" in source:
+            named_matches = [item for item in module_matches if item.get("name") == source["module_name"]]
+            _require(len(named_matches) == 1,
+                     f"component {component['id']} Qt SPDX lacks one exact licensed module {source['module_name']}")
+            selected_package = named_matches[0]
+        else:
+            # Preserve historical receipts; new SDK manifests name the actual module.
+            selected_package = next((item for item in module_matches
+                                     if item.get("name") == expected_package["name"]), module_matches[0])
         _require(expected_package["version"] == module_version,
                  f"component {component['id']} Qt manifest version does not match module version")
         module_revision = package.get("versionInfo")

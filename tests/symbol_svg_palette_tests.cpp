@@ -160,7 +160,13 @@ void renderingContract() {
     require(canvas.entities()[0].svg_symbol->document == simple, "legacy source bytes changed");
     canvas.setEntities({entity(QStringLiteral("invalid"), -1,
                         SymbolSvgPalette{"wrong", "#111111", "#ffffff"})});
-    (void)output(canvas); // Paint callbacks must contain validation errors.
+    bool output_refused = false;
+    try { (void)output(canvas); }
+    catch (const std::invalid_argument&) { output_refused = true; }
+    require(output_refused, "invalid palette was silently exported");
+    canvas.resize(600, 300);
+    require(!canvas.grab().toImage().isNull(),
+            "interactive paint did not contain an invalid palette refusal");
 
     canvas.resize(600, 300);
     canvas.setEntities({left, right});
@@ -222,7 +228,7 @@ int main(int argc, char** argv) {
             structuralContract(file.readAll());
             ++count;
         }
-        require(count == 342, "complete supplied and Pinc-adoption SVG catalog was not exercised");
+        require(count == 345, "complete supplied and adopted SVG catalog was not exercised");
         for (const auto& path : {"04_living/sofa-three-seat.svg", "01_bathroom/basin-round.svg",
                                  "02_kitchen/cooktop-gas-four.svg", "25_drafting_symbols/north-arrow.svg"})
             structuralContract(asset(QString::fromLatin1(path)));
@@ -251,7 +257,7 @@ int main(int argc, char** argv) {
         unknown = simple;
         unknown.replace("http://www.w3.org/2000/svg", "https://example.com/custom"); rejects(unknown);
         renderingContract();
-        std::cout << "symbol SVG palette checks passed (342 catalog assets)\n";
+        std::cout << "symbol SVG palette checks passed (345 catalog assets)\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "symbol_svg_palette_tests: " << error.what() << '\n';

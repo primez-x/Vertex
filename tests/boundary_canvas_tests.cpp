@@ -66,7 +66,14 @@ QImage render(PlanCanvas& canvas, bool fit_to_content) {
     QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
     image.fill(background.rgba());
     QPainter painter(&image);
-    canvas.renderScene(painter, QRectF(image.rect()), fit_to_content, background);
+    if (fit_to_content) {
+        canvas.renderScene(painter, QRectF(image.rect()), true, background);
+    } else {
+        // Interactive assertions must use the QWidget paint event. Public
+        // scene renderers deliberately expose only committed output.
+        canvas.setCanvasBackground(background);
+        canvas.render(&painter);
+    }
     return image;
 }
 
@@ -1093,10 +1100,16 @@ void test_automatic_wall_label_collision_layout() {
     };
     const auto capture = [&](double scale, int dpi, std::optional<double> paper, bool screen) {
         QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
-        image.setDotsPerMeterX(qRound(dpi / .0254));
-        image.setDotsPerMeterY(qRound(dpi / .0254));
+        // Interactive picking uses the widget's actual paint device. The
+        // independent export cases below still exercise both output DPIs.
+        image.setDotsPerMeterX(qRound((screen ? canvas.logicalDpiX() : dpi) / .0254));
+        image.setDotsPerMeterY(qRound((screen ? canvas.logicalDpiY() : dpi) / .0254));
+        image.fill(Qt::white);
         QPainter painter(&image);
-        if (screen) canvas.renderScene(painter, image.rect(), false, Qt::white);
+        if (screen) {
+            canvas.setCanvasBackground(Qt::white);
+            canvas.render(&painter);
+        }
         else canvas.renderSceneAt(painter, image.rect(), scale, {}, Qt::white, paper);
         painter.end();
         return image;
@@ -1232,7 +1245,15 @@ void test_paper_label_style_and_hit_testing() {
     require(images_equal(at_50, output(200, 96)),
         "paper label pixels must be independent of model-to-output scale");
     const auto normal_bounds = red_text_bounds(at_50);
-    const auto high_dpi_bounds = red_text_bounds(output(50, 192));
+    const auto at_192 = output(50, 192);
+    const auto high_dpi_bounds = red_text_bounds(at_192);
+    const auto capture_dir = qEnvironmentVariable("SKETCH_BOUNDARY_CANVAS_CAPTURE_DIR");
+    save_capture(capture_dir, QStringLiteral("paper-label-96.png"), at_50);
+    save_capture(capture_dir, QStringLiteral("paper-label-192.png"), at_192);
+    std::cout << "paper label red bounds: 96 DPI " << normal_bounds.x() << ','
+              << normal_bounds.y() << ' ' << normal_bounds.width() << 'x' << normal_bounds.height()
+              << "; 192 DPI " << high_dpi_bounds.x() << ',' << high_dpi_bounds.y() << ' '
+              << high_dpi_bounds.width() << 'x' << high_dpi_bounds.height() << '\n';
     require(!normal_bounds.isEmpty() && !high_dpi_bounds.isEmpty(),
         "explicit label color must reach output glyph pixels");
     require(std::abs(high_dpi_bounds.height() - 2 * normal_bounds.height()) <= 3 &&
@@ -1254,23 +1275,24 @@ void test_paper_label_style_and_hit_testing() {
         require(images_equal(at_50, output(50, 96, invalid)),
             "invalid paper scale must preserve the device-DPI fallback");
     }
-    const auto screen_output = [&](int dpi) {
+    const auto screen_output = [&] {
         QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
-        image.setDotsPerMeterX(qRound(dpi / 0.0254));
-        image.setDotsPerMeterY(qRound(dpi / 0.0254));
+        image.setDotsPerMeterX(qRound(canvas.logicalDpiX() / 0.0254));
+        image.setDotsPerMeterY(qRound(canvas.logicalDpiY() / 0.0254));
         image.fill(Qt::white);
         QPainter painter(&image);
-        canvas.renderScene(painter, QRectF(image.rect()), false, Qt::white);
+        canvas.setCanvasBackground(Qt::white);
+        canvas.render(&painter);
         return image;
     };
-    const auto screen_before_zoom = red_text_bounds(screen_output(96));
+    const auto screen_before_zoom = red_text_bounds(screen_output());
     canvas.zoomBy(2.0, QRectF(canvas.rect()).center());
-    require(screen_before_zoom == red_text_bounds(screen_output(192)),
+    require(screen_before_zoom == red_text_bounds(screen_output()),
         "interactive paper text must use fixed widget DPI and ignore model zoom");
-    const auto unselected_screen = screen_output(96);
+    const auto unselected_screen = screen_output();
     label.selected = true;
     canvas.setLabels({label});
-    const auto selected_screen = screen_output(96);
+    const auto selected_screen = screen_output();
     require(!images_equal(unselected_screen, selected_screen) &&
             red_text_bounds(unselected_screen) == red_text_bounds(selected_screen),
         "styled screen selection must add an outline while retaining authored text color");
@@ -1389,7 +1411,8 @@ void test_two_line_area_label_rendering_and_hit_testing() {
     interactive.fill(Qt::white);
     {
         QPainter painter(&interactive);
-        canvas.renderScene(painter, interactive.rect(), false, Qt::white);
+        canvas.setCanvasBackground(Qt::white);
+        canvas.render(&painter);
     }
     const auto screen_bounds = red_text_bounds(interactive);
     require(!screen_bounds.isEmpty(), "interactive two-line area label must paint its text");
@@ -1451,7 +1474,8 @@ void test_selection_annotations_remain_legible_and_rotation_handle_reachable() {
         QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
         image.fill(background.rgba());
         QPainter painter(&image);
-        canvas.renderScene(painter, image.rect(), false, background);
+        canvas.setCanvasBackground(background);
+        canvas.render(&painter);
         return image;
     };
     const auto render_one_label = [&](const CanvasLabel& label) {
@@ -1654,7 +1678,8 @@ void test_selection_corner_handle_enters_viewport_from_offscreen_anchor() {
     image.fill(background.rgba());
     {
         QPainter painter(&image);
-        canvas.renderScene(painter, image.rect(), false, background);
+        canvas.setCanvasBackground(background);
+        canvas.render(&painter);
     }
     QPointF visible_corner;
     int largest_white_block = 0;
@@ -1922,7 +1947,10 @@ void test_opt_in_screen_paper_stroke_width() {
         result.fill(Qt::white);
         QPainter painter(&result);
         if (output) canvas.renderSceneAt(painter, result.rect(), 100, {}, Qt::white);
-        else canvas.renderScene(painter, result.rect(), false, Qt::white);
+        else {
+            canvas.setCanvasBackground(Qt::white);
+            canvas.render(&painter);
+        }
         return result;
     };
     const auto ink_width = [&](const QImage& rendered) {
@@ -2110,6 +2138,401 @@ void test_closed_entity_hatching_and_open_path_safety() {
     const auto open_outline = render(canvas, true);
     require(images_equal(open_filled, open_outline),
             "open or split paths must never receive a misleading material fill");
+}
+
+void test_published_geometry_repaint_agrees_with_uncached_output() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setSnapEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setCanvasBackground(Qt::white);
+    canvas.setTool(CanvasTool::select);
+    CanvasEntity area{QStringLiteral("cached-owner"), QStringLiteral("slab"),
+        Boundary{Segment{{-2,-1},{2,-1},0}, Segment{{2,-1},{2,1},0},
+                 sketch::arc_from_chord_angle({2,1},{-2,1}, std::numbers::pi),
+                 Segment{{-2,1},{-2,-1},0}}};
+    area.filled = true;
+    area.hatch_pattern = QStringLiteral("cross");
+    area.hatch_scale = 1.5;
+    area.fill_color = QColor(75, 135, 165);
+    area.fill_opacity = 0.4;
+    area.stroke_color = QColor(130, 40, 65);
+    area.stroke_width_metres = 0.03;
+    area.line_pattern = QStringLiteral("dashdot");
+    area.holes = {Boundary{
+        sketch::arc_from_chord_angle({-.6,0},{.6,0}, std::numbers::pi),
+        Segment{{.6,0},{-.6,0},0}}};
+    // Derived stroke runs must stay separate and must not replace fill geometry.
+    area.stroke_segments = Boundary{area.segments[0], area.segments[2]};
+    canvas.setEntities({area});
+    const auto capture = [&](int dpr, bool screen) {
+        QImage image(canvas.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        if (screen) canvas.render(&painter);
+        else canvas.renderSceneAt(painter, QRectF(canvas.rect()), canvas.viewScale(),
+                                  canvas.viewCenter(), Qt::white);
+        return image;
+    };
+    for (const int dpr : {1, 2, 3}) {
+        for (const double scale : {45.0, 80.0, 135.0}) {
+            canvas.setViewTransform({.25, .5}, scale);
+            const auto expected = capture(dpr, false);
+            require(images_equal(capture(dpr, true), expected),
+                    "interactive model paths must agree exactly with uncached output at each transform and DPR");
+            require(images_equal(capture(dpr, true), expected),
+                    "warm geometry repaint must preserve arcs, holes, hatch space and derived strokes");
+        }
+    }
+    const auto old_screen = capture(1, true);
+    for (auto& segment : area.segments) {
+        segment.start.x += .75;
+        segment.end.x += .75;
+    }
+    area.stroke_segments.reset();
+    area.holes.clear();
+    canvas.setEntities({area}); // Same ID and same entity count, new geometry.
+    const auto replacement = capture(1, true);
+    require(!images_equal(old_screen, replacement),
+            "same-ID publication must replace retained geometry");
+    require(images_equal(replacement, capture(1, false)),
+            "same-count replacement must invalidate cached strokes and fills");
+    canvas.setEntities({});
+    canvas.setEntities({area});
+    require(images_equal(capture(2, true), capture(2, false)),
+            "empty publication followed by repopulation must not retain stale paths");
+}
+
+void test_viewport_rejection_preserves_entering_strokes_arcs_and_fills() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setSnapEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSelectionControlsVisible(false);
+    canvas.setCanvasBackground(Qt::white);
+    canvas.setTool(CanvasTool::select);
+    const auto capture = [&](int dpr, bool screen) {
+        QImage image(canvas.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        if (screen) canvas.render(&painter);
+        else canvas.renderSceneAt(painter, QRectF(canvas.rect()), canvas.viewScale(),
+                                  canvas.viewCenter(), Qt::white);
+        return image;
+    };
+    const auto ink_count = [](const QImage& image, QRect region) {
+        int count = 0;
+        region = region.intersected(image.rect());
+        for (int y = region.top(); y <= region.bottom(); ++y)
+            for (int x = region.left(); x <= region.right(); ++x)
+                if (image.pixelColor(x, y) != QColor(Qt::white)) ++count;
+        return count;
+    };
+    canvas.setViewTransform({}, 80);
+    // Centerlines lie beyond x=4 (the right viewport edge). A bounds test
+    // that omits model, wall, symbol, paper or default pen width loses ink.
+    for (int style = 0; style < 5; ++style) {
+        const double x = style >= 3 ? 4.0005 : style == 2 ? 4.0125 : 4.075;
+        CanvasEntity stroke{QStringLiteral("edge-stroke"), QStringLiteral("annotation_symbol"),
+                            Boundary{Segment{{x, -.75}, {x, .75}, 0}}};
+        stroke.stroke_color = QColor(180, 20, 50);
+        if (style == 0) stroke.stroke_width_metres = .2;
+        if (style == 1) { stroke.type = QStringLiteral("wall"); stroke.thickness_metres = .2; }
+        if (style == 2) { stroke.type = QStringLiteral("symbol"); stroke.stroke_width_metres = .2; }
+        if (style == 3) {
+            stroke.paper_stroke_width_on_screen = true;
+            stroke.output_stroke_width_mm = 1.0;
+        }
+        canvas.setEntities({stroke});
+        for (const int dpr : {1, 2, 3}) {
+            const auto screen = capture(dpr, true);
+            require(ink_count(screen, QRect(637*dpr, 180*dpr, 3*dpr, 120*dpr)) > 20*dpr,
+                    "stroke outside the viewport must retain the part of its width that enters it");
+            require(images_equal(screen, capture(dpr, true)),
+                    "entering stroke must survive a warmed viewport repaint");
+            if (style <= 1)
+                require(images_equal(screen, capture(dpr, false)),
+                        "entering model and wall strokes must match uncullable committed output");
+        }
+    }
+    // Both chord endpoints lie above y=3. The semicircle reaches y=2.25,
+    // so endpoint-only bounds would discard a visible analytical arc.
+    CanvasEntity arc{QStringLiteral("edge-arc"), QStringLiteral("annotation_symbol"),
+                    Boundary{sketch::arc_from_chord_angle({-1, 3.25}, {1, 3.25},
+                                                        std::numbers::pi)}};
+    arc.stroke_width_metres = .03;
+    arc.stroke_color = QColor(180, 20, 50);
+    canvas.setEntities({arc});
+    for (const int dpr : {1, 2, 3}) {
+        const auto screen = capture(dpr, true);
+        require(ink_count(screen, QRect(280*dpr, 40*dpr, 80*dpr, 40*dpr)) > 20*dpr,
+                "visible arc extrema must survive rejection even when both endpoints are outside");
+        require(images_equal(screen, capture(dpr, false)),
+                "edge arc must match fresh analytical committed painting");
+    }
+    CanvasEntity area{QStringLiteral("edge-fill"), QStringLiteral("slab"),
+        Boundary{Segment{{3.5,-1},{5.5,-1},0}, Segment{{5.5,-1},{5.5,1},0},
+                 Segment{{5.5,1},{3.5,1},0}, Segment{{3.5,1},{3.5,-1},0}}};
+    area.filled = true;
+    area.hatch_pattern = QStringLiteral("solid");
+    area.fill_color = QColor(190, 35, 170);
+    area.fill_opacity = 1.0;
+    area.stroke_width_metres = .02;
+    area.stroke_color = QColor(180, 20, 50);
+    area.stroke_segments = Boundary{}; // Fill cannot inherit empty derived stroke bounds.
+    area.holes = {Boundary{Segment{{4.25,-.4},{5,-.4},0}, Segment{{5,-.4},{5,.4},0},
+                           Segment{{5,.4},{4.25,.4},0}, Segment{{4.25,.4},{4.25,-.4},0}}};
+    canvas.setEntities({area});
+    for (const int dpr : {1, 2, 3}) {
+        const auto screen = capture(dpr, true);
+        require(screen.pixelColor(608*dpr, 176*dpr) == area.fill_color &&
+                screen.pixelColor(624*dpr, 240*dpr) == area.fill_color,
+                "visible fill must survive when every derived outline lies outside the viewport");
+        require(images_equal(screen, capture(dpr, false)),
+                "cached stroke/fill union must match fresh committed painting at the viewport edge");
+    }
+    area.holes = {Boundary{Segment{{3.6,-.4},{4.5,-.4},0}, Segment{{4.5,-.4},{4.5,.4},0},
+                           Segment{{4.5,.4},{3.6,.4},0}, Segment{{3.6,.4},{3.6,-.4},0}}};
+    canvas.setEntities({area});
+    for (const int dpr : {1, 2, 3}) {
+        require(capture(dpr, true).pixelColor(624*dpr, 240*dpr) == QColor(Qt::white) &&
+                images_equal(capture(dpr, true), capture(dpr, false)),
+                "viewport-edge fill must preserve its unfilled semantic hole after replacement");
+    }
+    // Publish a culled same-ID owner, then move the view and finally replace
+    // the owner without changing count. Neither operation may retain rejection.
+    auto distant = area;
+    distant.holes.clear();
+    for (auto& segment : distant.segments) {
+        segment.start.x += 20;
+        segment.end.x += 20;
+    }
+    canvas.setEntities({distant});
+    require(ink_count(capture(1, true), canvas.rect()) == 0,
+            "fully offscreen committed material must leave the viewport clear");
+    canvas.setViewTransform({24.5, 0}, 135);
+    require(ink_count(capture(1, true), canvas.rect()) > 1000 &&
+            images_equal(capture(2, true), capture(2, false)),
+            "pan and zoom must bring a warmed offscreen owner into view");
+    canvas.setViewTransform({}, 80);
+    canvas.setEntities({area});
+    require(images_equal(capture(1, true), capture(1, false)) &&
+            ink_count(capture(1, true), canvas.rect()) > 1000,
+            "same-ID same-count replacement must refresh rejection bounds and fill geometry");
+}
+
+void test_warm_geometry_cache_selection_and_pointer_transforms() {
+    const auto configure = [](PlanCanvas& canvas) {
+        canvas.resize(640, 480);
+        canvas.setGridEnabled(false);
+        canvas.setSnapEnabled(false);
+        canvas.setOverviewMapEnabled(false);
+        canvas.setCanvasBackground(Qt::white);
+        canvas.setTool(CanvasTool::select);
+    };
+    const auto capture = [](PlanCanvas& canvas, int dpr, bool screen) {
+        QImage image(canvas.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        if (screen) canvas.render(&painter); // QWidget::paintEvent, including retained paths.
+        else canvas.renderSceneAt(painter, QRectF(canvas.rect()), canvas.viewScale(),
+                                  canvas.viewCenter(), Qt::white);
+        return image;
+    };
+    PlanCanvas line_canvas;
+    configure(line_canvas);
+    line_canvas.setSelectionControlsVisible(false);
+    CanvasEntity line{QStringLiteral("cosmetic-owner"), QStringLiteral("annotation_symbol"),
+                      Boundary{Segment{{-1, 0}, {1, 0}, 0}}};
+    line_canvas.setEntities({line});
+    const auto ink_span = [](const QImage& image, int dpr) {
+        int span = 0;
+        const int x = image.width() / 2;
+        for (int y = image.height()/2 - 10*dpr; y <= image.height()/2 + 10*dpr; ++y) {
+            const auto color = image.pixelColor(x, y);
+            if (std::min({color.red(), color.green(), color.blue()}) < 170) ++span;
+        }
+        // Compare device pixels within a DPR; Qt's cosmetic device treatment
+        // must not be inferred from model zoom or normalized between DPRs.
+        return static_cast<double>(span);
+    };
+    for (const int dpr : {1, 2, 3}) {
+        double plain_width = -1, selected_width = -1;
+        for (const double scale : {45.0, 135.0}) {
+            line_canvas.setViewTransform({0, 0}, scale);
+            const auto plain = capture(line_canvas, dpr, true); // Warm before selecting.
+            require(images_equal(plain, capture(line_canvas, dpr, true)),
+                    "unselected cosmetic stroke must survive warm QWidget repaint");
+            line_canvas.setSelectedId(line.id); // Do not republish or rebuild geometry.
+            const auto selected = capture(line_canvas, dpr, true);
+            require(ink_span(selected, dpr) > ink_span(plain, dpr) + .5,
+                    "selection must update cosmetic stroke width on warmed geometry");
+            require(images_equal(selected, capture(line_canvas, dpr, true)),
+                    "selected cosmetic stroke must survive warm QWidget repaint");
+            if (plain_width >= 0) {
+                require(std::abs(plain_width - ink_span(plain, dpr)) <= .5 &&
+                        std::abs(selected_width - ink_span(selected, dpr)) <= .5,
+                        "selected and unselected cosmetic widths must stay fixed across model zoom");
+            }
+            plain_width = ink_span(plain, dpr);
+            selected_width = ink_span(selected, dpr);
+            line_canvas.setSelectedId({});
+            require(images_equal(plain, capture(line_canvas, dpr, true)),
+                    "deselection must restore the original warm stroke without republishing");
+        }
+    }
+
+    // A non-origin, rotated frame distinguishes model pivots and local axes
+    // from a viewport center or an axis-aligned bounding-box shortcut.
+    const Vec2 pivot{.65, -.35};
+    constexpr double angle = std::numbers::pi / 6;
+    constexpr double width = 2.0, depth = 1.2, scale = 80.0;
+    const auto rotate = [](Vec2 point, double radians) {
+        const auto c = std::cos(radians), s = std::sin(radians);
+        return Vec2{point.x*c-point.y*s, point.x*s+point.y*c};
+    };
+    const auto world = [&](Vec2 local) {
+        const auto p = rotate(local, angle);
+        return Vec2{pivot.x+p.x, pivot.y+p.y};
+    };
+    const std::vector<Vec2> corners{{-1,-.6}, {1,-.6}, {1,.1}, {.35,.6}, {-1,.6}};
+    CanvasEntity owner{QStringLiteral("preview-owner"), QStringLiteral("annotation_symbol"), {}};
+    for (std::size_t i = 0; i < corners.size(); ++i)
+        owner.segments.push_back({world(corners[i]), world(corners[(i+1)%corners.size()]), 0});
+    owner.resize_frame = sketch::desktop::CanvasSelectionFrame{pivot, angle, width, depth};
+    owner.filled = true;
+    owner.hatch_pattern = QStringLiteral("solid");
+    owner.fill_color = QColor(210, 35, 190);
+    owner.fill_opacity = 1.0;
+    // Compare filled geometry alone. Empty derived strokes exclude cosmetic
+    // pen differences; hiding controls after admission excludes all frame UI.
+    owner.stroke_segments = Boundary{};
+    const auto fill_pixel = [](const QImage& image, int x, int y) {
+        const auto c = image.pixelColor(x, y);
+        return c.red() > 150 && c.green() < 80 && c.blue() > 140;
+    };
+    const auto fill_difference = [&](const QImage& left, const QImage& right) {
+        int count = 0;
+        for (int y = 0; y < left.height(); ++y)
+            for (int x = 0; x < left.width(); ++x)
+                if (fill_pixel(left,x,y) != fill_pixel(right,x,y)) ++count;
+        return count;
+    };
+    const auto fill_count = [&](const QImage& image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (fill_pixel(image,x,y)) ++count;
+        return count;
+    };
+    for (const int dpr : {1, 2, 3}) {
+        // 0 translation, 1 free rotation, 2 uniform scale, 3/4 local X/Y scale.
+        for (int operation = 0; operation < 5; ++operation) {
+            PlanCanvas canvas, reference;
+            configure(canvas);
+            configure(reference);
+            canvas.setViewTransform({.2, -.1}, scale);
+            reference.setViewTransform(canvas.viewCenter(), scale);
+            canvas.setEntities({owner});
+            canvas.setSelectedId(owner.id);
+            canvas.setSelectionTransformEnabled(true, true);
+            canvas.setSelectionAxisResizeEnabled(true);
+            int commits = 0;
+            canvas.setEntitiesMoveRequested([&](QStringList, Vec2) { ++commits; return false; });
+            canvas.setEntityTransformRequested([&](QString, double, double) { ++commits; return false; });
+            canvas.setEntityAxisResizeRequested([&](QString, double, double, Vec2) { ++commits; return false; });
+            canvas.setSelectionControlsVisible(false);
+            const auto published = capture(canvas, dpr, true); // Warm published geometry.
+            const auto committed = capture(canvas, dpr, false);
+            canvas.setSelectionControlsVisible(true);
+            const auto model_screen = [&](Vec2 p) {
+                const auto center = QRectF(canvas.rect()).center();
+                return center + QPointF((p.x-canvas.viewCenter().x)*scale,
+                                        -(p.y-canvas.viewCenter().y)*scale);
+            };
+            const auto center = model_screen(pivot);
+            const auto control_screen = [&](QPointF local) {
+                // Control coordinates have downward Y; model Y is upward.
+                const auto p = rotate({local.x(), -local.y()}, angle);
+                return center + QPointF(p.x, -p.y);
+            };
+            QPointF press = center, target;
+            Vec2 translation{.45, .3}, anchor = pivot;
+            double radians = 0, sx = 1, sy = 1;
+            if (operation == 0) target = press + QPointF(translation.x*scale, -translation.y*scale);
+            else if (operation == 1) {
+                const auto handle = canvas.selectionRotationHandlePosition();
+                require(handle.has_value(), "rotated preview fixture must expose its rotation handle");
+                press = *handle;
+                radians = .41; // Shift avoids 45-degree quantization.
+                const auto p = rotate({press.x()-center.x(), -(press.y()-center.y())}, radians);
+                target = center + QPointF(p.x, -p.y);
+            } else if (operation == 2) {
+                press = control_screen({width*scale*.5+7.5, depth*scale*.5+7.5});
+                sx = sy = 1.35;
+                target = center + (press-center)*sx;
+            } else {
+                const bool horizontal = operation == 3;
+                press = control_screen(horizontal ? QPointF(width*scale*.5+7.5, 0)
+                                                  : QPointF(0, -depth*scale*.5-7.5));
+                const auto direction = rotate(horizontal ? Vec2{1,0} : Vec2{0,1}, angle);
+                const auto extent = horizontal ? width : depth;
+                anchor = {pivot.x-direction.x*extent*.5, pivot.y-direction.y*extent*.5};
+                const auto travel = .4*extent;
+                target = press + QPointF(direction.x*travel*scale, -direction.y*travel*scale);
+                if (horizontal) sx = 1.4;
+                else sy = 1.4;
+            }
+            const auto mouse = [&](QEvent::Type type, QPointF point) {
+                QMouseEvent event(type, point, point,
+                    type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                    Qt::LeftButton, Qt::ShiftModifier);
+                QApplication::sendEvent(&canvas, &event);
+            };
+            mouse(QEvent::MouseButtonPress, press);
+            mouse(QEvent::MouseMove, target);
+            canvas.setSelectionControlsVisible(false);
+            auto expected = owner;
+            expected.selected = false;
+            const auto transform = [&](Vec2 p) {
+                if (operation == 0) return Vec2{p.x+translation.x, p.y+translation.y};
+                if (operation < 3) {
+                    const auto local = rotate({(p.x-pivot.x)*sx, (p.y-pivot.y)*sy}, radians);
+                    return Vec2{pivot.x+local.x, pivot.y+local.y};
+                }
+                const auto local = rotate({p.x-anchor.x, p.y-anchor.y}, -angle);
+                const auto scaled = rotate({local.x*sx, local.y*sy}, angle);
+                return Vec2{anchor.x+scaled.x, anchor.y+scaled.y};
+            };
+            for (auto& segment : expected.segments) {
+                segment.start = transform(segment.start);
+                segment.end = transform(segment.end);
+            }
+            reference.setEntities({expected}); // Fresh, uncached committed geometry.
+            const auto expected_image = capture(reference, dpr, false);
+            const auto preview = capture(canvas, dpr, true);
+            require(fill_count(expected_image) > 5000*dpr*dpr,
+                    "independent transform reference must contain substantial visible geometry");
+            require(fill_difference(published, preview) > 400*dpr*dpr,
+                    "actual pointer preview must visibly transform the warmed published geometry");
+            require(fill_difference(preview, expected_image) <= 16*dpr,
+                    "cached pointer translation, rotation and resize must match independent transformed vertices");
+            require(images_equal(preview, capture(canvas, dpr, true)),
+                    "pointer preview must remain deterministic across warmed QWidget repaints");
+            require(commits == 0 && images_equal(committed, capture(canvas, dpr, false)),
+                    "pointer preview must neither commit nor leak transformed paths into output");
+            QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(&canvas, &escape);
+            require(fill_difference(published, capture(canvas, dpr, true)) == 0 &&
+                    commits == 0 && images_equal(committed, capture(canvas, dpr, false)),
+                    "cancel must restore the original warm geometry and preserve committed output");
+        }
+    }
 }
 
 void test_explicit_output_excludes_interactive_state() {
@@ -3462,6 +3885,39 @@ void test_boundary_vertex_stale_and_canceled_previews() {
             "projection exception must revoke pending admission");
 }
 
+void test_published_geometry_cache_excludes_exact_vertex_preview() {
+    VertexPreviewFixture f;
+    // The related owner starts offscreen; its exact candidate enters the view.
+    // Applying committed bounds before resolving previews would discard it.
+    f.neighbor.segments = {{{8,-1},{8,1},0}};
+    f.canvas.setEntities({f.boundary, f.neighbor});
+    const auto screen = [&] {
+        QImage image(f.canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(background);
+        QPainter painter(&image);
+        f.canvas.render(&painter);
+        return image;
+    };
+    const QRect neighbor_ink(470, 145, 65, 185);
+    const auto published = screen(); // Populate retained geometry before preview.
+    const auto committed = f.output();
+    f.begin();
+    const auto serial = f.serial;
+    require(f.canvas.completeBoundaryVertexPreview(serial, f.exact()),
+            "current exact preview must be admitted with a warm published cache");
+    require(differing_pixels(published, screen(), neighbor_ink) > 50,
+            "same-ID exact related geometry must bypass published paths");
+    require(images_equal(committed, f.output()),
+            "painting exact preview must leave committed output unchanged");
+    f.cancel();
+    require(differing_pixels(published, screen(), neighbor_ink) == 0,
+            "cancel must restore the warm published path rather than retain preview ink");
+    require(!f.canvas.completeBoundaryVertexPreview(serial, f.exact()),
+            "a canceled exact projection must remain stale");
+    require(differing_pixels(published, screen(), neighbor_ink) == 0,
+            "stale completion must not contaminate retained published geometry");
+}
+
 void test_boundary_tool_uses_unified_selection_until_a_draft_starts() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -3674,8 +4130,13 @@ void test_dark_canvas_semantic_strokes_and_overrides() {
     const auto capture = [&](QColor surface, bool output = false) {
         canvas.setEntities({entity});
         QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(surface);
         QPainter painter(&image);
-        canvas.renderScene(painter, QRectF(image.rect()), output, surface);
+        if (output) canvas.renderScene(painter, QRectF(image.rect()), true, surface);
+        else {
+            canvas.setCanvasBackground(surface);
+            canvas.render(&painter);
+        }
         return image;
     };
     const auto semantic_dark = capture(background);
@@ -3983,6 +4444,16 @@ int main(int argc, char** argv) {
             test_effective_cursor_matches_click();
             return 0;
         }
+        if (application.arguments().contains(QStringLiteral("--geometry-cache-only"))) {
+            test_published_geometry_repaint_agrees_with_uncached_output();
+            test_viewport_rejection_preserves_entering_strokes_arcs_and_fills();
+            test_warm_geometry_cache_selection_and_pointer_transforms();
+            test_published_geometry_cache_excludes_exact_vertex_preview();
+            test_boundary_vertex_stale_and_canceled_previews();
+            test_output_stroke_width_is_paper_space();
+            test_explicit_output_excludes_interactive_state();
+            return 0;
+        }
         test_mouse_drawing_lengths_use_relative_zoom_increments();
         test_right_drag_pans_without_authoring_or_moving_selection();
         test_drawing_length_guides_and_non_drawing_placements();
@@ -4009,6 +4480,7 @@ int main(int argc, char** argv) {
         test_boundary_vertex_annotation_invalidation();
         test_boundary_vertex_invalid_and_final_pointer();
         test_boundary_vertex_stale_and_canceled_previews();
+        test_published_geometry_cache_excludes_exact_vertex_preview();
         test_mouse_gesture_contract();
         test_focus_loss_cancels_navigation_without_canceling_draft();
         test_source_replacement_cancels_object_moves();
@@ -4024,6 +4496,9 @@ int main(int argc, char** argv) {
         test_analytic_arc_fit_bounds();
         test_reference_grid_labels_render_in_screen_and_output();
         test_closed_entity_hatching_and_open_path_safety();
+        test_published_geometry_repaint_agrees_with_uncached_output();
+        test_viewport_rejection_preserves_entering_strokes_arcs_and_fills();
+        test_warm_geometry_cache_selection_and_pointer_transforms();
         test_explicit_output_excludes_interactive_state();
         test_output_stroke_width_is_paper_space();
         test_paper_label_style_and_hit_testing();

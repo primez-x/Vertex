@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/document.hpp"
 #include "sketch/output_fingerprint.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -162,11 +163,11 @@ void test_document_and_asset_changes() {
     const auto inputs = valid_inputs();
     const auto fingerprint = sketch::make_output_fingerprint(document.snapshot(), inputs);
 
-    auto same_revision_snapshot = document.snapshot();
+    sketch::test::DetachedDocumentSnapshotFixture same_revision_snapshot(document.snapshot());
     check(same_revision_snapshot.revision() == document.revision(),
           "semantic comparison fixture must keep the document revision unchanged");
     auto& same_revision_entity =
-        const_cast<sketch::Entity&>(same_revision_snapshot.entities().at("wall-1"));
+        same_revision_snapshot.entities().at("wall-1");
     same_revision_entity.properties["baseline"]["end"][0] = 6.0;
     const auto same_revision_status = sketch::check_output_fingerprint_current(
         fingerprint, same_revision_snapshot, inputs);
@@ -256,9 +257,9 @@ void test_invalid_hashes_and_tampering() {
     }
     check(rejected, "non-finite dependency metadata must be rejected");
 
-    auto invalid_document_snapshot = document.snapshot();
+    sketch::test::DetachedDocumentSnapshotFixture invalid_document_snapshot(document.snapshot());
     auto& invalid_document_entity =
-        const_cast<sketch::Entity&>(invalid_document_snapshot.entities().at("wall-1"));
+        invalid_document_snapshot.entities().at("wall-1");
     invalid_document_entity.properties["invalid_utf8"] = invalid_utf8();
     rejected = false;
     try {
@@ -280,9 +281,9 @@ void test_invalid_hashes_and_tampering() {
     }
     check(rejected, "invalid dependency UTF-8 must produce a typed dependency error");
 
-    auto malformed_snapshot = document.snapshot();
+    sketch::test::DetachedDocumentSnapshotFixture malformed_snapshot(document.snapshot());
     auto& malformed_asset =
-        const_cast<sketch::Asset&>(malformed_snapshot.assets().at("asset-1"));
+        malformed_snapshot.assets().at("asset-1");
     malformed_asset.sha256 = std::string(64, '0');
     rejected = false;
     try {

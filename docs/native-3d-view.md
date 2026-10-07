@@ -188,14 +188,13 @@ final application target also links its existing architecture toolkit set:
 targets are available after `find_package(OpenCASCADE CONFIG REQUIRED
 COMPONENTS FoundationClasses ModelingData ModelingAlgorithms Visualization)`.
 
-For this project, the verified runtime prefixes are:
+The Qt prefix is resolved from the repository's selected SDK in
+`third_party/qt-sdk.json`: `.deps/qt/<version>/<directory>`, currently
+`.deps/qt/6.11.2/msvc2022_64`. Native dependencies are provisioned under
+`.deps/native/x64-windows`. These are repository-relative dependency paths;
+the selected Qt version and directory come from the manifest.
 
-```text
-.deps/qt/6.8.3/msvc2022_64
-.deps/native/x64-windows
-```
-
-The application must put the matching Qt `bin` directory and OCCT's
+The application must put the selected Qt `bin` directory and OCCT's
 configuration directory (`bin` for Release, `debug/bin` for Debug) on `PATH`
 before launching. The Qt and OCCT DLLs are dynamically linked; no global
 installation is required.
@@ -270,10 +269,11 @@ After the desktop target has been wired to the control:
    false. No placeholder solid should appear. Add a plan-only boundary or
    annotation and confirm it does not produce a missing-3D warning.
 
-The standalone object probe used while the application target is being
-integrated is kept under `.deps/probes/visualization`; it builds
+The historical standalone object probe from the Qt 6.8.3 integration
+checkpoint is kept under `.deps/probes/visualization`; it built
 `src/visualization/native_model_view.cpp` with MSVC 19.44, Qt 6.8.3, and OCCT
-8.0.1. It does not create generated files in the repository root.
+8.0.1. It documents the earlier SDK and is not evidence for the current
+Qt 6.11.2 selection. It does not create generated files in the repository root.
 
 The hosted-opening extension uses a strict `opening_assembly` profile:
 

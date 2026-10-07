@@ -4,7 +4,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$qtPrefix = Join-Path $projectRoot '.deps\qt\6.8.3\msvc2022_64'
+. (Join-Path $PSScriptRoot 'qt-selection.ps1')
+$qtSelection = Get-VertexQtSelection -ProjectRoot $projectRoot
+$qtPrefix = $qtSelection.prefix
 $nativeSuffix = if ($Configuration -eq 'Debug') { 'debug\bin' } else { 'bin' }
 $nativeBin = Join-Path $projectRoot ".deps\native\x64-windows\$nativeSuffix"
 $applicationPath = Join-Path $projectRoot "build\windows-$($Configuration.ToLowerInvariant())\vertex.exe"

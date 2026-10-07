@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/boundary_recovery_source.hpp"
 #include "sketch/document_digest.hpp"
@@ -103,8 +104,8 @@ void check_publication_and_detachment() {
     detached_active->checkpoint.pointer = Vec2{-1, -2};
     detached_active->checkpoint.extensions["future"]["detached"] = true;
     detached_active->source.authoring_digest = std::string(64, '0');
-    auto detached_document = workspace.snapshot();
-    const_cast<std::map<std::string, Entity, std::less<>>&>(detached_document.entities())
+    sketch::test::DetachedDocumentSnapshotFixture detached_document(workspace.snapshot());
+    detached_document.entities()
         .at("label")
         .properties["text"] = "detached";
     require(workspace.active_boundary() && *workspace.active_boundary() == expected_first,
@@ -327,13 +328,17 @@ void check_aggregate_capture() {
             "pointer capture must retain associated counters without changing older captures");
     const_cast<std::optional<BoundaryActiveRecovery>&>(captured.active_boundary())
         ->source.document_id = "tampered detached capture";
-    const_cast<std::map<std::string, Entity, std::less<>>&>(captured.document().entities())
-        .at("label").properties["text"] = "tampered detached capture";
+    // Replace this capture's document handle only after detached fixture mutation.
+    // Never cast away constness on its shared immutable entity storage.
+    const_cast<DocumentSnapshot&>(captured.document()) =
+        sketch::test::DetachedDocumentSnapshotFixture::mutate(captured.document(), [](auto& fixture) {
+            fixture.entities().at("label").properties["text"] = "tampered detached capture";
+        });
     require(document_snapshot_digest(workspace.snapshot()) == original_digest &&
                 document_snapshot_digest(copied.document()) == original_digest &&
                 copied.active_boundary()->source == source &&
                 workspace.active_boundary()->source == source,
-            "capture and its copies must own detached document and recovery data");
+            "capture handles and recovery data must remain independent after detached fixture replacement");
     auto edit = workspace.prepare(edit_label(workspace.snapshot(), "later"));
     (void)workspace.commit(edit);
     const auto edited = workspace.capture();

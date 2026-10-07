@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/area_class_palette.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -243,8 +244,8 @@ void detected_spaces() {
     auto& stale_rows=child<QListWidget>(window,"areaClassTargets");QListWidgetItem* stale_target=nullptr;
     for(int i=0;i<stale_rows.count();++i)if(stale_rows.item(i)->data(Qt::UserRole).toString().startsWith("detected-area:"))stale_target=stale_rows.item(i);
     require(stale_target,"retained detected row exists");const auto stale_point=stale_rows.visualItemRect(stale_target).center();
-    auto replaced=source;
-    const_cast<std::vector<RevisionRecord>&>(replaced.history()).front().entities.at("separator")=stroke("separator",{{1,-1},{1,5}},false);
+    sketch::test::DetachedDocumentSnapshotFixture replaced(source);
+    replaced.history().front().entities.at("separator")=stroke("separator",{{1,-1},{1,5}},false);
     window.document()=Document::fork(replaced);const auto changed=window.document().snapshot();
     require(changed.revision()==source.revision()&&changed.document_id()==source.document_id()&&changed.entities()!=source.entities(),"detected replacement changes geometry at the same immutable identity and revision");
     require(!drop(*stale_rows.viewport(),stale_point,"living")&&window.document().snapshot().entities()==changed.entities()&&window.lastError().contains("area list changed"),
@@ -418,8 +419,8 @@ void stale_sources() {
         "retained canvas refuses a changed revision without classifying its old hit");
     window.document()=Document::create(entities,assets);require(window.selectEntity(area),"refresh replacement create head");
     auto& rows=child<QListWidget>(window,"areaClassTargets");auto* row=areaRow(rows,area);require(row,"replacement area row exists");
-    const auto row_point=rows.visualItemRect(row).center();source=window.document().snapshot();auto altered=source;
-    const_cast<std::vector<RevisionRecord>&>(altered.history()).front().entities.at(area.toStdString()).extensions["fixture_same_revision"]=true;
+    const auto row_point=rows.visualItemRect(row).center();source=window.document().snapshot();sketch::test::DetachedDocumentSnapshotFixture altered(source);
+    altered.history().front().entities.at(area.toStdString()).extensions["fixture_same_revision"]=true;
     window.document()=Document::fork(altered);const auto replacement=window.document().snapshot();
     require(replacement.revision()==source.revision()&&replacement.document_id()==source.document_id()&&replacement.entities()!=source.entities(),
         "replacement changes authority while preserving identity and revision");

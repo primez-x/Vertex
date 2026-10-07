@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/workspace_recovery_budget.hpp"
 #include "sketch/boundary_authoring_recovery_resource.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -121,8 +122,8 @@ void run(bool subtraction = false) {
     exact.max_validation_work = usage.validation_work;
     (void)preflight(s, exact);
     --exact.max_encoded_bytes; rejects([&] { (void)preflight(s, exact); });
-    auto malformed = s.document();
-    const_cast<std::vector<RevisionRecord>&>(malformed.history()).front().revision = 99;
+    sketch::test::DetachedDocumentSnapshotFixture malformed(s.document());
+    malformed.history().front().revision = 99;
     WorkspaceRecoveryLimits denied; denied.max_events = 0;
     bool budget_first = false;
     try { validate_workspace_recovery(malformed, s.document_history(), s.lifecycle_history(), s.navigation(),

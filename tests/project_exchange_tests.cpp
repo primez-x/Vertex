@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/project_exchange.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/roof_join_semantics.hpp"
@@ -141,6 +142,66 @@ void test_architectural_appraisal_v55_export_floor(const std::filesystem::path& 
               found->at("extensions") == entity.extensions,
               "exchange55 retains exact authoring envelopes and catalog/material/unit references");
         }
+      }
+    }
+  }
+}
+
+void test_site_frame_v56_export_floor(const std::filesystem::path& root) {
+  const auto make = [](std::string id, std::string type, nlohmann::json properties) {
+    return sketch::Entity{std::move(id), std::move(type), std::move(properties), false,
+                          nlohmann::json::object()};
+  };
+  auto property = make("site", "property", {{"name", "Exchange frame fixture"}});
+  auto building = make("building", "building", {{"property_id", "site"}});
+  auto floor = make("floor", "floor", {{"building_id", "building"}});
+  auto layer = make("layer", "layer", {{"floor_id", "floor"}});
+  auto wall = make("wall", "wall", {{"layer_id", "layer"}, {"elevation_m", 2.5}});
+  auto document = sketch::Document::create({property, building, floor, layer, wall});
+  property.properties["site_frame"] = {{"version", 1}, {"origin_m", {100, 200, 10}},
+      {"rotation_radians", 1.5707963267948966},
+      {"vertical_datum", {{"identifier", "survey-A"}, {"height_at_origin_m", 150}}}};
+  building.properties["site_placement"] = {{"version", 1}, {"translation_m", {3, 4, 2}},
+      {"rotation_radians", 1.5707963267948966}};
+  document.apply(sketch::ApplyEntityChanges{document.revision(),
+      {sketch::EntityChange::upsert(property), sketch::EntityChange::upsert(building)}, {},
+      "Declare site and building frames"});
+  const auto created = document.snapshot();
+  document.undo(document.revision());
+  const auto undone = document.snapshot();
+  document.redo(document.revision());
+  const auto redone = document.snapshot();
+  auto deleted = sketch::Document::fork(created);
+  auto legacy_property = property;
+  legacy_property.properties.erase("site_frame");
+  auto legacy_building = building;
+  legacy_building.properties.erase("site_placement");
+  deleted.apply(sketch::ApplyEntityChanges{deleted.revision(),
+      {sketch::EntityChange::upsert(legacy_property), sketch::EntityChange::upsert(legacy_building)}, {},
+      "Remove site and building frames"});
+
+  unsigned sequence = 0;
+  for (const auto& snapshot : {created, undone, redone, deleted.snapshot()}) {
+    const auto output = root / ("site-frame-v56-" + std::to_string(sequence++));
+    sketch::extract_project(snapshot, output);
+    std::ifstream input(output / "project.json");
+    const auto encoded = nlohmann::json::parse(input);
+    check(encoded.at("exchange_version") == 56 &&
+        encoded.at("revisions").size() == snapshot.history().size(),
+        "current, undone, redone and deleted site-frame history requires exchange56");
+    for (std::size_t index = 0; index < snapshot.history().size(); ++index) {
+      const auto& expected = snapshot.history()[index];
+      const auto& row = encoded.at("revisions").at(index);
+      check(row.at("revision") == expected.revision &&
+          row.at("undo_stack") == expected.undo_stack && row.at("redo_stack") == expected.redo_stack &&
+          row.at("entities").size() == expected.entities.size(),
+          "exchange56 must retain every site-frame revision and navigation stack");
+      for (const auto& [id, entity] : expected.entities) {
+        const auto found = std::find_if(row.at("entities").begin(), row.at("entities").end(),
+            [&](const auto& value) { return value.at("id") == id; });
+        check(found != row.at("entities").end() &&
+            found->at("properties") == entity.properties && found->at("extensions") == entity.extensions,
+            "exchange56 must preserve the exact local site and building frame payloads");
       }
     }
   }
@@ -609,8 +670,8 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, b
         if (mutation == 2) forged.erase("supplemental_asset_changes");
         if (mutation == 3) forged["version"] = 6;
         if (mutation < 2) {
-          auto tampered = snapshot;
-          auto& proof = *const_cast<std::vector<sketch::RevisionRecord>&>(tampered.history())[1].boundary_constraint_changes;
+          sketch::test::DetachedDocumentSnapshotFixture tampered(snapshot);
+          auto& proof = *tampered.history()[1].boundary_constraint_changes;
           bool rejected = false;
           try { proof=std::get<sketch::ApplyBoundaryConstraintChanges>(sketch::command_from_json(forged,resolver));(void)sketch::Document::fork(tampered); } catch (const std::exception&) { rejected = true; }
           check(rejected, "extracted supplemental proof must independently reproduce the recorded entities and assets");
@@ -1470,6 +1531,7 @@ int main() {
     test_view_appearance_export_floor(root);
     test_appraisal_reporting_export_floor(root);
     test_architectural_appraisal_v55_export_floor(root);
+    test_site_frame_v56_export_floor(root);
     test_live_exterior_source_exchange_v17(root);
     test_live_exterior_source_exchange_v17(root, true);
     test_live_exterior_source_exchange_v17(root, true,true);

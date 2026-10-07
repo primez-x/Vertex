@@ -1,4 +1,5 @@
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/site_frame.hpp"
 
 #include <stdexcept>
 #include <utility>
@@ -26,11 +27,22 @@ const nlohmann::json& state_json(const Entity& entity) {
     require(entity.properties.at("schema") == "sketch.annotation_entity",
             "unsupported annotation entity schema");
     require(entity.properties.at("version").is_number_integer() &&
-                (entity.properties.at("version") == 1 || entity.properties.at("version") == 2),
+                (entity.properties.at("version") == 1 || entity.properties.at("version") == 2 ||
+                 entity.properties.at("version") == 3),
             "unsupported annotation entity version");
-    const bool scoped = entity.properties.at("version") == 2;
-    require(entity.properties.size() == (scoped ? (entity.properties.contains("level_id") ? 8 : 7) : 3),
+    const bool framed = entity.properties.at("version") == 3;
+    const bool has_context = entity.properties.contains("property_id") ||
+        entity.properties.contains("building_id") || entity.properties.contains("floor_id") ||
+        entity.properties.contains("layer_id") || entity.properties.contains("level_id");
+    const bool scoped = entity.properties.at("version") == 2 || (framed && has_context);
+    require(entity.properties.size() ==
+                (scoped ? (entity.properties.contains("level_id") ? 8 : 7) : 3) + (framed ? 1 : 0),
             "annotation entity has unknown or missing fields");
+    if(framed) {
+        require(entity.properties.contains("presentation_frame"),
+                "annotation entity v3 requires presentation_frame");
+        (void)decode_presentation_frame(entity.properties.at("presentation_frame"));
+    }
     if(scoped) {
         const auto identifier = [&](const char* key) {
             require(entity.properties.contains(key) && entity.properties.at(key).is_string(),
@@ -69,7 +81,17 @@ Entity make_annotation_entity(std::string id, const AnnotationState& state,
 }
 
 AnnotationState decode_annotation_entity(const Entity& entity) {
-    return decode_annotation_state(state_json(entity), catalog());
+    const auto& encoded=state_json(entity);
+    auto decoded=decode_annotation_state(encoded, catalog());
+    if(entity.properties.at("version")==3) {
+        // The owner frame applies to each child's own layer. A second frame
+        // in child JSON cannot be silently ignored by the state decoder.
+        for(const auto* collection:{"labels","symbols"})for(const auto& child:encoded.at(collection)) {
+            require(!child.contains("presentation_frame") && !child.at("placement").contains("presentation_frame"),
+                "annotation child presentation_frame is owned only by the framed annotation entity");
+        }
+    }
+    return decoded;
 }
 
 void validate_annotation_entity(const Entity& entity) {
@@ -83,7 +105,20 @@ ApplyEntityChanges make_symbol_migration_command(const DocumentSnapshot& snapsho
     auto entity = found->second;
     const auto state = migrate_symbol_definition(decode_annotation_entity(entity), instance_id,
                                                  catalog(), std::move(pinned_svg));
-    entity.properties["state"] = encode_annotation_state(state, catalog());
+    // Replace only the explicitly migrated artwork fields. Re-encoding the
+    // whole state would discard opaque label/symbol/override siblings.
+    const auto encoded = encode_annotation_state(state, catalog());
+    auto& symbols = entity.properties["state"]["symbols"];
+    const auto& migrated_symbols = encoded.at("symbols");
+    for(std::size_t index = 0; index < symbols.size(); ++index) {
+        if(symbols.at(index).at("id").get<std::string>() != instance_id) continue;
+        for(const auto* key : {"definition", "pinned_svg"}) {
+            if(migrated_symbols.at(index).contains(key))
+                symbols.at(index)[key] = migrated_symbols.at(index).at(key);
+            else symbols.at(index).erase(key);
+        }
+        break;
+    }
     return {snapshot.revision(), {EntityChange::upsert(std::move(entity))}, {},
             "Migrate symbol artwork revision"};
 }

@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/boundary_recovery_source.hpp"
 #include "sketch/boundary_active_recovery.hpp"
 #include "sketch/document_digest.hpp"
@@ -56,8 +57,8 @@ void check_binding() {
     try { (void)capture_boundary_recovery_source(original, wrong_context.context); }
     catch (const std::invalid_argument&) { rejected = true; }
     require(rejected, "capture cannot silently repair a context");
-    auto forged = original;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).front()
+    sketch::test::DetachedDocumentSnapshotFixture forged(original);
+    forged.history().front()
         .entities.at("p").properties["name"] = "Changed under same revision";
     require(inspect_boundary_recovery_source(forged, source) ==
                 BoundaryRecoverySourceStatus::stale_digest, "same identity and revision cannot hide changes");
@@ -119,8 +120,8 @@ void check_historical_binding() {
     rejected([&] { validate_historical_boundary_recovery_source(current, wrong_context); },
              "historical validation accepted the wrong original drawing context");
 
-    auto malformed = current;
-    const_cast<std::vector<RevisionRecord>&>(malformed.history()).back().undo_stack.push_back(999);
+    sketch::test::DetachedDocumentSnapshotFixture malformed(current);
+    malformed.history().back().undo_stack.push_back(999);
     rejected([&] { validate_historical_boundary_recovery_source(malformed, source); },
              "historical validation accepted malformed retained history");
 }

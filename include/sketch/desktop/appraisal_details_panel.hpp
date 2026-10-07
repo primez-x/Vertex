@@ -9,8 +9,9 @@
 
 namespace sketch::desktop {
 
-// Always rebuilds from the document. Only semantic design-phase IDs belong in
-// the optional mask; workspace presentation visibility must never be passed.
+// Rebuilds from the document unless the complete immutable authoring source,
+// property, units and effective semantic mask are unchanged. Only semantic
+// design-phase IDs belong in the mask; never pass workspace presentation visibility.
 class AppraisalDetailsPanel final : public QWidget {
 public:
     explicit AppraisalDetailsPanel(QWidget* parent = nullptr);

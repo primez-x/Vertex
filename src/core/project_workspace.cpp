@@ -141,6 +141,22 @@ ProjectWorkspace::ProjectWorkspace(const DocumentSnapshot& source, BoundaryAutho
 
 ProjectWorkspace::~ProjectWorkspace() = default;
 
+PreparedProjectWorkspace::PreparedProjectWorkspace(std::unique_ptr<ProjectWorkspace> workspace) noexcept
+    : workspace_(std::move(workspace)) {}
+PreparedProjectWorkspace::PreparedProjectWorkspace(PreparedProjectWorkspace&&) noexcept = default;
+PreparedProjectWorkspace& PreparedProjectWorkspace::operator=(PreparedProjectWorkspace&&) noexcept = default;
+PreparedProjectWorkspace::~PreparedProjectWorkspace() = default;
+ProjectWorkspaceSnapshot PreparedProjectWorkspace::capture() const {
+    if (!workspace_) throw std::invalid_argument("prepared workspace is consumed or moved from");
+    return workspace_->capture();
+}
+PreparedProjectWorkspace ProjectWorkspace::prepare_detached(const DocumentSnapshot& source) {
+    return PreparedProjectWorkspace(std::make_unique<ProjectWorkspace>(source));
+}
+std::unique_ptr<ProjectWorkspace> ProjectWorkspace::adopt_prepared(PreparedProjectWorkspace&& prepared) noexcept {
+    return std::move(prepared.workspace_);
+}
+
 std::unique_ptr<ProjectWorkspace> ProjectWorkspace::restore_components(
     const DocumentSnapshot& document, const WorkspaceDocumentHistory& history,
     const std::optional<BoundaryActiveRecovery>& active, const WorkspaceNavigationState& navigation,
@@ -163,6 +179,8 @@ std::unique_ptr<ProjectWorkspace> ProjectWorkspace::restore_components(
 }
 
 const std::string& ProjectWorkspace::identity() const noexcept { return identity_; }
+const std::string& ProjectWorkspace::document_id() const noexcept { return state_->document->document_id(); }
+Revision ProjectWorkspace::revision() const noexcept { return state_->document->revision(); }
 std::uint64_t ProjectWorkspace::epoch() const noexcept { return epoch_; }
 std::uint64_t ProjectWorkspace::edited_generation() const noexcept { return edited_generation_; }
 std::uint64_t ProjectWorkspace::checkpoint_generation() const noexcept { return checkpoint_generation_; }

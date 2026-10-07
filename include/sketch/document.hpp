@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -350,6 +351,8 @@ struct RevisionRecord {
     std::optional<TransformBoundaries> boundary_transforms;
 };
 
+namespace test { class DetachedDocumentSnapshotFixture; }
+
 class DocumentSnapshot {
 public:
     DocumentSnapshot(const DocumentSnapshot&) = default;
@@ -370,8 +373,13 @@ public:
     [[nodiscard]] const std::map<std::string, Revision, std::less<>>&
     named_revisions() const noexcept;
 
+    // Sufficient authoring-source equality; saved/editability metadata is excluded.
+    // This does not replace full snapshot equality for workspace publication.
+    [[nodiscard]] bool shares_authoring_source_with(const DocumentSnapshot& other) const noexcept;
+
 private:
     friend class Document;
+    friend class test::DetachedDocumentSnapshotFixture;
     friend class ProjectStore;
     friend class ProjectStoreAccess;
 
@@ -382,7 +390,7 @@ private:
     std::optional<Revision> saved_revision_;
     bool editable_ = true;
     std::string read_only_reason_;
-    std::vector<RevisionRecord> history_;
+    std::shared_ptr<const std::vector<RevisionRecord>> history_;
     std::map<std::string, Revision, std::less<>> named_revisions_;
 };
 
@@ -404,8 +412,11 @@ public:
     [[nodiscard]] bool dirty() const noexcept;
     [[nodiscard]] bool is_editable() const noexcept;
     [[nodiscard]] const std::string& read_only_reason() const noexcept;
+    [[nodiscard]] const std::string& document_id() const noexcept;
     [[nodiscard]] bool can_undo() const noexcept;
     [[nodiscard]] bool can_redo() const noexcept;
+    // Capture on the owning document thread. Save workers consume immutable
+    // snapshots and must not capture or access the editable Document.
     [[nodiscard]] DocumentSnapshot snapshot() const;
 
     // A private working copy with the same identity and complete validated
@@ -450,6 +461,7 @@ private:
     bool editable_ = true;
     std::string read_only_reason_;
     std::vector<RevisionRecord> history_;
+    mutable std::shared_ptr<const std::vector<RevisionRecord>> snapshot_history_cache_;
     std::map<std::string, Revision, std::less<>> named_revisions_;
     std::optional<std::string> unsupported_constraint_history_reason_;
     std::optional<std::string> session_read_only_reason_;

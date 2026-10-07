@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/document.hpp"
+#include "sketch/site_frame.hpp"
 #include <Quantity_Color.hxx>
 #include <TopoDS_Shape.hxx>
 #include <functional>
@@ -41,6 +42,12 @@ struct PreparedNativeSolid {
     // Includes source bindings and resolved colors. Geometry content remains
     // stable on catalog color edits; publication must compare this separately.
     std::string appearance_content;
+    // Authored source -> world, applied once to shape and every material region.
+    // Selection/manipulator presentations therefore use world geometry. Retain
+    // the captured placement for command-edge conjugation; it does not replace
+    // the controller's complete document-snapshot authority guard. Legacy
+    // catalog host copies have no enrollment and remain world by default.
+    std::optional<SitePresentationPlacement> presentation_placement;
 };
 struct PreparedNativeGeometry {
     Revision revision{};

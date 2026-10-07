@@ -5,6 +5,7 @@
 #include <QCryptographicHash>
 #include <QFontDatabase>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QPainter>
 
 #include <algorithm>
@@ -274,6 +275,159 @@ void reference_remains_visible_through_room_and_over_underlay() {
             "underlay composition change never introduces reference ink into output");
 }
 }
+
+namespace {
+void exact_reference_gesture_payload() {
+    PlanCanvas canvas;
+    configure(canvas);
+    canvas.setSelectionControlsVisible(true);
+    canvas.setSnapEnabled(false);
+    canvas.setSelectionTransformEnabled(true, true);
+    CanvasReference source;
+    source.id = "posed-underlay";
+    source.image = QImage(160, 90, QImage::Format_ARGB32_Premultiplied);
+    source.image.fill(QColor(30, 110, 210));
+    { QPainter ink(&source.image); ink.fillRect(3, 7, 37, 21, Qt::yellow); }
+    // Asymmetric presented building pose; calibration and flips remain immutable.
+    source.position = {1.3, -.7}; source.rotation_degrees = 37.0;
+    source.metres_per_source_unit = .013; source.scale = 1.4;
+    source.flip_horizontal = true; source.intensity = .63; source.selected = true;
+    canvas.setReferences({source});
+    canvas.setSelectedId(source.id);
+    CanvasReference candidate = source;
+    int commits = 0;
+    std::uint64_t captured_serial = 0;
+    bool complete_move_automatically = false;
+    bool refuse_move = false;
+    const auto mouse = [&](QEvent::Type type, QPointF point) {
+        QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()),
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    canvas.setEntityTransformPreviewRequested([&](QString id, double scale, double radians, Vec2, std::uint64_t serial)
+        -> std::optional<std::vector<CanvasEntity>> {
+        require(id == source.id, "reference preview retains source identity");
+        captured_serial = serial;
+        candidate = source;
+        candidate.scale *= scale;
+        candidate.rotation_degrees += radians * 180 / std::numbers::pi;
+        require(canvas.markEntityTransformPreviewPending(serial), "reference transform marks exact pending");
+        require(canvas.completeEntityTransformPreview(serial, std::vector<CanvasEntity>{}, {}, {candidate}),
+            "reference-only exact payload completes");
+        return std::nullopt;
+    });
+    canvas.setEntityTransformRequested([&](QString, double, double) {
+        ++commits; canvas.setReferences({candidate}); return true;
+    });
+    canvas.setEntitiesMovePreviewRequested([&](QStringList, Vec2 delta, std::uint64_t serial)
+        -> std::optional<std::vector<CanvasEntity>> {
+        captured_serial = serial;
+        candidate = source; candidate.position = {source.position.x + delta.x, source.position.y + delta.y};
+        require(canvas.markEntitiesMovePreviewPending(serial), "reference move marks pending");
+        if (complete_move_automatically)
+            require(canvas.completeEntitiesMovePreview(serial,
+                refuse_move ? std::optional<std::vector<CanvasEntity>>{} : std::vector<CanvasEntity>{},
+                {}, refuse_move ? std::vector<CanvasReference>{} : std::vector<CanvasReference>{candidate}),
+                "release-position reference preview completes its own serial");
+        return std::nullopt;
+    });
+    canvas.setEntitiesMoveRequested([&](QStringList, Vec2) {
+        ++commits; canvas.setReferences({candidate}); return true;
+    });
+    const auto reference_artwork = [&](PlanCanvas& value) {
+        value.setSelectionControlsVisible(false);
+        const auto result = digest(screen_image(value));
+        value.setSelectionControlsVisible(true);
+        return result;
+    };
+    const auto expected_artwork = [&](const CanvasReference& value) {
+        PlanCanvas expected; configure(expected); expected.setReferences({value});
+        return digest(screen_image(expected));
+    };
+    const auto original_screen = digest(screen_image(canvas));
+    const auto original_unfitted_output = digest(output_image(canvas, 0));
+    const auto original_fitted_output = digest(output_image(canvas, 1));
+    const auto original_fixed_output = digest(output_image(canvas, 2));
+    const auto center = screen(canvas, source.position);
+    mouse(QEvent::MouseButtonPress, center);
+    mouse(QEvent::MouseMove, center + QPointF(28, 14));
+    const auto stale = captured_serial;
+    mouse(QEvent::MouseMove, center + QPointF(70, 35));
+    require(!canvas.completeEntitiesMovePreview(stale, std::vector<CanvasEntity>{}, {}, {candidate}),
+        "new mouse position rejects stale queued reference move");
+    require(canvas.completeEntitiesMovePreview(captured_serial, std::vector<CanvasEntity>{}, {}, {candidate}),
+        "exact reference move payload completes");
+    require(digest(screen_image(canvas)) != original_screen && canvas.references().front().position.x == source.position.x,
+        "exact move paints transient reference without altering retained position");
+    require(reference_artwork(canvas) == expected_artwork(candidate), "move exact payload paints the complete calibrated flipped candidate");
+    require(digest(output_image(canvas, 0)) == original_unfitted_output &&
+            digest(output_image(canvas, 1)) == original_fitted_output &&
+            digest(output_image(canvas, 2)) == original_fixed_output,
+        "all public output modes exclude transient reference move payload");
+    const auto moved = candidate;
+    complete_move_automatically = true;
+    mouse(QEvent::MouseButtonRelease, center + QPointF(70, 35));
+    QApplication::processEvents();
+    require(commits == 1 && canvas.references().front().position.x == moved.position.x &&
+            canvas.references().front().position.y == moved.position.y,
+        "reference move preview and commit agree");
+    require(reference_artwork(canvas) == expected_artwork(moved), "move commit renders the same candidate as preview");
+    canvas.setReferences({source}); canvas.setSelectedId(source.id); commits = 0;
+    complete_move_automatically = false;
+    mouse(QEvent::MouseButtonPress, center); mouse(QEvent::MouseMove, center + QPointF(35, 21));
+    require(canvas.completeEntitiesMovePreview(captured_serial, std::nullopt), "rejected move completion admitted");
+    complete_move_automatically = true; refuse_move = true;
+    mouse(QEvent::MouseButtonRelease, center + QPointF(35, 21));
+    require(commits == 0 && digest(screen_image(canvas)) == original_screen, "rejected reference move restores source exactly");
+    const auto baseline = screen_image(canvas);
+    const auto unfitted_output = digest(output_image(canvas, 0));
+    const auto output = digest(output_image(canvas, 1));
+    const auto explicit_output = digest(output_image(canvas, 2));
+    for (bool rotate : {true, false}) {
+        const auto frame = canvas.selectionBounds().value();
+        const auto angle = -source.rotation_degrees * std::numbers::pi / 180;
+        const QPointF local_corner(source.image.width()*source.metres_per_source_unit*source.scale*70/2 + 7.5,
+                                   source.image.height()*source.metres_per_source_unit*source.scale*70/2 + 7.5);
+        const QPointF corner = screen(canvas,source.position) + QPointF(
+            std::cos(angle)*local_corner.x()-std::sin(angle)*local_corner.y(),
+            std::sin(angle)*local_corner.x()+std::cos(angle)*local_corner.y());
+        const auto start = rotate ? canvas.selectionRotationHandlePosition().value() : corner;
+        const auto end = rotate ? frame.center() + QPointF(110, 10)
+                                : frame.center() + (start - frame.center()) * 1.3;
+        mouse(QEvent::MouseButtonPress, start); mouse(QEvent::MouseMove, end);
+        const auto preview = screen_image(canvas);
+        require(reference_artwork(canvas) == expected_artwork(candidate), "rotation/scale preview renders exact full candidate artwork");
+        require(digest(preview) != digest(baseline), "reference exact transform paints candidate artwork");
+        require(canvas.references().front().scale == source.scale &&
+                canvas.references().front().rotation_degrees == source.rotation_degrees,
+            "preview preserves committed references");
+        require(digest(output_image(canvas, 0)) == unfitted_output &&
+                digest(output_image(canvas, 1)) == output &&
+                digest(output_image(canvas, 2)) == explicit_output,
+            "all public output modes exclude transient reference transform payload");
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &escape);
+        require(!canvas.completeEntityTransformPreview(captured_serial, std::vector<CanvasEntity>{}, {}, {candidate}),
+            "cancel rejects queued reference completion");
+        mouse(QEvent::MouseButtonRelease, end);
+        require(commits == 0 && digest(screen_image(canvas)) == digest(baseline),
+            "cancel restores exact posed calibrated flipped reference");
+        mouse(QEvent::MouseButtonPress, start); mouse(QEvent::MouseMove, end);
+        const auto accepted = candidate;
+        mouse(QEvent::MouseButtonRelease, end);
+        require(commits == 1 && canvas.references().front().scale == accepted.scale &&
+                canvas.references().front().rotation_degrees == accepted.rotation_degrees &&
+                canvas.references().front().metres_per_source_unit == source.metres_per_source_unit &&
+                canvas.references().front().flip_horizontal == source.flip_horizontal,
+            "reference preview and committed transform agree with calibration and flips intact");
+        require(reference_artwork(canvas) == expected_artwork(accepted), "rotation/scale commit renders the same exact candidate as preview");
+        // Restore source before the next independent real mouse gesture.
+        canvas.setReferences({source}); canvas.setSelectedId(source.id); commits = 0;
+    }
+}
+
+}
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -285,6 +439,7 @@ int main(int argc, char** argv) {
         outputs_bounds_and_guide_are_unchanged();
         ghost_is_not_selectable_or_snappable();
         reference_remains_visible_through_room_and_over_underlay();
+        exact_reference_gesture_payload();
         std::cout << "Floor reference canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

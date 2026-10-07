@@ -1,8 +1,10 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/site_frame.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <filesystem>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -40,12 +42,121 @@ void rejects_document(F&& operation) {
     }
     throw std::runtime_error("invalid annotation entity accepted by Document");
 }
+
+std::vector<sketch::Entity> framed_fixture(sketch::Entity owner) {
+    const auto entity = [](std::string id, std::string type, nlohmann::json properties) {
+        return sketch::Entity{std::move(id),std::move(type),std::move(properties),false,nlohmann::json::object()};
+    };
+    return {
+        entity("property-1","property",{{"site_frame",{{"version",1},{"origin_m",{100,200,10}},
+            {"rotation_radians",0},{"vertical_datum",{{"identifier","survey"},{"height_at_origin_m",150}}}}}}),
+        entity("building-1","building",{{"property_id","property-1"},{"site_placement",{
+            {"version",1},{"translation_m",{3,4,2}},{"rotation_radians",0}}}}),
+        entity("floor-1","floor",{{"building_id","building-1"}}),
+        entity("layer-ground","layer",{{"floor_id","floor-1"}}),
+        entity("building-2","building",{{"property_id","property-1"},{"site_placement",{
+            {"version",1},{"translation_m",{30,40,5}},{"rotation_radians",0}}}}),
+        entity("floor-2","floor",{{"building_id","building-2"}}),
+        entity("layer-other","layer",{{"floor_id","floor-2"}}),std::move(owner)};
+}
+
+void test_framed_owner(const sketch::AnnotationState& state) {
+    auto owner=sketch::make_annotation_entity("framed",state);
+    owner.properties["version"]=3;
+    owner.properties["presentation_frame"]={{"version",1},{"mode","building"}};
+    owner.properties["state"]["symbols"][0]["placement"]["layer_id"]="layer-other";
+    owner.extensions["vendor_owner"]={{"retain","exact"},{"presentation_frame","opaque vendor text"}};
+    owner.properties["state"]["labels"][0]["vendor_label"]={{"presentation_frame",{{"mode","opaque"}}}};
+    owner.properties["state"]["symbols"][0]["placement"]["vendor_placement"]={{"retain",7}};
+    sketch::validate_annotation_entity(owner);
+    auto document=sketch::Document::create(framed_fixture(owner));
+    const std::vector<sketch::SiteAnnotationTarget> targets{{"framed","label-1"},{"framed","symbol-1"}};
+    const auto placed=sketch::resolve_site_annotation_presentations(document.snapshot(),targets);
+    require(placed.at(targets[0]).source_frame.building_id=="building-1" &&
+        placed.at(targets[1]).source_frame.building_id=="building-2",
+        "unscoped v3 children must resolve their own layer building");
+    const auto label=sketch::site_transform_point({2,3,0},placed.at(targets[0]).forward);
+    const auto symbol=sketch::site_transform_point({4,5,0},placed.at(targets[1]).forward);
+    require(std::abs(label.x-105)<1e-9 && std::abs(label.y-207)<1e-9 && std::abs(label.z-12)<1e-9 &&
+        std::abs(symbol.x-134)<1e-9 && std::abs(symbol.y-245)<1e-9 && std::abs(symbol.z-15)<1e-9,
+        "child building pose must be applied once to authored coordinates");
+    auto moved=owner;
+    moved.properties["state"]["labels"][0]["placement"]["x"]=7;
+    moved.properties["state"]["labels"][0]["placement"]["y"]=8;
+    (void)document.apply(sketch::ApplyEntityChanges{document.revision(),
+        {sketch::EntityChange::upsert(moved)}, {},"Move framed label"});
+    require(document.snapshot().entities().at("framed")==moved,
+        "transform command must preserve exact outer frame and unrelated child metadata");
+    (void)document.undo(document.revision());
+    require(document.snapshot().entities().at("framed")==owner,"framed transform undo must restore exact owner");
+    (void)document.redo(document.revision());
+    require(document.snapshot().entities().at("framed")==moved,"framed transform redo must restore exact owner");
+    auto world=owner;world.properties["presentation_frame"]["mode"]="world";
+    const auto world_document=sketch::Document::create(framed_fixture(world));
+    const auto world_placed=sketch::resolve_site_annotation_presentations(world_document.snapshot(),targets);
+    const auto point=sketch::site_transform_point({2,3,0},world_placed.at(targets[0]).forward);
+    require(point.x==2 && point.y==3 && point.z==0,"explicit world owner retains child coordinates");
+    require(world_document.snapshot().entities().at("framed")==world,
+        "supported owner frame must preserve opaque vendor label, placement and owner metadata");
+    auto sibling=owner;sibling.id="framed-other";
+    sibling.properties["state"]["labels"][0]["placement"]["layer_id"]="layer-other";
+    auto local_children=framed_fixture(owner);local_children.push_back(sibling);
+    const auto local_document=sketch::Document::create(local_children);
+    const std::vector<sketch::SiteAnnotationTarget> local_targets{{"framed","label-1"},{"framed-other","label-1"}};
+    const auto local_placed=sketch::resolve_site_annotation_presentations(local_document.snapshot(),local_targets);
+    require(local_placed.at(local_targets[0]).source_frame.building_id=="building-1" &&
+        local_placed.at(local_targets[1]).source_frame.building_id=="building-2",
+        "repeated child IDs remain owner-local and resolve each child's layer");
+    for(const auto* collection:{"labels","symbols"})for(const bool in_placement:{false,true}) {
+        auto invalid=owner;
+        auto& child=invalid.properties["state"][collection][0];
+        auto& target=in_placement ? child["placement"] : child;
+        target["presentation_frame"]=owner.properties.at("presentation_frame");
+        bool codec_refused=false;
+        try { (void)sketch::decode_annotation_entity(invalid); }
+        catch(const std::invalid_argument&) { codec_refused=true; }
+        require(codec_refused,"framed annotation codec must reject presentation frames on children and placements");
+        rejects_document([&]{(void)sketch::Document::create(framed_fixture(invalid));});
+    }
+    auto scoped=owner;
+    for(const auto* key:{"property_id","building_id","floor_id","layer_id"})
+        scoped.properties[key]=key==std::string_view("property_id") ? "property-1" :
+            key==std::string_view("building_id") ? "building-1" :
+            key==std::string_view("floor_id") ? "floor-1" : "layer-ground";
+    sketch::validate_annotation_entity(scoped);
+    for(const auto* key:{"property_id","building_id","floor_id","layer_id"}) {
+        auto invalid=scoped;invalid.properties.erase(key);
+        rejects_document([&]{(void)sketch::Document::create(framed_fixture(invalid));});
+    }
+    for(const auto version:{0,1,2,4}) {
+        auto invalid=owner;invalid.properties["version"]=version;
+        rejects_document([&]{(void)sketch::Document::create(framed_fixture(invalid));});
+    }
+    for(const auto frame:{nlohmann::json(nullptr),nlohmann::json{{"version",1}},
+        nlohmann::json{{"mode","world"}},nlohmann::json{{"version",2},{"mode","world"}},
+        nlohmann::json{{"version",1},{"mode","unknown"}},
+        nlohmann::json{{"version",1},{"mode","world"},{"extra",true}}}) {
+        auto invalid=owner;invalid.properties["presentation_frame"]=frame;
+        rejects_document([&]{(void)sketch::Document::create(framed_fixture(invalid));});
+    }
+    for(const auto* key:{"presentation_frame","state","schema"}) {
+        auto invalid=owner;invalid.properties.erase(key);
+        rejects_document([&]{(void)sketch::Document::create(framed_fixture(invalid));});
+    }
+    auto invalid=owner;invalid.properties["extra"]=true;
+    rejects_document([&]{(void)sketch::Document::create(framed_fixture(invalid));});
+    invalid=owner;invalid.properties["level_id"]="level-1";
+    rejects_document([&]{(void)sketch::Document::create(framed_fixture(invalid));});
+    auto missing=framed_fixture(owner);missing.erase(missing.begin()+3);
+    rejects_document([&]{(void)sketch::Document::create(missing);});
+}
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
         const auto state = fixture();
+        test_framed_owner(state);
         auto entity = sketch::make_annotation_entity("annotations", state);
         sketch::validate_annotation_entity(entity);
         const auto decoded = sketch::decode_annotation_entity(entity);
@@ -153,11 +264,13 @@ int main() {
         palette_symbol.flip_horizontal = true;
         palette_symbol.svg_palette = sketch::SymbolSvgPalette{"white-outline-2", "#A1b2C3", "#456789"};
         auto palette_entity = sketch::make_annotation_entity("palette-annotations", palette_state);
+        palette_entity.properties["version"]=3;
+        palette_entity.properties["presentation_frame"]={{"version",1},{"mode","building"}};
         palette_entity.required = true;
         palette_entity.extensions["vendor_palette_owner"] = {{"retain", 18}};
         palette_entity.properties["state"]["labels"][0]["vendor_label"] = "retain";
         palette_entity.properties["state"]["overrides"][0]["vendor_area"] = "retain";
-        const auto palette_document = sketch::Document::create({palette_entity});
+        const auto palette_document = sketch::Document::create(framed_fixture(palette_entity));
         (void)sketch::ProjectStore::save(path, palette_document.snapshot());
         const auto palette_saved = sketch::ProjectStore::load(path).document.snapshot().entities().at("palette-annotations");
         const auto palette_reopened = sketch::decode_annotation_entity(palette_saved);
@@ -167,6 +280,19 @@ int main() {
                 !palette_reopened.symbols.front().svg_palette && palette_reopened.labels.front().model_plan &&
                 palette_reopened.overrides.back().paper_text_height_mm == 5.0,
             "Native save/reopen retains v7 palettes, exact artwork, transforms and opaque sibling metadata with older presentation features");
+        auto palette_edited=palette_saved;
+        palette_edited.properties["state"]["symbols"][1]["svg_palette"]["surface_color"]="#abcdef";
+        auto palette_edit_document=sketch::Document::create(framed_fixture(palette_saved));
+        (void)palette_edit_document.apply(sketch::ApplyEntityChanges{palette_edit_document.revision(),
+            {sketch::EntityChange::upsert(palette_edited)}, {},"Change framed symbol palette"});
+        require(palette_edit_document.snapshot().entities().at("palette-annotations")==palette_edited,
+            "palette edit must preserve exact v3 frame and opaque siblings");
+        (void)palette_edit_document.undo(palette_edit_document.revision());
+        require(palette_edit_document.snapshot().entities().at("palette-annotations")==palette_saved,
+            "palette undo must restore exact framed owner");
+        (void)palette_edit_document.redo(palette_edit_document.revision());
+        require(palette_edit_document.snapshot().entities().at("palette-annotations")==palette_edited,
+            "palette redo must restore exact framed owner");
         auto malformed_palette_entity = palette_entity;
         malformed_palette_entity.properties["state"]["symbols"][1]["svg_palette"] = nullptr;
         rejects_document([&] { (void)sketch::Document::create({malformed_palette_entity}); });
@@ -187,10 +313,12 @@ int main() {
         area_calculation.paper_text_height_mm=6;area_calculation.style.bold=true;
         role_state.overrides.push_back(area_name);role_state.overrides.push_back(area_calculation);
         auto role_entity=sketch::make_annotation_entity("role-annotations",role_state);
+        role_entity.properties["version"]=3;
+        role_entity.properties["presentation_frame"]={{"version",1},{"mode","building"}};
         role_entity.extensions["vendor_owner"]="retain";
         role_entity.properties["state"]["labels"][0]["vendor_label"]={{"retain",1}};
         role_entity.properties["state"]["overrides"][2]["vendor_role"]={{"retain",2}};
-        auto role_document=sketch::Document::create({role_entity});
+        auto role_document=sketch::Document::create(framed_fixture(role_entity));
         (void)sketch::ProjectStore::save(path,role_document.snapshot());
         auto role_reopened=sketch::ProjectStore::load(path).document;
         const auto role_saved=role_reopened.snapshot().entities().at("role-annotations");
@@ -238,9 +366,17 @@ int main() {
         historical.symbols.front().visible = false;
         historical.symbols.front().svg_palette = sketch::SymbolSvgPalette{};
         auto historical_entity = sketch::make_annotation_entity("annotations", historical);
+        historical_entity.properties["version"]=3;
+        historical_entity.properties["presentation_frame"]={{"version",1},{"mode","building"}};
+        historical_entity.properties["state"]["labels"][0]["vendor_label"]={{"retain",1}};
+        auto unsupported_symbol = historical_entity;
+        unsupported_symbol.properties["state"]["symbols"][0]["vendor_symbol"]={{"retain",2}};
+        rejects_document([&] { (void)sketch::Document::create(framed_fixture(unsupported_symbol)); });
+        historical_entity.extensions["vendor_symbols"]["symbol-1"]={{"retain",2}};
+        historical_entity.properties["state"]["overrides"][0]["vendor_override"]={{"retain",3}};
         historical_entity.extensions["owner_context"] = "retain-me";
         historical_entity.required = true;
-        auto migration_document = sketch::Document::create({historical_entity});
+        auto migration_document = sketch::Document::create(framed_fixture(historical_entity));
         const auto command = sketch::make_symbol_migration_command(
             migration_document.snapshot(), "annotations", "symbol-1", "<svg/>");
         (void)migration_document.apply(command);

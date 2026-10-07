@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/appraisal_details_panel.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
@@ -560,9 +561,9 @@ void reporting_and_declaration_lifecycle() {
         sketch::desktop::appraisal_report_html(declared, declared_report, false).contains("supplied building plans"),
         "typed declaration reaches the current calculation and report");
     dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
-        auto replacement = window.document().snapshot();
+        sketch::test::DetachedDocumentSnapshotFixture replacement(window.document().snapshot());
         const auto captured_digest = sketch::document_snapshot_digest(replacement);
-        auto& retained = const_cast<std::vector<sketch::RevisionRecord>&>(replacement.history());
+        auto& retained = replacement.history();
         const auto property_record = std::find_if(retained.begin(), retained.end(), [&](const auto& record) {
             return record.revision < replacement.revision() && record.entities.contains(property_id);
         });

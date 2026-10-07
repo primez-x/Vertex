@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
@@ -12,6 +13,124 @@ namespace {
 using namespace sketch;
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+
+void test_shared_immutable_snapshot_authority_and_lifetime() {
+    Entity label{"shared-label", "label", {{"text", "original"}}, false, nlohmann::json::object()};
+    auto document = Document::create({label});
+    const auto initial = document.snapshot();
+    const auto copied = initial;
+    const auto initial_full = document_snapshot_digest(initial);
+    require(initial.shares_authoring_source_with(copied) &&
+            initial.shares_authoring_source_with(document.snapshot()) &&
+            document.document_id() == initial.document_id(),
+            "unchanged captures and copies must share immutable authoring history");
+    bool rejected = false;
+    try { (void)document.undo(document.revision()); }
+    catch (const DocumentError&) { rejected = true; }
+    require(rejected && initial.shares_authoring_source_with(document.snapshot()),
+            "rejected navigation must retain the snapshot cache");
+    document.mark_saved(document.revision());
+    const auto saved = document.snapshot();
+    require(initial.shares_authoring_source_with(saved) &&
+            document_snapshot_digest(saved) != initial_full &&
+            document_authoring_source_digest_v1(saved) == document_authoring_source_digest_v1(initial),
+            "save metadata must remain fresh while authoring history is shared");
+    label.properties["text"] = "edited";
+    document.apply(ApplyEntityChanges{.expected_revision = 0,
+        .entity_changes = {EntityChange::upsert(label)}, .message = "edit"});
+    const auto edited = document.snapshot();
+    require(!edited.shares_authoring_source_with(initial) &&
+            edited.shares_authoring_source_with(document.snapshot()) &&
+            initial.entities().at(label.id).properties.at("text") == "original",
+            "successful apply must replace the cache without changing old captures");
+    rejected = false;
+    try { document.apply(NameRevision{0, "stale"}); }
+    catch (const DocumentError&) { rejected = true; }
+    require(rejected && edited.shares_authoring_source_with(document.snapshot()),
+            "rejected commands must keep the same immutable history");
+    document.apply(NameRevision{document.revision(), "retained"});
+    const auto named = document.snapshot();
+    require(!named.shares_authoring_source_with(edited) && edited.named_revisions().empty() &&
+            named.named_revisions().at("retained") == named.revision(),
+            "naming must replace history and copy fresh named-revision metadata");
+    document.undo(document.revision());
+    const auto undone = document.snapshot();
+    document.redo(document.revision());
+    const auto redone = document.snapshot();
+    require(!undone.shares_authoring_source_with(named) &&
+            !redone.shares_authoring_source_with(undone) &&
+            redone.entities() == named.entities(),
+            "undo and redo must replace retained history even with equal geometry");
+    auto fork = Document::fork(redone);
+    require(fork.snapshot().shares_authoring_source_with(redone),
+            "fully validated restoration may seed the immutable source cache");
+    fork.apply(NameRevision{fork.revision(), "private"});
+    require(!fork.snapshot().shares_authoring_source_with(redone) &&
+            !redone.named_revisions().contains("private"),
+            "fork edits must detach history and names from their source");
+    auto prefix = Document::fork_at_revision(redone, edited.revision());
+    const auto prefix_snapshot = prefix.snapshot();
+    require(!prefix_snapshot.shares_authoring_source_with(edited) &&
+            document_snapshot_digest(prefix_snapshot) == document_snapshot_digest(edited),
+            "retained prefixes must own separate truncated immutable history");
+    document.mark_read_only("session ownership diagnostic");
+    const auto read_only = document.snapshot();
+    require(read_only.shares_authoring_source_with(redone) && !read_only.is_editable() &&
+            document_snapshot_digest(read_only) != document_snapshot_digest(redone),
+            "read-only metadata must be copied without invalidating authoring history");
+    auto identity_changed = redone;
+    const_cast<std::string&>(identity_changed.document_id()) = "other-document";
+    auto names_changed = redone;
+    const_cast<std::map<std::string, Revision, std::less<>>&>(names_changed.named_revisions())
+        .emplace("forged-name", 0);
+    require(!identity_changed.shares_authoring_source_with(redone) &&
+            !names_changed.shares_authoring_source_with(redone),
+            "shared history alone must not bypass identity or named-revision authority");
+    const auto lifetime = [&] {
+        auto temporary = Document::fork(initial);
+        const auto retained = temporary.snapshot();
+        auto moved = std::move(temporary);
+        moved.apply(NameRevision{moved.revision(), "after-move"});
+        require(retained.shares_authoring_source_with(initial),
+                "moving and editing the owner must preserve old snapshot storage");
+        return retained;
+    }();
+    require(document_snapshot_digest(lifetime) == initial_full,
+            "snapshots must survive owner move and destruction");
+    const auto source_digest = document_snapshot_digest(redone);
+    const auto historical_forgery = test::DetachedDocumentSnapshotFixture::mutate(redone, [](auto& fixture) {
+        fixture.history().front().action = "forged create";
+    });
+    const auto entity_forgery = test::DetachedDocumentSnapshotFixture::mutate(redone, [](auto& fixture) {
+        fixture.entities().at("shared-label").properties["text"] = "forged entity";
+    });
+    const auto proof_forgery = test::DetachedDocumentSnapshotFixture::mutate(redone, [](auto& fixture) {
+        fixture.history().front().boundary_translation = BoundaryTranslation{"forged-boundary", {1, 2}};
+    });
+    const auto invalid_suffix = test::DetachedDocumentSnapshotFixture::mutate(redone, [](auto& fixture) {
+        fixture.history().back().parent_revision = 999;
+    });
+    for (const auto* forged : {&historical_forgery, &entity_forgery, &proof_forgery}) {
+        require(forged->document_id() == redone.document_id() && forged->revision() == redone.revision() &&
+                !forged->shares_authoring_source_with(redone) &&
+                document_snapshot_digest(*forged) != source_digest,
+                "same-ID/revision detached forgeries must fail sufficient source equality");
+    }
+    for (const auto* invalid : {&historical_forgery, &proof_forgery, &invalid_suffix}) {
+        rejected = false;
+        try { (void)Document::fork_at_revision(*invalid, 0); }
+        catch (const DocumentError&) { rejected = true; }
+        require(rejected, "prefix restoration must validate the complete original source");
+    }
+    test::DetachedDocumentSnapshotFixture writable(initial);
+    const auto frozen = writable.freeze();
+    writable.entities().at(label.id).properties["text"] = "later fixture edit";
+    require(document_snapshot_digest(frozen) == initial_full &&
+            document_snapshot_digest(redone) == source_digest &&
+            document_snapshot_digest(copied) == initial_full,
+            "fixture edits must preserve original and previously frozen captures");
 }
 
 void test_full_snapshot_binding() {
@@ -52,8 +171,8 @@ void test_full_snapshot_binding() {
             {{"boundary-1",{{2,1},.37,true,false,{8,-4}}}}, {}, "rigid group proof"}; },
     };
     for (const auto& mutate : mutations) {
-        auto changed = source;
-        mutate(const_cast<std::vector<RevisionRecord>&>(changed.history()).front());
+        sketch::test::DetachedDocumentSnapshotFixture changed(source);
+        mutate(changed.history().front());
         require(changed.entities() == source.entities() && changed.revision() == source.revision(),
                 "history fixture must leave the visible head and revision unchanged");
         require(document_snapshot_digest(changed) != original_digest,
@@ -63,8 +182,8 @@ void test_full_snapshot_binding() {
     }
     require(document_snapshot_digest(source) == original_digest,
             "copied snapshot mutation changed the original snapshot");
-    auto mismatched_asset = source;
-    auto& asset_map = const_cast<std::vector<RevisionRecord>&>(mismatched_asset.history()).front().assets;
+    sketch::test::DetachedDocumentSnapshotFixture mismatched_asset(source);
+    auto& asset_map = mismatched_asset.history().front().assets;
     auto asset_node = asset_map.extract("asset-1");
     asset_node.key() = "different-key";
     asset_map.insert(std::move(asset_node));
@@ -178,16 +297,16 @@ void test_historical_authoring_bindings() {
     try { (void)document_authoring_source_digest_v1_at_revision(current, current.revision() + 1); }
     catch (const std::invalid_argument&) { rejected = true; }
     require(rejected, "missing historical revision must reject");
-    auto forged = current;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).front().action = "forged";
+    sketch::test::DetachedDocumentSnapshotFixture forged(current);
+    forged.history().front().action = "forged";
     require(document_authoring_source_digest_v1_at_revision(forged, 0) !=
                 document_authoring_source_digest_v1(baselines.front()),
             "changed retained baseline data must alter its binding");
 }
 
 void test_translation_proof_digest_and_codec() {
-    auto snapshot = Document::create().snapshot();
-    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_translation;
+    sketch::test::DetachedDocumentSnapshotFixture snapshot(Document::create().snapshot());
+    auto& proof = snapshot.history().front().boundary_translation;
     proof = BoundaryTranslation{"boundary-1", {8, -4}};
     const auto digest = document_authoring_source_digest_v1(snapshot);
     proof->offset.x = 9;
@@ -211,8 +330,8 @@ void test_translation_proof_digest_and_codec() {
     }
 }
 void test_transform_proof_digest_and_codec() {
-    auto snapshot = Document::create().snapshot();
-    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_transform;
+    sketch::test::DetachedDocumentSnapshotFixture snapshot(Document::create().snapshot());
+    auto& proof = snapshot.history().front().boundary_transform;
     const BoundaryTransformation original{"boundary-1", {{1, 2}, 0.4, true, false, {3, 4}}};
     proof = original;
     const auto digest = document_authoring_source_digest_v1(snapshot);
@@ -243,9 +362,9 @@ void test_transform_proof_digest_and_codec() {
 }
 
 void test_legacy_constraint_proof_digest_vectors() {
-    auto snapshot = Document::create().snapshot();
+    sketch::test::DetachedDocumentSnapshotFixture snapshot(Document::create().snapshot());
     const_cast<std::string&>(snapshot.document_id()) = "legacy-constraint-digest-vectors";
-    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_constraint_changes;
+    auto& proof = snapshot.history().front().boundary_constraint_changes;
     const BoundaryGeometryEdit boundary{"legacy-area", BoundaryGeometryEditKind::move_vertex,
         "legacy-vertex", {3, 1}};
     const ConstraintWallGeometryEdit straight{"legacy-wall", {{0,0},{2,0},0}, std::nullopt, 1};
@@ -285,8 +404,8 @@ void test_legacy_constraint_proof_digest_vectors() {
 }
 
 void test_live_source_proof_digest_binding() {
-    auto snapshot = Document::create().snapshot();
-    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_constraint_changes;
+    sketch::test::DetachedDocumentSnapshotFixture snapshot(Document::create().snapshot());
+    auto& proof = snapshot.history().front().boundary_constraint_changes;
     ApplyBoundaryConstraintChanges original{0, {}, {}, "Live source proof"};
     original.physical_entity_changes.push_back(EntityChange::upsert(
         {"source-wall", "wall", {{"baseline", {{"start", {0,0}}, {"end", {4,0}}, {"sweep_radians", 0.0}}},
@@ -406,6 +525,7 @@ void test_live_source_proof_digest_binding() {
 
 int main() {
     try {
+        test_shared_immutable_snapshot_authority_and_lifetime();
         test_full_snapshot_binding();
         test_candidate_maps_preserve_identity_authority();
         test_authoring_source_survives_save_bookkeeping();

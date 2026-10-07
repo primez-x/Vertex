@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "version": "6.11.2",
+  "architecture": "win64_msvc2022_64",
+  "directory": "msvc2022_64",
+  "aqt_revision": "076e1659807d0b362a3ed684d54c2e9c775eb9c7",
+  "aqt_source_archive": {
+    "url": "https://codeload.github.com/miurahr/aqtinstall/zip/076e1659807d0b362a3ed684d54c2e9c775eb9c7",
+    "sha256": "8c42874261a8e1769728da9305626b9f227b59d08b291b3bf79115b22f73d6ad"
+  },
+  "archives": [
+    "qtbase",
+    "qtsvg"
+  ],
+  "modules": [
+    "qtpdf"
+  ],
+  "components": [
+    "Core",
+    "Gui",
+    "Widgets",
+    "OpenGL",
+    "OpenGLWidgets",
+    "PrintSupport",
+    "Pdf",
+    "Svg"
+  ],
+  "source_archives": {
+    "qtbase": {
+      "name": "qtbase-everywhere-src-6.11.2.tar.xz",
+      "bytes": 50582668,
+      "sha256": "5b2e00eccaf5a4d8c14134ffa0ea8dfd0a35ae1ffc7f8d87fa4305a1ed23cf22",
+      "url": "https://download.qt.io/official_releases/qt/6.11/6.11.2/submodules/qtbase-everywhere-src-6.11.2.tar.xz"
+    },
+    "qtsvg": {
+      "name": "qtsvg-everywhere-src-6.11.2.tar.xz",
+      "bytes": 2341860,
+      "sha256": "d594337feca84c26fb67fe87b85e6a5c12fda404b611d905f9d138210c311876",
+      "url": "https://download.qt.io/official_releases/qt/6.11/6.11.2/submodules/qtsvg-everywhere-src-6.11.2.tar.xz"
+    },
+    "qtwebengine": {
+      "name": "qtwebengine-everywhere-src-6.11.2.tar.xz",
+      "bytes": 580351104,
+      "sha256": "6101c1aa00ff933d1b65ee5d167f76e8d71b9ac5b378b0111277723ebda7c163",
+      "url": "https://download.qt.io/official_releases/qt/6.11/6.11.2/submodules/qtwebengine-everywhere-src-6.11.2.tar.xz"
+    }
+  },
+  "sdk_archives": [
+    {
+      "archive": "qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6112/qt6_6112_msvc2022_64/qt.qt6.6112.win64_msvc2022_64/6.11.2-0-202608131017qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "version": "6.11.2-0-202608131017",
+      "sha1": "1fca9483183d426c1a3a984f1382382fa51f48de",
+      "bytes": 39618573,
+      "measured_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb"
+    },
+    {
+      "archive": "qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6112/qt6_6112_msvc2022_64/qt.qt6.6112.win64_msvc2022_64/6.11.2-0-202608131017qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "version": "6.11.2-0-202608131017",
+      "sha1": "f458d7f238795d61a3e53fa5211cf2d6b1aa08ef",
+      "bytes": 684353,
+      "measured_sha256": "417f44499c835b2303f3ff78043179bb23442f33d5d2816fbf7e8dbf275b1c89"
+    },
+    {
+      "archive": "qtpdf-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtpdf/6112/msvc2022_64/extensions.qtpdf.6112.win64_msvc2022_64/6.11.2-0-202608131017qtpdf-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "version": "6.11.2-0-202608131017",
+      "sha1": "619bbefdeb26c36cf21f25cfe6e076fb92fa3646",
+      "bytes": 5495688,
+      "measured_sha256": "83306fe90cdbb2a365bdea1188be9352772ad8f1aea94ef327758f1635c86908"
+    }
+  ],
+  "sbom_sha256": {
+    "qtbase": "a5c6018dd0b4096e66f697ce98b83f0ac3f8c9424720e090a1d5b00125179a24",
+    "qtsvg": "eabd595e394dfb7a9d2fd3735096fe5390377f2bee5349b02a4311ff9471e8c5",
+    "qtpdf": "121186d379d2ba9a14eae8689457402e3ad72a045ea95e0079e39f5a3fa93f97"
+  }
+}

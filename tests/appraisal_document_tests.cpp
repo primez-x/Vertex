@@ -1,5 +1,6 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/site_frame.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -1372,6 +1373,179 @@ void reporting_v2_room_vocabulary() {
         "Projected Other room retains the appraiser's description");
 }
 
+void site_frame_command_preserves_v2_appraisal_observations() {
+    using namespace sketch;
+    auto entities = ansi_fixture_entities();
+    AppraisalReportingSettings settings;
+    settings.contract = AppraisalReportingContract::uad_3_6;
+    settings.room_inventory_complete = true;
+    settings.version = 2;
+    settings.living_units = {
+        {"home", "Main dwelling", DwellingIdentity::primary, {}},
+        {"east", "East ADU", DwellingIdentity::attached_adu, {}}};
+    entities.front().properties["appraisal_reporting"] = appraisal_reporting_json(settings);
+    auto adu = entities.back();
+    adu.id = "adu-area";
+    adu.properties["boundary"] = square(10, 0, 3.048);
+    adu.properties["appraisal_facts"]["ansi"]["dwelling_identity"] = "attached_adu";
+    entities.push_back(std::move(adu));
+
+    const auto observation_source = Document::create(entities).snapshot();
+    std::map<std::string, json, std::less<>> saved_observations, local_boundaries, local_facts;
+    for (auto& item : entities) {
+        if (item.type != "measurement_boundary") continue;
+        AppraisalAreaReportingFacts declaration;
+        declaration.version = 2;
+        declaration.living_unit_id = item.id == "area-1" ? "home" : "east";
+        declaration.source_geometry_sha256 = appraisal_reporting_source_digest(observation_source, item.id);
+        declaration.rooms = {{"room-" + item.id, AppraisalRoomUse::bedroom, true}};
+        item.properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+        saved_observations.emplace(item.id, item.properties.at("appraisal_reporting"));
+        local_boundaries.emplace(item.id, item.properties.at("boundary"));
+        local_facts.emplace(item.id, item.properties.at("appraisal_facts"));
+    }
+
+    auto document = Document::create(std::move(entities));
+    const auto before = document.snapshot();
+    const auto original_document_id = before.document_id();
+    const auto original_snapshot_digest = document_snapshot_digest(before);
+    require(local_boundaries.at("area-1") == square(0, 0, 3.048) &&
+        local_boundaries.at("adu-area") == square(10, 0, 3.048) &&
+        local_facts.at("area-1").at("ansi").at("dwelling_identity") == "primary" &&
+        local_facts.at("adu-area").at("ansi").at("dwelling_identity") == "attached_adu",
+        "Fixture must preserve exact local primary and attached ADU geometry and explicit classification");
+    const auto before_report = build_appraisal_document_report(before, "property-1");
+    require(before_report.qualified && before_report.calculation && before_report.reporting &&
+        before_report.reporting->individual_units_available && before_report.reporting->living_units.size() == 2,
+        "Primary and attached ADU V2 observations must qualify before site placement changes");
+
+    const auto unit = [](const AppraisalFormProjection& projection, std::string_view id)
+        -> const AppraisalLivingUnitProjection& {
+        const auto found = std::find_if(projection.living_units.begin(), projection.living_units.end(),
+            [&](const auto& value) { return value.living_unit.unit_id == id; });
+        require(found != projection.living_units.end(), "expected V2 living unit must remain inspectable");
+        return *found;
+    };
+    const auto primary_before = unit(*before_report.reporting, "home");
+    const auto adu_before = unit(*before_report.reporting, "east");
+    require(primary_before.living_unit.role == DwellingIdentity::primary &&
+        adu_before.living_unit.role == DwellingIdentity::attached_adu,
+        "V2 registry roles must explicitly distinguish primary and attached ADU");
+    for (const auto* value : {&primary_before, &adu_before}) {
+        require(value->area_fields_available && value->room_counts_available && value->counts.bedrooms == 1 &&
+            value->levels.size() == 1 && value->levels.front().grade == GradeStatus::above,
+            "Each dwelling must retain its declared above-grade bedroom and level");
+        near(value->area_fields.at(AppraisalAreaCategory::above_grade_finished), 9.290304, 1e-8,
+            "Each dwelling must retain its exact above-grade finished area");
+    }
+
+    const auto world_before = resolve_site_presentation(before, "area-1");
+    const auto original_world_origin = site_transform_point({0, 0, 0}, world_before.forward);
+    near(original_world_origin.x, 0, 1e-9, "Unplaced boundary starts in world X");
+    near(original_world_origin.y, 0, 1e-9, "Unplaced boundary starts in world Y");
+
+    auto property = before.entities().at("property-1");
+    property.properties["site_frame"] = {
+        {"version", 1}, {"origin_m", {100.0, 200.0, 10.0}}, {"rotation_radians", 1.57079632679489661923},
+        {"vertical_datum", {{"identifier", "fixture-datum"}, {"height_at_origin_m", 0.0}}}};
+    auto building = before.entities().at("building-1");
+    building.properties["site_placement"] = {
+        {"version", 1}, {"translation_m", {3.0, 4.0, 2.0}}, {"rotation_radians", 1.57079632679489661923}};
+    document.apply(ApplyEntityChanges{before.revision(),
+        {EntityChange::upsert(std::move(property)), EntityChange::upsert(std::move(building))}, {},
+        "Set site frame and building placement"});
+
+    const auto after = document.snapshot();
+    const auto after_snapshot_digest = document_snapshot_digest(after);
+    require(after.document_id() == original_document_id && after_snapshot_digest != original_snapshot_digest,
+        "Changing both typed site owners changes the full snapshot while retaining document identity");
+    require(after.entities().at("property-1").properties.at("appraisal_reporting") ==
+        before.entities().at("property-1").properties.at("appraisal_reporting"),
+        "Site-frame edits must preserve the exact saved V2 unit registry");
+    for (const auto& [id, observation] : saved_observations) {
+        const auto& changed = after.entities().at(id);
+        require(changed.properties.at("boundary") == local_boundaries.at(id) &&
+            changed.properties.at("appraisal_facts") == local_facts.at(id) &&
+            changed.properties.at("appraisal_reporting") == observation,
+            "Site-frame edits must preserve each boundary geometry, classification and saved observation exactly");
+        require(appraisal_reporting_source_digest(after, id) ==
+            parse_appraisal_area_reporting_facts(observation).source_geometry_sha256,
+            "Current V2 source observation digest must remain valid after a site-frame edit");
+    }
+
+    const auto after_report = build_appraisal_document_report(after, "property-1");
+    require(after_report.qualified && after_report.calculation && after_report.reporting &&
+        after_report.reporting->individual_units_available,
+        "Site placement must not stale or unqualify the appraisal report");
+    near(after_report.reporting->primary_above_grade_finished_square_metres,
+        before_report.reporting->primary_above_grade_finished_square_metres, 1e-9,
+        "Primary reported area must remain invariant under site placement");
+    for (const auto* id : {"home", "east"}) {
+        const auto& expected = unit(*before_report.reporting, id);
+        const auto& actual = unit(*after_report.reporting, id);
+        require(actual.living_unit.unit_id == expected.living_unit.unit_id &&
+            actual.living_unit.role == expected.living_unit.role && actual.boundary_ids == expected.boundary_ids &&
+            actual.area_fields == expected.area_fields && actual.counts.total_rooms == expected.counts.total_rooms &&
+            actual.counts.bedrooms == expected.counts.bedrooms &&
+            actual.counts.bathrooms_full == expected.counts.bathrooms_full &&
+            actual.counts.bathrooms_half == expected.counts.bathrooms_half &&
+            actual.levels.size() == expected.levels.size() &&
+            actual.levels.front().floor_id == expected.levels.front().floor_id &&
+            actual.levels.front().grade == expected.levels.front().grade,
+            "V2 unit identity, grade, counts and area fields must remain unchanged");
+    }
+
+    const auto expect_world_point = [](const Vec2& point, double x, double y) {
+        near(point.x, x, 1e-8, "Resolved boundary world X must match the independent expected pose");
+        near(point.y, y, 1e-8, "Resolved boundary world Y must match the independent expected pose");
+    };
+    const auto primary_pose = resolve_site_presentation(after, "area-1");
+    const auto primary_world = site_transform_boundary(rectangle_geometry(0, 0, 3.048, 3.048), primary_pose.forward);
+    const auto primary_world_origin = site_transform_point({0, 0, 0}, primary_pose.forward);
+    require(primary_pose.source_frame.mode == SiteFrameMode::building &&
+        primary_pose.source_frame.property_id == "property-1" && primary_pose.source_frame.building_id == "building-1",
+        "Public resolver must identify the explicit property/building frame owners");
+    near(primary_world_origin.x, 96, 1e-8, "Resolved site pose must include property and building X/Z translations");
+    near(primary_world_origin.y, 203, 1e-8, "Resolved site pose must include both yaw rotations and translations");
+    near(primary_world_origin.z, 12, 1e-8, "Resolved site pose must retain both nonzero Z translations");
+    expect_world_point(primary_world.at(0).start, 96, 203);
+    expect_world_point(primary_world.at(0).end, 92.952, 203);
+    expect_world_point(primary_world.at(1).end, 92.952, 199.952);
+    expect_world_point(primary_world.at(2).end, 96, 199.952);
+    require(std::abs(primary_world.at(0).start.x - original_world_origin.x) > 1.0,
+        "Resolved primary boundary points must move to the independent world pose");
+    const auto adu_pose = resolve_site_presentation(after, "adu-area");
+    const auto adu_world = site_transform_boundary(rectangle_geometry(10, 0, 3.048, 3.048), adu_pose.forward);
+    expect_world_point(adu_world.at(0).start, 86, 203);
+    expect_world_point(adu_world.at(0).end, 82.952, 203);
+
+    document.undo(document.revision());
+    const auto undone = document.snapshot();
+    require(undone.document_id() == original_document_id && undone.entities() == before.entities() &&
+        undone.revision() == after.revision() + 1 && undone.history().size() == after.history().size() + 1,
+        "Undo must restore the exact original document identity, local geometry and unplaced owner state");
+    const auto undo_pose = resolve_site_presentation(undone, "area-1");
+    require(undo_pose.source_frame.mode == SiteFrameMode::world,
+        "Undo must restore the original world-frame identity");
+    const auto undo_report = build_appraisal_document_report(undone, "property-1");
+    require(undo_report.qualified && undo_report.reporting && undo_report.reporting->individual_units_available,
+        "Undo must restore current V2 appraisal reporting");
+
+    document.redo(document.revision());
+    const auto redone = document.snapshot();
+    require(redone.document_id() == original_document_id && redone.entities() == after.entities() &&
+        redone.revision() == undone.revision() + 1 && redone.history().size() == undone.history().size() + 1,
+        "Redo must restore the exact placed snapshot under the original document identity");
+    const auto redo_report = build_appraisal_document_report(redone, "property-1");
+    require(redo_report.qualified && redo_report.reporting && redo_report.reporting->individual_units_available,
+        "Redo must restore current V2 appraisal reporting");
+    for (const auto& [id, observation] : saved_observations)
+        require(redone.entities().at(id).properties.at("appraisal_reporting") == observation &&
+            appraisal_reporting_source_digest(redone, id) ==
+                parse_appraisal_area_reporting_facts(observation).source_geometry_sha256,
+            "Redo must retain the exact saved observations and their current source digests");
+}
+
 void reporting_v2_ansi_grade_coherence() {
     using namespace sketch;
     const auto rebind = [](std::vector<Entity>& entities) {
@@ -1691,6 +1865,7 @@ int main() {
         qualified_document_recalculates_from_geometry();
         reporting_projection_contracts();
         reporting_living_unit_v2_contracts();
+        site_frame_command_preserves_v2_appraisal_observations();
         reporting_v2_ansi_grade_coherence();
         reporting_v2_room_vocabulary();
         reporting_unfinished_room_treatment();

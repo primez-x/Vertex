@@ -1,4 +1,5 @@
 #include "sketch/annotation_catalog.hpp"
+#include "sketch/svg_admission.hpp"
 
 #include <algorithm>
 #include <array>
@@ -156,29 +157,7 @@ std::string folded(std::string_view value) {
 }
 void validate_pinned_svg(std::string_view document) {
     if (document.empty()) return;
-    check(document.size() <= 262144, "Pinned SVG exceeds the per-instance limit");
-    check(document.find('\0') == std::string_view::npos, "Pinned SVG contains a NUL byte");
-    const auto source = folded(document);
-    check(source.find("<svg") != std::string::npos, "Pinned SVG has no SVG root");
-    for (const auto token : {"<!doctype", "<!entity", "<script", "foreignobject",
-                             "<image", "href", "@import", "javascript:", "data:",
-                             "file:", "onload", "onerror",
-                             "onclick", "onmouse", "onfocus", "onbegin", "onend",
-                             "onrepeat"}) {
-        check(source.find(token) == std::string::npos,
-              "Pinned SVG contains active or external content");
-    }
-    for (auto position = source.find("url("); position != std::string::npos;
-         position = source.find("url(", position + 4)) {
-        auto content = position + 4;
-        while (content < source.size() &&
-               (std::isspace(static_cast<unsigned char>(source[content])) ||
-                source[content] == '\'' || source[content] == '"')) {
-            ++content;
-        }
-        check(content < source.size() && source[content] == '#',
-              "Pinned SVG URL must reference an internal fragment");
-    }
+    validate_svg_structure(document);
 }
 }
 

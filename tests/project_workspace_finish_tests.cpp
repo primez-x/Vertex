@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/workspace_slot_validation.hpp"
 #include "sketch/document_digest.hpp"
@@ -297,8 +298,8 @@ void check_atomic_redefinition_finish() {
     try { validate_workspace_finish_deltas(finished.document(), forged, finished.resource_policy()); }
     catch (const std::invalid_argument&) { rejected = true; }
     require(rejected, "persisted redraw must reject valid geometry bound to unrelated archived input");
-    auto forged_classification = finished.document();
-    auto& forged_record = const_cast<std::vector<RevisionRecord>&>(forged_classification.history()).back();
+    sketch::test::DetachedDocumentSnapshotFixture forged_classification(finished.document());
+    auto& forged_record = forged_classification.history().back();
     auto forged_properties = command.edit.replacement_properties;
     forged_properties["classification"] = forged_properties["measurement_classification"] = "garage";
     forged_record.boundary_geometry_edit->replacement_properties = forged_properties;

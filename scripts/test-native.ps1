@@ -12,7 +12,9 @@ $configName = $Configuration.ToLowerInvariant()
 $testPath = Join-Path $projectRoot "build\windows-$configName\native_view_tests.exe"
 if (!(Test-Path -LiteralPath $testPath)) { throw 'Build the desktop test targets first.' }
 $nativeSuffix = if ($Configuration -eq 'Debug') { 'debug\bin' } else { 'bin' }
-$qtPrefix = Join-Path $projectRoot '.deps\qt\6.8.3\msvc2022_64'
+. (Join-Path $PSScriptRoot 'qt-selection.ps1')
+$qtSelection = Get-VertexQtSelection -ProjectRoot $projectRoot
+$qtPrefix = $qtSelection.prefix
 $outputDirectory = Join-Path $projectRoot 'artifacts\native-tests'
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 $sourceEnvironment = [Environment]::GetEnvironmentVariables('Process')

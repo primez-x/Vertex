@@ -36,6 +36,19 @@ public:
     // stays visible; isReady()/exportViewImage reject pending or failed output.
     void setSnapshot(const DocumentSnapshot& snapshot,
                      std::optional<VisibleEntityIds> visible_ids = std::nullopt);
+    // Exact immutable source of the successfully published AIS scene. A newer
+    // queued request never substitutes its source for displayed geometry.
+    [[nodiscard]] std::shared_ptr<const DocumentSnapshot> publishedSnapshot() const noexcept;
+    // Gesture press capture, retained through the synchronous commit callback.
+    // Empty outside an active Move/manipulator gesture or its commit callback.
+    [[nodiscard]] std::shared_ptr<const DocumentSnapshot> gestureSourceSnapshot() const noexcept;
+    // Called after the native press capture and before the first preview. The
+    // shell captures selection/workspace/context here; this emits no command.
+    std::function<void(QString)> onTransformGestureStarted;
+    // Authorize semantic input before native picking/manipulation. Starting
+    // captures context; later calls validate that same press. Camera input is
+    // independent, and a stationary context click starts its own admission.
+    std::function<bool(bool starting)> onSceneInputRequested;
     void fitAll();
     // Synchronize the shell's single semantic selection into the native view.
     // Transformable visible solids receive an OCCT manipulator; empty, hidden,
@@ -139,6 +152,7 @@ protected:
     QPaintEngine* paintEngine() const override;
 
 private:
+    [[nodiscard]] bool admitSceneInput(bool starting);
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

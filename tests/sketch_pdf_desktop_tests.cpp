@@ -7,17 +7,25 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <QAction>
+#include <QBuffer>
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFontDatabase>
 #include <QPdfDocument>
+#include <QPdfWriter>
+#include <QPainter>
+#include <QPicture>
+#include <QRawFont>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
+#include <nlohmann/json.hpp>
+
 #include <cmath>
+#include <vector>
 #include <iostream>
 #include <stdexcept>
 
@@ -55,6 +63,149 @@ Output output(const QString& path) {
     }
     return {points, image, pdf.getAllText(0).text()};
 }
+QString sha256(const QByteArray& bytes) {
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+nlohmann::json text_evidence(const QString& text) {
+    auto units = nlohmann::json::array();
+    for (const auto unit : text)
+        units.push_back(QStringLiteral("%1").arg(static_cast<unsigned int>(unit.unicode()), 4, 16, QLatin1Char('0')).toStdString());
+    return {{"text", text.toStdString()}, {"utf8_hex", text.toUtf8().toHex().toStdString()},
+            {"utf16_units_hex", units}};
+}
+nlohmann::json font_evidence(const QFont& font) {
+    const auto raw = QRawFont::fromFont(font);
+    auto tables = nlohmann::json::object();
+    for (const auto* tag : {"head", "name", "cmap", "OS/2", "GSUB"})
+        tables[tag] = sha256(raw.fontTable(tag)).toStdString();
+    const auto os2 = raw.fontTable("OS/2");
+    const int fs_type = os2.size() >= 10
+        ? (static_cast<unsigned char>(os2[8]) << 8) | static_cast<unsigned char>(os2[9]) : -1;
+    return {{"requested", font.toString().toStdString()}, {"raw_valid", raw.isValid()},
+            {"resolved_family", raw.familyName().toStdString()},
+            {"resolved_style", raw.styleName().toStdString()}, {"weight", raw.weight()},
+            {"pixel_size", raw.pixelSize()}, {"fs_type", fs_type}, {"tables_sha256", tables}};
+}
+struct TextControl {
+    QByteArray bytes;
+    nlohmann::json evidence;
+};
+TextControl text_control(const QFont& font, const QString& text, int dpi,
+                         double degrees, bool via_picture) {
+    TextControl result;
+    QBuffer buffer(&result.bytes);
+    bool started = buffer.open(QIODevice::WriteOnly);
+    bool recorded = !via_picture;
+    bool finished = false;
+    if (started) {
+        QPdfWriter writer(&buffer);
+        writer.setResolution(dpi);
+        QPainter painter(&writer);
+        started = painter.isActive();
+        if (started) {
+            painter.translate(writer.width() / 2.0, writer.height() / 2.0);
+            const auto draw = [&](QPainter& target) {
+                target.setFont(font);
+                target.setPen(Qt::black);
+                target.rotate(degrees);
+                target.drawText(QRectF(-500, -100, 1000, 200), Qt::AlignCenter, text);
+            };
+            if (via_picture) {
+                QPicture picture;
+                QPainter recorder(&picture);
+                recorded = recorder.isActive();
+                if (recorded) {
+                    draw(recorder);
+                    recorded = recorder.end() && picture.play(&painter);
+                }
+            } else {
+                draw(painter);
+            }
+            finished = painter.end();
+        }
+    }
+    buffer.close();
+    QBuffer input(&result.bytes);
+    const bool input_open = input.open(QIODevice::ReadOnly);
+    QPdfDocument pdf;
+    if (input_open) pdf.load(&input);
+    const auto extracted = pdf.pageCount() == 1 ? pdf.getAllText(0).text() : QString{};
+    result.evidence = {{"degrees", degrees}, {"via_picture", via_picture},
+        {"started", started}, {"recorded", recorded}, {"finished", finished},
+        {"pdf_error", static_cast<int>(pdf.error())}, {"page_count", pdf.pageCount()},
+        {"pdf_sha256", sha256(result.bytes).toStdString()}, {"extracted", text_evidence(extracted)},
+        {"expected_text_present", extracted.contains(text)}};
+    return result;
+}
+void diagnose_selectable_text(const PlanCanvas& canvas, const QString& label_id,
+                             const Output& actual, const QByteArray& pdf_bytes) {
+    // Preserve the assertion. Retain the failed boundary before its temporary
+    // directory unwinds; the controls do not change the authored scene.
+    const auto expected = QStringLiteral("Sketch crop text");
+    QFile resource(QStringLiteral(":/fonts/Inter.ttf"));
+    const bool resource_open = resource.open(QIODevice::ReadOnly);
+    const auto font_bytes = resource_open ? resource.readAll() : QByteArray{};
+    nlohmann::json evidence{{"qt_runtime", qVersion()}, {"qt_compile", QT_VERSION_STR},
+        {"platform", QGuiApplication::platformName().toStdString()},
+        {"platform_environment", qEnvironmentVariable("QT_QPA_PLATFORM").toStdString()},
+        {"arguments", nlohmann::json::array()}, {"library_paths", nlohmann::json::array()},
+        {"application_font", font_evidence(QApplication::font())},
+        {"canvas_font", font_evidence(canvas.font())},
+        {"resource_open", resource_open}, {"resource_bytes", font_bytes.size()},
+        {"resource_sha256", sha256(font_bytes).toStdString()},
+        {"pdf_sha256", sha256(pdf_bytes).toStdString()},
+        {"pdf_has_font_descriptor", pdf_bytes.contains("/FontDescriptor")},
+        {"pdf_has_to_unicode", pdf_bytes.contains("/ToUnicode")},
+        {"expected", text_evidence(expected)}, {"actual", text_evidence(actual.text)},
+        {"expected_text_present", actual.text.contains(expected)},
+        {"controls", nlohmann::json::array()}};
+    for (const auto& argument : QCoreApplication::arguments())
+        evidence["arguments"].push_back(argument.toStdString());
+    for (const auto& library_path : QCoreApplication::libraryPaths())
+        evidence["library_paths"].push_back(library_path.toStdString());
+    std::vector<TextControl> controls;
+    const auto recording = canvas.recordSketchContent();
+    for (const auto& label : canvas.labels()) {
+        if (label.id != label_id) continue;
+        const int dpi = recording ? recording->picture.logicalDpiY() : canvas.logicalDpiY();
+        auto font = canvas.font();
+        if (!label.font_family.isEmpty()) font.setFamily(label.font_family);
+        font.setPixelSize(static_cast<int>(std::lround(label.paper_height_mm * dpi / 25.4)));
+        font.setBold(label.bold); font.setItalic(label.italic);
+        font.setFeature("calt", 0); font.setFeature("case", 0);
+        evidence["label"] = {{"text", label.text.toStdString()},
+            {"paper_height_mm", label.paper_height_mm}, {"dpi", dpi},
+            {"rotation_radians", label.rotation_radians}, {"font", font_evidence(font)}};
+        for (const bool via_picture : {false, true}) {
+            for (const double degrees : {0.0, -35.0}) {
+                controls.push_back(text_control(font, label.text, dpi, degrees, via_picture));
+                evidence["controls"].push_back(controls.back().evidence);
+            }
+        }
+    }
+    std::cerr << "sketch PDF selectable-text diagnostic: " << evidence.dump() << '\n';
+    const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (capture.isEmpty()) return;
+    if (!QDir().mkpath(capture)) {
+        std::cerr << "sketch PDF diagnostic capture directory could not be created\n";
+        return;
+    }
+    const auto retain = [&](const QString& name, const QByteArray& bytes) {
+        QFile file(QDir(capture).filePath(name));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(bytes) != bytes.size())
+            std::cerr << "sketch PDF diagnostic capture failed: " << name.toStdString() << '\n';
+    };
+    retain(QStringLiteral("sketch-pdf-text-failure.pdf"), pdf_bytes);
+    retain(QStringLiteral("sketch-pdf-text-failure.txt"), actual.text.toUtf8());
+    retain(QStringLiteral("sketch-pdf-text-diagnostic.json"), QByteArray::fromStdString(evidence.dump(2)));
+    retain(QStringLiteral("sketch-pdf-loaded-Inter.ttf"), font_bytes);
+    for (std::size_t index = 0; index < controls.size(); ++index)
+        retain(QStringLiteral("sketch-pdf-text-control-%1.pdf").arg(static_cast<qulonglong>(index)),
+               controls[index].bytes);
+    if (!actual.image.save(QDir(capture).filePath(QStringLiteral("sketch-pdf-text-failure.png"))))
+        std::cerr << "sketch PDF diagnostic render capture failed\n";
+}
+
 std::shared_ptr<Document> fixture() {
     return std::make_shared<Document>(Document::create({
         {"p", "property", {{"name", "Sketch output"}}, false},
@@ -104,7 +255,13 @@ void checks() {
                  .match(QString::fromLatin1(original)).hasMatch(),
             "vector sketch does not embed a raster screenshot or underlay");
     const auto first = output(base);
-    require(first.text.contains("Sketch crop text"), "rotated text remains selectable PDF text");
+    // PDFium may group rotated words into separate reading-order lines. Keep
+    // every word and glyph mandatory while accepting extracted whitespace.
+    const bool selectable_phrase = first.text.simplified().contains("Sketch crop text");
+    if (!selectable_phrase ||
+        qEnvironmentVariableIntValue("VERTEX_TEST_PDF_TEXT_DIAGNOSTICS") != 0)
+        diagnose_selectable_text(*canvas, label, first, original);
+    require(selectable_phrase, "rotated text remains selectable PDF text");
     const auto recorded = canvas->recordSketchContent();
     require(recorded.has_value(), "shared renderer records committed drawing");
     const auto expected_mm = QSizeF(recorded->ink_bounds.width() / recorded->pixels_per_mm + 4,
@@ -174,7 +331,7 @@ void checks() {
     const auto metric_path = directory.filePath("metric.pdf");
     require(window.exportSketchPdf(metric_path), "metric sketch PDF exports");
     const auto metric = output(metric_path);
-    require(metric.text.contains("Sketch crop text") && metric.text != third.text,
+    require(metric.text.simplified().contains("Sketch crop text") && metric.text != third.text,
             "actual metric output retains text and updates dimensional presentation");
     window.setMetricUnits(false);
     PlanCanvas oversize;
@@ -210,9 +367,12 @@ int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
-    application.setFont(QFont(QStringLiteral("Inter"), 10));
-    try { checks(); std::cout << "sketch PDF desktop checks passed\n"; return 0; }
+    try {
+        require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf")) >= 0,
+                "bundled Inter application font loads");
+        application.setFont(QFont(QStringLiteral("Inter"), 10));
+        checks(); std::cout << "sketch PDF desktop checks passed\n"; return 0;
+    }
     catch (const std::exception& error) {
         std::cerr << "sketch_pdf_desktop_tests: " << error.what() << '\n'; return 1;
     }

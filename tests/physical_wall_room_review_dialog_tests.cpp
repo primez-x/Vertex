@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/physical_wall_room_review_dialog.hpp"
 #include "sketch/physical_wall_room_review.hpp"
 #include "sketch/document_digest.hpp"
@@ -159,7 +160,7 @@ void cancel_reset_and_same_head_fence() {
     for (const bool change_asset:{false,true}) {
         PhysicalWallRoomReviewDialog stale(source,"bottom",true,[&]{return current;});show(stale);
         choose(stale,"freshAssignment:0","unclassified");require(control<QPushButton>(stale,"physicalRoomReviewApply")->isEnabled(),"explicit leave-unclassified completes new-only review");
-        auto altered=source;auto& record=const_cast<std::vector<RevisionRecord>&>(altered.history()).front();
+        sketch::test::DetachedDocumentSnapshotFixture altered(source);auto& record=altered.history().front();
         if (change_asset) record.assets.at(asset.id)=Asset::create(asset.id,asset.media_type,{std::byte{2}});
         else record.entities.at("property").extensions["same_head_replacement"]=true;
         current=altered;stale.accept();require(!stale.acceptedCommand() && stale.result()!=QDialog::Accepted && !stale.lastError().isEmpty(),"same-head entities/assets replacement cannot accept stale preview");

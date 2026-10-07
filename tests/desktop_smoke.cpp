@@ -1756,6 +1756,55 @@ void test_annotation_transform_legacy_and_ambiguity() {
         ((bounds.minimum.x + bounds.maximum.x) / 2 - canvas->viewCenter().x) * canvas->viewScale(),
         -((bounds.minimum.y + bounds.maximum.y) / 2 - canvas->viewCenter().y) * canvas->viewScale());
     refuse(point, point + QPointF(35, -25));
+    // Diagnostic selection has no semantic owner. Boolean edit/clipboard
+    // operations must report ambiguity without escaping to Qt or changing data.
+    require(ambiguous.selectEntity("legacy-selected"), "ambiguous diagnostic selection remains usable after rejected drags");
+    const auto diagnostic_source = ambiguous.document().snapshot();
+    const auto diagnostic_selection = ambiguous.selectedEntityIds();
+    const auto diagnostic_layer = ambiguous.activeLayerId();
+    const auto clipboard = QGuiApplication::clipboard()->text();
+    const auto refusal_preserves_source = [&] {
+        require(document_snapshot_digest(ambiguous.document().snapshot()) == document_snapshot_digest(diagnostic_source) &&
+                ambiguous.selectedEntityIds() == diagnostic_selection && ambiguous.activeLayerId() == diagnostic_layer &&
+                QGuiApplication::clipboard()->text() == clipboard &&
+                ambiguous.lastError().contains("ambiguous", Qt::CaseInsensitive),
+                "ambiguous raw-child refusal preserves complete retained source, history, selection, layer and clipboard");
+    };
+    require(!ambiguous.copySelection(), "ambiguous raw child Copy must refuse"); refusal_preserves_source();
+    require(!ambiguous.cutSelection(), "ambiguous raw child Cut must refuse"); refusal_preserves_source();
+    require(!ambiguous.deleteSelection(), "ambiguous raw child Delete must refuse"); refusal_preserves_source();
+    require(!ambiguous.editSymbolSvgPalette("legacy-selected", std::nullopt), "ambiguous raw child palette edit must refuse");
+    refusal_preserves_source();
+    require(ambiguous.selectEntity("legacy-sibling") && ambiguous.copySelection() && ambiguous.selectEntity({}) &&
+            document_snapshot_digest(ambiguous.document().snapshot()) == document_snapshot_digest(diagnostic_source),
+            "a unique sibling and clearing selection remain usable after ambiguous refusals");
+
+    desktop::MainWindow collision;
+    const auto wall = collision.createStraightWall({0, 0}, {3, 0});
+    require(!wall.isEmpty(), "annotation/model collision fixture creates an actual wall");
+    auto collision_owner = fixture();
+    collision_owner.properties["state"]["symbols"][0]["id"] = wall.toStdString();
+    collision.document().apply(ApplyEntityChanges{collision.document().revision(),
+        {EntityChange::upsert(collision_owner)}, {}, "Admitted annotation/model identity collision"});
+    require(collision.selectEntity(wall), "a colliding model identity remains selectable for diagnostics");
+    const auto collision_source = collision.document().snapshot();
+    const auto collision_selection = collision.selectedEntityIds();
+    const auto collision_clipboard = QGuiApplication::clipboard()->text();
+    const auto collision_refusal_preserves_source = [&] {
+        require(document_snapshot_digest(collision.document().snapshot()) == document_snapshot_digest(collision_source) &&
+                collision.selectedEntityIds() == collision_selection &&
+                QGuiApplication::clipboard()->text() == collision_clipboard &&
+                collision.lastError().contains("ambiguous", Qt::CaseInsensitive),
+                "annotation/model identity collision refuses without choosing either target or changing source/history/clipboard");
+    };
+    require(!collision.copySelection(), "annotation/model identity collision Copy must refuse"); collision_refusal_preserves_source();
+    require(!collision.cutSelection(), "annotation/model identity collision Cut must refuse"); collision_refusal_preserves_source();
+    require(!collision.deleteSelection(), "annotation/model identity collision Delete must refuse"); collision_refusal_preserves_source();
+    require(!collision.editSymbolSvgPalette(wall, std::nullopt), "annotation/model identity collision palette edit must refuse");
+    collision_refusal_preserves_source();
+    require(collision.selectEntity("legacy-sibling") && collision.copySelection() && collision.selectEntity({}) &&
+            document_snapshot_digest(collision.document().snapshot()) == document_snapshot_digest(collision_source),
+            "a unique sibling remains usable after annotation/model collision refusals");
 }
 
 void test_pasted_annotation_visible_selection() {
@@ -7109,6 +7158,42 @@ void test_hosted_opening_editor(const QString& capture_directory) {
     require(overlap.submit(), "curved host preview uses along-wall distance");
 }
 
+void edit_assembly_catalog_from_workspace(sketch::desktop::MainWindow& window,
+                                          const std::function<void()>& edit) {
+    auto* action = window.findChild<QAction*>(QStringLiteral("assemblyCatalog"));
+    require(action, "assembly catalog should be discoverable from the workspace actions");
+    bool workspace_opened = false;
+    bool catalog_opened = false;
+    QTimer workspace_timer;
+    workspace_timer.setSingleShot(true);
+    QObject::connect(&workspace_timer, &QTimer::timeout, [&] {
+        auto* workspace = window.findChild<QDialog*>(QStringLiteral("assemblyWorkspaceDialog"));
+        require(workspace && QApplication::activeModalWidget() == workspace,
+                "assembly action should open the reusable assembly workspace");
+        workspace_opened = true;
+        auto* metadata = workspace->findChild<QPushButton*>(QStringLiteral("assemblyCatalogMetadata"));
+        require(metadata, "assembly workspace should offer the materials and catalog editor");
+        QTimer catalog_timer;
+        catalog_timer.setSingleShot(true);
+        QObject::connect(&catalog_timer, &QTimer::timeout, [&] {
+            auto* catalog = window.findChild<QDialog*>(QStringLiteral("assemblyCatalogDialog"));
+            require(catalog && QApplication::activeModalWidget() == catalog,
+                    "materials and catalog should open its actual nested modal editor");
+            catalog_opened = true;
+            edit();
+        });
+        catalog_timer.start(0);
+        metadata->click();
+        catalog_timer.stop();
+        require(catalog_opened, "materials and catalog action should execute the editor callback");
+        workspace->reject();
+    });
+    workspace_timer.start(0);
+    action->trigger();
+    workspace_timer.stop();
+    require(workspace_opened, "assembly action should execute the workspace callback");
+}
+
 void test_material_color_catalog(const QString& capture_directory) {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -7119,7 +7204,7 @@ void test_material_color_catalog(const QString& capture_directory) {
             if (entity.type == "assembly_model") return AssemblyModel::from_json(entity.properties.at("model"));
         throw std::runtime_error("missing material catalog");
     };
-    QTimer::singleShot(0, &window, [&] {
+    edit_assembly_catalog_from_workspace(window, [&] {
         auto* dialog = window.findChild<QDialog*>("assemblyCatalogDialog");
         require(dialog, "material catalog dialog opens");
         auto* id = dialog->findChild<QLineEdit*>("assemblyMaterialId");
@@ -7144,7 +7229,6 @@ void test_material_color_catalog(const QString& capture_directory) {
         require(window.document().revision() == revision, "malformed color must not mutate the catalog");
         dialog->accept();
     });
-    window.findChild<QAction*>("assemblyCatalog")->trigger();
     require(window.undoCommand() && model().materials()[0].color_srgb == "#d08030" &&
         window.redoCommand() && model().materials()[0].color_srgb == "#c07020", "material appearance undo/redo");
     QTemporaryDir directory;
@@ -7156,10 +7240,9 @@ void test_assembly_catalog_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
-    auto* action = window.findChild<QAction*>(QStringLiteral("assemblyCatalog"));
-    require(action, "assembly catalog should be discoverable from the workspace actions");
+    const auto before = window.document().snapshot();
 
-    QTimer::singleShot(0, &window, [&] {
+    edit_assembly_catalog_from_workspace(window, [&] {
         auto* dialog = window.findChild<QDialog*>(QStringLiteral("assemblyCatalogDialog"));
         require(dialog, "assembly catalog editor should open from the workspace action");
         auto* types = dialog->findChild<QListWidget*>(QStringLiteral("assemblyTypeList"));
@@ -7227,7 +7310,6 @@ void test_assembly_catalog_workflow() {
                 "assembly editor should persist a dimensioned quantity override");
         dialog->reject();
     });
-    action->trigger();
 
     const auto find_model = [&] {
         const auto snapshot = window.document().snapshot();
@@ -7250,9 +7332,9 @@ void test_assembly_catalog_workflow() {
     require(window.undoCommand() && window.undoCommand() && window.undoCommand() &&
                 window.undoCommand() && window.undoCommand() && window.undoCommand(),
             "assembly catalog edits should participate in normal undo history");
-    model = find_model();
-    require(model.types().empty() && model.instances().empty(),
-            "undo should remove the instance and type without leaving a partial model");
+    const auto undone = window.document().snapshot();
+    require(undone.entities() == before.entities() && undone.assets() == before.assets(),
+            "undo should restore the exact source without leaving a newly created partial catalog");
     require(window.redoCommand() && window.redoCommand() && window.redoCommand() &&
                 window.redoCommand() && window.redoCommand() && window.redoCommand(),
             "assembly catalog edits should be redoable");

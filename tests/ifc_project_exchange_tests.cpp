@@ -1,17 +1,24 @@
 #include "sketch/boundary_entity.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/terrain_surface.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "sketch/document.hpp"
 #include "sketch/ifc_project_exchange.hpp"
+#include "sketch/project_organization.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/ifc_native_geometry.hpp"
 #include "sketch/project_import_worker.hpp"
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
 #include "sketch/building_entity.hpp"
+#include "sketch/architecture.hpp"
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/vertical_levels.hpp"
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -508,8 +515,39 @@ void native_assemblies() {
                             (hinge_end == swing_left ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT."),
                             "both native handings must map to corresponding IFC door operations");
                         const auto& placement = graph.at(record.fields[5]);
-                        check(placement.type == "IFCLOCALPLACEMENT" && placement.fields[0] == "$",
-                              "fill must declare an explicit absolute local placement");
+                        check(placement.type == "IFCLOCALPLACEMENT" && placement.fields.size() == 2,
+                              "fill must declare an explicit local placement");
+                        // This fixture has no authored spatial scope. Validate
+                        // its entire parent chain independently before treating
+                        // the fill frame and mesh coordinates as world geometry.
+                        std::set<std::string> placement_ancestors;
+                        for (auto parent = placement.fields[0]; parent != "$";) {
+                            check(placement_ancestors.size() < 32 && placement_ancestors.insert(parent).second,
+                                  "unscoped fill parent placements must be bounded and acyclic");
+                            const auto& ancestor = graph.at(parent);
+                            check(ancestor.type == "IFCLOCALPLACEMENT" && ancestor.fields.size() == 2,
+                                  "unscoped fill parent must be an explicit local placement");
+                            const auto& parent_axis = graph.at(ancestor.fields[1]);
+                            check(parent_axis.type == "IFCAXIS2PLACEMENT3D" && parent_axis.fields.size() == 3,
+                                  "unscoped fill parent must use a 3D axis placement");
+                            const auto verify_vector = [&](const std::string& reference, const char* type,
+                                                           const std::array<double, 3>& expected) {
+                                const auto& vector = graph.at(reference);
+                                check(vector.type == type && vector.fields.size() == 1,
+                                      "unscoped fill parent vector must have the expected STEP type");
+                                const auto components = list(vector.fields[0]);
+                                check(components.size() == 3, "unscoped fill parent vector must be 3D");
+                                for (std::size_t k = 0; k < 3; ++k)
+                                    check(std::abs(std::stod(components[k]) - expected[k]) < 1e-9,
+                                          "unscoped fill parent chain must preserve the identity world frame");
+                            };
+                            verify_vector(parent_axis.fields[0], "IFCCARTESIANPOINT", {0, 0, 0});
+                            if (parent_axis.fields[1] != "$")
+                                verify_vector(parent_axis.fields[1], "IFCDIRECTION", {0, 0, 1});
+                            if (parent_axis.fields[2] != "$")
+                                verify_vector(parent_axis.fields[2], "IFCDIRECTION", {1, 0, 0});
+                            parent = ancestor.fields[0];
+                        }
                         const auto& axis = graph.at(placement.fields[1]);
                         check(axis.type == "IFCAXIS2PLACEMENT3D" && axis.fields[1] != "$" && axis.fields[2] != "$",
                               "fill placement must declare width and up directions");
@@ -695,10 +733,10 @@ void native_assemblies() {
                 }
                 // Equivalent parent +90 degree rotation and translation must
                 // compose before native comparison, for all host/handing cases.
-                const auto absolute=import_project_ifc(exported.step);
-                check(std::any_of(absolute.entities.begin(),absolute.entities.end(),[](const auto& entity) {
+                const auto original=import_project_ifc(exported.step);
+                check(std::any_of(original.entities.begin(),original.entities.end(),[](const auto& entity) {
                     return entity.type=="opening" && entity.properties.contains("opening_assembly");
-                }),"absolute oblique fill must reconstruct before equivalent parent placement is tested");
+                }),"oblique fill must reconstruct before equivalent parent placement is tested");
                 auto relative_placement=placement; relative_placement.fields[0]="#999974";
                 auto relative=replace_fields(exported.step,graph.at(fill_id).fields[5],relative_placement);
                 auto relative_origin=graph.at(axis.fields[0]);
@@ -781,12 +819,42 @@ void native_assemblies() {
                 check(std::none_of(transformed.entities.begin(), transformed.entities.end(), [](const auto& entity) {
                     return entity.type == "opening" && entity.properties.contains("opening_assembly");
                 }) && transformed.source_retention_required, "context-only translation must not activate world-coordinate native meshes");
-                IfcExchangeLimits small;
-                small.max_mesh_vertices = 4;
-                bool bounded = false;
-                try { (void)export_project_ifc(Document::create({wall, opening}).snapshot(), small); }
-                catch (const std::invalid_argument&) { bounded = true; }
-                check(bounded, "insufficient native tessellation budget must fail closed");
+                // Exhaust vertices and triangles separately. Budget refusal is
+                // diagnosed source retention, and must publish neither a partial
+                // void/fill nor an analytical substitute for a curved host.
+                for (const bool exhaust_vertices : {true, false}) {
+                    IfcExchangeLimits small;
+                    if (exhaust_vertices) small.max_mesh_vertices = 4;
+                    else small.max_mesh_triangles = 1;
+                    const auto source = Document::create({wall, opening});
+                    const auto refused = export_project_ifc(source.snapshot(), small);
+                    const auto refused_graph = records(refused.step);
+                    check(std::none_of(refused_graph.begin(), refused_graph.end(), [&](const auto& item) {
+                        const auto& type = item.second.type;
+                        return type == "IFCOPENINGELEMENT" || type == "IFCDOOR" || type == "IFCWINDOW" ||
+                            type == "IFCRELVOIDSELEMENT" || type == "IFCRELFILLSELEMENT" ||
+                            type == "IFCTRIANGULATEDFACESET" || type == "IFCCARTESIANPOINTLIST3D" ||
+                            (curved && type == "IFCWALL");
+                    }), "native budget refusal must withhold the entire opening and all failed tessellation records");
+                    check(std::any_of(refused.diagnostics.begin(), refused.diagnostics.end(), [&](const auto& diagnostic) {
+                        return diagnostic.source_id == opening.id && diagnostic.code == "local_geometry_not_exported";
+                    }), "native opening budget refusal must be explicitly diagnosed");
+                    const auto retained = import_project_ifc(refused.step);
+                    check(retained.source_retention_required && std::none_of(retained.entities.begin(), retained.entities.end(),
+                        [](const auto& entity) { return entity.type == "opening"; }),
+                        "refused manufactured opening must not reactivate as a generic void on import");
+                    check(std::any_of(retained.entities.begin(), retained.entities.end(), [&](const auto& entity) {
+                        if (entity.type != "ifc_reference" || !entity.extensions.contains("ifc_vertex_properties")) return false;
+                        const auto& properties = entity.extensions.at("ifc_vertex_properties");
+                        if (!properties.contains("native_entity")) return false;
+                        const auto& descriptor = properties.at("native_entity");
+                        return descriptor.at("id") == opening.id && descriptor.at("type") == opening.type &&
+                            descriptor.at("properties") == opening.properties && descriptor.at("extensions") == opening.extensions &&
+                            descriptor.at("required") == opening.required;
+                    }), "native budget refusal must retain the exact manufactured opening as inert source");
+                    check(source.snapshot().entities().at(opening.id) == opening && source.snapshot().entities().at(wall.id) == wall,
+                        "budget refusal must preserve authoring");
+                }
               }
             }
         }
@@ -2406,9 +2474,512 @@ void run() {
 
 } // namespace
 
+// Catches identity export, applying the spatial parent twice, flattening floors,
+// and changing source authoring. Coordinates are consumed independently of the
+// Vertex importer/site-frame resolver.
+std::array<double,3> consume_site_point(const std::map<std::string, Record>& graph,
+    const std::string& placement, std::array<double,3> point) {
+    if (placement == "$") return point;
+    const auto& local = graph.at(placement);
+    const auto& axis = graph.at(local.fields.at(1));
+    const auto origin = list(graph.at(axis.fields.at(0)).fields.at(0));
+    double c=1, s=0;
+    if (axis.fields.at(2) != "$") {
+        const auto x = list(graph.at(axis.fields.at(2)).fields.at(0));
+        c=std::stod(x[0]); s=std::stod(x[1]);
+    }
+    return consume_site_point(graph,local.fields.at(0),
+        {c*point[0]-s*point[1]+std::stod(origin[0]),
+         s*point[0]+c*point[1]+std::stod(origin[1]),point[2]+std::stod(origin[2])});
+}
+void explicit_site_export_consumer() {
+    using namespace sketch;
+    Entity property{"site-owner","property",{{"name","Survey parcel"},{"site_frame",{
+        {"version",1},{"origin_m",{100,200,10}},{"rotation_radians",std::acos(-1.0)/2},
+        {"vertical_datum",{{"identifier","datum-A"},{"height_at_origin_m",50}}}}}}};
+    property.extensions={{"vendor",{{"opaque","never rewrite"}}}};
+    std::vector<Entity> source{property};
+    for (int i=0;i<2;++i) {
+        const auto b="building-"+std::to_string(i), f="floor-"+std::to_string(i);
+        source.push_back({b,"building",{{"name",b},{"property_id",property.id},{"site_placement",{
+            {"version",1},{"translation_m",{i*20,0,2}},{"rotation_radians",0}}}}});
+        source.push_back({f,"floor",{{"name",f},{"building_id",b},
+            {"vertical_level_binding",VerticalLevelBinding{"site-levels","upper"}.to_json()}}});
+        const auto layer="site-layer-"+std::to_string(i);
+        source.push_back({layer,"layer",{{"floor_id",f}}});
+        auto wall=make_document().snapshot().entities().at("wall-1");
+        wall.id="site-wall-"+std::to_string(i); wall.properties["floor_id"]=f;
+        wall.properties["layer_id"]=layer;
+        wall.properties["elevation_m"]=3; source.push_back(wall);
+        source.back().properties["vertical_placement"]={{"version",1},{"mode","level"},{"offset_m",0}};
+        auto opening=make_document().snapshot().entities().at("opening-1");
+        opening.id="site-opening-"+std::to_string(i); opening.properties["wall_id"]=wall.id;
+        source.push_back(opening);
+    }
+    source.push_back({"site-levels","vertical_levels",{{"model",nlohmann::json::parse(VerticalLevelGraph({{"upper",5}},{}).serialize())}}});
+    Entity terrain{"site-terrain","terrain_surface",{{"property_id",property.id},
+        {"terrain_elevation_binding",{{"version",1},{"mode","declared_absolute"},{"datum_identifier","datum-A"}}},
+        {"model",TerrainSurface("survey",{{"p0",0,0,52},{"p1",1,0,52},{"p2",0,1,53}},{{{0,1,2}}}).to_json()}}};
+    source.push_back(terrain);
+    AssemblyType leaf; leaf.id="leaf"; leaf.name="Leaf"; leaf.materials={{"slot","wood"}};
+    leaf.quantities={{"declared",{7,AssemblyQuantityUnit::cubic_metre}}};
+    AssemblyProfile profile; profile.id="profile"; profile.height_m=2; profile.material_slot="slot";
+    profile.outer={{{0,0},{1,0}},{{1,0},{1,1}},{{1,1},{0,1}},{{0,1},{0,0}}}; leaf.profiles={profile};
+    AssemblyType root; root.id="root"; root.name="Root";
+    AssemblyPart part; part.id="child"; part.type_id="leaf"; part.transform.translation_m={2,0,0}; root.parts={part};
+    const auto catalog=AssemblyModel::create({{"wood","Wood"}},{root,leaf},{});
+    source.push_back({"site-catalog","assembly_model",{{"model",catalog.to_json()}}});
+    Entity instance{"site-assembly","assembly_instance",{{"floor_id","floor-0"},
+        {"presentation_frame",{{"version",1},{"mode","building"}}}}};
+    AssemblyDocumentInstance envelope; envelope.assembly_catalog_id="site-catalog";
+    envelope.instance.id=instance.id; envelope.instance.type_id="root";
+    envelope.instance.root_transform=AssemblyTransform{{0,0,3},0,1};
+    source.push_back(encode_document_assembly_instance(instance,envelope));
+    const auto document=Document::create(source); const auto before=document.snapshot().entities();
+    for (int i=0;i<2;++i) {
+        const auto wall_id="site-wall-"+std::to_string(i);
+        const auto resolved=resolve_vertical_placement(document.snapshot(),document.snapshot().entities().at(wall_id));
+        check(resolved.properties.at("elevation_m")==8,
+            "site fixture must resolve its authored 3 m elevation plus 5 m bound level before export");
+    }
+    const auto exported=export_project_ifc(document.snapshot());
+    const auto graph=records(exported.step);
+    std::map<std::string,std::string> products, spatial;
+    int sites=0,buildings=0,floors=0,assemblies=0,materials=0;
+    for (const auto& [id,r]:graph) {
+        if (r.type=="IFCSITE") ++sites;
+        if (r.type=="IFCBUILDING") ++buildings;
+        if (r.type=="IFCBUILDINGSTOREY") ++floors;
+        if (r.type=="IFCELEMENTASSEMBLY") ++assemblies;
+        if (r.type=="IFCMATERIAL") ++materials;
+        if (r.fields.size()>6 && (r.type=="IFCWALL" || r.type=="IFCOPENINGELEMENT" ||
+            r.type=="IFCELEMENTASSEMBLY" || r.type=="IFCGEOGRAPHICELEMENT")) products[r.fields[2]]=id;
+        if (r.type=="IFCRELCONTAINEDINSPATIALSTRUCTURE")
+            for (const auto& child:list(r.fields[4])) check(spatial.emplace(child,r.fields[5]).second,"one spatial owner per product");
+    }
+    check(sites==1 && buildings==2 && floors==2,"explicit containers must replace the flattened default hierarchy");
+    std::vector<std::string> expected_products{"site-wall-0","site-opening-0","site-wall-1","site-opening-1","site-terrain"};
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    expected_products.push_back("site-assembly");
+#endif
+    for (const auto& source_id : expected_products) {
+        if (products.contains("'"+source_id+"'")) continue;
+        std::string message="missing expected site product "+source_id;
+        std::size_t included=0;
+        for (const auto& diagnostic : exported.diagnostics)
+            if ((diagnostic.source_id==source_id || diagnostic.source_kind=="PROJECT") && included++<8)
+                message+="; "+diagnostic.source_id+":"+diagnostic.code;
+        throw std::runtime_error(message);
+    }
+    for (int i=0;i<2;++i) {
+        const auto& wall=graph.at(products.at("'site-wall-"+std::to_string(i)+"'"));
+        const auto p=consume_site_point(graph,wall.fields[5],{0,0,0});
+        check(std::abs(p[0]-100)<1e-8 && std::abs(p[1]-(200+i*20))<1e-8 && std::abs(p[2]-20)<1e-8,
+            "same local wall must have distinct composed world pose with local height once");
+        const auto& opening=graph.at(products.at("'site-opening-"+std::to_string(i)+"'"));
+        const auto op=consume_site_point(graph,opening.fields[5],{0,0,0});
+        check(std::abs(op[0]-100)<1e-8 && std::abs(op[1]-(200+i*20))<1e-8 && std::abs(op[2]-20.1)<1e-8,
+            "hosted void inherits its resolved wall frame and sill once");
+        bool host_link=false;
+        for (const auto& [id,r]:graph) if (r.type=="IFCRELVOIDSELEMENT" && r.fields[5]==products.at("'site-opening-"+std::to_string(i)+"'"))
+            host_link=r.fields[4]==products.at("'site-wall-"+std::to_string(i)+"'");
+        check(host_link,"void must refer to its own building's wall");
+        const auto& shape=graph.at(wall.fields[6]); const auto& repr=graph.at(list(shape.fields[2])[0]);
+        const auto& solid=graph.at(list(repr.fields[3])[0]);
+        check(std::stod(solid.fields[3])==2.5,"rigid site placement preserves depth");
+        const auto& poly=graph.at(graph.at(solid.fields[0]).fields[2]);
+        double twice_area=0; const auto point_refs=list(poly.fields[0]);
+        for(std::size_t k=0;k+1<point_refs.size();++k) {
+            const auto a=list(graph.at(point_refs[k]).fields[0]),b=list(graph.at(point_refs[k+1]).fields[0]);
+            twice_area+=std::stod(a[0])*std::stod(b[1])-std::stod(b[0])*std::stod(a[1]);
+        }
+        check(std::abs(std::abs(twice_area)*.5-.8)<1e-8,"wall source area and volume remain unchanged");
+        check(spatial.contains(products.at("'site-wall-"+std::to_string(i)+"'")),"wall requires floor containment");
+        const auto& floor=graph.at(spatial.at(products.at("'site-wall-"+std::to_string(i)+"'")));
+        const auto fp=consume_site_point(graph,floor.fields[5],{0,0,0});
+        check(std::abs(fp[0]-100)<1e-8 && std::abs(fp[1]-(200+i*20))<1e-8 && std::abs(fp[2]-17)<1e-8,
+            "floor hierarchy placement includes its authored level without adding it to products twice");
+    }
+    check(spatial.at(products.at("'site-wall-0'"))!=spatial.at(products.at("'site-wall-1'")),"each building keeps its floor owner");
+    const auto& terrain_product=graph.at(products.at("'site-terrain'"));
+    const auto tp=consume_site_point(graph,terrain_product.fields[5],{0,0,52});
+    check(std::abs(tp[2]-12)<1e-8,"absolute terrain datum is applied once and remains separate from CRS");
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    check(assemblies==1 && materials==1,"nested profiles keep one semantic assembly root and one material");
+    const auto& assembly=graph.at(products.at("'site-assembly'"));
+    const auto ap=consume_site_point(graph,assembly.fields[5],{2,0,3});
+    check(std::abs(ap[0]-100)<1e-8 && std::abs(ap[1]-202)<1e-8 && std::abs(ap[2]-15)<1e-8,"nested assembly is placed after expansion");
+    std::vector<std::string> children;
+    for (const auto& [id,r]:graph) if (r.type=="IFCRELAGGREGATES" && r.fields[4]==products.at("'site-assembly'")) {
+        const auto owned=list(r.fields[5]); children.insert(children.end(),owned.begin(),owned.end());
+    }
+    check(children.size()==1 && !spatial.contains(children[0]),"profile children decompose one root without duplicate spatial roots");
+    const auto& child=graph.at(children[0]);
+    const auto& child_shape=graph.at(child.fields[6]); const auto& child_repr=graph.at(list(child_shape.fields[2])[0]);
+    double mesh_volume=0;
+    for (const auto& mesh_id:list(child_repr.fields[3])) {
+        const auto& mesh=graph.at(mesh_id); const auto rows=list(graph.at(mesh.fields[0]).fields[0]);
+        std::vector<std::array<double,3>> points;
+        for (const auto& row:rows) {
+            const auto xyz=list(row);
+            points.push_back(consume_site_point(graph,child.fields[5],{std::stod(xyz[0]),std::stod(xyz[1]),std::stod(xyz[2])}));
+        }
+        for (const auto& row:list(mesh.fields[3])) {
+            const auto t=list(row); const auto a=points.at(std::stoul(t[0])-1),b=points.at(std::stoul(t[1])-1),c=points.at(std::stoul(t[2])-1);
+            mesh_volume+=(a[0]*(b[1]*c[2]-b[2]*c[1])+a[1]*(b[2]*c[0]-b[0]*c[2])+a[2]*(b[0]*c[1]-b[1]*c[0]))/6;
+        }
+    }
+    check(std::abs(std::abs(mesh_volume)-2)<1e-7,"independently consumed assembly volume must be 2 m3 rather than its declared 7 m3");
+    auto world_source=source; world_source.back().properties.erase("presentation_frame");
+    const auto world_graph=records(export_project_ifc(Document::create(world_source).snapshot()).step);
+    for (const auto& [id,r]:world_graph) if (r.type=="IFCELEMENTASSEMBLY") {
+        const auto point=consume_site_point(world_graph,r.fields[5],{2,0,3});
+        check(point==std::array<double,3>{2,0,3},"independent root is world by default despite floor membership");
+    }
+    auto curved_leaf=leaf; curved_leaf.profiles[0].outer={{{0,0},{2,0},std::acos(-1.0)},{{2,0},{0,0},0}};
+    auto curved_source=source; curved_source[curved_source.size()-2].properties["model"]=
+        AssemblyModel::create({{"wood","Wood"}},{root,curved_leaf},{}).to_json();
+    const auto curved_export=export_project_ifc(Document::create(curved_source).snapshot());
+    check(curved_export.step.find("=IFCELEMENTASSEMBLY(")!=std::string::npos &&
+        std::none_of(curved_export.diagnostics.begin(),curved_export.diagnostics.end(),[](const auto& d){
+            return d.source_id=="site-assembly" && d.code=="independent_assembly_geometry_not_exported";
+        }),"curved nested profile must use real native tessellation");
+#else
+    check(assemblies==0 && std::any_of(exported.diagnostics.begin(),exported.diagnostics.end(),[](const auto& d){
+        return d.source_id=="site-assembly" && d.code=="independent_assembly_runtime_unavailable";
+    }),"assembly without native bridge must retain source with explicit loss diagnostic");
+#endif
+    check(document.snapshot().entities()==before,"IFC derivation must preserve all source geometry and opaque extensions");
+    auto bad=source; bad[1].properties["site_placement"]["rotation_radians"]="invalid";
+    bool frame_refused=false;
+    try {
+        const auto refused=export_project_ifc(Document::create(bad).snapshot());
+        frame_refused=std::any_of(refused.diagnostics.begin(),refused.diagnostics.end(),[](const auto& d){
+            return d.source_id=="site-wall-0" && d.code=="site_frame_not_exported";
+        });
+        check(refused.step.find("'site-wall-0','wall:")==std::string::npos,"invalid site frame cannot leak an active identity wall");
+    } catch (const DocumentError& error) {
+        frame_refused=error.code()==DocumentErrorCode::invalid_entity &&
+            std::string(error.what())=="Invalid site presentation frames: site-frame coordinate must be numeric";
+    } catch (const std::invalid_argument&) { frame_refused=true; }
+    check(frame_refused,"malformed explicit frame must refuse at document or export boundary");
+}
+
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+nlohmann::json independently_read_join_metadata(const std::string& step, const std::string& source_id) {
+    const auto graph = records(step);
+    for (const auto& [id, set] : graph) {
+        (void)id;
+        if (set.type != "IFCPROPERTYSET" || (set.fields[2] != "'Pset_VertexExchange_v1'" &&
+            set.fields[2] != "'Pset_VertexExchange_v2'")) continue;
+        std::string payload;
+        std::map<std::size_t, std::string> chunks;
+        for (const auto& property : list(set.fields[4])) {
+            const auto& p = graph.at(property);
+            auto text = p.fields[2].substr(9, p.fields[2].size() - 11);
+            for (std::size_t i = 0; (i = text.find("''", i)) != std::string::npos; ++i) text.erase(i, 1);
+            if (p.fields[0] == "'Properties'") payload = text;
+            else if (p.fields[0].starts_with("'PropertiesChunk:"))
+                chunks.emplace(std::stoull(p.fields[0].substr(17, p.fields[0].size() - 18)), text);
+        }
+        if (payload.empty()) for (const auto& [i, chunk] : chunks) { (void)i; payload += chunk; }
+        const auto metadata = nlohmann::json::parse(payload);
+        if (metadata.contains("_vertex_ifc_join") && metadata.at("_vertex_ifc_join").at("native_entity").at("id") == source_id)
+            return metadata.at("_vertex_ifc_join");
+    }
+    throw std::runtime_error("join must retain a complete native source carrier");
+}
+
+std::string one_join_product(const std::map<std::string, Record>& graph, const std::string& type) {
+    std::string product;
+    std::size_t count = 0;
+    for (const auto& [id, r] : graph) if (r.type == type) { product = id; ++count; }
+    check(count == 1, "join must replace its members with exactly one physical occurrence");
+    return product;
+}
+
+void joined_wall_exchange() {
+    using namespace sketch;
+    using Json = nlohmann::json;
+    auto a = make_document().snapshot().entities().at("wall-1"); a.id = "wall-a";
+    a.properties["baseline"] = {{"start", {0,0}}, {"end", {4,0}}, {"sweep_radians", 0}};
+    auto b = a; b.id = "wall-b";
+    b.properties["baseline"] = {{"start", {4,0}}, {"end", {4,3}}, {"sweep_radians", 0}};
+    a.properties["height_m"] = b.properties["height_m"] = 2.5;
+    a.properties["elevation_m"] = b.properties["elevation_m"] = 3;
+    a.extensions["opaque"] = {{"name", "wall-b"}, {"data", std::string(5000, 'x')}};
+    auto opening = make_document().snapshot().entities().at("opening-1"); opening.id = "opening-a";
+    opening.properties["wall_id"] = a.id; opening.properties["offset_m"] = 1;
+    opening.properties["width_m"] = 1; opening.properties["height_m"] = 2; opening.properties["sill_m"] = .1;
+    const Entity join{"zz-wall-join", "wall_join", wall_join_json(WallJoin{"zz-wall-join", {a.id,b.id}})};
+    const auto doc = Document::create({a,b,opening,join});
+    const auto before = doc.snapshot().entities();
+    const auto exported = export_project_ifc(doc.snapshot());
+    const auto graph = records(exported.step);
+    const auto product = one_join_product(graph, "IFCWALL");
+    check(graph.at(product).fields[2] == "'zz-wall-join'", "authored join owns the only wall occurrence");
+    check(std::abs(independently_read_mesh_volume(graph, graph.at(product)) - 3.075) < 1e-7,
+        "orthogonal joined mesh must deduct its exact 0.025 overlap and 0.4 hosted cut");
+    const auto metadata = independently_read_join_metadata(exported.step, join.id);
+    check(metadata.at("members")[0].at("id") == a.id && metadata.at("members")[0].at("properties") == a.properties &&
+        metadata.at("members")[0].at("extensions") == a.extensions && metadata.at("hosted_openings")[0].at("properties") == opening.properties,
+        "long joined carrier must preserve exact authored sources, opaque text and hosted manufactured semantics");
+    std::size_t voids = 0, fills = 0;
+    for (const auto& [id,r] : graph) {
+        (void)id;
+        if (r.type == "IFCRELVOIDSELEMENT") { ++voids; check(r.fields[4] == product, "joined opening must belong to the replacement join"); }
+        if (r.type == "IFCRELFILLSELEMENT") ++fills;
+    }
+    check(voids == 1 && fills == 1, "hosted cut and actual manufactured fill remain distinct owned products");
+    const auto imported = import_project_ifc(exported.step);
+    check(std::none_of(imported.entities.begin(), imported.entities.end(), [](const Entity& e) {
+        return e.type == "wall" || e.type == "wall_join";
+    }) && imported.source_retention_required, "unvalidated joined meshes must remain exact inert references on import");
+    check(doc.snapshot().entities() == before, "joined export cannot mutate authoring");
+    IfcExchangeLimits small; small.max_mesh_vertices = 64; small.max_mesh_triangles = 64;
+    const auto refused = export_project_ifc(doc.snapshot(), small);
+    check(refused.step.find("=IFCWALL(") == std::string::npos && refused.step.find("=IFCOPENINGELEMENT(") == std::string::npos &&
+        refused.step.find("=IFCTRIANGULATEDFACESET(") == std::string::npos,
+        "join exhaustion must roll back all joined records and withhold dependent openings");
+
+    a.extensions = Json::object();
+    a.properties["baseline"] = {{"start", {0,0}}, {"end", {1,1}}, {"sweep_radians", std::acos(-1.0)/2}};
+    b.properties["baseline"] = {{"start", {1,1}}, {"end", {1,4}}, {"sweep_radians", 0}};
+    opening.properties["offset_m"] = .3; opening.properties["width_m"] = .6;
+    const auto curved_doc = Document::create({a,b,opening,join});
+    const auto curved = export_project_ifc(curved_doc.snapshot());
+    const auto curved_graph = records(curved.step);
+    const auto curved_product = one_join_product(curved_graph,"IFCWALL");
+    const auto expected = solid_volume(make_wall_join(WallJoin{join.id,{a.id,b.id}}, std::vector<Wall>{
+        {a.id,{{0,0},{1,1},std::acos(-1.0)/2},.2,2.5,3,{{opening.id,.3,.6,.1,2}}},
+        {b.id,{{1,1},{1,4},0},.2,2.5,3}}));
+    check(std::abs(independently_read_mesh_volume(curved_graph,curved_graph.at(curved_product))-expected) < .002,
+        "closed curved joined mesh must conserve authoritative analytical native volume within 1mm tessellation deviation");
+
+    a.properties["baseline"] = {{"start", {0,0}}, {"end", {4,0}}, {"sweep_radians", 0}};
+    b.properties["baseline"] = {{"start", {4,0}}, {"end", {4,3}}, {"sweep_radians", 0}};
+    opening.properties["offset_m"] = 1; opening.properties["width_m"] = 1;
+    const Entity catalog{"join-catalog","assembly_model",{{"version",1},{"model",AssemblyModel::create({
+        {"outer","Outer",std::string("#ff0000")},{"core","Core",std::string("#0000ff")}}, {}, {}).to_json()}}};
+    a.properties["layers"] = Json::array({{{"id","outer"},{"thickness_m",.05},{"material_assignment",{
+        {"version",1},{"catalog_id",catalog.id},{"material_id","outer"}}}},
+        {{"id","core"},{"thickness_m",.15},{"material_assignment",{{"version",1},{"catalog_id",catalog.id},{"material_id","core"}}}}});
+    const auto layered = export_project_ifc(Document::create({a,b,opening,join,catalog}).snapshot());
+    const auto layered_graph = records(layered.step);
+    const auto layered_product = one_join_product(layered_graph,"IFCWALL");
+    check(std::abs(independently_read_mesh_volume(layered_graph,layered_graph.at(layered_product))-3.075) < 1e-7,
+        "actual wall layers must preserve the exact cut joined volume");
+    const auto layered_metadata = independently_read_join_metadata(layered.step,join.id);
+    check(layered_metadata.at("regions").size() == 3 && layered_metadata.at("regions")[0].at("layer_id") == "outer" &&
+        layered_metadata.at("regions")[1].at("layer_id") == "core" &&
+        std::abs(layered_metadata.at("regions")[0].at("net_volume_m3").get<double>()-.4) < 1e-7 &&
+        std::abs(layered_metadata.at("regions")[1].at("net_volume_m3").get<double>()-1.2) < 1e-7,
+        "layer region quantities must come from actual ordered cut solids");
+    std::vector<Entity> chain;
+    std::vector<std::string> chain_ids;
+    for (int i = 0; i < 17; ++i) {
+        auto member = b; member.id = "chain-"+std::to_string(i);
+        member.properties["baseline"] = {{"start",{i,0}},{"end",{i+1,0}},{"sweep_radians",0}};
+        chain_ids.push_back(member.id); chain.push_back(member);
+    }
+    chain.push_back({"chain-join","wall_join",wall_join_json(WallJoin{"chain-join",chain_ids})});
+    const auto long_join = export_project_ifc(Document::create(chain).snapshot());
+    const auto long_graph = records(long_join.step);
+    const auto long_product = one_join_product(long_graph,"IFCWALL");
+    check(std::abs(independently_read_mesh_volume(long_graph,long_graph.at(long_product))-8.5) < 1e-7,
+        "valid wall joins above sixteen members must not inherit the roof join member cap");
+}
+
+void joined_roof_exchange() {
+    using namespace sketch;
+    using Json = nlohmann::json;
+    const Entity catalog{"join-catalog","assembly_model",{{"version",1},{"model",AssemblyModel::create({
+        {"red","Red",std::string("#ff0000")},{"blue","Blue",std::string("#0000ff")},
+        {"green","Green",std::string("#00ff00")}}, {}, {}).to_json()}}};
+    const auto assignment = [&](const char* material) { return Json{{"version",1},{"catalog_id",catalog.id},{"material_id",material}}; };
+    auto a = encode_building_entity(SlopedRoofPanel{"roof-a",{0,0,3},0,2,4,0,0,0,.2,{}});
+    auto b = encode_building_entity(SlopedRoofPanel{"roof-b",{1,0,3},0,2,4,0,0,0,.2,{}});
+    a.properties["material_assignment"] = assignment("red"); b.properties["material_assignment"] = assignment("blue");
+    Entity join{"zz-roof-join","roof_join",roof_join_json(RoofJoin{"zz-roof-join",{a.id,b.id}})};
+    const auto inspect = [&](const Entity& first, const Entity& second, const Entity& relation, double expected) {
+        const auto exported = export_project_ifc(Document::create({first,second,relation,catalog}).snapshot());
+        const auto graph = records(exported.step); const auto product = one_join_product(graph,"IFCROOF");
+        check(std::abs(independently_read_mesh_volume(graph,graph.at(product))-expected) < 1e-7,
+            "joined roof must emit actual disjoint native regions with exact net overlap volume");
+        const auto metadata = independently_read_join_metadata(exported.step,relation.id);
+        double sum = 0;
+        for (const auto& region : metadata.at("regions")) sum += region.at("net_volume_m3").get<double>();
+        check(std::abs(sum-expected) < 1e-7, "all retained regions must conserve actual joined volume");
+        const auto imported = import_project_ifc(exported.step);
+        check(std::none_of(imported.entities.begin(),imported.entities.end(),[](const Entity& e){return e.type=="roof" || e.type=="roof_join";}),
+            "joined roof source cannot activate without native geometric validation");
+        return metadata;
+    };
+    auto metadata = inspect(a,b,join,2.4);
+    check(std::abs(metadata.at("regions")[0].at("net_volume_m3").get<double>()-1.6) < 1e-7 &&
+        std::abs(metadata.at("regions")[1].at("net_volume_m3").get<double>()-.8) < 1e-7 &&
+        metadata.at("regions")[0].at("material_assignment") == assignment("red"), "earlier authored roof owns shared volume and color");
+    join.properties["roof_ids"] = {b.id,a.id}; metadata = inspect(a,b,join,2.4);
+    check(metadata.at("regions")[0].at("source_id") == b.id && metadata.at("regions")[0].at("material_assignment") == assignment("blue"),
+        "reversing authored priority must reverse overlap ownership");
+    join.properties = roof_join_json(RoofJoin{join.id,{a.id,b.id},RoofJoinStyle::fused,RoofJoinMaterialAssignment{catalog.id,"green"}});
+    metadata = inspect(a,b,join,2.4);
+    check(metadata.at("regions")[0].at("material_assignment") == assignment("green") &&
+        metadata.at("regions")[1].at("material_assignment") == assignment("green"), "join override must bind every actual region");
+    join.properties = roof_join_json(RoofJoin{join.id,{a.id,b.id}}); metadata = inspect(a,b,join,2.4);
+    check(metadata.at("regions")[0].at("material_assignment") == assignment("red") &&
+        metadata.at("regions")[1].at("material_assignment") == assignment("blue"), "cleared override restores exact source materials");
+    b = a; b.id = "roof-b"; b.properties["material_assignment"] = assignment("blue"); metadata = inspect(a,b,join,1.6);
+    check(metadata.at("regions")[1].at("net_volume_m3") == 0 && metadata.at("regions")[1].at("mesh_count") == 0 &&
+        metadata.at("members")[1].at("id") == b.id, "fully occluded member keeps exact semantics with zero geometry");
+    b = encode_building_entity(SlopedRoofPanel{"roof-b",{1,0,3},0,2,4,0,0,0,.2,{}});
+    a = encode_building_entity(SlopedRoofPanel{"roof-a",{0,0,3},0,2,4,0,0,0,.2,{{"skylight",.3,.5,.4,.5}}});
+    (void)inspect(a,b,join,2.36);
+    b = encode_building_entity(SlopedRoofPanel{"roof-b",{20,0,3},0,2,4,0,0,0,.2,{}});
+    const auto invalid = export_project_ifc(Document::create({a,b,join}).snapshot());
+    check(invalid.step.find("=IFCROOF(") == std::string::npos && invalid.step.find("=IFCTRIANGULATEDFACESET(") == std::string::npos,
+        "disconnected join must refuse atomically and cannot fall back to overlapping member products");
+}
+
+void joined_building_frames_and_aggregate_caps() {
+    using namespace sketch;
+    std::vector<Entity> source{Entity{"property","property",{{"site_frame",{{"version",1},{"origin_m",{100,200,10}},
+        {"rotation_radians",std::acos(-1.0)/2},{"vertical_datum",{{"identifier","datum"},{"height_at_origin_m",0}}}}}}},
+        Entity{"levels","vertical_levels",{{"model",nlohmann::json::parse(VerticalLevelGraph({{"upper",5}},{}).serialize())}}}};
+    for (int i = 0; i < 2; ++i) {
+        const auto suffix = std::to_string(i), building = "building-" + suffix, floor = "floor-" + suffix;
+        source.push_back({building,"building",{{"property_id","property"},{"site_placement",{{"version",1},{"translation_m",{i*20,0,2}},{"rotation_radians",0}}}}});
+        source.push_back({floor,"floor",{{"building_id",building},{"vertical_level_binding",VerticalLevelBinding{"levels","upper"}.to_json()}}});
+        const auto layer="joined-layer-"+suffix;
+        source.push_back({layer,"layer",{{"floor_id",floor}}});
+        auto a = make_document().snapshot().entities().at("wall-1"); a.id = "a-" + suffix;
+        a.properties["floor_id"] = floor; a.properties["vertical_placement"] = {{"version",1},{"mode","level"},{"offset_m",0}};
+        a.properties["layer_id"] = layer;
+        a.properties["elevation_m"] = 3;
+        a.properties["baseline"] = {{"start",{0,0}},{"end",{4,0}},{"sweep_radians",0}};
+        auto b = a; b.id = "b-" + suffix; b.properties["baseline"] = {{"start",{4,0}},{"end",{4,3}},{"sweep_radians",0}};
+        source.push_back(a); source.push_back(b);
+        auto properties = wall_join_json(WallJoin{"join-"+suffix,{a.id,b.id}});
+        source.push_back({"join-"+suffix,"wall_join",properties});
+    }
+    // Valid V3 owners have no owner context. Child IDs are owner-local and
+    // each label is scoped by its own layer, including across buildings.
+    source.push_back({"annotation-layer-0","layer",{{"floor_id","floor-0"}}});
+    source.push_back({"annotation-layer-1","layer",{{"floor_id","floor-1"}}});
+    const auto templates = default_label_templates();
+    AnnotationState annotations;
+    annotations.labels.push_back(instantiate_label(templates.front(),"same-label"));
+    annotations.labels.push_back(instantiate_label(templates.front(),"different-label"));
+    annotations.labels[0].placement.layer_id = "annotation-layer-0";
+    annotations.labels[1].placement.layer_id = "annotation-layer-1";
+    auto annotation_owner = make_annotation_entity("annotation-owner",annotations);
+    annotation_owner.properties["version"] = 3;
+    annotation_owner.properties["presentation_frame"] = {{"version",1},{"mode","building"}};
+    annotation_owner.extensions["opaque"] = {{"retained","exact"}};
+    source.push_back(annotation_owner);
+    auto second_owner = annotation_owner; second_owner.id = "annotation-owner-site";
+    second_owner.properties["presentation_frame"]["mode"] = "site";
+    second_owner.properties["state"]["labels"][0]["placement"]["layer_id"] = "annotation-layer-1";
+    source.push_back(second_owner);
+    const auto doc = Document::create(source); const auto before = doc.snapshot().entities();
+    const auto exported = export_project_ifc(doc.snapshot());
+    check(std::none_of(exported.diagnostics.begin(),exported.diagnostics.end(),[](const auto& d) {
+        return d.code == "site_frame_batch_not_exported" ||
+            ((d.source_id == "annotation-owner" || d.source_id == "annotation-owner-site") &&
+             d.code == "site_frame_not_exported");
+    }), "unscoped annotation owners must not poison physical site placement");
+    const auto imported = import_project_ifc(exported.step);
+    for (const auto& owner : {annotation_owner,second_owner}) {
+        const auto retained = std::find_if(imported.entities.begin(),imported.entities.end(),[&](const Entity& e) {
+            return e.extensions.contains("ifc_vertex_properties") &&
+                e.extensions.at("ifc_vertex_properties").contains("native_entity") &&
+                e.extensions.at("ifc_vertex_properties").at("native_entity").at("id") == owner.id;
+        });
+        check(retained != imported.entities.end(), "annotation source carrier must round trip");
+        const auto& descriptor = retained->extensions.at("ifc_vertex_properties").at("native_entity");
+        check(descriptor == nlohmann::json{{"id",owner.id},{"type",owner.type},{"required",owner.required},
+            {"properties",owner.properties},{"extensions",owner.extensions}},
+            "annotation carrier must preserve exact source, child namespace and opaque extensions");
+    }
+    check(doc.snapshot().entities() == before, "IFC annotation retention must not mutate source");
+    for (int invalid_case = 0; invalid_case < 2; ++invalid_case) {
+        auto invalid_source = source;
+        auto& invalid_owner = invalid_source[invalid_source.size()-2];
+        if (invalid_case == 0) invalid_owner.properties["presentation_frame"]["mode"] = "future";
+        else invalid_owner.properties["state"]["labels"][0]["presentation_frame"] =
+            {{"version",1},{"mode","building"}};
+        // Repeat the same refusal to cover stable validation with no fallback
+        // or mutation of the captured valid document.
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            bool rejected = false;
+            try { (void)Document::create(invalid_source); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected, "unknown owner frames and forbidden child-local frames must refuse");
+        }
+    }
+    const auto graph = records(exported.step);
+    std::size_t products = 0;
+    for (const auto& [id,r] : graph) {
+        (void)id;
+        if (r.type != "IFCWALL") continue;
+        ++products; const auto index = r.fields[2] == "'join-0'" ? 0 : 1;
+        const auto& shape = graph.at(r.fields[6]); const auto& repr = graph.at(list(shape.fields[2])[0]);
+        std::array<double,3> min{1e10,1e10,1e10}, max{-1e10,-1e10,-1e10};
+        for (const auto& item : list(repr.fields[3])) for (const auto& row : list(graph.at(graph.at(item).fields[0]).fields[0])) {
+            const auto p = list(row); const auto world = consume_site_point(graph,r.fields[5],{std::stod(p[0]),std::stod(p[1]),std::stod(p[2])});
+            for (int axis = 0; axis < 3; ++axis) { min[axis] = std::min(min[axis],world[axis]); max[axis] = std::max(max[axis],world[axis]); }
+        }
+        check(std::abs(min[0]-97) < 1e-7 && std::abs(max[0]-100.1) < 1e-7 &&
+            std::abs(min[1]-(200+20*index)) < 1e-7 && std::abs(max[1]-(204.1+20*index)) < 1e-7 &&
+            std::abs(min[2]-20) < 1e-7 && std::abs(max[2]-22.5) < 1e-7,
+            "each joined cluster must apply its root-level yaw/site/building/vertical level exactly once");
+        check(std::abs(independently_read_mesh_volume(graph,r)-3.475) < 1e-7, "placed joins preserve net physical volume");
+    }
+    check(products == 2, "two buildings contain exactly two joined wall products");
+    // The native bridge reserves 64 stations per source before OCCT allocation.
+    // This admits one two-member cluster; its actual output charge leaves less
+    // than the next cluster's preflight reservation.
+    IfcExchangeLimits bounded; bounded.max_mesh_vertices = 128;
+    const auto refused = export_project_ifc(doc.snapshot(),bounded); const auto limited_graph = records(refused.step);
+    check(std::count_if(limited_graph.begin(),limited_graph.end(),[](const auto& item){return item.second.type == "IFCWALL";}) == 1,
+        "aggregate mesh cap must retain the first complete join and atomically refuse the second");
+    for (auto& e : source) if (e.id == "b-0") {
+        e.properties["floor_id"] = "floor-1";
+        e.properties["layer_id"] = "joined-layer-1";
+    }
+    auto member_source=source;
+    std::erase_if(member_source,[](const Entity& e) { return e.id=="join-0"; });
+    const auto member_document=Document::create(member_source);
+    const auto cross_frame_organization=organize_project(member_document.snapshot());
+    const auto a_context=cross_frame_organization.drawing_context("a-0");
+    const auto b_context=cross_frame_organization.drawing_context("b-0");
+    check(a_context && b_context && a_context->building_id!=b_context->building_id,
+        "cross-frame join fixture must contain individually valid members in different buildings");
+    bool cross_frame_refused = false;
+    try {
+        const auto invalid = export_project_ifc(Document::create(source).snapshot());
+        const auto invalid_graph = records(invalid.step);
+        cross_frame_refused = std::none_of(invalid_graph.begin(),invalid_graph.end(),[](const auto& item) {
+            return item.second.type == "IFCWALL" && item.second.fields[2] == "'join-0'";
+        });
+    } catch (const std::exception&) { cross_frame_refused = true; }
+    check(cross_frame_refused, "a join cannot publish across two placed physical building frames");
+}
+#endif
+
 int main() {
     try {
-        run();
+        const auto stage = [](const char* name, auto operation) {
+            try { operation(); }
+            catch (const std::exception& error) { throw std::runtime_error(std::string(name)+": "+error.what()); }
+        };
+        stage("core and native exchange",run);
+        stage("explicit site export consumer",explicit_site_export_consumer);
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+        stage("joined wall exchange",joined_wall_exchange);
+        stage("joined roof exchange",joined_roof_exchange);
+        stage("joined building frames and aggregate caps",joined_building_frames_and_aggregate_caps);
+#endif
         std::cout << "IFC project exchange tests passed\n";
         return 0;
     } catch (const std::exception& error) {

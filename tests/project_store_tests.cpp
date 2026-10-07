@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/roof_join_semantics.hpp"
@@ -21,6 +22,10 @@
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/project_workspace.hpp"
+#include "sketch/site_frame.hpp"
+#include "sketch/terrain_surface.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "support/redraw_angle_fixture.hpp"
 
@@ -2830,8 +2835,8 @@ void test_selected_rigid_curve_storage_v27(bool compact = false) {
     require(archive.at("source_input")==source.extensions.at("curve_input") &&
         archive.at("source_baseline")==source.properties.at("baseline") && changed.entities().at(opening.id)==opening &&
         changed.entities().at(neighbor.id)!=neighbor,"rigid native fixture must preserve exact source and host while propagating its join");
-    auto emptied = changed;
-    auto& marker = *const_cast<std::vector<sketch::RevisionRecord>&>(emptied.history())[1].boundary_constraint_changes;
+    sketch::test::DetachedDocumentSnapshotFixture emptied(changed);
+    auto& marker = *emptied.history()[1].boundary_constraint_changes;
     marker.wall_edits.clear(); marker.supplemental_entity_changes.clear(); marker.supplemental_asset_changes.clear();
     require(ProjectStore::required_format_version(emptied)==27,"empty retained rigid ten marker must retain native27");
     auto deleted = Document::fork(changed);
@@ -2988,8 +2993,8 @@ void test_live_exterior_source_storage_and_history_floor(bool mixed = false, boo
     const auto imported = Document::create(imported_values, imported_assets);
     require(ProjectStore::required_format_version(imported.snapshot()) == 16,
         "source entities without retained v6 command history must keep their existing native floor");
-    auto emptied_proof = changed;
-    auto& retained_proof = *const_cast<std::vector<sketch::RevisionRecord>&>(emptied_proof.history())[1].boundary_constraint_changes;
+    sketch::test::DetachedDocumentSnapshotFixture emptied_proof(changed);
+    auto& retained_proof = *emptied_proof.history()[1].boundary_constraint_changes;
     retained_proof.physical_entity_changes.clear();
     retained_proof.exterior_source_edits.clear();
     if (mixed) {
@@ -4021,6 +4026,311 @@ Entity semantic_floor_context(Entity value) {
     return value;
 }
 
+Entity& fixture_entity(std::vector<Entity>& owners, std::string_view id) {
+    const auto found = std::find_if(owners.begin(), owners.end(),
+        [&](const auto& owner) { return owner.id == id; });
+    require(found != owners.end(), "site-frame fixture owner must exist");
+    return *found;
+}
+
+nlohmann::json site_frame_value() {
+    return {{"version", 1}, {"origin_m", {100, 200, 10}},
+        {"rotation_radians", std::numbers::pi / 2},
+        {"vertical_datum", {{"identifier", "survey-A"}, {"height_at_origin_m", 150}}}};
+}
+
+nlohmann::json building_site_placement_value(double x, double y, double z) {
+    return {{"version", 1}, {"translation_m", {x, y, z}},
+        {"rotation_radians", std::numbers::pi / 2}};
+}
+
+nlohmann::json terrain_model_value() {
+    return sketch::TerrainSurface("site-frame reader-floor fixture",
+        {sketch::TerrainPoint{"p0", 0, 0, 0}, sketch::TerrainPoint{"p1", 4, 0, 1},
+            sketch::TerrainPoint{"p2", 0, 4, 2}},
+        {sketch::TerrainTriangle{{0, 1, 2}}}).to_json();
+}
+
+std::vector<Entity> site_frame_v58_fixture(bool framed) {
+    auto property = entity("site", "property", {{"name", "Surveyed site"}});
+    if (framed) property.properties["site_frame"] = site_frame_value();
+    auto building_a = entity("building-a", "building", {{"property_id", "site"}});
+    auto building_b = entity("building-b", "building", {{"property_id", "site"}});
+    if (framed) {
+        building_a.properties["site_placement"] = building_site_placement_value(3, 4, 2);
+        building_b.properties["site_placement"] = building_site_placement_value(30, 40, 5);
+    }
+    auto level_graph = sketch::VerticalLevelGraph(
+        {sketch::VerticalLevel{"ground", 0}, sketch::VerticalLevel{"upper", 3}});
+    const auto levels = entity("site-levels", "vertical_levels",
+        {{"model", nlohmann::json::parse(level_graph.serialize())}});
+    auto floor_a = entity("floor-a", "floor", {{"building_id", "building-a"},
+        {"vertical_level_binding", sketch::VerticalLevelBinding{"site-levels", "ground"}.to_json()}});
+    auto floor_b = entity("floor-b", "floor", {{"building_id", "building-b"},
+        {"vertical_level_binding", sketch::VerticalLevelBinding{"site-levels", "upper"}.to_json()}});
+    const auto layer_a = entity("layer-a", "layer", {{"floor_id", "floor-a"}});
+    const auto layer_b = entity("layer-b", "layer", {{"floor_id", "floor-b"}});
+    const auto wall_a = entity("wall-a", "wall", {{"layer_id", "layer-a"},
+        {"elevation_m", 2.5}, {"length_m", 3}, {"area_m2", 7.5}});
+    const auto wall_b = entity("wall-b", "wall", {{"layer_id", "layer-b"},
+        {"elevation_m", 3.5}, {"length_m", 4}, {"area_m2", 10}});
+
+    const auto terrain_model = terrain_model_value();
+    auto terrain_relative = entity("terrain-relative", "terrain_surface",
+        {{"property_id", "site"}, {"model", terrain_model}});
+    auto terrain_absolute = entity("terrain-absolute", "terrain_surface",
+        {{"property_id", "site"}, {"model", terrain_model}});
+    if (framed) {
+        terrain_relative.properties["terrain_elevation_binding"] =
+            {{"version", 1}, {"mode", "relative_site_origin"}};
+        terrain_absolute.properties["terrain_elevation_binding"] =
+            {{"version", 1}, {"mode", "declared_absolute"}, {"datum_identifier", "survey-A"}};
+    }
+
+    auto assembly_owners = architectural_appraisal_v57_fixtures().front();
+    auto independent = assembly_owners.back();
+    independent.properties["layer_id"] = "layer-a";
+    if (framed)
+        independent.properties["presentation_frame"] = {{"version", 1}, {"mode", "building"}};
+
+    sketch::AnnotationState state;
+    auto first = sketch::instantiate_label(sketch::default_label_templates().front(), "child-a");
+    first.placement.position = {1, 2};
+    first.placement.layer_id = "layer-a";
+    auto second = first;
+    second.id = "child-b";
+    second.placement.position = {4, 5};
+    second.placement.layer_id = "layer-b";
+    state.labels = {first, second};
+    auto annotations = sketch::make_annotation_entity("annotations", state);
+    if (framed) {
+        annotations.properties["version"] = 3;
+        annotations.properties["presentation_frame"] = {{"version", 1}, {"mode", "building"}};
+    }
+
+    std::vector<Entity> result{property, building_a, building_b, levels, floor_a, floor_b,
+        layer_a, layer_b, wall_a, wall_b, terrain_relative, terrain_absolute};
+    result.insert(result.end(), assembly_owners.begin(), assembly_owners.end() - 1);
+    result.push_back(independent);
+    result.push_back(annotations);
+    return result;
+}
+
+std::vector<std::pair<std::string, std::vector<Entity>>> site_frame_v58_floor_triggers() {
+    const auto base = site_frame_v58_fixture(false);
+    std::vector<std::pair<std::string, std::vector<Entity>>> cases;
+    const auto add_case = [&](std::string label, auto configure) {
+        auto owners = base;
+        configure(owners);
+        cases.emplace_back(std::move(label), std::move(owners));
+    };
+    add_case("property.site_frame", [](auto& owners) {
+        fixture_entity(owners, "site").properties["site_frame"] = site_frame_value();
+    });
+    add_case("building.site_placement", [](auto& owners) {
+        fixture_entity(owners, "building-a").properties["site_placement"] =
+            building_site_placement_value(3, 4, 2);
+    });
+    add_case("terrain_surface relative binding", [](auto& owners) {
+        fixture_entity(owners, "terrain-relative").properties["terrain_elevation_binding"] =
+            {{"version", 1}, {"mode", "relative_site_origin"}};
+    });
+    add_case("terrain_surface absolute binding", [](auto& owners) {
+        fixture_entity(owners, "site").properties["site_frame"] = site_frame_value();
+        fixture_entity(owners, "terrain-absolute").properties["terrain_elevation_binding"] =
+            {{"version", 1}, {"mode", "declared_absolute"}, {"datum_identifier", "survey-A"}};
+    });
+    add_case("non-container presentation_frame", [](auto& owners) {
+        fixture_entity(owners, "wall-a").properties["presentation_frame"] =
+            {{"version", 1}, {"mode", "building"}};
+    });
+    add_case("independent assembly presentation_frame", [](auto& owners) {
+        fixture_entity(owners, "independent").properties["presentation_frame"] =
+            {{"version", 1}, {"mode", "building"}};
+    });
+    add_case("annotation entity v3", [](auto& owners) {
+        auto& annotations = fixture_entity(owners, "annotations");
+        annotations.properties["version"] = 3;
+        annotations.properties["presentation_frame"] = {{"version", 1}, {"mode", "building"}};
+    });
+    return cases;
+}
+
+void test_site_frame_v58_reader_floor_retains_history() {
+    const auto legacy_owners = site_frame_v58_fixture(false);
+    const auto framed_owners = site_frame_v58_fixture(true);
+    const auto legacy = Document::create(legacy_owners);
+    require(ProjectStore::required_format_version(legacy.snapshot()) == 57,
+        "site-frame fixture starts as a readable v57 document with no inferred placement");
+
+    std::vector<EntityChange> add_frames;
+    for (const auto& owner : framed_owners) {
+        if (legacy.snapshot().entities().at(owner.id) != owner)
+            add_frames.push_back(EntityChange::upsert(owner));
+    }
+    auto document = Document::fork(legacy.snapshot());
+    document.apply(ApplyEntityChanges{document.revision(), add_frames, {}, "Declare site coordinate frames"});
+    const auto created = document.snapshot();
+    require(ProjectStore::required_format_version(created) == 58,
+        "property, building, terrain and explicit non-container frames require native58");
+    verify_semantic_history_storage(created, 58, 56);
+
+    document.undo(document.revision());
+    const auto undone = document.snapshot();
+    require(undone.entities() == legacy.snapshot().entities() &&
+        ProjectStore::required_format_version(undone) == 58,
+        "undone frame creation retains its native58 floor and Redo history");
+    verify_semantic_history_storage(undone, 58, 56);
+    document.redo(document.revision());
+    const auto redone = document.snapshot();
+    require(redone.entities() == created.entities() && ProjectStore::required_format_version(redone) == 58,
+        "Redo restores exact local source entities and their native58 floor");
+    verify_semantic_history_storage(redone, 58, 56);
+
+    auto deleted = Document::fork(created);
+    std::vector<EntityChange> remove_frames;
+    constexpr std::array<const char*,4> erased_owners{"terrain-relative", "terrain-absolute", "independent", "annotations"};
+    for (const auto& original : legacy_owners) {
+        if (std::any_of(erased_owners.begin(),erased_owners.end(),[&](const char* id){return original.id==id;})) continue;
+        const auto& current = deleted.snapshot().entities().at(original.id);
+        if (current != original) remove_frames.push_back(EntityChange::upsert(original));
+    }
+    for (const auto* id : erased_owners)
+        remove_frames.push_back(EntityChange::erase(id));
+    deleted.apply(ApplyEntityChanges{deleted.revision(), std::move(remove_frames), {}, "Remove framed site records"});
+    const auto removed = deleted.snapshot();
+    require(!removed.entities().contains("terrain-relative") &&
+        !removed.entities().contains("terrain-absolute") &&
+        !removed.entities().contains("independent") && !removed.entities().contains("annotations") &&
+        ProjectStore::required_format_version(removed) == 58,
+        "deleted framed owners retain native58 through every historical revision");
+    verify_semantic_history_storage(removed, 58, 56);
+
+    for (const auto& [name, owners] : site_frame_v58_floor_triggers()) {
+        const auto snapshot = Document::create(owners).snapshot();
+        require(ProjectStore::required_format_version(snapshot) == 58,
+            "strict site-frame contract must independently raise native58: " + name);
+    }
+}
+
+void test_site_frame_v58_archive_preserves_recovery_and_local_geometry() {
+    TempDirectory temp;
+    const auto owners = site_frame_v58_fixture(true);
+    const auto document = Document::create(owners);
+    sketch::ProjectWorkspace workspace(document.snapshot());
+    const auto capture = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(capture);
+    const sketch::RecoveryLedger ledger{{"site-frame-history", "workspace_history",
+        sketch::encode_workspace_history_record(capture.document(), history, std::nullopt)}};
+    const auto archive_path = temp.path / "site-frame-archive.bldproj";
+    const auto saved = ProjectStore::save_archive(archive_path,
+        {capture.document(), ledger, sketch::ArchiveRole::ordinary});
+    const auto loaded = ProjectStore::load_archive(archive_path, sketch::ArchiveRole::ordinary);
+    require(loaded.supported() && loaded.file_sha256 == saved.file_sha256 &&
+        ProjectStore::required_format_version(loaded.archive->document()) == 58 &&
+        loaded.archive->document().entities() == document.snapshot().entities() &&
+        loaded.archive->recovery().size() == 1 &&
+        loaded.archive->recovery().front().record_id == ledger.front().record_id &&
+        loaded.archive->recovery().front().record_kind == ledger.front().record_kind &&
+        loaded.archive->recovery().front().envelope == ledger.front().envelope &&
+        ProjectStore::file_sha256(archive_path) == saved.file_sha256,
+        "native58 archive inspection retains the original frame geometry, complete recovery envelope and file bytes");
+
+    const auto& local_wall = loaded.archive->document().entities().at("wall-a");
+    require(local_wall == document.snapshot().entities().at("wall-a") &&
+        local_wall.properties.at("elevation_m") == 2.5 &&
+        local_wall.properties.at("length_m") == 3 &&
+        local_wall.properties.at("area_m2") == 7.5,
+        "site placement does not migrate or rewrite the authored wall coordinates and measurement facts");
+    const auto extracted = temp.path / "site-frame-extracted";
+    sketch::extract_project_archive(*loaded.archive, extracted);
+    std::ifstream input(extracted / "project.json");
+    const auto manifest = nlohmann::json::parse(input);
+    require(manifest.at("exchange_version") == 56 && manifest.at("archive_role") == "ordinary" &&
+        manifest.at("recovery_records").size() == 1 &&
+        manifest.at("recovery_records").front().at("envelope") == ledger.front().envelope,
+        "exchange56 archive extraction preserves the complete original recovery ledger and role");
+}
+
+void test_site_frame_future_markers_keep_conservative_native_floor() {
+    const auto initial = Document::create(site_frame_v58_fixture(false));
+    const auto snapshot = initial.snapshot();
+    const std::array<std::string, 7> raw_future_markers{
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.site_frame',json('{\"version\":999,\"origin_m\":[1,2,3],\"rotation_radians\":0,\"vertical_datum\":{\"identifier\":\"future-datum\",\"height_at_origin_m\":0}}')) WHERE revision=0 AND id='site'",
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.site_placement',json('{\"version\":999,\"translation_m\":[1,2,3],\"rotation_radians\":0}')) WHERE revision=0 AND id='building-a'",
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.terrain_elevation_binding',json('{\"version\":999,\"mode\":\"future\"}')) WHERE revision=0 AND id='terrain-relative'",
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.presentation_frame',json('{\"version\":999,\"mode\":\"future\"}')) WHERE revision=0 AND id='wall-a'",
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.presentation_frame',json('{\"version\":999,\"mode\":\"future\"}')) WHERE revision=0 AND id='independent'",
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.version',99) WHERE revision=0 AND id='annotations'",
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.version','future-v3') WHERE revision=0 AND id='annotations'"
+    };
+    for (const auto& mutation : raw_future_markers)
+        verify_tampered_opaque_semantic_rejected(snapshot, 57, mutation);
+
+    auto with_undo = Document::fork(snapshot);
+    with_undo.apply(ApplyEntityChanges{with_undo.revision(),
+        {EntityChange::upsert(entity("history-note", "label", {{"text", "Undo floor fixture"}}))},
+        {}, "Add non-frame history"});
+    verify_tampered_opaque_semantic_rejected(with_undo.snapshot(), 57,
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.site_frame',json('{\"version\":999,\"origin_m\":[1,2,3],\"rotation_radians\":0,\"vertical_datum\":{\"identifier\":\"undo-datum\",\"height_at_origin_m\":0}}')) WHERE revision=0 AND id='site'");
+    with_undo.undo(with_undo.revision());
+    verify_tampered_opaque_semantic_rejected(with_undo.snapshot(), 57,
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.site_placement',json('{\"version\":999,\"translation_m\":[1,2,3],\"rotation_radians\":0}')) WHERE revision=1 AND id='building-a'");
+
+    auto deleted = Document::fork(snapshot);
+    deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase("annotations")}, {},
+        "Delete legacy annotation owner"});
+    verify_tampered_opaque_semantic_rejected(deleted.snapshot(), 57,
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.version',99) WHERE revision=0 AND id='annotations'");
+}
+
+void test_v57_and_exchange55_preserve_legacy_world_coordinates() {
+    TempDirectory temp;
+    auto owners = site_frame_v58_fixture(false);
+    auto& property = fixture_entity(owners, "site");
+    property.properties["appraisal_reporting"] = {{"version", 2}, {"contract", "uad_3_6"},
+        {"room_inventory_complete", true}, {"living_units", nlohmann::json::array({
+            {{"unit_id", "home"}, {"identifier", "Main dwelling"}, {"role", "primary"}}})}};
+    const auto document = Document::create(owners);
+    require(ProjectStore::required_format_version(document.snapshot()) == 57,
+        "legacy site/building hierarchy without placement markers remains native57");
+    const auto path = temp.path / "legacy-v57.bldproj";
+    (void)ProjectStore::save(path, document.snapshot());
+    sqlite3* database = nullptr;
+    require(sqlite3_open(path.string().c_str(), &database) == SQLITE_OK &&
+        metadata_value(database, "format_version") == "57" && sqlite_user_version(database) == 57,
+        "legacy file without frames is written using its original native57 format");
+    sqlite3_close(database);
+    const auto original_hash = ProjectStore::file_sha256(path);
+    const auto reopened = ProjectStore::load(path).document.snapshot();
+    require(reopened.entities() == document.snapshot().entities() &&
+        ProjectStore::required_format_version(reopened) == 57 &&
+        ProjectStore::file_sha256(path) == original_hash,
+        "native57 read preserves exact legacy content and source bytes without migration");
+    const auto wall = sketch::resolve_site_presentation(reopened, "wall-a");
+    const auto point = sketch::site_transform_point({1, 2, 3}, wall.forward);
+    require(wall.source_frame.mode == sketch::SiteFrameMode::world &&
+        point.x == 1 && point.y == 2 && point.z == 3,
+        "legacy descendant walls stay in their authored world frame without inferred placement");
+
+    const auto extracted = temp.path / "legacy-exchange55";
+    sketch::extract_project(reopened, extracted);
+    std::ifstream input(extracted / "project.json");
+    const auto manifest = nlohmann::json::parse(input);
+    require(manifest.at("exchange_version") == 55 &&
+        manifest.at("revisions").size() == reopened.history().size(),
+        "legacy native57 state remains extractable at exchange55");
+    for (const auto& revision : reopened.history()) {
+        for (const auto& [id, owner] : revision.entities) {
+            (void)id;
+            require(!owner.properties.contains("site_frame") && !owner.properties.contains("site_placement") &&
+                !owner.properties.contains("terrain_elevation_binding") &&
+                !owner.properties.contains("presentation_frame"),
+                "legacy extraction must not invent site or presentation markers");
+        }
+    }
+}
+
 void test_landing_railing_retained_history_reader_floor() {
     for (const auto role : {sketch::StairLandingRole::connecting, sketch::StairLandingRole::top}) {
         sketch::StairFlight stair{"semantic-stair", {2, 3, 4}, .37, 8, 1.6, .3, 1,
@@ -4183,6 +4493,10 @@ int main() {
         test_ansi_appraisal_reader_floor_retains_history(2);
         test_appraisal_reporting_reader_floor_retains_history();
         test_architectural_appraisal_v57_reader_floor_retains_history();
+        test_site_frame_v58_reader_floor_retains_history();
+        test_site_frame_v58_archive_preserves_recovery_and_local_geometry();
+        test_site_frame_future_markers_keep_conservative_native_floor();
+        test_v57_and_exchange55_preserve_legacy_world_coordinates();
         test_automatic_angle_redraw_reader_floor();
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();

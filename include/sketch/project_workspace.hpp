@@ -68,6 +68,8 @@ class ProjectWorkspaceSnapshot final {
 public:
     ProjectWorkspaceSnapshot(const ProjectWorkspaceSnapshot&) = default;
     ProjectWorkspaceSnapshot& operator=(const ProjectWorkspaceSnapshot&) = default;
+    ProjectWorkspaceSnapshot(ProjectWorkspaceSnapshot&&) noexcept = default;
+    ProjectWorkspaceSnapshot& operator=(ProjectWorkspaceSnapshot&&) noexcept = default;
 
     [[nodiscard]] const DocumentSnapshot& document() const noexcept { return document_; }
     [[nodiscard]] const WorkspaceDocumentHistory& document_history() const noexcept { return history_; }
@@ -102,6 +104,23 @@ private:
     std::vector<WorkspaceLifecycleEvent> lifecycle_history_;
     WorkspaceRetiredBoundaries retired_;
     nlohmann::json history_extensions_;
+};
+
+// Validated detached workspace ownership. Capture remains on its preparation
+// thread; the owner consumes the move-only token once through adopt_prepared.
+class PreparedProjectWorkspace final {
+public:
+    PreparedProjectWorkspace(PreparedProjectWorkspace&&) noexcept;
+    PreparedProjectWorkspace& operator=(PreparedProjectWorkspace&&) noexcept;
+    PreparedProjectWorkspace(const PreparedProjectWorkspace&) = delete;
+    PreparedProjectWorkspace& operator=(const PreparedProjectWorkspace&) = delete;
+    ~PreparedProjectWorkspace();
+    // Preparation-thread access only, before transfer to the owner.
+    [[nodiscard]] ProjectWorkspaceSnapshot capture() const;
+private:
+    friend class ProjectWorkspace;
+    explicit PreparedProjectWorkspace(std::unique_ptr<ProjectWorkspace>) noexcept;
+    std::unique_ptr<ProjectWorkspace> workspace_;
 };
 
 // A sealed, instance-bound candidate. Returned snapshots are detached values.
@@ -139,6 +158,13 @@ public:
     ProjectWorkspace& operator=(ProjectWorkspace&&) = delete;
     ~ProjectWorkspace();
 
+    // Validate and allocate entirely on the preparation thread. The token is
+    // the only transfer boundary; no live workspace can be rebound. After the
+    // owner has validated its original fence and full source proof, adoption
+    // consumes the token once and publishes without allocation or validation.
+    [[nodiscard]] static PreparedProjectWorkspace prepare_detached(const DocumentSnapshot&);
+    [[nodiscard]] static std::unique_ptr<ProjectWorkspace> adopt_prepared(PreparedProjectWorkspace&&) noexcept;
+
     // Revalidates the archive and supplied decoded aggregate before restoration.
     // Archives do not persist instance identity or resource policy: restoration
     // creates a fresh workspace identity and uses the default resource policy.
@@ -146,6 +172,8 @@ public:
         const ProjectArchiveSnapshot&, const DecodedRecoveryLedger&);
 
     [[nodiscard]] const std::string& identity() const noexcept;
+    [[nodiscard]] const std::string& document_id() const noexcept;
+    [[nodiscard]] Revision revision() const noexcept;
     [[nodiscard]] std::uint64_t epoch() const noexcept;
     // Independent monotonic content counters. Navigation advances them too;
     // imported document revisions are baseline state, not new workspace edits.

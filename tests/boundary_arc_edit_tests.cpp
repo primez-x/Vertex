@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/document.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -458,7 +459,7 @@ void frozen_legacy_tangent_history_remains_exact_and_replayable() {
     edit=decode_boundary_geometry_edit(wire);document.apply(EditBoundaryGeometry{source.revision(),edit});
     // Retain a historical old-kernel command/state, replacing only the new
     // scaffold's analytical payload with the frozen pre-change bytes.
-    auto historical=document.snapshot();auto& record=const_cast<std::vector<RevisionRecord>&>(historical.history()).back();
+    sketch::test::DetachedDocumentSnapshotFixture historical(document.snapshot());auto& record=historical.history().back();
     edit.replacement_segments=encode_identified_boundary_entity(model).properties.at("segments");record.boundary_geometry_edit=edit;
     auto old_owner=encode_identified_boundary_entity(model,&record.entities.at(owner.id));
     old_owner.extensions.at("boundary_geometry_derivation").at("operations").back().at("value")=encode_boundary_geometry_edit(edit);
@@ -552,7 +553,7 @@ void grouped_rigid_transform_is_atomic_and_replayable() {
         TransformBoundaries overlap{0,{{"deduction",{{},0,false,false,{2,0}}}},{},"Move deduction onto sibling"};
         rejected([&]{(void)Document::preview_command(overlap_document.snapshot(),overlap);},DocumentErrorCode::invalid_entity,
             "unchanged parent must validate all deductions collectively after a shared child moves");
-        auto forged=after;const_cast<std::vector<RevisionRecord>&>(forged.history()).back().action="Forged transform";
+        sketch::test::DetachedDocumentSnapshotFixture forged(after);forged.history().back().action="Forged transform";
         rejected([&]{(void)Document::fork(forged);},DocumentErrorCode::invalid_history,"retained group transform action must match its exact command proof");
         document.undo(document.revision());require(document.snapshot().entities()==before.entities() && ProjectStore::required_format_version(document.snapshot())==18,"group transform undo retains exact source and required redo floor");
         document.redo(document.revision());require(document.snapshot().entities()==after.entities(),"group transform redo restores same owner and deductions");

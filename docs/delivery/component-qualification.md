@@ -6,7 +6,40 @@ not licensing clearance or production acceptance. Existing authorization to
 include the supplied artwork remains recorded; this audit introduces no new
 permission gate or publication action.
 
-## Current evidence overlay (2026-10-06)
+## Selected Qt source and build overlay (2026-10-07)
+
+The current source selects the coherent Qt 6.11.2 Windows MSVC SDK through
+`third_party/qt-sdk.json`. Its eight CMake components and the independently
+verified SDK/source archive identities replace the earlier 6.8.3 selection.
+The actual payload's PE imports determine which modules are distributed;
+the CMake component list does not itself assert that every SDK module ships.
+The earlier installed candidate and inventory counts below remain historical
+and must not be described as this new selected runtime.
+
+The selected Release build and affected Site/editor checks pass. All 345 SVG
+assets pass the actual native palette, transparent-selection and output checks;
+bounded SVG admission also passes persisted artwork, optional-guide painting
+and explicit invalid-output refusal. These observations verify the exercised
+paths, not complete parser security or production acceptance.
+
+Current corresponding-source inputs are pinned for QtBase, QtSvg and the
+QtWebEngine source archive that supplies QtPdf/PDFium. The QtPdf snapshot at
+`third_party/notices/qt-pdf/6.11.2` contains 45 distinct original grant slices
+correlated to 77 current source members. The preserved older snapshot is
+historical evidence. Source notices and upstream build descriptions still
+require correlation with the exact final binary configuration and complete
+transitive input set. Open-source module routes and original alternative
+license expressions remain recorded separately; this overlay supplies no
+licensing clearance.
+
+The pre-integration source allowlist check covered 1,705 of 1,705 tracked inputs.
+Further source changes require an updated allowlist and a source-kit/candidate
+binding. Rebuild the runtime inventory, SBOM, corresponding-source kit and
+installed checks from the final committed payload before cutover. The selected
+source/build observations do not rebind or qualify the installed candidate.
+All distribution, offline and production qualification flags remain false.
+
+## Historical evidence overlay (2026-10-06)
 
 The current selected runtime inventory contains 127 binaries, 18 static inputs
 and 52 components. Its selected-source audit records 49 exact local sources, two
@@ -238,7 +271,49 @@ conclusions or redistribution clearance:
 |---|---|---|
 | Leptonica 1.87.0 | Two-clause BSD redistribution conditions and disclaimer are present. | `87829abb5bbb00b55a107365da89e9a33f86c4250169e5a1e5588505be7d5806` |
 | libarchive 3.8.8 | Default two-clause BSD terms plus identified UC Regents terms, public-domain code, triple-licensed files and varying build-script terms. Per-file terms are controlling. | `30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229` |
-| liblzma 5.8.3 | The XZ licensing summary identifies the liblzma library as 0BSD, distinguishes command-line/build-system terms, and points to separate full license texts. Those referenced texts still need staging/review. | `616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8` |
+| liblzma 5.8.3 | The XZ licensing summary identifies the liblzma library as 0BSD and distinguishes command-line/build-system terms. Its four referenced full license texts are exposed separately in the notice inputs; applicability and actual build binding remain unqualified. | `616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8` |
+
+The installed copyright files for all three ports are byte-identical to their
+members in the exact source archives already included in the composed dependency
+source kit. [Native notice provenance](../../third_party/notices/native/README.md)
+records their archive identities. This closes a standalone notice-exposure gap,
+not a missing-source-archive gap. The selected runtime notice inputs now include
+XZ's `COPYING.0BSD`, `COPYING.LGPLv2.1`, `COPYING.GPLv2`, and `COPYING.GPLv3`,
+without claiming that the command-line/build-system terms apply to liblzma.dll.
+
+Libarchive's two compress-filter source headers contain complete author and UC
+Regents terms absent from its generic installed summary. Those exact header
+bytes and the shared BLAKE2 header are separate notice inputs. The BLAKE2 header
+offers CC0, OpenSSL or Apache-2.0. Vertex selects Apache-2.0 for the four named
+BLAKE2 files, retaining their original grant and full Apache text. The
+[GNU GPLv3 guide](https://www.gnu.org/licenses/quick-guide-gplv3.en.html) and
+[Apache compatibility statement](https://www.apache.org/licenses/GPL-compatibility.html)
+support inclusion of Apache-2.0 code in this GPL-3.0-or-later project route.
+This does not replace the installed license-conclusion strings or establish
+broader distribution clearance.
+
+Preserved Release compile/link logs include both BLAKE2 reference sources,
+both compress filters and the public-domain date parser in the shared library.
+Its actual build, installed and package DLL copies have the same SHA-256:
+`1463391ebf117034a247f239ac618871f71b120088668ef72b59a828174795f9`.
+The named original sources match the pinned libarchive archive. `mtree.5` is
+a manpage removed by the exact recipe after installation, absent from the
+shared-library link and installed package; its source notice remains in the
+delivered archive. No additional applicable standalone notice was found in
+these specifically named per-file sources.
+
+The libcrypto.lib named by the same Release link is the installed native
+OpenSSL 3.6.4 import library, not static OpenSSL implementation code. Its
+import-object/descriptor contents, the DLL's actual normal and absent delayed
+imports, generated Windows digest config and pinned CNG cryptor selection
+jointly resolve this library's OpenSSL runtime applicability. No OpenSSL runtime
+owner is added for archive.dll on that link input. Separate OpenSSL-bearing
+components retain their independent version/source/notice records.
+Leptonica's complete installed notice needed no duplicate addition in this
+bounded review. The original archive retains individual build-script terms.
+All three original `LicenseRef-vcpkg-null` expressions and false qualification
+states are preserved. Root must regenerate the selected inventory and source kit
+to bind these additions to a later packaged candidate.
 
 The fixed GPL engine descriptor is a separate workspace asset. The worker's
 source closure now includes `assistance_ocr.cpp/.hpp` and
@@ -260,3 +335,39 @@ payload is selected, stage the complete exact source/notice inputs, resolve the
 three unknown conclusions and other embedded/alternative terms, and qualify
 the offline rebuild. Distribution, licensing and corresponding-source
 qualification remain false; this source batch does not accept D02 or D07.
+
+## Selected MSVC redistributable evidence (2026-10-06)
+
+The five selected release CRT DLLs are byte-identical to the installed Visual
+Studio Build Tools 2022 redistributable files. The installation reports version
+17.14.37 (build 17.14.37516.0); the selected directory is
+`VC/Redist/MSVC/14.44.35112/x64/Microsoft.VC143.CRT`. Each selected DLL reports
+file version 14.44.35211.0. This is a comparison with the actual selected files,
+not a claim that directory and file version labels must be identical.
+
+| Selected file | SHA-256 |
+|---|---|
+| msvcp140.dll | `0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9` |
+| msvcp140_1.dll | `bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d` |
+| msvcp140_2.dll | `3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9` |
+| vcruntime140.dll | `d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066` |
+| vcruntime140_1.dll | `1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f` |
+
+Microsoft's [Visual Studio 2022 redistributable list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution)
+includes unmodified files under the VC redistributable directory and its
+subdirectories, excluding debug redistributables. That directory-wide rule
+covers the five selected non-debug DLLs. The retained 187-byte `Redist.txt`
+is a pointer to that list; its SHA-256 is
+`da53b097e02b08e0fc69706102a60bc384fe756426ae4dc4a855e96f95cb2b9c`.
+The original 7,043,986-byte third-party notice is also retained, with SHA-256
+`782815bd1256f9ad798211eee4b0e574ddd113bd07700c6921ab25c591fbcda7`.
+The retained runtime license document is 39,644 bytes, with SHA-256
+`f1e3d56ceb2ad68aae0711b910375009e651ac5530fa0760f0dea6e81e54fae1`.
+
+The [app-local redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170)
+and [runtime license terms](https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/)
+remain the terms sources. Installation metadata alone does not establish the
+distributor's licensed-user eligibility or acceptance of applicable terms.
+That fact remains unresolved in D02-Q06, and `licensing_clearance` remains
+false. This bounded CRT evidence makes no compiler or Windows SDK handoff
+rights claim.

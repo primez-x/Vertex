@@ -52,6 +52,19 @@ SavePublicationTicket::SavePublicationTicket(SavePublicationTicket&&) noexcept =
 SavePublicationTicket& SavePublicationTicket::operator=(SavePublicationTicket&&) noexcept = default;
 SavePublicationTicket::~SavePublicationTicket() = default;
 
+SaveAcknowledgementDescriptor WorkspaceSaveCoordinator::describe(const ProjectWorkspaceSnapshot& snapshot) {
+    return {snapshot.identity(), snapshot.document().document_id(), snapshot.document().revision(),
+        snapshot.epoch(), snapshot.edited_generation(), snapshot.checkpoint_generation()};
+}
+SaveAcknowledgementDescriptor WorkspaceSaveCoordinator::describe(const ProjectWorkspace& workspace) {
+    return {workspace.identity(), workspace.document_id(), workspace.revision(), workspace.epoch(),
+        workspace.edited_generation(), workspace.checkpoint_generation()};
+}
+bool WorkspaceSaveCoordinator::publication_valid(const SavePublicationTicket& ticket, const SaveReceipt& receipt) {
+    return ticket.state_ && receipt.revision == ticket.state_->revision && valid_digest(receipt.file_sha256) &&
+        valid_backup_path(receipt.backup_path);
+}
+
 SavePublicationTicket WorkspaceSaveCoordinator::capture(
     const ProjectWorkspaceSnapshot& snapshot, const SavePublicationBinding& binding,
     std::string_view authoring_source_digest) {
@@ -68,6 +81,20 @@ SaveAcknowledgementResult WorkspaceSaveCoordinator::accept(
     SavePublicationTicket& ticket, const SaveReceipt& receipt,
     const ProjectWorkspaceSnapshot& current, const SavePublicationBinding& current_binding,
     std::string_view current_authoring_source_digest) {
+    try {
+        return accept(ticket, receipt, describe(current), current_binding, current_authoring_source_digest);
+    } catch (...) {
+        // Preserve the original API's consume-on-every-attempt contract even
+        // if allocating the cheap descriptor fails before the common gate.
+        ticket.state_.reset();
+        throw;
+    }
+}
+
+SaveAcknowledgementResult WorkspaceSaveCoordinator::accept(
+    SavePublicationTicket& ticket, const SaveReceipt& receipt,
+    const SaveAcknowledgementDescriptor& current, const SavePublicationBinding& current_binding,
+    std::string_view current_authoring_source_digest) {
     // Transfer before any validation (including allocations) so no failed
     // completion can be retried as a different storage result.
     const auto state = std::move(ticket.state_);
@@ -79,11 +106,11 @@ SaveAcknowledgementResult WorkspaceSaveCoordinator::accept(
         return {SaveAcknowledgementStatus::invalid_current_binding, true};
     if (state->binding != current_binding)
         return {SaveAcknowledgementStatus::binding_mismatch, true};
-    if (state->workspace_identity != current.identity() ||
-        state->document_id != current.document().document_id() ||
-        state->revision != current.document().revision() || state->epoch != current.epoch() ||
-        state->edited_generation != current.edited_generation() ||
-        state->checkpoint_generation != current.checkpoint_generation())
+    if (state->workspace_identity != current.workspace_identity ||
+        state->document_id != current.document_id ||
+        state->revision != current.revision || state->epoch != current.epoch ||
+        state->edited_generation != current.edited_generation ||
+        state->checkpoint_generation != current.checkpoint_generation)
         return {SaveAcknowledgementStatus::stale_workspace, true};
     if (!valid_digest(current_authoring_source_digest) || state->source_digest != current_authoring_source_digest)
         return {SaveAcknowledgementStatus::source_mismatch, true};

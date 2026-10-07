@@ -12,13 +12,15 @@ $depsRoot = Join-Path $projectRoot '.deps'
 $toolingRoot = Join-Path $depsRoot 'tooling'
 $qtRoot = Join-Path $depsRoot 'qt'
 $downloadRoot = Join-Path $depsRoot 'downloads'
-$venvRoot = Join-Path $toolingRoot 'qt-venv'
-$venvPython = Join-Path $venvRoot 'Scripts\python.exe'
 
-$qtVersion = '6.8.3'
-$qtArchitecture = 'win64_msvc2022_64'
-$aqtVersion = '3.3.0'
-$qtPrefix = Join-Path $qtRoot "$qtVersion\msvc2022_64"
+. (Join-Path $PSScriptRoot 'qt-selection.ps1')
+$qtSelection = Get-VertexQtSelection -ProjectRoot $projectRoot
+$qtVersion = $qtSelection.version
+$qtArchitecture = $qtSelection.architecture
+$aqtRequirement = "aqtinstall @ $($qtSelection.aqt_source_archive.url)#sha256=$($qtSelection.aqt_source_archive.sha256)"
+$qtPrefix = $qtSelection.prefix
+$venvRoot = Join-Path $toolingRoot "qt-$qtVersion-venv"
+$venvPython = Join-Path $venvRoot 'Scripts\python.exe'
 
 function Assert-File {
     param(
@@ -63,7 +65,15 @@ function Test-QtInstallation {
         throw "qtpaths prefix '$resolvedReportedPrefix' does not match '$resolvedQtPrefix'."
     }
 
-    $components = @('Core', 'Gui', 'Widgets', 'OpenGL', 'OpenGLWidgets', 'PrintSupport', 'Pdf', 'Svg')
+    foreach ($module in @('qtbase', 'qtsvg', 'qtpdf')) {
+        $sbom = Join-Path $qtPrefix "sbom/$module-$qtVersion.spdx.json"
+        Assert-File $sbom 'Original upstream Qt SPDX metadata'
+        $expectedHash = $qtSelection.sbom_sha256.$module
+        if ($expectedHash -notmatch '^[0-9a-f]{64}$' -or (Get-FileHash -LiteralPath $sbom -Algorithm SHA256).Hash -ne $expectedHash) {
+            throw "Qt $module SPDX metadata differs from the pinned upstream SDK build."
+        }
+    }
+    $components = @($qtSelection.components)
     $missing = [System.Collections.Generic.List[string]]::new()
     foreach ($component in $components) {
         $releaseDll = Join-Path $qtPrefix "bin\Qt6$component.dll"
@@ -114,7 +124,7 @@ if ($Offline) {
 
         Invoke-Checked $venvPython @(
             '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade',
-            "aqtinstall==$aqtVersion"
+            $aqtRequirement
         )
 
         $aqtInstallArguments = @(
@@ -123,10 +133,8 @@ if ($Offline) {
             '--outputdir', $qtRoot,
             '--archive-dest', $downloadRoot,
             '--keep',
-            '--timeout', '60',
-            '--archives', 'qtbase', 'qtsvg',
-            '--modules', 'qtpdf'
-        )
+            '--timeout', '60'
+        ) + @('--archives') + @($qtSelection.archives) + @('--modules') + @($qtSelection.modules)
         Push-Location $toolingRoot
         try {
             Invoke-Checked $venvPython $aqtInstallArguments

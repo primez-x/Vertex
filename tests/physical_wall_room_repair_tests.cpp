@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -171,11 +172,11 @@ void forged_inputs_and_retained_payloads_are_refused() {
     refuses([&]{(void)decode_boundary_geometry_edit(encoded);});
     require(document.snapshot().entities()==before.entities() && document.revision()==before.revision(),"repair refusal published partial state");
     (void)document.apply(command);const auto after=document.snapshot();
-    auto tampered=after;
-    auto& records=const_cast<std::vector<RevisionRecord>&>(tampered.history());
+    sketch::test::DetachedDocumentSnapshotFixture tampered(after);
+    auto& records=tampered.history();
     records.back().boundary_geometry_edit->physical_wall_room_repair->reviewed_source_lineage["forged"]=true;
     refuses([&]{(void)Document::fork(tampered);});
-    tampered=after;auto& holes=const_cast<std::vector<RevisionRecord>&>(tampered.history()).back().entities.at(id).extensions["physical_wall_room"]["holes"];
+    tampered=after;auto& holes=tampered.history().back().entities.at(id).extensions["physical_wall_room"]["holes"];
     holes.push_back(Json::array({{{"start",{1,1}},{"end",{1.2,1}},{"sweep_radians",0}},
         {{"start",{1.2,1}},{"end",{1.1,1.2}},{"sweep_radians",0}},{{"start",{1.1,1.2}},{"end",{1,1}},{"sweep_radians",0}}}));
     refuses([&]{(void)Document::fork(tampered);});

@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "sketch/document_digest.hpp"
@@ -25,7 +26,16 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
+#include <atomic>
+#include <functional>
+#include <thread>
+#include <string_view>
+
+namespace sketch::desktop::testing {
+void set_autosave_hook(std::function<void(std::string_view)>);
+}
 
 namespace {
 void require(bool condition, const char* message) {
@@ -188,6 +198,290 @@ template<class Predicate> void wait_until(Predicate predicate, const char* messa
         QThread::msleep(5);
     }
     require(predicate(), message);
+}
+
+void test_autosave_source_mismatch_retry() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "autosave source fixture directory");
+    const auto source_path = std::filesystem::path(temporary.filePath("source.bldproj").toStdWString());
+    desktop::MainWindow seed;
+    seed.findChild<QTimer*>("workspaceSavePoll")->stop();
+    ProjectWorkspace workspace(seed.document().snapshot());
+    const auto capture = workspace.capture();
+    const RecoveryLedger ledger{{"source-history", "workspace_history",
+        encode_workspace_history_record(capture.document(), capture_workspace_history_record(capture),
+            capture.active_boundary())}};
+    (void)ProjectStore::save_archive(source_path,
+        ProjectArchiveSnapshot(capture.document(), ledger, ArchiveRole::ordinary));
+    const auto original_file_hash = ProjectStore::file_sha256(source_path);
+    auto window_owner = std::make_unique<desktop::MainWindow>();
+    auto& window = *window_owner;
+    window.findChild<QTimer*>("workspaceSavePoll")->stop();
+    window.document().mark_saved(window.document().revision());
+    require(window.openProject(qt_path(source_path)), "open recovered source authority fixture");
+    require(!window.createStraightWall({0, 0}, {4, 0}).isEmpty(), "edit recovered workspace before capture");
+    auto* poll = window.findChild<QTimer*>("workspaceSavePoll");
+    require(poll != nullptr, "autosave owner-thread poll exists");
+    poll->stop();
+    const auto valid_source = window.document().snapshot();
+    const auto valid_digest = document_snapshot_digest(valid_source);
+    require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "observe source fixture edit");
+    const auto recovery_path = std::filesystem::path(window.recoveryCopyPath().toStdWString());
+    require(!recovery_path.empty() && !std::filesystem::exists(recovery_path), "quiet interval has no publication");
+    const auto replaced = test::DetachedDocumentSnapshotFixture::mutate(valid_source, [](auto& fixture) {
+        fixture.entities().at("property-1").extensions["out_of_band_autosave"] = true;
+    });
+    window.document() = Document::fork(replaced);
+    const auto replaced_digest = document_snapshot_digest(window.document().snapshot());
+    require(replaced.document_id() == valid_source.document_id() && replaced.revision() == valid_source.revision() &&
+        replaced_digest != valid_digest, "replacement changes source at the same ID and revision");
+    require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "idle tick after replacement");
+    require(window.lastError().isEmpty() && !std::filesystem::exists(recovery_path),
+        "idle scheduling does not publish or perform recovered-source validation");
+    QThread::msleep(2100);
+    require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "drive due mismatched capture");
+    wait_until([&] {
+        require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "drain mismatched preparation");
+        return window.lastError().contains("Recovery publication is blocked");
+    }, "worker reports recovered source refusal");
+    require(window.lastError().contains("Recovery publication is blocked") &&
+        !std::filesystem::exists(recovery_path) &&
+        document_snapshot_digest(window.document().snapshot()) == replaced_digest,
+        "due mismatched source refuses publication without editing retained history");
+    window.document() = Document::fork(valid_source);
+    QThread::msleep(2100);
+    require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "retry corrected due source");
+    wait_until([&] { return std::filesystem::exists(recovery_path); },
+        "failed capture releases its scheduler slot and permits valid retry");
+    require(document_snapshot_digest(valid_source) == valid_digest &&
+        document_snapshot_digest(window.document().snapshot()) == valid_digest,
+        "mismatch and retry preserve retained capture and live source");
+    // Rename can precede release of the worker's publication handle. Joining
+    // the save queue closes that handle before the archive reader opens it.
+    window_owner.reset();
+    const auto loaded = ProjectStore::load_archive(recovery_path, ArchiveRole::recovery_copy);
+    require(loaded.supported() && loaded.recovery.decoded->recovery_copy &&
+        loaded.recovery.decoded->recovery_copy->autosaved_checkpoint_generation > 0 &&
+        document_authoring_source_digest_v1(loaded.archive->document()) ==
+            document_authoring_source_digest_v1(valid_source),
+        "retry archive contains the exact valid authoring source and checkpoint");
+    require(ProjectStore::file_sha256(source_path) == original_file_hash,
+        "mismatch and retry preserve the original project file");
+}
+
+struct AutosaveHookScope {
+    ~AutosaveHookScope() { sketch::desktop::testing::set_autosave_hook({}); }
+};
+struct AutosaveWindowScope {
+    std::unique_ptr<sketch::desktop::MainWindow>& window;
+    std::atomic<bool>* release{};
+    ~AutosaveWindowScope() { if (release) *release = true; window.reset(); }
+};
+
+void drive_due_autosave(sketch::desktop::MainWindow& window) {
+    auto* poll = window.findChild<QTimer*>("workspaceSavePoll");
+    require(poll != nullptr, "owner autosave poll exists");
+    poll->stop();
+    require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "observe autosave edit");
+    QThread::msleep(2100);
+    require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "dispatch due autosave");
+}
+
+void test_deferred_autosave_owner_dispatch_and_explicit_save() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "deferred autosave directory");
+    auto window_owner = std::make_unique<desktop::MainWindow>();
+    auto& window = *window_owner;
+    window.findChild<QTimer*>("workspaceSavePoll")->stop();
+    const auto path = std::filesystem::path(temporary.filePath("source.bldproj").toStdWString());
+    require(window.saveProjectAs(qt_path(path)), "save baseline for deferred autosave");
+    require(!window.createStraightWall({0, 0}, {4, 0}).isEmpty(), "first legacy edit");
+    const auto captured = window.document().snapshot();
+    const auto captured_digest = document_authoring_source_digest_v1(captured);
+    std::atomic<bool> entered = false, release = false;
+    AutosaveHookScope hook_scope;
+    desktop::testing::set_autosave_hook([&](std::string_view stage) {
+        if (stage != "preparation") return;
+        entered = true;
+        while (!release) std::this_thread::yield();
+    });
+    // Always release before window destruction, including an assertion failure.
+    struct Release { std::atomic<bool>& value; ~Release() { value = true; } } release_scope{release};
+    AutosaveWindowScope join_scope{window_owner, &release};
+    drive_due_autosave(window);
+    wait_until([&] { return entered.load(); }, "preparation worker enters test pause");
+    bool timer_dispatched = false;
+    QTimer::singleShot(0, &window, [&] { timer_dispatched = true; });
+    QApplication::processEvents();
+    require(timer_dispatched && !window.createStraightWall({0, 2}, {5, 2}).isEmpty(),
+        "owner timer and real edit dispatch continue while preparation is paused");
+    const auto newer = window.document().snapshot();
+    require(document_authoring_source_digest_v1(newer) != captured_digest && window.document().dirty(),
+        "edit during preparation advances current authoring source");
+    release = true;
+    // This must finalize the old publication/proof before capturing/rebasing
+    // explicit Save. It also exercises CAS retention and recovery cleanup.
+    require(window.saveProject(), "explicit Save settles deferred stale preparation before capture");
+    const auto loaded = ProjectStore::load(path);
+    require(document_authoring_source_digest_v1(loaded.document.snapshot()) ==
+        document_authoring_source_digest_v1(newer) && !window.document().dirty(),
+        "explicit Save publishes the newer source after stale autosave without losing edits");
+    require(document_authoring_source_digest_v1(captured) == captured_digest,
+        "preparation leaves its full captured source immutable");
+}
+
+void test_deferred_autosave_destructor_covers_detached_proof() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "destructor proof directory");
+    auto window = std::make_unique<desktop::MainWindow>();
+    window->findChild<QTimer*>("workspaceSavePoll")->stop();
+    const auto path = std::filesystem::path(temporary.filePath("source.bldproj").toStdWString());
+    require(window->saveProjectAs(qt_path(path)), "save destructor proof baseline");
+    require(!window->createStraightWall({0, 0}, {4, 0}).isEmpty(), "edit destructor proof fixture");
+    const auto source = window->document().snapshot();
+    std::atomic<bool> entered = false, release = false, proof_entered = false;
+    AutosaveHookScope hook_scope;
+    desktop::testing::set_autosave_hook([&](std::string_view stage) {
+        if (stage == "preparation") {
+            entered = true;
+            while (!release) std::this_thread::yield();
+        } else if (stage == "proof") proof_entered = true;
+    });
+    struct Release { std::atomic<bool>& value; ~Release() { value = true; } } release_scope{release};
+    AutosaveWindowScope join_scope{window, &release};
+    drive_due_autosave(*window);
+    wait_until([&] { return entered.load(); }, "destructor preparation is paused");
+    const auto recovery_path = std::filesystem::path(window->recoveryCopyPath().toStdWString());
+    const auto detached = test::DetachedDocumentSnapshotFixture::mutate(source, [](auto&) {});
+    require(!detached.shares_authoring_source_with(source), "proof fixture owns detached equal history");
+    window->document() = Document::fork(detached);
+    release = true;
+    window.reset();
+    require(proof_entered && std::filesystem::exists(recovery_path),
+        "destructor settles late detached proof while enqueue is open");
+    const auto loaded = ProjectStore::load_archive(recovery_path, ArchiveRole::recovery_copy);
+    require(loaded.supported() && document_authoring_source_digest_v1(loaded.archive->document()) ==
+        document_authoring_source_digest_v1(source), "destructor preserves complete recovery publication");
+}
+
+void test_deferred_owner_failures_settle_and_retry() {
+    using namespace sketch;
+    for (const auto fault : {"preparation", "storage", "descriptor", "acknowledgement", "proof-enqueue", "proof"}) {
+        QTemporaryDir temporary;
+        require(temporary.isValid(), "owner failure directory");
+        auto window = std::make_unique<desktop::MainWindow>();
+        window->findChild<QTimer*>("workspaceSavePoll")->stop();
+        const auto path = std::filesystem::path(temporary.filePath("source.bldproj").toStdWString());
+        require(window->saveProjectAs(qt_path(path)), "save owner failure baseline");
+        const auto original_file_hash = ProjectStore::file_sha256(path);
+        const auto saved = window->document().saved_revision_optional();
+        require(!window->createStraightWall({0, 0}, {4, 0}).isEmpty(), "edit owner failure fixture");
+        const auto first = window->document().snapshot();
+        std::atomic<int> faults = 0, acknowledgements = 0;
+        AutosaveHookScope hook_scope;
+        desktop::testing::set_autosave_hook([&](std::string_view stage) {
+            if (stage == "acknowledgement") ++acknowledgements;
+            if (stage == fault && faults.fetch_add(1) == 0)
+                throw std::runtime_error("injected owner finalization failure");
+        });
+        AutosaveWindowScope join_scope{window};
+        drive_due_autosave(*window);
+        if (std::string_view(fault) == "proof-enqueue" || std::string_view(fault) == "proof") {
+            const auto detached = test::DetachedDocumentSnapshotFixture::mutate(first, [](auto&) {});
+            window->document() = Document::fork(detached);
+        }
+        auto* poll = window->findChild<QTimer*>("workspaceSavePoll");
+        wait_until([&] {
+            require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "drain owner failure");
+            return window->lastError().contains("injected owner finalization failure");
+        }, "owner finalization failure becomes terminal scheduler failure");
+        const auto recovery_path = std::filesystem::path(window->recoveryCopyPath().toStdWString());
+        const bool published = std::string_view(fault) != "preparation" && std::string_view(fault) != "storage";
+        require(std::filesystem::exists(recovery_path) == published && window->document().dirty() &&
+            window->document().saved_revision_optional() == saved,
+            "owner failure preserves successful stale file and dirty source markers");
+        const auto old_hash = published ? ProjectStore::file_sha256(recovery_path) : std::string{};
+        require(!window->createStraightWall({0, 2}, {5, 2}).isEmpty(), "new edit after terminal failure");
+        const auto retry_source = window->document().snapshot();
+        const int prior_acknowledgements = acknowledgements;
+        drive_due_autosave(*window);
+        wait_until([&] {
+            require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "drain owner retry");
+            return acknowledgements > prior_acknowledgements;
+        }, "terminal owner failure releases scheduler and permits guarded retry");
+        require(window->document().dirty() && window->document().saved_revision_optional() == saved,
+            "successful recovery retry does not mark explicit source saved");
+        window.reset();
+        const auto loaded = ProjectStore::load_archive(recovery_path, ArchiveRole::recovery_copy);
+        require(loaded.supported() && loaded.file_sha256 != old_hash &&
+            document_authoring_source_digest_v1(loaded.archive->document()) ==
+                document_authoring_source_digest_v1(retry_source),
+            "guarded retry retains file fact and publishes exact newer authoring source");
+        require(ProjectStore::file_sha256(path) == original_file_hash,
+            "preparation/finalization failures and retries preserve the original project file");
+    }
+}
+
+void test_deferred_same_id_reopen_settles_old_session() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "same ID reopen directory");
+    auto window = std::make_unique<desktop::MainWindow>();
+    window->findChild<QTimer*>("workspaceSavePoll")->stop();
+    const auto path = std::filesystem::path(temporary.filePath("source.bldproj").toStdWString());
+    require(window->saveProjectAs(qt_path(path)), "save same ID reopen baseline");
+    const auto original = window->document().snapshot();
+    require(!window->createStraightWall({0, 0}, {4, 0}).isEmpty(), "edit before same ID reopen");
+    const auto captured = window->document().snapshot();
+    std::atomic<bool> entered = false, release = false;
+    std::atomic<int> proofs = 0, acknowledgements = 0;
+    AutosaveHookScope hook_scope;
+    desktop::testing::set_autosave_hook([&](std::string_view stage) {
+        if (stage == "preparation") {
+            entered = true;
+            while (!release) std::this_thread::yield();
+        } else if (stage == "proof") ++proofs;
+        else if (stage == "acknowledgement") ++acknowledgements;
+    });
+    AutosaveWindowScope join_scope{window, &release};
+    drive_due_autosave(*window);
+    wait_until([&] { return entered.load(); }, "same ID old-session preparation is paused");
+    const auto old_path = std::filesystem::path(window->recoveryCopyPath().toStdWString());
+    window->document() = Document::fork(test::DetachedDocumentSnapshotFixture::mutate(captured, [](auto&) {}));
+    release = true;
+    QTimer discard;
+    QObject::connect(&discard, &QTimer::timeout, window.get(), [] {
+        if (auto* prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+            if (auto* button = prompt->button(QMessageBox::Discard)) button->click();
+    });
+    discard.start(1);
+    require(window->openProject(qt_path(path)), "reopen same ID after old-session proof finalization");
+    discard.stop();
+    require(proofs == 1 && window->document().document_id() == original.document_id() &&
+        document_authoring_source_digest_v1(window->document().snapshot()) ==
+            document_authoring_source_digest_v1(original),
+        "same ID reopen preserves file authority after exactly one old-session proof");
+    require(!window->createStraightWall({0, 4}, {5, 4}).isEmpty(), "edit reopened session");
+    const auto reopened = window->document().snapshot();
+    const int previous_acknowledgements = acknowledgements;
+    drive_due_autosave(*window);
+    auto* poll = window->findChild<QTimer*>("workspaceSavePoll");
+    wait_until([&] {
+        require(QMetaObject::invokeMethod(poll, "timeout", Qt::DirectConnection), "drain reopened session");
+        return acknowledgements > previous_acknowledgements;
+    }, "reopened same ID session can publish its own checkpoint");
+    const auto new_path = std::filesystem::path(window->recoveryCopyPath().toStdWString());
+    require(new_path != old_path && window->document().dirty(), "reopen resets recovery session and saved markers");
+    window.reset();
+    const auto old_copy = ProjectStore::load_archive(old_path, ArchiveRole::recovery_copy);
+    const auto new_copy = ProjectStore::load_archive(new_path, ArchiveRole::recovery_copy);
+    require(old_copy.supported() && new_copy.supported() &&
+        document_authoring_source_digest_v1(old_copy.archive->document()) == document_authoring_source_digest_v1(captured) &&
+        document_authoring_source_digest_v1(new_copy.archive->document()) == document_authoring_source_digest_v1(reopened),
+        "old and reopened recovery copies remain bound to their exact independent session sources");
 }
 
 void test_startup_recovery_selection() {
@@ -732,6 +1026,11 @@ void run() {
         require(constrained.redoCommand() && constrained.saveProject(),
             "workspace boundary redo preserves saveable recovery ledger");
     }
+    test_autosave_source_mismatch_retry();
+    test_deferred_autosave_owner_dispatch_and_explicit_save();
+    test_deferred_autosave_destructor_covers_detached_proof();
+    test_deferred_owner_failures_settle_and_retry();
+    test_deferred_same_id_reopen_settles_old_session();
     test_startup_recovery_selection();
     test_live_boundary_recovery();
     test_discard_navigation();
@@ -750,6 +1049,13 @@ int main(int argc, char** argv) {
             test_discard_navigation();
         else if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--redefine-recovery"))
             { test_redefine_recovery(); test_invalid_redefine_recovery(); }
+        else if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--autosave-source"))
+            test_autosave_source_mismatch_retry();
+        else if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--autosave-fifo"))
+            { test_deferred_autosave_owner_dispatch_and_explicit_save();
+              test_deferred_autosave_destructor_covers_detached_proof();
+              test_deferred_owner_failures_settle_and_retry();
+              test_deferred_same_id_reopen_settles_old_session(); }
         else run();
     }
     catch (const std::exception& error) {

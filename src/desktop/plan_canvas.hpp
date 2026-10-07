@@ -13,6 +13,7 @@
 #include <QImage>
 #include <QMouseEvent>
 #include <QPicture>
+#include <QPainterPath>
 #include <QRectF>
 #include <QSharedPointer>
 #include <QString>
@@ -430,6 +431,8 @@ public:
     // Transient drawing labels use exact inch fractions when representable.
     // Arbitrary exact object snaps retain decimal precision instead of rounding.
     [[nodiscard]] static QString drawingLengthText(double metres, bool metric);
+    // Public scene renderers use committed content, excluding selection,
+    // cursor feedback and transient edits even at the current viewport scale.
     void renderScene(QPainter& painter, const QRectF& viewport) const;
     void renderScene(QPainter& painter, const QRectF& viewport, bool fit_to_content,
                      QColor background) const;
@@ -491,13 +494,16 @@ public:
     [[nodiscard]] std::vector<CanvasEntity> entitiesMovePreview() const { return m_move_entities_preview; }
     bool markEntitiesMovePreviewPending(std::uint64_t serial);
     bool completeEntitiesMovePreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
     // Commits a single-selection transform after the interactive preview.
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
     void setEntityTransformStarted(std::function<void(QString)> callback);
     // Capture authority at an opening-width or boundary-vertex press.
     void setEntityEditGestureStarted(std::function<void(QString)> callback);
+    // Admit semantic input against the exact displayed source before any hit
+    // or handle work. Context cancellation remains a shell-owned decision.
+    void setInteractionAdmissionRequested(std::function<bool(bool context)> callback);
     // nullopt retains the ordinary transform preview; an engaged empty
     // proposal rejects it. Pending exact projections never invent geometry.
     void setEntityTransformPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
@@ -507,7 +513,7 @@ public:
     [[nodiscard]] std::vector<CanvasEntity> entityTransformPreview() const { return m_transform_entities_preview; }
     bool markEntityTransformPreviewPending(std::uint64_t serial);
     bool completeEntityTransformPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
     // Local-axis scales around the model-space midpoint of the opposite edge.
     // Capability gating belongs to the document; rejected previews restore.
     void setEntityAxisResizeRequested(
@@ -625,6 +631,7 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
+    [[nodiscard]] bool admitInteraction(bool context = false);
     void notifyNavigationChanged(Vec2 previous_center, double previous_scale);
     using PerformanceClock = std::chrono::steady_clock;
     std::function<void(PerformanceMetric, PerformanceClock::duration)> m_performance_measured;
@@ -651,10 +658,17 @@ private:
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds(bool include_drafts = false) const;
     [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> selectionFrame(const QRectF& viewport) const;
+    [[nodiscard]] std::optional<QRectF> computeSelectionBounds(const QRectF& viewport) const;
+    [[nodiscard]] std::optional<QRectF> computeSelectionFrame(const QRectF& viewport) const;
+    [[nodiscard]] QByteArray retainedSelectionKey(const QRectF& viewport, bool model_axes = false) const;
+    [[nodiscard]] bool hasInteractivePresentation() const;
+    void invalidateRetainedPresentation();
+    void ensureRetainedSelection() const;
     enum class SelectionHandle { none, resize, rotate, left, right, top, bottom };
     [[nodiscard]] std::optional<CanvasSelectionFrame> entitySelectionAxes(
         const CanvasEntity& entity) const;
     [[nodiscard]] std::optional<CanvasSelectionFrame> selectionAxes() const;
+    [[nodiscard]] std::optional<CanvasSelectionFrame> computeSelectionAxes() const;
     [[nodiscard]] CanvasLabel presentedLabel(const CanvasLabel& label, bool output) const;
     [[nodiscard]] const std::vector<CanvasLabel>& positionedLabels(
         const QFont& base_font, const QPaintDevice* device, double scale,
@@ -695,11 +709,12 @@ private:
     [[nodiscard]] std::optional<OpeningWidthHandleHit> openingWidthHandleAt(
         QPointF point, const QRectF& viewport) const;
     [[nodiscard]] const CanvasEntity& interactiveEntity(const CanvasEntity& entity) const;
+    [[nodiscard]] const CanvasReference& interactiveReference(const CanvasReference& reference) const;
     bool applyEntitiesMovePreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
     void updateEntityTransformPreview();
     bool applyEntityTransformPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
     void finishEntityTransformPreview(std::uint64_t serial);
     void finishBoundaryVertexPreview(std::uint64_t serial);
     void updateOpeningWidthPreview(QPointF point);
@@ -720,7 +735,7 @@ private:
     [[nodiscard]] bool matchesSelectionType(const QString& type) const;
     [[nodiscard]] bool selectionInteractionEnabled() const;
     [[nodiscard]] QString contextTarget(QPointF point) const;
-    [[nodiscard]] QStringList selectedIds() const;
+    [[nodiscard]] const QStringList& selectedIds() const;
     [[nodiscard]] Vec2 dragDelta(QPointF position) const;
     [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle, bool crossing) const;
     [[nodiscard]] std::optional<Vec2> closingAnchor(QPointF point) const;
@@ -738,9 +753,22 @@ private:
                            QColor background) const;
     void drawDrawingWitnesses(QPainter& painter, const QRectF& viewport, double scale,
                               Vec2 view_center, QColor background) const;
+    struct EntityGeometry {
+        QPainterPath stroke;
+        std::optional<QPainterPath> fill;
+        // Conservative model-space control-point bounds, independent of view
+        // and selection. Missing/unsafe bounds keep the original draw path.
+        std::optional<QRectF> bounds;
+    };
+    void ensurePublishedEntityGeometry() const;
+    void ensurePublishedGeometryIndex() const;
+    [[nodiscard]] std::optional<std::vector<std::size_t>> visiblePublishedEntityIndices(
+        const QTransform& model_to_device, const QTransform& canvas_to_device,
+        const QRectF& device_viewport) const;
     void drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
                     QColor background,
-                    std::optional<double> paper_pixels_per_mm) const;
+                    std::optional<double> paper_pixels_per_mm,
+                    const EntityGeometry* geometry = nullptr) const;
     void drawSegment(QPainter& painter, const Segment& segment) const;
     void drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                     Vec2 view_center, bool output, QColor background,
@@ -758,6 +786,48 @@ private:
                                   SceneLayer layer = SceneLayer::committed) const;
 
     std::vector<CanvasEntity> m_entities;
+    // These indices and IDs belong to owned retained inputs, not document IDs
+    // or revisions. Every replacement and selected-flag update invalidates them.
+    mutable bool m_retained_selection_ready{};
+    mutable QStringList m_retained_selected_ids;
+    mutable std::vector<std::size_t> m_selected_entity_indices;
+    mutable bool m_has_selected_label{};
+    mutable bool m_has_selected_reference{};
+    struct SelectionRectCache {
+        QByteArray key;
+        std::optional<QRectF> bounds;
+    };
+    mutable SelectionRectCache m_selection_bounds_cache;
+    mutable SelectionRectCache m_selection_frame_cache;
+    mutable QByteArray m_selection_axes_key;
+    mutable std::optional<CanvasSelectionFrame> m_selection_axes_cache;
+    // Model-space paths belong only to the current published vector. Selection
+    // flags may change in place; every setEntities replacement clears the cache.
+    // Preview projections and committed print/export never consume these paths.
+    mutable std::vector<EntityGeometry> m_published_entity_geometry;
+    struct GeometryIndexEntry {
+        QRectF bounds; // Includes the model-space round pen envelope.
+        std::size_t entity_index{};
+        double cosmetic_pixels{};
+        double symbol_metres{};
+        double paper_mm{};
+    };
+    struct GeometryIndexNode {
+        QRectF bounds;
+        double cosmetic_pixels{};
+        double symbol_metres{};
+        double paper_mm{};
+        std::size_t first{};
+        std::size_t count{}; // Nonzero only for leaves.
+        std::size_t left{};
+        std::size_t right{};
+    };
+    // Owned input replacement, never IDs/count/revision, defines index identity.
+    // Selection changes do not alter bounds; selected entries bypass the query.
+    mutable bool m_published_geometry_index_ready{};
+    mutable std::vector<GeometryIndexEntry> m_published_geometry_index_entries;
+    mutable std::vector<GeometryIndexNode> m_published_geometry_index_nodes;
+    mutable std::vector<std::size_t> m_published_geometry_index_fallback;
     std::vector<CanvasLabel> m_labels;
     std::vector<CanvasEntity> m_floor_ghost_entities;
     std::vector<CanvasLabel> m_floor_ghost_labels;
@@ -765,6 +835,9 @@ private:
     Vec2 m_floor_ghost_offset{};
     struct LabelPlacementCache {
         QByteArray key;
+        // A small device/layout key can reuse owned unchanged source labels.
+        // Active previews continue using the complete content signature below.
+        QByteArray retained_key;
         std::vector<CanvasLabel> labels;
     };
     // Keep interactive picking warm while a separate output device is used.
@@ -775,6 +848,8 @@ private:
     mutable QFont m_sketch_guide_font;
     mutable std::optional<CanvasSketchContentRecording> m_sketch_guide_recording;
     std::vector<CanvasReference> m_references;
+    std::vector<CanvasReference> m_move_references_preview;
+    std::vector<CanvasReference> m_transform_references_preview;
     std::vector<CanvasReferenceGrid> m_reference_grids;
     mutable QHash<QString, QSharedPointer<QSvgRenderer>> m_svg_renderers;
     QString m_selection_caption;
@@ -900,6 +975,7 @@ private:
     std::function<bool(QString, double, double)> m_entity_transform_requested;
     std::function<void(QString)> m_entity_transform_started;
     std::function<void(QString)> m_entity_edit_gesture_started;
+    std::function<bool(bool)> m_interaction_admission_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, double, Vec2, std::uint64_t)> m_entity_transform_preview_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;

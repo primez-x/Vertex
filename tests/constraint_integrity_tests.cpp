@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/document.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -323,8 +324,8 @@ void test_save_reopen_preserves_enforcement_and_history() {
 
     // Fault-inject a caller-owned, non-const snapshot to exercise the save and
     // restore trust boundary. Production code never edits snapshot internals.
-    auto invalid_history = document.snapshot();
-    auto& invalid_records = const_cast<std::vector<RevisionRecord>&>(invalid_history.history());
+    sketch::test::DetachedDocumentSnapshotFixture invalid_history(document.snapshot());
+    auto& invalid_records = invalid_history.history();
     invalid_records.front().entities.at("wall-a").properties["baseline"]["end"] = {4.0, 1.0};
     bool rejected = false;
     try { (void)ProjectStore::save(directory / "invalid-history.bldproj", invalid_history); }
@@ -336,8 +337,8 @@ void test_save_reopen_preserves_enforcement_and_history() {
     // An unsupported historical lock must not disable transition validation
     // for the known locks alongside it. Both endpoint orders satisfy the
     // horizontal residual, but the stable endpoint roles must be remapped.
-    auto mixed_history = document.snapshot();
-    auto& mixed_records = const_cast<std::vector<RevisionRecord>&>(mixed_history.history());
+    sketch::test::DetachedDocumentSnapshotFixture mixed_history(document.snapshot());
+    auto& mixed_records = mixed_history.history();
     auto future_lock = horizontal();
     future_lock.id = "future-lock";
     future_lock.properties["version"] = 99;
@@ -364,8 +365,8 @@ void test_save_reopen_preserves_enforcement_and_history() {
 
     document.apply(ApplyEntityChanges{document.revision(),
         {EntityChange::erase("horizontal-a")}, {}, "remove lock"});
-    auto future_history = document.snapshot();
-    auto& future_records = const_cast<std::vector<RevisionRecord>&>(future_history.history());
+    sketch::test::DetachedDocumentSnapshotFixture future_history(document.snapshot());
+    auto& future_records = future_history.history();
     for (auto& record : future_records) {
         const auto found = record.entities.find("horizontal-a");
         if (found != record.entities.end()) found->second.properties["version"] = 99;

@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stage_ifc_sdk_sources as safe
 import native_source_inputs as native
+import qt_source_inputs as qt_inputs
 
 MAX_FILE = 1024 * 1024 * 1024
 MAX_FILES = 4096
@@ -683,9 +684,16 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
         elif kind == "qt":
             _, sbom = json_input(root, source["spdx_path"], source["spdx_sha256"])
             item["provenance"] = {"sbom": sbom, "declared_revision_locator": source.get("url")}
-            if component["id"] in QT_SOURCES and component["package"]["version"] == "6.8.3":
-                module, checksum = QT_SOURCES[component["id"]]
-                url = QT_BASE + f"{module}-everywhere-src-6.8.3.tar.xz"
+            if component["id"] in QT_SOURCES:
+                version = component["package"]["version"]
+                if version == "6.8.3":
+                    # Frozen historical receipt/archive binding remains unchanged.
+                    module, checksum = QT_SOURCES[component["id"]]
+                    url = QT_BASE + f"{module}-everywhere-src-{version}.tar.xz"
+                else:
+                    module = "qtwebengine" if component["id"] == "qtpdf" else component["id"]
+                    pin = qt_inputs.selected_archives(root, version)[module]
+                    url, checksum = pin["url"], pin["sha256"]
                 item["sources"] = [cached_source(cache, url, checksum, "sha256", provenance_url=url + ".mirrorlist",
                                                  binding_role="official release source; exact prebuilt revision/options still require review")]
             item["remaining"].append("exact_prebuilt_source_and_embedded_third_party_binding_pending")

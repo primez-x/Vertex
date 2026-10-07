@@ -20,14 +20,19 @@ and its explicitly staged `proj.db` and `proj.ini` resources. The output uses
 repository-relative POSIX paths and records SHA-256 hashes, package/version, source location,
 provenance evidence, and notice hashes.
 
-The pinned Qt 6.8.3 SBOM currently carries stale SHA-1 values for the shipped
-Qt binaries. The Qt component entries record each exception explicitly under
-`source.hash_overrides`: the replacement digest, the pinned archive and its
-SHA-256, the archive member, the repository-local 7-Zip tool, and a reason.
-Inventory generation hashes the archive itself, extracts the named member
-offline, and requires the member, installed binary, and replacement digest to
-agree. An override cannot name an unknown SBOM file, omit its provenance, or
-bypass verification of any other checksum supplied by the SBOM.
+The current Qt selection is Qt 6.11.2 (`win64_msvc2022_64`), pinned in
+`third_party/qt-sdk.json`. Native QtPdf and QtSvg runtime qualification remains
+pending, and their separate license and source review is still required.
+
+Historical Qt 6.8.3 inventory records noted stale SHA-1 values in that SDK's
+SBOM. Those recorded `source.hash_overrides` entries bind each replacement
+digest to its pinned archive and SHA-256, archive member, repository-local
+7-Zip tool, and reason. Inventory generation hashed the archive, extracted the
+named member offline, and required the member, installed binary, and
+replacement digest to agree. An override could not name an unknown SBOM file,
+omit provenance, or bypass verification of any other checksum supplied by the
+SBOM. This is historical evidence for the prior Qt 6.8.3 selection; it does not
+establish the current Qt 6.11.2 runtime's checksum or qualification status.
 
 The generator exits nonzero without writing an inventory when ownership is
 unknown, evidence is missing or malformed, a recorded hash is stale, a source

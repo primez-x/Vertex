@@ -1,4 +1,5 @@
 #include "sketch/visualization/native_model_view.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/visualization/native_geometry_preparation.hpp"
 #include "framebuffer_image.hpp"
 
@@ -178,6 +179,9 @@ public:
     NativeModelView* owner{};
     QLabel* status_label{};
     std::optional<DocumentSnapshot> snapshot;
+    std::shared_ptr<const DocumentSnapshot> published_snapshot;
+    std::shared_ptr<const DocumentSnapshot> gesture_snapshot;
+    std::shared_ptr<const DocumentSnapshot> commit_snapshot;
     std::optional<NativeModelView::VisibleEntityIds> visible_ids;
     NativeGeometryRegenerator regenerator;
     QTimer* preparation_timer{};
@@ -187,6 +191,7 @@ public:
     QString native_error;
     QString geometry_status;
     QString operation_error;
+    QString input_error;
     QString export_error;
     bool native_attempted{};
     bool native_ready{};
@@ -324,15 +329,17 @@ public:
     void show_status(const QString& text, bool report_error = true) {
         geometry_status = text;
         operation_error.clear();
+        input_error.clear();
         export_error.clear();
         refresh_status_label();
+        const QPointer<NativeModelView> owner_guard(owner);
         try {
             const auto callback = owner->onGeometryStatusChanged;
             if (callback) callback(text);
         } catch (...) {
             // A progress observer cannot prevent scheduling or publication.
         }
-        if (report_error && !text.isEmpty()) notify_error(text);
+        if (owner_guard && report_error && !text.isEmpty()) notify_error(text);
     }
 
     void show_native_error(const QString& text) {
@@ -343,6 +350,14 @@ public:
 
     void show_operation_error(const QString& text) {
         operation_error = text;
+        refresh_status_label();
+        notify_error(text);
+    }
+
+    void show_input_error(const QString& text) {
+        // Called after cancellation restores the published scene. An observer
+        // refusing this input does not invalidate geometry or a later gesture.
+        input_error = text;
         refresh_status_label();
         notify_error(text);
     }
@@ -359,15 +374,16 @@ public:
         const auto text = !native_error.isEmpty()
                               ? native_error
                               : (!geometry_status.isEmpty() ? geometry_status :
-                                 (!operation_error.isEmpty() ? operation_error : export_error));
+                                 (!operation_error.isEmpty() ? operation_error :
+                                  (!input_error.isEmpty() ? input_error : export_error)));
         status_label->setText(text);
         status_label->setVisible(!text.isEmpty());
         status_label->raise();
         auto bounds = owner->rect().adjusted(12, 12, -12, -12);
-        if ((regenerator.is_pending() || !export_error.isEmpty()) &&
+        if ((regenerator.is_pending() || !input_error.isEmpty() || !export_error.isEmpty()) &&
             native_error.isEmpty() && operation_error.isEmpty()) {
-            // Keep the previous valid scene visible while preparing its
-            // replacement; a progress banner must not cover the viewport.
+            // Keep the valid scene visible during preparation or a recovered
+            // input/export failure; a diagnostic must not cover the viewport.
             bounds.setHeight(std::min(bounds.height(), status_label->sizeHint().height()));
         }
         status_label->setGeometry(bounds);
@@ -379,11 +395,14 @@ public:
         prepared_geometry.reset();
         geometry_prepared = false;
         regenerator.request(*snapshot, visible_ids);
+        const QPointer<NativeModelView> owner_guard(owner);
         show_status(QStringLiteral("Preparing 3D geometry…"), false);
+        if (!owner_guard) return;
         preparation_timer->start();
     }
 
     void collect_prepared_geometry() {
+        const QPointer<NativeModelView> owner_guard(owner);
         try {
             if (auto completed = regenerator.take_completed()) prepared_geometry = std::move(completed);
             if (!regenerator.is_pending()) preparation_timer->stop();
@@ -445,6 +464,7 @@ public:
                 if (next == replacement.end() || next->second.presentation != solid.presentation)
                     ++metrics.removed;
             }
+            auto published_source = std::make_shared<const DocumentSnapshot>(*snapshot);
             const bool had_solids = !solids.empty();
             const bool previously_fit = has_fit;
             const bool previously_pending_fit = initial_fit_pending;
@@ -485,7 +505,10 @@ public:
                 }
                 const bool has_visible_solids = std::any_of(prepared->solids.begin(), prepared->solids.end(),
                     [](const auto& entry) { return entry.second.visible; });
-                if (has_visible_solids && fit_requested) fit_all();
+                if (has_visible_solids && fit_requested) {
+                    fit_all();
+                    if (!owner_guard) return;
+                }
                 else if (has_visible_solids && (!has_fit || !had_solids)) defer_initial_fit = true;
                 else if (!has_visible_solids) {
                     if (replacement.empty()) has_fit = false;
@@ -528,12 +551,14 @@ public:
                 throw;
             }
             solids.swap(replacement);
+            published_snapshot = std::move(published_source);
             fit_requested = false;
             prepared_geometry.reset();
             metrics.elapsed_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - publication_started).count();
             publication_metrics = metrics;
             show_status(QString());
+            if (!owner_guard) return;
             if (defer_initial_fit) schedule_initial_fit();
             try {
                 attach_manipulator();
@@ -570,6 +595,7 @@ public:
             return;
         }
         native_attempted = true;
+        const QPointer<NativeModelView> owner_guard(owner);
         try {
             const auto platform_name = QGuiApplication::platformName().toLower();
             if (platform_name == QStringLiteral("offscreen") ||
@@ -619,6 +645,7 @@ public:
             operation_error.clear();
             if (snapshot.has_value()) {
                 collect_prepared_geometry();
+                if (!owner_guard) return;
             } else {
                 refresh_status_label();
             }
@@ -652,7 +679,7 @@ public:
     }
 
     bool supports_direct_transform(const std::string& id) const {
-        if (!snapshot.has_value() || id.empty()) return false;
+        if (!snapshot.has_value() || !snapshot->is_editable() || id.empty()) return false;
         const auto found = snapshot->entities().find(id);
         if (found == snapshot->entities().end()) {
             // Catalog-owned geometric instances use derived root IDs. Their
@@ -879,6 +906,7 @@ public:
         if (!native_ready || !geometry_status.isEmpty() || context.IsNull() || view.IsNull()) {
             return {};
         }
+        if (!owner->admitSceneInput(false)) return {};
         const auto x = point.x;
         const auto y = point.y;
         context->MoveTo(x, y, view, false);
@@ -921,6 +949,20 @@ public:
         if (path.trimmed().isEmpty()) {
             show_export_error(QStringLiteral("3D view image export requires a destination path"));
             return false;
+        }
+        // Publication schedules the first fit for a settled native client.
+        // An export can arrive before that queued paint/timer, particularly
+        // when visibility changes from an initially empty scene. Complete the
+        // pending fit against the current HWND before capturing its camera.
+        if (initial_fit_pending) {
+            const QPointer<NativeModelView> owner_guard(owner);
+            complete_initial_fit();
+            if (!owner_guard) return false;
+            if (initial_fit_pending) {
+                if (native_error.isEmpty())
+                    show_export_error(QStringLiteral("3D view layout must settle before exporting an image"));
+                return false;
+            }
         }
         const bool restore_manipulator = !manipulator.IsNull() && manipulator->IsAttached();
         const int control_display_mode = restore_manipulator && manipulator->HasDisplayMode()
@@ -1039,7 +1081,8 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
         m_impl->snapshot->document_id() == snapshot.document_id() &&
         m_impl->snapshot->revision() == snapshot.revision() &&
         m_impl->visible_ids == visible_ids &&
-        same_snapshot_content(*m_impl->snapshot, snapshot)) {
+        same_snapshot_content(*m_impl->snapshot, snapshot) &&
+        document_snapshot_digest(*m_impl->snapshot) == document_snapshot_digest(snapshot)) {
         return;
     }
 
@@ -1047,10 +1090,20 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
     m_impl->detach_manipulator();
     m_impl->visible_ids = std::move(visible_ids);
     m_impl->snapshot = snapshot;
+    const QPointer<NativeModelView> owner_guard(this);
     m_impl->rebuild_snapshot();
+    if (!owner_guard) return;
     if (isVisible()) {
         m_impl->initialize_native_view();
     }
+}
+
+std::shared_ptr<const DocumentSnapshot> NativeModelView::publishedSnapshot() const noexcept {
+    return m_impl->published_snapshot;
+}
+
+std::shared_ptr<const DocumentSnapshot> NativeModelView::gestureSourceSnapshot() const noexcept {
+    return m_impl->commit_snapshot ? m_impl->commit_snapshot : m_impl->gesture_snapshot;
 }
 
 void NativeModelView::fitAll() {
@@ -1132,7 +1185,8 @@ QString NativeModelView::lastError() const {
     if (!m_impl->geometry_status.isEmpty()) {
         return m_impl->geometry_status;
     }
-    return !m_impl->operation_error.isEmpty() ? m_impl->operation_error : m_impl->export_error;
+    if (!m_impl->operation_error.isEmpty()) return m_impl->operation_error;
+    return !m_impl->input_error.isEmpty() ? m_impl->input_error : m_impl->export_error;
 }
 
 bool NativeModelView::isGeometryPending() const noexcept {
@@ -1250,6 +1304,7 @@ void NativeModelView::cancelInteraction() {
         }
     }
     m_impl->manipulation_transform.reset();
+    m_impl->gesture_snapshot.reset();
     m_impl->clear_translation_preview();
     m_impl->gesture = Impl::Gesture::none;
     m_impl->initiating_button = Qt::NoButton;
@@ -1277,7 +1332,9 @@ bool NativeModelView::event(QEvent* event) {
 
 void NativeModelView::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
+    const QPointer<NativeModelView> owner_guard(this);
     m_impl->initialize_native_view();
+    if (!owner_guard) return;
     m_impl->synchronize_native_size();
     m_impl->refresh_status_label();
     if (m_impl->initial_fit_pending) m_impl->schedule_initial_fit();
@@ -1297,7 +1354,9 @@ void NativeModelView::paintEvent(QPaintEvent* event) {
     (void)event;
     if (m_impl->native_ready && !m_impl->view.IsNull()) {
         m_impl->synchronize_native_size();
+        const QPointer<NativeModelView> owner_guard(this);
         m_impl->complete_initial_fit();
+        if (!owner_guard) return;
         m_impl->view->Redraw();
     }
 }
@@ -1307,7 +1366,9 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
+    const QPointer<NativeModelView> owner_guard(this);
     m_impl->complete_initial_fit();
+    if (!owner_guard) { event->accept(); return; }
     const auto logical_point = event->position();
     const auto point = m_impl->input_point(logical_point);
     setFocus();
@@ -1337,8 +1398,36 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
             event->ignore();
             return;
         }
+        if (!admitSceneInput(true)) { event->accept(); return; }
         m_impl->initiating_button = Qt::LeftButton;
-        if (!isMoveActive() && m_impl->begin_manipulation(point)) {
+        const auto capture_transform = [this](const QString& target) {
+            m_impl->gesture_snapshot = m_impl->published_snapshot;
+            const QPointer<NativeModelView> guard(this);
+            try {
+                const auto observer=onTransformGestureStarted;
+                if (observer) observer(target);
+                return !guard.isNull();
+            } catch (const std::exception& error) {
+                if (guard) {
+                    guard->cancelInteraction();
+                    guard->m_impl->show_input_error(QStringLiteral("3D edit capture failed: ") +
+                        QString::fromUtf8(error.what()));
+                }
+            } catch (...) {
+                if (guard) {
+                    guard->cancelInteraction();
+                    guard->m_impl->show_input_error(QStringLiteral("3D edit capture failed: unknown observer failure"));
+                }
+            }
+            return false;
+        };
+        const bool manipulating = !isMoveActive() && m_impl->begin_manipulation(point);
+        if (!owner_guard) { event->accept(); return; }
+        if (manipulating) {
+            if (!capture_transform(QString::fromStdString(*m_impl->manipulator_entity_id))) {
+                event->accept();
+                return;
+            }
             m_impl->gesture = Impl::Gesture::manipulate;
             setCursor(Qt::SizeAllCursor);
             event->accept();
@@ -1346,8 +1435,13 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
         }
         m_impl->gesture = isMoveActive() ? Impl::Gesture::move : Impl::Gesture::select;
         m_impl->translation_start.reset();
-        if (m_impl->gesture == Impl::Gesture::move)
+        if (m_impl->gesture == Impl::Gesture::move) {
+            if (!capture_transform(QString::fromStdString(*m_impl->translation_entity_id))) {
+                event->accept();
+                return;
+            }
             m_impl->translation_start = m_impl->world_point(point);
+        }
         event->accept();
         return;
     }
@@ -1362,7 +1456,7 @@ void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
                           event->modifiers() == Qt::NoModifier &&
                           m_impl->initiating_button == Qt::NoButton;
     cancelInteraction();
-    if (can_edit) {
+    if (can_edit && admitSceneInput(true)) {
         // The manipulator origin commonly overlaps the object's centre. Hide it
         // for the semantic edit pick so a real double-click never targets the
         // derived control instead of its document object.
@@ -1405,7 +1499,9 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
     }
     if (m_impl->initiating_button == Qt::LeftButton) {
         if (m_impl->gesture == Impl::Gesture::manipulate && m_impl->left_moved) {
+            const QPointer<NativeModelView> owner_guard(this);
             m_impl->preview_manipulation(point);
+            if (!owner_guard) { event->accept(); return; }
         }
         if (m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
             m_impl->translation_entity_id.has_value()) {
@@ -1432,6 +1528,7 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    const QPointer<NativeModelView> owner_guard(this);
     const auto point = m_impl->input_point(event->position());
     if ((event->position() - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
         m_impl->left_moved = true;
@@ -1442,7 +1539,7 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         const auto callback = onContextMenuRequested;
         event->accept();
         if (context_click) {
-            const QPointer<NativeModelView> owner_guard(this);
+            if (!admitSceneInput(true)) return;
             const auto target = m_impl->select_at(point);
             if (owner_guard && callback) callback(target, global_position);
         }
@@ -1464,12 +1561,24 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         const auto translation_id = m_impl->translation_entity_id;
         const auto translation_start = m_impl->translation_start;
         if (was_manipulation) m_impl->preview_manipulation(point);
+        if (!owner_guard) { event->accept(); return; }
         const auto manipulation_id = m_impl->manipulator_entity_id;
         const auto manipulation_transform = m_impl->manipulation_transform;
+        const auto gesture_source = m_impl->gesture_snapshot;
         cancelInteraction();
+        // Reset even when an observer throws; the shell can read only this
+        // actual press capture, never the newest requested snapshot.
+        struct CommitSourceReset {
+            QPointer<NativeModelView> owner;
+            ~CommitSourceReset() {
+                if (owner) owner->m_impl->commit_snapshot.reset();
+            }
+        } reset_source{owner_guard};
+        m_impl->commit_snapshot = gesture_source;
         if (was_edit && isReady()) {
             m_impl->detach_manipulator();
             m_impl->select_at(point, true);
+            if (!owner_guard) { event->accept(); return; }
             try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
             event->accept();
             return;
@@ -1479,15 +1588,18 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
             const auto dx = end_world->x - translation_start->x;
             const auto dy = end_world->y - translation_start->y;
             const auto dz = end_world->z - translation_start->z;
+            const auto callback = onEntityTranslationRequested;
             constexpr double epsilon = 1.0e-9;
             if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz) &&
                 (std::abs(dx) > epsilon || std::abs(dy) > epsilon || std::abs(dz) > epsilon) &&
-                onEntityTranslationRequested) {
-                onEntityTranslationRequested(QString::fromStdString(*translation_id), dx, dy, dz);
+                callback) {
+                callback(QString::fromStdString(*translation_id), dx, dy, dz);
+                if (!owner_guard) { event->accept(); return; }
             }
         }
+        const auto transform_callback = onEntityTransformRequested;
         if (was_manipulation && manipulation_id.has_value() &&
-            manipulation_transform.has_value() && onEntityTransformRequested) {
+            manipulation_transform.has_value() && transform_callback) {
             const auto& transform = *manipulation_transform;
             const auto translation = transform.TranslationPart();
             const auto scale = transform.ScaleFactor();
@@ -1512,8 +1624,9 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
                                          std::abs(rotation_axis.Y()) <= epsilon &&
                                          std::abs(std::abs(rotation_axis.Z()) - 1.0) <= epsilon);
             if (finite && changed && supported_axis) {
-                onEntityTransformRequested(QString::fromStdString(*manipulation_id),
+                transform_callback(QString::fromStdString(*manipulation_id),
                     translation.X(), translation.Y(), translation.Z(), rotation, scale);
+                if (!owner_guard) { event->accept(); return; }
             } else if (finite && changed && !supported_axis) {
                 m_impl->show_operation_error(
                     QStringLiteral("Vertex supports direct 3D rotation around the vertical axis only."));
@@ -1528,12 +1641,41 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
     QWidget::mouseReleaseEvent(event);
 }
 
+bool NativeModelView::admitSceneInput(bool starting) {
+    const QPointer<NativeModelView> guard(this);
+    try {
+        const auto observer = onSceneInputRequested;
+        const bool accepted = !observer || observer(starting);
+        if (!guard) return false;
+        if (!accepted) cancelInteraction();
+        else if (!m_impl->input_error.isEmpty()) {
+            m_impl->input_error.clear();
+            m_impl->refresh_status_label();
+        }
+        return accepted;
+    } catch (const std::exception& error) {
+        if (guard) {
+            guard->cancelInteraction();
+            guard->m_impl->show_input_error(QStringLiteral("3D input admission failed: ") +
+                QString::fromUtf8(error.what()));
+        }
+    } catch (...) {
+        if (guard) {
+            guard->cancelInteraction();
+            guard->m_impl->show_input_error(QStringLiteral("3D input admission failed: unknown observer failure"));
+        }
+    }
+    return false;
+}
+
 void NativeModelView::wheelEvent(QWheelEvent* event) {
     if (!m_impl->native_ready || m_impl->view.IsNull()) {
         event->ignore();
         return;
     }
+    const QPointer<NativeModelView> owner_guard(this);
     m_impl->complete_initial_fit();
+    if (!owner_guard) { event->accept(); return; }
     int delta = event->angleDelta().y();
     if (delta == 0) {
         delta = event->pixelDelta().y() * 8;

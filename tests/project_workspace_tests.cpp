@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_construction.hpp"
@@ -13,6 +14,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
+#include <future>
+#include <thread>
 
 namespace {
 using namespace sketch;
@@ -20,6 +23,9 @@ static_assert(!std::is_copy_constructible_v<ProjectWorkspace>);
 static_assert(!std::is_move_constructible_v<ProjectWorkspace>);
 static_assert(!std::is_copy_constructible_v<PreparedWorkspaceEdit>);
 static_assert(std::is_move_constructible_v<PreparedWorkspaceEdit>);
+static_assert(!std::is_copy_constructible_v<PreparedProjectWorkspace>);
+static_assert(std::is_nothrow_move_constructible_v<PreparedProjectWorkspace>);
+static_assert(std::is_nothrow_move_constructible_v<ProjectWorkspaceSnapshot>);
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
@@ -32,6 +38,31 @@ Command edit(const DocumentSnapshot& snapshot, const char* text) {
     label.properties["text"] = text;
     return ApplyEntityChanges{.expected_revision = snapshot.revision(),
         .entity_changes = {EntityChange::upsert(label)}, .message = "Edit label"};
+}
+void check_detached_preparation_transfer() {
+    const auto source = Document::create({{"label", "label", {{"text", "Original"}}}}).snapshot();
+    const auto before = document_snapshot_digest(source);
+    std::promise<PreparedProjectWorkspace> delivery;
+    auto future = delivery.get_future();
+    std::thread worker([&] {
+        try {
+            auto token = ProjectWorkspace::prepare_detached(source);
+            require(document_snapshot_digest(token.capture().document()) == before,
+                "worker preparation changed the exact captured source");
+            delivery.set_value(std::move(token));
+        } catch (...) { delivery.set_exception(std::current_exception()); }
+    });
+    worker.join();
+    auto token = future.get();
+    auto adopted = ProjectWorkspace::adopt_prepared(std::move(token));
+    require(adopted && !ProjectWorkspace::adopt_prepared(std::move(token)), "detached token replayed adoption");
+    rejected([&] { (void)token.capture(); });
+    require(document_snapshot_digest(adopted->snapshot()) == before,
+        "owner adoption changed validated history or saved markers");
+    auto staged = adopted->prepare(edit(adopted->snapshot(), "After transfer"));
+    (void)adopted->commit(staged);
+    require(adopted->snapshot().entities().at("label").properties.at("text") == "After transfer" &&
+        document_snapshot_digest(source) == before, "adopted authority cannot edit independently on owner");
 }
 void check_publication() {
     auto document = Document::create({{"label", "label", {{"text", "Original"}}}});
@@ -47,8 +78,8 @@ void check_publication() {
     require(workspace.epoch() == 0 && document_snapshot_digest(workspace.snapshot()) ==
                 document_snapshot_digest(initial), "prepare must leave workspace unchanged");
     std::get<ApplyEntityChanges>(command).entity_changes.front().entity.properties["text"] = "Tampered command";
-    auto preview = first.preview();
-    const_cast<std::map<std::string, Entity, std::less<>>&>(preview.entities())
+    sketch::test::DetachedDocumentSnapshotFixture preview(first.preview());
+    preview.entities()
         .at("label").properties["text"] = "Tampered preview";
     rejected([&] { (void)foreign.commit(first); });
     require(foreign.epoch() == 0, "foreign rejection must not mutate receiver");
@@ -172,8 +203,8 @@ void check_rejections() {
     catch (const DocumentError& error) { read_only = error.code() == DocumentErrorCode::read_only; }
     require(read_only && workspace.epoch() == 0 && !workspace.snapshot().is_editable(),
             "workspace cannot bypass read-only state");
-    auto malformed = Document::create().snapshot();
-    const_cast<std::vector<RevisionRecord>&>(malformed.history()).front().undo_stack.push_back(999);
+    sketch::test::DetachedDocumentSnapshotFixture malformed(Document::create().snapshot());
+    malformed.history().front().undo_stack.push_back(999);
     bool invalid = false;
     try { ProjectWorkspace bad(malformed); } catch (const DocumentError&) { invalid = true; }
     require(invalid, "workspace construction must validate retained history");
@@ -599,7 +630,7 @@ void check_subtraction_recovery_finish_and_revise() {
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_legacy_classification_only_finished_archive(); check_subtraction_recovery_finish_and_revise();
+    try { check_detached_preparation_transfer(); check_legacy_classification_only_finished_archive(); check_subtraction_recovery_finish_and_revise();
           check_publication(); check_compact_mixed_asset_publication(); check_rejections(); check_checkpoint_policy();
           check_archived_redraw_reference_plan(); check_archived_automatic_angle_removal();
           check_reviewed_geometry_identity_binding(); check_rejected_archived_redraw_plans(); }

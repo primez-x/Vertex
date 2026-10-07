@@ -46,12 +46,12 @@ class MaterializeQtNoticesTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
-    def archive(self, module, files, extras=()):
-        name = f"{module}-everywhere-src-6.8.3.tar.xz"
+    def archive(self, module, files, extras=(), version="6.8.3"):
+        name = f"{module}-everywhere-src-{version}.tar.xz"
         path = self.cache / name
         with tarfile.open(path, "w:xz") as stream:
             for relative, data in files.items():
-                entry = tarfile.TarInfo(f"{module}-everywhere-src-6.8.3/{relative}")
+                entry = tarfile.TarInfo(f"{module}-everywhere-src-{version}/{relative}")
                 entry.size = len(data)
                 stream.addfile(entry, io.BytesIO(data))
             for entry, data in extras:
@@ -135,6 +135,22 @@ class MaterializeQtNoticesTests(unittest.TestCase):
                     self.run_materializer()
                 self.assertFalse(self.output.exists())
                 self.archive(module, self.payloads[module])
+
+    def test_selected_svg_notice_rename_preserves_bytes_and_still_requires_permission(self):
+        files = dict(self.payloads["qtsvg"])
+        original = files.pop("src/svg/XSVG_LICENSE.txt")
+        files["src/svg/LICENSE.XSVG.txt"] = original
+        self.archive("qtsvg", files, version="6.11.2")
+        payloads, reasons, _, _, _ = notices.read_archive(
+            self.cache, "qtsvg", self.pins["qtsvg"], version="6.11.2")
+        self.assertEqual(payloads["src/svg/LICENSE.XSVG.txt"], original)
+        self.assertIn("notice-name-superset", reasons["src/svg/LICENSE.XSVG.txt"])
+        files.pop("src/svg/LICENSE.XSVG.txt")
+        # An old filename cannot satisfy the new archive's required notice.
+        files["src/svg/XSVG_LICENSE.txt"] = original
+        self.archive("qtsvg", files, version="6.11.2")
+        with self.assertRaisesRegex(ValueError, "LICENSE.XSVG.txt"):
+            notices.read_archive(self.cache, "qtsvg", self.pins["qtsvg"], version="6.11.2")
 
     def test_unsafe_members_even_unselected_are_rejected(self):
         bad_names = ["../escape", "/absolute", "C:/drive", "qtbase-everywhere-src-6.8.3/a/../escape",

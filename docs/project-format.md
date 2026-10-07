@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v57
+# Vertex project formats v1 through v58
+
+## Site presentation frames, terrain datum bindings and framed annotations (v58)
+
+Native format 58 and JSON/assets extraction version 56 protect explicit
+site-coordinate contracts: `property.site_frame`, `building.site_placement`,
+`terrain_surface.terrain_elevation_binding`, and `presentation_frame` on
+non-container entities. Annotation entity version 3 requires its own strict
+`presentation_frame`; each label or symbol still uses its own saved layer to
+determine the source context.
+
+Site and building transforms use metres, XY yaw and Z translation. They do not
+scale, shear or rewrite authored geometry, measurements, or vertical-level
+facts. Building geometry enters the property-site and relative building
+transform only when `site_placement` is explicitly present. Terrain ignores
+building placement: relative elevations bind to the site origin, while
+absolute elevations require the property's matching vertical datum. Independent
+assembly geometry remains in its existing world frame unless its
+`presentation_frame` explicitly enrolls it. Placement is resolved for
+presentation after local hosts, joins, assembly expansion and vertical
+placement; the saved source remains local and unchanged.
+
+The reader floor scans every retained revision, including undone, deleted and
+abandoned owners. Unknown or malformed future markers raise the conservative
+reader floor but gain no typed authority. Container entities cannot override
+their presentation frame. Older projects without these explicit markers keep
+their existing world coordinates; loading or extracting them does not infer a
+site placement or migrate geometry. Their recovery ledger and original source
+bytes remain intact.
 
 ## Independent assemblies, roof materials and living units (v57)
 

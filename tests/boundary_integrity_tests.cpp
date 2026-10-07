@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/document.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_integrity.hpp"
@@ -475,8 +476,8 @@ void test_abandoned_unknown_history_and_forged_navigation() {
         .entity_changes = {EntityChange::upsert(Entity{"note", "label", {{"text", "new branch"}},
                                                       false, Json::object()})},
         .message = "branch after undo"});
-    auto future_history = document.snapshot();
-    auto& abandoned = const_cast<std::vector<RevisionRecord>&>(future_history.history()).at(1);
+    sketch::test::DetachedDocumentSnapshotFixture future_history(document.snapshot());
+    auto& abandoned = future_history.history().at(1);
     abandoned.entities.at("boundary-1").properties["boundary_model_version"] = 999;
     abandoned.entities.at("boundary-1").properties["segments"] = {{"future_payload", true}};
     auto loaded = reopen(future_history);
@@ -485,24 +486,24 @@ void test_abandoned_unknown_history_and_forged_navigation() {
     require(loaded.snapshot().history().at(1).entities == abandoned.entities,
             "abandoned unknown history payload changed during storage");
 
-    auto malformed_history = document.snapshot();
-    auto& malformed = const_cast<std::vector<RevisionRecord>&>(malformed_history.history()).at(1);
+    sketch::test::DetachedDocumentSnapshotFixture malformed_history(document.snapshot());
+    auto& malformed = malformed_history.history().at(1);
     malformed.entities.at("boundary-1").properties["segments"][1]["segment_id"] = "edge-0";
     require_invalid_snapshot_not_published(malformed_history);
 
     auto upgraded = Document::create({rectangle(false)});
     put(upgraded, rectangle());
     upgraded.undo(upgraded.revision());
-    auto fake_apply = upgraded.snapshot();
-    auto& fake_record = const_cast<std::vector<RevisionRecord>&>(fake_apply.history()).back();
+    sketch::test::DetachedDocumentSnapshotFixture fake_apply(upgraded.snapshot());
+    auto& fake_record = fake_apply.history().back();
     fake_record.action = "apply";
     fake_record.source_revision.reset();
     fake_record.undo_stack = {0, 1};
     fake_record.redo_stack.clear();
     require_invalid_snapshot_not_published(fake_apply);
 
-    auto fake_navigation = upgraded.snapshot();
-    auto& undo = const_cast<std::vector<RevisionRecord>&>(fake_navigation.history()).back();
+    sketch::test::DetachedDocumentSnapshotFixture fake_navigation(upgraded.snapshot());
+    auto& undo = fake_navigation.history().back();
     undo.entities.at("boundary-1").properties["vendor_data"] = "not the recorded source";
     require_invalid_snapshot_not_published(fake_navigation);
 }
@@ -515,8 +516,8 @@ void test_history_navigation_preserves_json_number_representation() {
         entity.properties["opaque_number"] = 2;
         put(document, entity);
         document.undo(document.revision());
-        auto modified = document.snapshot();
-        auto& head = const_cast<std::vector<RevisionRecord>&>(modified.history()).back();
+        sketch::test::DetachedDocumentSnapshotFixture modified(document.snapshot());
+        auto& head = modified.history().back();
         head.entities.at("boundary-1").properties["opaque_number"] = signed_zero ? Json(-0.0) : Json(1.0);
         require_invalid_snapshot_not_published(modified);
     }
@@ -648,8 +649,8 @@ void test_split_retirement_and_forged_resurrection() {
     deleted.apply(ApplyEntityChanges{.expected_revision = deleted.revision(),
         .entity_changes = {EntityChange::erase("boundary-1")}, .message = "delete"});
     put(deleted, Entity{"note", "label", {{"text", "branch"}}, false, Json::object()});
-    auto forged = deleted.snapshot();
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().entities.emplace("boundary-1", rectangle());
+    sketch::test::DetachedDocumentSnapshotFixture forged(deleted.snapshot());
+    forged.history().back().entities.emplace("boundary-1", rectangle());
     require_invalid_snapshot_not_published(forged);
 }
 
@@ -677,8 +678,8 @@ void test_strict_metadata_equality_for_all_navigation() {
                 }
                 auto genuine = reopen(document.snapshot());
                 require(genuine.is_editable(), "genuine numeric metadata history failed to reopen");
-                auto forged = document.snapshot();
-                auto& record = const_cast<std::vector<RevisionRecord>&>(forged.history()).back();
+                sketch::test::DetachedDocumentSnapshotFixture forged(document.snapshot());
+                auto& record = forged.history().back();
                 set_value(record.entities.at("boundary-1"), record.assets.at("asset-1"),
                           signed_zero ? Json(-0.0) : Json(1.0));
                 require_invalid_snapshot_not_published(forged);
@@ -776,8 +777,8 @@ void test_legacy_lineage_preserves_v1_without_laundering_identity() {
     erase_boundary(forged_document);
     put(forged_document, rectangle(false));
     put(forged_document, Entity{"note", "label", {{"text", "ordinary edit"}}, false, Json::object()});
-    auto forged = forged_document.snapshot();
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().entities.at("boundary-1") = upgraded;
+    sketch::test::DetachedDocumentSnapshotFixture forged(forged_document.snapshot());
+    forged.history().back().entities.at("boundary-1") = upgraded;
     require_invalid_snapshot_not_published(forged);
 }
 void test_manual_chain_fresh_topology_mapping_preserves_all_targets() {
@@ -936,8 +937,8 @@ void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
     require(std::abs(decode_boundary_dimension_entity(after.entities().at(split.new_dimension_id))
         .dimension->resolve(edited).segment_length() - 3.0) < 1e-9,
         "automatic dimension must be created for the second piece");
-    auto forged = after;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit->fraction = 0.5;
+    sketch::test::DetachedDocumentSnapshotFixture forged(after);
+    forged.history().back().boundary_geometry_edit->fraction = 0.5;
     require_invalid_snapshot_not_published(forged);
     document.undo(document.revision());
     require(document.snapshot().entities() == before.entities(), "split undo must be exact");
@@ -1154,8 +1155,8 @@ void test_boundary_redefinition_proofs_and_reference_policy() {
         std::isfinite(angle.resolve(updated).angle()), "manual angle identity, metadata and resolution must survive same-count redraw");
     auto reopened = reopen(after, 7);
     require(reopened.snapshot().entities() == after.entities(), "large redefinition proof must reopen exactly");
-    auto forged = after;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit->replacement_segments[0]["end"][0] = 99;
+    sketch::test::DetachedDocumentSnapshotFixture forged(after);
+    forged.history().back().boundary_geometry_edit->replacement_segments[0]["end"][0] = 99;
     require_invalid_snapshot_not_published(forged);
     document.undo(document.revision());
     require(document.snapshot().entities() == before.entities(), "redefinition undo must restore exact source input");
@@ -1382,8 +1383,8 @@ void test_changed_topology_explicit_reference_resolution() {
     malformed["replacement_child_mapping"]["vertices"] = Json::array(); invalid_codec(malformed);
     malformed = encode_boundary_geometry_edit(edit);
     malformed["replacement_child_mapping"]["extra"] = Json::object(); invalid_codec(malformed);
-    auto forged = after;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit = plan(mapping, {manual.id});
+    sketch::test::DetachedDocumentSnapshotFixture forged(after);
+    forged.history().back().boundary_geometry_edit = plan(mapping, {manual.id});
     require_invalid_snapshot_not_published(forged);
 }
 
@@ -1559,10 +1560,10 @@ void test_redraw_automatic_angle_removal_requires_version_five() {
     require(!fresh_document.snapshot().entities().contains(angle.id) &&
         exact_entities(reopen(fresh_document.snapshot(), 23).snapshot().entities(), fresh_document.snapshot().entities()),
         "reviewed same-count fresh topology must support automatic angle removal and derivation replay");
-    auto forged = after;
+    sketch::test::DetachedDocumentSnapshotFixture forged(after);
     auto forged_edit = edit;
     forged_edit.allow_automatic_angle_removal = false;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit = forged_edit;
+    forged.history().back().boundary_geometry_edit = forged_edit;
     require_invalid_snapshot_not_published(forged);
 }
 

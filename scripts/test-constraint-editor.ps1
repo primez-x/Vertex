@@ -3,7 +3,9 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $configName = $Configuration.ToLowerInvariant()
 $executable = Join-Path $projectRoot "build/windows-$configName/constraint_dialog_tests.exe"
-$qtPrefix = Join-Path $projectRoot '.deps/qt/6.8.3/msvc2022_64'
+. (Join-Path $PSScriptRoot 'qt-selection.ps1')
+$qtSelection = Get-VertexQtSelection -ProjectRoot $projectRoot
+$qtPrefix = $qtSelection.prefix
 $nativeSuffix = if ($Configuration -eq 'Debug') { 'debug/bin' } else { 'bin' }
 $evidence = @()
 foreach ($scale in @('1', '1.5')) {

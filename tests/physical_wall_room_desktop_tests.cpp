@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -367,8 +368,8 @@ void workflow() {
         retained_review(dialog,id,area_dimension,length_dimension);
         pick_review(dialog,{2,2}); ready_review(dialog);
         QObject::connect(&dialog,&QDialog::accepted,&dialog,[&] {
-            auto replaced=window.document().snapshot();
-            auto& records=const_cast<std::vector<RevisionRecord>&>(replaced.history());
+            sketch::test::DetachedDocumentSnapshotFixture replaced(window.document().snapshot());
+            auto& records=replaced.history();
             records.back().action+=" (room review source replacement)";
             window.document()=Document::fork(replaced);
             expected_replacement=window.document().snapshot();

@@ -342,11 +342,11 @@ void guards() {
     unchanged(before,window.document().snapshot()); mouse(canvas,QEvent::MouseButtonRelease,p,Qt::MiddleButton);
     auto* height=window.findChild<QLineEdit*>("wallDrawHeight"); require(height,"guard uses actual inspector edit field");
     height->setFocus(); height->selectAll();
-    for (const auto code:{Qt::Key_X,Qt::Key_Y,Qt::Key_A}) key(*height,code,Qt::NoModifier,QString(QChar(code).toLower()));
+    for (const auto code:{Qt::Key_X,Qt::Key_Y,Qt::Key_A}) key(*height,code,Qt::NoModifier,QString(QChar(static_cast<char16_t>(code)).toLower()));
     require(height->text()=="xya" && !selected(canvas),"letters in inspector remain typed text"); unchanged(before,window.document().snapshot());
     height->setText("2.4 m"); canvas.setFocus(); key(canvas,Qt::Key_1,Qt::NoModifier,"1");
     auto* input=canvas.findChild<QLineEdit*>("drawingLengthInput"); require(input && input->hasFocus(),"native inline precise length editor has focus");
-    for (const auto code:{Qt::Key_X,Qt::Key_Y,Qt::Key_A}) key(*input,code,Qt::NoModifier,QString(QChar(code).toLower()));
+    for (const auto code:{Qt::Key_X,Qt::Key_Y,Qt::Key_A}) key(*input,code,Qt::NoModifier,QString(QChar(static_cast<char16_t>(code)).toLower()));
     require(input->text().contains("xya") && !selected(canvas),"X/Y/A in precise editor remain typed text"); unchanged(before,window.document().snapshot());
     key(*input,Qt::Key_Escape); canvas.setFocus();
     propose(window,canvas,true); height->setText("invalid height"); key(canvas,Qt::Key_Return);

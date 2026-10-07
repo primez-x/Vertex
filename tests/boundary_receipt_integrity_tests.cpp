@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -403,8 +404,8 @@ void test_unknown_and_malformed_receipts_in_abandoned_history() {
 
     // Model a file written by a future version: its unknown record is retained
     // only in the abandoned revision, not in the visible current entities.
-    auto future = document.snapshot();
-    auto& future_record = const_cast<std::vector<RevisionRecord>&>(future.history()).at(1);
+    sketch::test::DetachedDocumentSnapshotFixture future(document.snapshot());
+    auto& future_record = future.history().at(1);
     future_record.entities.at("boundary").properties["boundary_authoring"] =
         Json{{"version", 999}, {"opaque", Json{{"number", 1.0}}}};
     const auto file = std::filesystem::temp_directory_path() /
@@ -425,8 +426,8 @@ void test_unknown_and_malformed_receipts_in_abandoned_history() {
     require(document_snapshot_digest(loaded.document.snapshot()) == before,
             "read-only navigation rejection must leave the complete history unchanged");
 
-    auto malformed = document.snapshot();
-    auto& bad_record = const_cast<std::vector<RevisionRecord>&>(malformed.history()).at(1);
+    sketch::test::DetachedDocumentSnapshotFixture malformed(document.snapshot());
+    auto& bad_record = malformed.history().at(1);
     bad_record.entities.at("boundary").properties["boundary_authoring"]["segments"][0]["receipt"].erase("rise");
     const auto original_hash = ProjectStore::file_sha256(file);
     bool invalid_snapshot = false;
@@ -530,30 +531,33 @@ void test_explicit_boundary_translation() {
     rejects([&] { raw.apply(ApplyEntityChanges{raw.revision(),
         {EntityChange::upsert(moved),EntityChange::upsert(after.entities().at(dimension.id))},{},"Translate boundary"}); },
         "action text must not authorize raw receipt edits");
-    auto forged = after;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().entities.at(note.id).properties["text"] = "Hidden edit";
+    sketch::test::DetachedDocumentSnapshotFixture forged(after);
+    forged.history().back().entities.at(note.id).properties["text"] = "Hidden edit";
     rejects([&] { (void)Document::fork(forged); }, "translation proof must not conceal unrelated edits");
     forged = after;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_translation->offset.x = 6;
+    forged.history().back().boundary_translation->offset.x = 6;
     rejects([&] { (void)Document::fork(forged); }, "translation history must match its offset exactly");
     forged = after;
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_translation.reset();
+    forged.history().back().boundary_translation.reset();
     rejects([&] { (void)Document::fork(forged); }, "missing derivation proof must not permit receipt changes");
     forged = after;
-    auto& empty_translation = const_cast<std::vector<RevisionRecord>&>(forged.history()).back();
+    auto& empty_translation = forged.history().back();
     empty_translation.entities = before.entities();
     empty_translation.boundary_translation->offset = {0,0};
     rejects([&] { (void)Document::fork(forged); }, "no-op translation proof must not invent a history event");
     document.undo(document.revision());
     require(document.snapshot().entities() == before.entities(), "translation undo must restore all entities");
     forged = document.snapshot();
-    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_translation = BoundaryTranslation{original.id,{5,-2}};
+    forged.history().back().boundary_translation = BoundaryTranslation{original.id,{5,-2}};
     rejects([&] { (void)Document::fork(forged); }, "navigation must not contain derivation intent");
     document.redo(document.revision());
     require(document.snapshot().entities() == after.entities(), "translation redo must restore all entities");
+    const auto no_op_snapshot = document.snapshot();
     const auto no_op_revision = document.revision();
     document.apply(TranslateBoundary{no_op_revision,{original.id,{0,0}}});
-    require(document.revision() == no_op_revision, "zero translation must not add history");
+    require(document.revision() == no_op_revision &&
+            document.snapshot().shares_authoring_source_with(no_op_snapshot),
+            "zero translation must not add history or replace immutable source storage");
     rejects([&] { document.apply(TranslateBoundary{0,{original.id,{1,1}}}); }, "translation must reject stale revisions");
     auto integer_points = fixture("integer-points");
     auto& receipt_json = integer_points.properties["boundary_authoring"];
@@ -625,8 +629,8 @@ void test_explicit_boundary_transform() {
     rejects([&] { raw.apply(ApplyEntityChanges{0,{EntityChange::upsert(moved)}, {}, "Transform boundary"}); },
         "raw action text cannot authorize transform");
     const auto forge = [&](const std::function<void(RevisionRecord&)>& mutate) {
-        auto forged = after;
-        mutate(const_cast<std::vector<RevisionRecord>&>(forged.history()).back());
+        sketch::test::DetachedDocumentSnapshotFixture forged(after);
+        mutate(forged.history().back());
         rejects([&] { (void)Document::fork(forged); }, "forged transform history must reject");
     };
     forge([&](auto& event) { event.entities.at(note.id).properties["text"] = "hidden"; });
@@ -636,21 +640,21 @@ void test_explicit_boundary_transform() {
     forge([](auto& event) { event.action = "Translate boundary"; });
     forge([&](auto& event) { event.entities = before.entities(); event.boundary_transform->transform = {}; });
     forge([](auto& event) { event.boundary_transform->transform.offset.x = std::numeric_limits<double>::infinity(); });
-    auto creation = before;
-    const_cast<std::vector<RevisionRecord>&>(creation.history()).front().boundary_transform = intent;
+    sketch::test::DetachedDocumentSnapshotFixture creation(before);
+    creation.history().front().boundary_transform = intent;
     rejects([&] { (void)Document::fork(creation); }, "create cannot carry transform proof");
     document.undo(document.revision());
     require(document.snapshot().entities().at(original.id).properties.dump() == original.properties.dump() &&
         document.snapshot().entities() == before.entities(), "transform undo must restore exact inputs and state");
-    auto navigation = document.snapshot();
-    const_cast<std::vector<RevisionRecord>&>(navigation.history()).back().boundary_transform = intent;
+    sketch::test::DetachedDocumentSnapshotFixture navigation(document.snapshot());
+    navigation.history().back().boundary_transform = intent;
     rejects([&] { (void)Document::fork(navigation); }, "undo cannot carry transform proof");
     document.redo(document.revision());
     require(document.snapshot().entities().at(original.id).properties.dump() == moved.properties.dump() &&
         document.snapshot().entities() == after.entities(), "transform redo must restore exact transformed state");
     document.apply(NameRevision{document.revision(),"named"});
-    auto named = document.snapshot();
-    const_cast<std::vector<RevisionRecord>&>(named.history()).back().boundary_transform = intent;
+    sketch::test::DetachedDocumentSnapshotFixture named(document.snapshot());
+    named.history().back().boundary_transform = intent;
     rejects([&] { (void)Document::fork(named); }, "named event cannot carry transform proof");
     const auto stable = document_snapshot_digest(document.snapshot());
     rejects([&] { document.apply(TransformBoundary{0,intent}); }, "transform must reject stale revisions");

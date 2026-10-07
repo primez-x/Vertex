@@ -2,6 +2,7 @@
 #include "sketch/desktop/assembly_authoring_dialog.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/visualization/native_geometry_preparation.hpp"
 #include "sketch/architectural_schedule.hpp"
@@ -237,6 +238,43 @@ void lifecycle(const QString& directory) {
     bounds(reopened,placed_id,10,10,12,6);bounds(reopened,root_id,20,30,6,3);
     require(reopened.selectEntity(root_id) && reopened.selectedEntityId()==root_id,"reopened embedded root retains selectable stable identity");
 }
+
+void frame_owner_collision(const QString& directory) {
+    MainWindow window({},nullptr,directory+"/frame-library.json");display(window);
+    const auto ordinary=window.createBoundary(rectangle(-20,-10,7,2));
+    require(!ordinary.isEmpty(),"ordinary frame fixture created");
+    const std::string child="frame-catalog:instance:root";
+    IdentifiedBoundary shadow{child,"measurement_boundary",{}};
+    const auto edges=rectangle(-50,-50,17,9);
+    for(std::size_t i=0;i<edges.size();++i)
+        shadow.segments.push_back({child+":s"+std::to_string(i),child+":v"+std::to_string(i),
+            child+":v"+std::to_string((i+1)%edges.size()),edges[i]});
+    AssemblyType type;type.id="profile";type.name="Frame profile";
+    type.profiles.push_back({"outer",rectangle(0,0,4,3),{},0,0.5,{}});
+    AssemblyInstance root;root.id="root";root.type_id=type.id;
+    root.root_transform=AssemblyTransform{{20,30,0},0.5,1};
+    Entity catalog{"frame-catalog","assembly_model",{{"model",AssemblyModel::create({}, {type},{root}).to_json()}}};
+    const auto source=window.document().snapshot();
+    window.document().apply(ApplyEntityChanges{source.revision(),
+        {EntityChange::upsert(catalog),EntityChange::upsert(encode_identified_boundary_entity(shadow))},
+        {},"Frame owner collision fixture"});
+    require(window.selectEntity(ordinary),"refresh frame owner collision fixture");
+    const auto captured=window.document().snapshot();
+    int collision_entries=0;
+    for(const auto& entry:control<PlanCanvas>(window,"measurementPlanCanvas").entities()) {
+        if(entry.id!=QString::fromStdString(child))continue;
+        ++collision_entries;
+        require(entry.resize_frame.has_value(),"colliding geometric owner retains frame");
+        close(entry.resize_frame->rotation_radians,0.5,"embedded frame retains priority over persisted same-ID boundary");
+        close(entry.resize_frame->width_metres,4,"embedded frame width uses captured profile");
+        close(entry.resize_frame->depth_metres,3,"embedded frame depth uses captured profile");
+    }
+    require(collision_entries>=1,"colliding owner remains present on canvas");
+    require(shape(window,ordinary).resize_frame.has_value(),"ordinary measured boundary retains frame");
+    close(shape(window,ordinary).resize_frame->width_metres,7,"ordinary frame uses its own geometry");
+    require(window.document().snapshot().entities()==captured.entities() && window.document().revision()==captured.revision(),
+        "frame preparation does not edit source or history");
+}
 }
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors();QApplication application(argc,argv);QTemporaryDir settings;
@@ -244,7 +282,8 @@ int main(int argc,char** argv) {
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settings.path());
     try {
         require(QFontDatabase::addApplicationFont(":/fonts/Inter.ttf")>=0,"bundled test font loads");
-        QTemporaryDir directory;require(directory.isValid(),"isolated fixture output");lifecycle(directory.path());
+        QTemporaryDir directory;require(directory.isValid(),"isolated fixture output");
+        frame_owner_collision(directory.path());lifecycle(directory.path());
         std::cout<<"embedded_assembly_workflow_desktop_tests passed\n";return 0;
     } catch(const std::exception& error){std::cerr<<"embedded_assembly_workflow_desktop_tests: "<<error.what()<<'\n';return 1;}
 }

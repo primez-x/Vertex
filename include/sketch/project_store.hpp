@@ -146,7 +146,11 @@ public:
     // require v56 across current, deleted and undone history.
     // Independent/nested assembly geometry, joined roof material ownership and
     // per-unit appraisal reporting require v57 across all retained revisions.
-    static constexpr std::uint32_t format_version = 57;
+    // Explicit property/building/terrain site frames, non-container
+    // presentation frames and framed annotation entities require v58 across
+    // current, deleted, undone and abandoned revisions, including future
+    // opaque marker forms.
+    static constexpr std::uint32_t format_version = 58;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

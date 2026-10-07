@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/project_exchange.hpp"
@@ -169,8 +170,8 @@ void workflow(const std::filesystem::path& root, bool two, bool exterior, bool p
     auto tampered=encoded; tampered["dimension_placement_moves"][0]["offset"][0]=0.6;
     const auto proof_path=root/(make_stable_id()+".sketch");
     (void)ProjectStore::save(proof_path,snapshot); forge(proof_path,snapshot,41,&tampered); stored_refuses(proof_path,StorageErrorCode::integrity_failure);
-    auto stripped=snapshot;
-    auto& retained=const_cast<std::vector<RevisionRecord>&>(stripped.history())[1].boundary_constraint_changes;
+    sketch::test::DetachedDocumentSnapshotFixture stripped(snapshot);
+    auto& retained=stripped.history()[1].boundary_constraint_changes;
     retained->dimension_placement_moves.clear();
     require(ProjectStore::required_format_version(stripped)==41,"stripped retained moves cannot lower the marker's storage floor");
     auto deletion=Document::fork(snapshot);

@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/drawing_input_panel.hpp"
 #include "sketch/document.hpp"
@@ -764,8 +765,8 @@ void test_parked_drawing_rejects_replaced_head() {
                     window.lastError().toStdString()+"; parked_preview="+std::to_string(parked.has_value())+
                     "; wall_preview="+std::to_string(canvas.wallPreview().has_value()));
             const auto source=window.document().snapshot();
-            auto altered=source;
-            auto& record=const_cast<std::vector<RevisionRecord>&>(altered.history()).front();
+            sketch::test::DetachedDocumentSnapshotFixture altered(source);
+            auto& record=altered.history().front();
             if (change_asset) record.assets.at(asset.id)=Asset::create(asset.id,asset.media_type,{std::byte{2}});
             else record.entities.at(source_id.toStdString()).extensions["replacement_fixture"]=true;
             window.document()=Document::fork(altered);

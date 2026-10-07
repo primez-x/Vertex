@@ -1,0 +1,1691 @@
+{
+  "schema_version": 1,
+  "archive": {
+    "path": ".deps/downloads/source-closure/qtwebengine-everywhere-src-6.8.3.tar.xz",
+    "sha256": "df4e19ba2b3a540551b6f998d62597377ffa688c1cff564589b7da2e2bf87337",
+    "bytes": 566553436,
+    "url": "https://download.qt.io/archive/qt/6.8/6.8.3/submodules/qtwebengine-everywhere-src-6.8.3.tar.xz"
+  },
+  "production_gn_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/BUILD.gn",
+  "production_gn_sha256": "f2ac4d69c58c432f2060eaeb336c2a381ffe935b8328e44675ba2fb6cff646ac",
+  "scope": "Original contiguous leading source comments from GN-referenced AGG23, Little CMS, OpenJPEG production sources; no license declarations rewritten",
+  "notices": [
+    {
+      "path": "headers/001.txt",
+      "bytes": 726,
+      "sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_array.h",
+      "source_member_sha256": "05f7077b756f2c4f515245566bf84c1215552e633848fe3c4de3535a9c1d07f2",
+      "source_member_bytes": 12611
+    },
+    {
+      "path": "headers/002.txt",
+      "bytes": 836,
+      "sha256": "2f2044087527fb86b5406328e6e5332d483644d4c0091fe6aca69cb0bc48caa3",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_clip_liang_barsky.h",
+      "source_member_sha256": "8eb426e1322a21afedcf92d3ebce1888e42b630eb893514de4e752415304fba8",
+      "source_member_bytes": 4286
+    },
+    {
+      "path": "headers/003.txt",
+      "bytes": 1165,
+      "sha256": "1811a9146ed9a80ad421a6a218aa64fde1c5a94eea8fb251a5159e0462087fc3",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        27
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_color_gray.h",
+      "source_member_sha256": "5358559345546c86d330ce8914ad68b7853661668a4b97280607fda3728c774a",
+      "source_member_bytes": 1725
+    },
+    {
+      "path": "headers/004.txt",
+      "bytes": 824,
+      "sha256": "79cbed2903b18f1f0a5ad5f7c89b6bf2067189f2c1132adebec5101b130c785e",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_conv_dash.h",
+      "source_member_sha256": "320ed8e2c76acfae3b6ac437d4f9ae71d49509b961e7ca802e4446185f026db4",
+      "source_member_bytes": 2046
+    },
+    {
+      "path": "headers/005.txt",
+      "bytes": 826,
+      "sha256": "66d67b2fab115bd6e257fc07aa9eafdb7ba8f0ebe8e8c754a4871252ba7d2eb4",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_conv_stroke.h",
+      "source_member_sha256": "26cd2f2221aa466a67b9fc98314dde4fbf266425a1bd5a688295330c034f5c06",
+      "source_member_bytes": 3227
+    },
+    {
+      "path": "headers/006.txt",
+      "bytes": 1078,
+      "sha256": "1c1affeb14967e6989a99a2ab9a413160a7ee63c0125453f717606ff5b24d086",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        21
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_curves.cpp",
+      "source_member_sha256": "30693bfa630ee5478c47eb05a47c8823072b1d977b3be64d77a67ea03e04d740",
+      "source_member_bytes": 4204
+    },
+    {
+      "path": "headers/007.txt",
+      "bytes": 782,
+      "sha256": "ccdcdb7126fea5cff6d0528f06c5c5045b598cc3979f65afb0a02087be03386e",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        16
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_curves.h",
+      "source_member_sha256": "00092b4fa259700b65139cefbf83b5103abd2694abc880c92d3091881a97b656",
+      "source_member_bytes": 4382
+    },
+    {
+      "path": "headers/008.txt",
+      "bytes": 917,
+      "sha256": "00160441a3fc3331bc700200d68f3f54621a94d2098803c2f9a86c777490e7c9",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        18
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_math.h",
+      "source_member_sha256": "ecba15653bb72f58dce4cfc813cff13521990182b04df00512cb88a1ff63f9bc",
+      "source_member_bytes": 2338
+    },
+    {
+      "path": "headers/009.txt",
+      "bytes": 826,
+      "sha256": "e0eddb784231ebea2b90f846136ee15d4b12d6839b77adc5fa5d8fccca0fdc84",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_math_stroke.h",
+      "source_member_sha256": "69f960d199e894d66c764631aadf16854b89d608b7540640d96a637091aa4685",
+      "source_member_bytes": 10246
+    },
+    {
+      "path": "headers/010.txt",
+      "bytes": 1185,
+      "sha256": "2a268e336036fd92aaeb687d7196170abadc22b9dd714a320e1dcfbc1755a8d2",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_path_storage.cpp",
+      "source_member_sha256": "701d9998d58d10ebb5962bd807156821c5f73400e6f8a1fd70190d378306c2a7",
+      "source_member_bytes": 3638
+    },
+    {
+      "path": "headers/011.txt",
+      "bytes": 1051,
+      "sha256": "bb07b82a4082d57e90cf1c47037cef0e22920b9028413c126daffe094d030911",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        23
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_pixfmt_gray.h",
+      "source_member_sha256": "ecb4565bae28532767e18275772a50cdf466b8e3268debf58ce2cd0e0126691c",
+      "source_member_bytes": 6008
+    },
+    {
+      "path": "headers/012.txt",
+      "bytes": 2389,
+      "sha256": "f47c3991a9f52e7d5477cc073fc901197b8655b8fe41ae8f973b93e6c2507cdf",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        48
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_rasterizer_scanline_aa.cpp",
+      "source_member_sha256": "59509970620218f1119476a6b96a5a1a40fb7f2099b060edbb58c30e64ba1e18",
+      "source_member_bytes": 14652
+    },
+    {
+      "path": "headers/013.txt",
+      "bytes": 1351,
+      "sha256": "34c808e951d7ed004384e7a7872fd8fc6319bda1fbf068dbe22e5361f1f0f57f",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        29
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_rasterizer_scanline_aa.h",
+      "source_member_sha256": "25d8886dd6dedcd24ea9804097088aea08574868402a07b5a31f7dd0120d09bf",
+      "source_member_bytes": 13788
+    },
+    {
+      "path": "headers/014.txt",
+      "bytes": 834,
+      "sha256": "a1e0bdf2c6b39f3af0dfe833ff3bcfbdd43ff5290e16c987f0191c289a0a9735",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_renderer_base.h",
+      "source_member_sha256": "ecab454b8f819968bf7803c3a8c26a2b7d1f0235e60087b889cf6cdd40dfcd1b",
+      "source_member_bytes": 4098
+    },
+    {
+      "path": "headers/015.txt",
+      "bytes": 837,
+      "sha256": "9c1d921ae11c7dde430316a8008f879c60ecbd554db8d67483f3372dd810c7cd",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_rendering_buffer.h",
+      "source_member_sha256": "f253e2c06bae89274abf9236ba379c1594ac45693ecb412d1abf297bf8f914bb",
+      "source_member_bytes": 3673
+    },
+    {
+      "path": "headers/016.txt",
+      "bytes": 1070,
+      "sha256": "98ec6d559000c1f0a31a09634a6f7ec9b2c93bf66b4ae4c31ee9fde860658135",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        23
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_scanline_u.h",
+      "source_member_sha256": "b82438cf11c604f35674fcd46f91cd3f1bf1994b4bd6d65964b29f9d242c28ae",
+      "source_member_bytes": 4363
+    },
+    {
+      "path": "headers/017.txt",
+      "bytes": 835,
+      "sha256": "446c3b6c16a1b0349814589633e406c6ddfb4912576e0e825668af27f787a378",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        20
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vcgen_dash.cpp",
+      "source_member_sha256": "e4874d6aec164626172db791b7ed1e255af8e6944fd8cd9edb1c74c6a9461358",
+      "source_member_bytes": 5814
+    },
+    {
+      "path": "headers/018.txt",
+      "bytes": 834,
+      "sha256": "acf038b6403050b051ec7bcb3dfa3329ff676b2eacbf0945b8dc23f287b597de",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vcgen_dash.h",
+      "source_member_sha256": "3538b317f20306b03d8a970c4a3c9aa22310d4c58817cf4372fe689cd611ff04",
+      "source_member_bytes": 2232
+    },
+    {
+      "path": "headers/019.txt",
+      "bytes": 1183,
+      "sha256": "645c704d9a48ad003a4fd7ab58c1e6e8f0fc1637ad89752016073d931e34faec",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vcgen_stroke.cpp",
+      "source_member_sha256": "57f613f9dc04d201c49f5b864f4230b03b7545695f272a436de589eea65a7849",
+      "source_member_bytes": 8014
+    },
+    {
+      "path": "headers/020.txt",
+      "bytes": 863,
+      "sha256": "f173bb73cfa84a52181929bbc6cde945d575ecb4c1da569edf83deb417b556eb",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vertex_sequence.h",
+      "source_member_sha256": "14887fde739098325d635a8e7e1ae0dce9f05e001f718875ebf8a27c0425bcdf",
+      "source_member_bytes": 2843
+    },
+    {
+      "path": "headers/021.txt",
+      "bytes": 1355,
+      "sha256": "9a50ca32f1be7ee2d1af3d064e899c5cdafc77283a2e60e0bb72ec27d296e94d",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        28
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/include/lcms2.h",
+      "source_member_sha256": "0540ed2d789a787430f09c4cccb644295563049b3042307d3336eab7e3d4be3c",
+      "source_member_bytes": 105238
+    },
+    {
+      "path": "headers/022.txt",
+      "bytes": 1642,
+      "sha256": "c05f94a4bb2de1ce603325e2128cdab00d2648c5ecaeb6f3ac8e7adc0e4e37b1",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        30
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/include/lcms2_plugin.h",
+      "source_member_sha256": "7239223c1bfbca117c08d548535cd9b60f1d64e7c7f5e6ec5258b8eb071e1d29",
+      "source_member_bytes": 31568
+    },
+    {
+      "path": "headers/023.txt",
+      "bytes": 1335,
+      "sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsalpha.c",
+      "source_member_sha256": "ddc2335ae177969bc72634e7649208a53286b0319eb08a99fc3b67070301708d",
+      "source_member_bytes": 18855
+    },
+    {
+      "path": "headers/024.txt",
+      "bytes": 1332,
+      "sha256": "4d772335d81afa7594fa081314be1488459cf247c82a80c1a243293e8aad821f",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmserr.c",
+      "source_member_sha256": "73544037ba15c9b1f30efad414e958a0c0e22261d80b3ef9731a92a04f0bb0d4",
+      "source_member_bytes": 17415
+    },
+    {
+      "path": "headers/025.txt",
+      "bytes": 1334,
+      "sha256": "535ac74298062d9d6dee01cde086350843d105239031bf70f80a37718cc7024e",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsgamma.c",
+      "source_member_sha256": "58444837910fbf2fb71de9d3b6621fab42103b5c2171c2e9bc5783e7e1c401f3",
+      "source_member_bytes": 44477
+    },
+    {
+      "path": "headers/026.txt",
+      "bytes": 1335,
+      "sha256": "a37b1586a1b3e6479ae4d464c2ebe47a7ef44bf786a82187627a28a7aa4ba771",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsgmt.c",
+      "source_member_sha256": "c5cbdaca716a466145e94df81e3a2a9253a8f7084c74b8eb10e848e3353fb2ed",
+      "source_member_bytes": 22319
+    },
+    {
+      "path": "headers/027.txt",
+      "bytes": 1337,
+      "sha256": "b082b146f35e86f87771323de7300bee7c2e42c48cfba24170c152438d658491",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmshalf.c",
+      "source_member_sha256": "e439f99ce375261940296800542aa747500ccf24105235ae838d5d03fbe2c60f",
+      "source_member_bytes": 35360
+    },
+    {
+      "path": "headers/028.txt",
+      "bytes": 1333,
+      "sha256": "315308d3a10925ff037c3f7c5527d86164467773e03666920bd17bbdd7c9728f",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsmd5.c",
+      "source_member_sha256": "f2c718c023482455a897a93e9e986a9003bae1d6759e74a1a7b0d027287ba6f5",
+      "source_member_bytes": 9538
+    },
+    {
+      "path": "headers/029.txt",
+      "bytes": 1972,
+      "sha256": "52782d1a2533535f2b93b5f6b0d1086432599b58558a52fd2ca1104dcd5a765d",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        37
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/bio.c",
+      "source_member_sha256": "7c8db305b3cc3812d94075aae9ad8bfe54064ac674e1749e5fbdc65f5be3c198",
+      "source_member_bytes": 5931
+    },
+    {
+      "path": "headers/030.txt",
+      "bytes": 2109,
+      "sha256": "6d7ed816687a6481b37f11b9ad44c06f8d2bafdb15d8ec65adfab0d2d8534a72",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        39
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/cio.c",
+      "source_member_sha256": "5a70f55f8b655f06af55f4750a69a41d12cd813dffd9a6d3f103c28b4dc63b3e",
+      "source_member_bytes": 24430
+    },
+    {
+      "path": "headers/031.txt",
+      "bytes": 2145,
+      "sha256": "7bc6139cb961cc483a048f3509aafbed198599179b4076adea2aa7f2335e3e58",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        40
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/dwt.c",
+      "source_member_sha256": "ff0b80d6576f83b6203ef38dd6aa6eec1800a21fca14eac5e59895a316beff29",
+      "source_member_bytes": 138284
+    },
+    {
+      "path": "headers/032.txt",
+      "bytes": 1795,
+      "sha256": "d1abbba924f7c0bebf0d44e180f49554f64040f31b01fc816660740d3380dab3",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        33
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/event.c",
+      "source_member_sha256": "6af6dad4e683c22d7ba67159a4e644fee029aea4ec1aa4c4dca754f1b950378e",
+      "source_member_bytes": 5052
+    },
+    {
+      "path": "headers/033.txt",
+      "bytes": 1691,
+      "sha256": "351b007cbb8398b8c24b0ad0b2f48e428f3f9a35bc0af6a6d8431d2be8e7b616",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/function_list.c",
+      "source_member_sha256": "4e1888dd7c21911b2baf954ad9cab498433ac37e4cb1ce39220904ae80455869",
+      "source_member_bytes": 4375
+    },
+    {
+      "path": "headers/034.txt",
+      "bytes": 2057,
+      "sha256": "072818d52f2e9571409732f0842efc67d048ae98837be7b87744111949d14a02",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        42
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/ht_dec.c",
+      "source_member_sha256": "ade0bca536bab3180d48911f70eeeadb6ea7e6557c676878059f1133491bed7d",
+      "source_member_bytes": 107863
+    },
+    {
+      "path": "headers/035.txt",
+      "bytes": 1658,
+      "sha256": "7e4796446ad622a90c6ba026634be13f3ca45023d3afad48d2a16b52aa8ab169",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/image.c",
+      "source_member_sha256": "d8cc7e7dd380aa39e8aeebea8bee62790d0fe4f02472eb7cc0e0617fc657ecd9",
+      "source_member_bytes": 9806
+    },
+    {
+      "path": "headers/036.txt",
+      "bytes": 2338,
+      "sha256": "a426209f6e1a30c220a154c8b4d9c013b5e57a6150fbb84db5daf9356175128c",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        43
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/j2k.c",
+      "source_member_sha256": "4582b44e7030921d9b887daf2a8a2f781a474ebb5a6bb939e4097c29ed31aa45",
+      "source_member_bytes": 497320
+    },
+    {
+      "path": "headers/037.txt",
+      "bytes": 2151,
+      "sha256": "f11fbcd55be52ea316cce2fbd73d248e35931f01b7dbcc91f4c3fae148bfce3f",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        39
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/jp2.c",
+      "source_member_sha256": "76649ee4cf92c9abd2d310c45531bbaf90f190009ed01b20c45b3432c0e40298",
+      "source_member_bytes": 118680
+    },
+    {
+      "path": "headers/038.txt",
+      "bytes": 2057,
+      "sha256": "b6b7636f9f56bd4522bc158484fe8a7bf3e01405a24f30df9c804bc4b86d3e57",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        38
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/mqc.c",
+      "source_member_sha256": "1eed01025ca64b556bb433d8301b759ebba6a6764ef82fa728af2851c4b28f29",
+      "source_member_bytes": 17879
+    },
+    {
+      "path": "headers/039.txt",
+      "bytes": 1712,
+      "sha256": "b31d9ff2348d1434b97b7bd0c5bd9680964d2e9e28ad81b6018e03757384ea71",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/opj_malloc.h",
+      "source_member_sha256": "fd7e8c01a7dfc2598df42094b4ae76132d79973fc120b527e6581dcf93c02a95",
+      "source_member_bytes": 3804
+    },
+    {
+      "path": "headers/040.txt",
+      "bytes": 2019,
+      "sha256": "aab6b2aa81ba0810c1983a55336b9a06af5d6dd27ca3d6229f49840e1314ea16",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        38
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/pi.c",
+      "source_member_sha256": "6bda001776659dc35b0ca20ea572eef27d83d5965e8073fd4584af0ccc5904aa",
+      "source_member_bytes": 83615
+    },
+    {
+      "path": "headers/041.txt",
+      "bytes": 1662,
+      "sha256": "498285c97f3a7e74d8adea5b4f4e1cc5ced7204b3d4e8d4aca08610da4ce6bd5",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/sparse_array.c",
+      "source_member_sha256": "5159bf88dd47abcf73425b478821431183241557c92ce870809e95cb37697a13",
+      "source_member_bytes": 15756
+    },
+    {
+      "path": "headers/042.txt",
+      "bytes": 2124,
+      "sha256": "9729c7ab9e59f4749a813289f99e7682c35e5dcff563cf4e4aae7046393cb566",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        40
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/t1.c",
+      "source_member_sha256": "d5a1614c9420294a8c857aacbff6ffbe1306be7b19d52de8983fbcdb8b286621",
+      "source_member_bytes": 88390
+    },
+    {
+      "path": "headers/043.txt",
+      "bytes": 2165,
+      "sha256": "1fc8e6bd93fb12da6489b889af0005192a5a6e7c0b75cc214ff61b2b3fe36c72",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        40
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/t2.c",
+      "source_member_sha256": "4e5539e37571540e16b8df5418507b69a322ab224dba2290843ebd56f10f759b",
+      "source_member_bytes": 63905
+    },
+    {
+      "path": "headers/044.txt",
+      "bytes": 2212,
+      "sha256": "d1bcbf4d802ef68fe237c0eac555a95f163b8dd1a17da56e0e882df2fa854670",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        41
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/tcd.c",
+      "source_member_sha256": "a1177ee7d2b8c901f00d457e9f67016e4e573e00b52601d4df1872933fbc8463",
+      "source_member_bytes": 114643
+    },
+    {
+      "path": "headers/045.txt",
+      "bytes": 1642,
+      "sha256": "4d5a50b855894e0a35df7462a60623680eee0ab84f73aba167de3a9d766e12a5",
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "source_member_representative": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/thread.c",
+      "source_member_sha256": "208c73dce20f4f8ecd9aaf33b2098234c3d403d9c3bd7b0d79947a2286e3be5a",
+      "source_member_bytes": 24529
+    }
+  ],
+  "source_members": [
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_array.h",
+      "source_member_sha256": "05f7077b756f2c4f515245566bf84c1215552e633848fe3c4de3535a9c1d07f2",
+      "source_member_bytes": 12611,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_array.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_basics.h",
+      "source_member_sha256": "498e2ee1e5a082c40c7033183c9c1d6b6f17441165c9f2b7c341304e853cda91",
+      "source_member_bytes": 6353,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_basics.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_clip_liang_barsky.h",
+      "source_member_sha256": "8eb426e1322a21afedcf92d3ebce1888e42b630eb893514de4e752415304fba8",
+      "source_member_bytes": 4286,
+      "notice_path": "headers/002.txt",
+      "notice_sha256": "2f2044087527fb86b5406328e6e5332d483644d4c0091fe6aca69cb0bc48caa3",
+      "notice_bytes": 836,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_clip_liang_barsky.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_color_gray.h",
+      "source_member_sha256": "5358559345546c86d330ce8914ad68b7853661668a4b97280607fda3728c774a",
+      "source_member_bytes": 1725,
+      "notice_path": "headers/003.txt",
+      "notice_sha256": "1811a9146ed9a80ad421a6a218aa64fde1c5a94eea8fb251a5159e0462087fc3",
+      "notice_bytes": 1165,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        27
+      ],
+      "gn_reference": "agg23/agg_color_gray.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_conv_adaptor_vcgen.h",
+      "source_member_sha256": "0f6359a0f8471c17face9e04157189acfcd711348682a33a7cea38c97ee59a26",
+      "source_member_bytes": 4409,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_conv_adaptor_vcgen.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_conv_dash.h",
+      "source_member_sha256": "320ed8e2c76acfae3b6ac437d4f9ae71d49509b961e7ca802e4446185f026db4",
+      "source_member_bytes": 2046,
+      "notice_path": "headers/004.txt",
+      "notice_sha256": "79cbed2903b18f1f0a5ad5f7c89b6bf2067189f2c1132adebec5101b130c785e",
+      "notice_bytes": 824,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_conv_dash.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_conv_stroke.h",
+      "source_member_sha256": "26cd2f2221aa466a67b9fc98314dde4fbf266425a1bd5a688295330c034f5c06",
+      "source_member_bytes": 3227,
+      "notice_path": "headers/005.txt",
+      "notice_sha256": "66d67b2fab115bd6e257fc07aa9eafdb7ba8f0ebe8e8c754a4871252ba7d2eb4",
+      "notice_bytes": 826,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_conv_stroke.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_curves.cpp",
+      "source_member_sha256": "30693bfa630ee5478c47eb05a47c8823072b1d977b3be64d77a67ea03e04d740",
+      "source_member_bytes": 4204,
+      "notice_path": "headers/006.txt",
+      "notice_sha256": "1c1affeb14967e6989a99a2ab9a413160a7ee63c0125453f717606ff5b24d086",
+      "notice_bytes": 1078,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        21
+      ],
+      "gn_reference": "agg23/agg_curves.cpp"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_curves.h",
+      "source_member_sha256": "00092b4fa259700b65139cefbf83b5103abd2694abc880c92d3091881a97b656",
+      "source_member_bytes": 4382,
+      "notice_path": "headers/007.txt",
+      "notice_sha256": "ccdcdb7126fea5cff6d0528f06c5c5045b598cc3979f65afb0a02087be03386e",
+      "notice_bytes": 782,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        16
+      ],
+      "gn_reference": "agg23/agg_curves.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_math.h",
+      "source_member_sha256": "ecba15653bb72f58dce4cfc813cff13521990182b04df00512cb88a1ff63f9bc",
+      "source_member_bytes": 2338,
+      "notice_path": "headers/008.txt",
+      "notice_sha256": "00160441a3fc3331bc700200d68f3f54621a94d2098803c2f9a86c777490e7c9",
+      "notice_bytes": 917,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        18
+      ],
+      "gn_reference": "agg23/agg_math.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_math_stroke.h",
+      "source_member_sha256": "69f960d199e894d66c764631aadf16854b89d608b7540640d96a637091aa4685",
+      "source_member_bytes": 10246,
+      "notice_path": "headers/009.txt",
+      "notice_sha256": "e0eddb784231ebea2b90f846136ee15d4b12d6839b77adc5fa5d8fccca0fdc84",
+      "notice_bytes": 826,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_math_stroke.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_path_storage.cpp",
+      "source_member_sha256": "701d9998d58d10ebb5962bd807156821c5f73400e6f8a1fd70190d378306c2a7",
+      "source_member_bytes": 3638,
+      "notice_path": "headers/010.txt",
+      "notice_sha256": "2a268e336036fd92aaeb687d7196170abadc22b9dd714a320e1dcfbc1755a8d2",
+      "notice_bytes": 1185,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "gn_reference": "agg23/agg_path_storage.cpp"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_path_storage.h",
+      "source_member_sha256": "d816f3815d206af54796b1cd10c1e0961fd9cc317ff31509886650acb334ec6d",
+      "source_member_bytes": 5104,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_path_storage.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_pixfmt_gray.h",
+      "source_member_sha256": "ecb4565bae28532767e18275772a50cdf466b8e3268debf58ce2cd0e0126691c",
+      "source_member_bytes": 6008,
+      "notice_path": "headers/011.txt",
+      "notice_sha256": "bb07b82a4082d57e90cf1c47037cef0e22920b9028413c126daffe094d030911",
+      "notice_bytes": 1051,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        23
+      ],
+      "gn_reference": "agg23/agg_pixfmt_gray.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_rasterizer_scanline_aa.cpp",
+      "source_member_sha256": "59509970620218f1119476a6b96a5a1a40fb7f2099b060edbb58c30e64ba1e18",
+      "source_member_bytes": 14652,
+      "notice_path": "headers/012.txt",
+      "notice_sha256": "f47c3991a9f52e7d5477cc073fc901197b8655b8fe41ae8f973b93e6c2507cdf",
+      "notice_bytes": 2389,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        48
+      ],
+      "gn_reference": "agg23/agg_rasterizer_scanline_aa.cpp"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_rasterizer_scanline_aa.h",
+      "source_member_sha256": "25d8886dd6dedcd24ea9804097088aea08574868402a07b5a31f7dd0120d09bf",
+      "source_member_bytes": 13788,
+      "notice_path": "headers/013.txt",
+      "notice_sha256": "34c808e951d7ed004384e7a7872fd8fc6319bda1fbf068dbe22e5361f1f0f57f",
+      "notice_bytes": 1351,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        29
+      ],
+      "gn_reference": "agg23/agg_rasterizer_scanline_aa.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_render_scanlines.h",
+      "source_member_sha256": "8c229bdc85603032ccc3ae1760d8d4de6e676d01894ed6a049f52ba79fb02317",
+      "source_member_bytes": 1856,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_render_scanlines.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_renderer_base.h",
+      "source_member_sha256": "ecab454b8f819968bf7803c3a8c26a2b7d1f0235e60087b889cf6cdd40dfcd1b",
+      "source_member_bytes": 4098,
+      "notice_path": "headers/014.txt",
+      "notice_sha256": "a1e0bdf2c6b39f3af0dfe833ff3bcfbdd43ff5290e16c987f0191c289a0a9735",
+      "notice_bytes": 834,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_renderer_base.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_renderer_scanline.h",
+      "source_member_sha256": "bd7b8321e880e4162785bfd3bff192bfe076e5277c63716b1d27c1cf54e93ea0",
+      "source_member_bytes": 3304,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_renderer_scanline.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_rendering_buffer.h",
+      "source_member_sha256": "f253e2c06bae89274abf9236ba379c1594ac45693ecb412d1abf297bf8f914bb",
+      "source_member_bytes": 3673,
+      "notice_path": "headers/015.txt",
+      "notice_sha256": "9c1d921ae11c7dde430316a8008f879c60ecbd554db8d67483f3372dd810c7cd",
+      "notice_bytes": 837,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_rendering_buffer.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_scanline_u.h",
+      "source_member_sha256": "b82438cf11c604f35674fcd46f91cd3f1bf1994b4bd6d65964b29f9d242c28ae",
+      "source_member_bytes": 4363,
+      "notice_path": "headers/016.txt",
+      "notice_sha256": "98ec6d559000c1f0a31a09634a6f7ec9b2c93bf66b4ae4c31ee9fde860658135",
+      "notice_bytes": 1070,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        23
+      ],
+      "gn_reference": "agg23/agg_scanline_u.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_shorten_path.h",
+      "source_member_sha256": "3f9222ff45b6e532e63006c2219734f311e31f755bcfc63259e7124a4c68ba42",
+      "source_member_bytes": 1870,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_shorten_path.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vcgen_dash.cpp",
+      "source_member_sha256": "e4874d6aec164626172db791b7ed1e255af8e6944fd8cd9edb1c74c6a9461358",
+      "source_member_bytes": 5814,
+      "notice_path": "headers/017.txt",
+      "notice_sha256": "446c3b6c16a1b0349814589633e406c6ddfb4912576e0e825668af27f787a378",
+      "notice_bytes": 835,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        20
+      ],
+      "gn_reference": "agg23/agg_vcgen_dash.cpp"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vcgen_dash.h",
+      "source_member_sha256": "3538b317f20306b03d8a970c4a3c9aa22310d4c58817cf4372fe689cd611ff04",
+      "source_member_bytes": 2232,
+      "notice_path": "headers/018.txt",
+      "notice_sha256": "acf038b6403050b051ec7bcb3dfa3329ff676b2eacbf0945b8dc23f287b597de",
+      "notice_bytes": 834,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_vcgen_dash.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vcgen_stroke.cpp",
+      "source_member_sha256": "57f613f9dc04d201c49f5b864f4230b03b7545695f272a436de589eea65a7849",
+      "source_member_bytes": 8014,
+      "notice_path": "headers/019.txt",
+      "notice_sha256": "645c704d9a48ad003a4fd7ab58c1e6e8f0fc1637ad89752016073d931e34faec",
+      "notice_bytes": 1183,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "gn_reference": "agg23/agg_vcgen_stroke.cpp"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vcgen_stroke.h",
+      "source_member_sha256": "22d3220dc0feae77a46b8bbd28e1009caeac791a4878511338d8e9d73fb9ab70",
+      "source_member_bytes": 3082,
+      "notice_path": "headers/001.txt",
+      "notice_sha256": "c5663042e0adaa89a68897599f93350e606bd51cfdf5be15d8825d15aeb964eb",
+      "notice_bytes": 726,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        15
+      ],
+      "gn_reference": "agg23/agg_vcgen_stroke.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/agg23/agg_vertex_sequence.h",
+      "source_member_sha256": "14887fde739098325d635a8e7e1ae0dce9f05e001f718875ebf8a27c0425bcdf",
+      "source_member_bytes": 2843,
+      "notice_path": "headers/020.txt",
+      "notice_sha256": "f173bb73cfa84a52181929bbc6cde945d575ecb4c1da569edf83deb417b556eb",
+      "notice_bytes": 863,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        19
+      ],
+      "gn_reference": "agg23/agg_vertex_sequence.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/include/lcms2.h",
+      "source_member_sha256": "0540ed2d789a787430f09c4cccb644295563049b3042307d3336eab7e3d4be3c",
+      "source_member_bytes": 105238,
+      "notice_path": "headers/021.txt",
+      "notice_sha256": "9a50ca32f1be7ee2d1af3d064e899c5cdafc77283a2e60e0bb72ec27d296e94d",
+      "notice_bytes": 1355,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        28
+      ],
+      "gn_reference": "lcms/include/lcms2.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/include/lcms2_plugin.h",
+      "source_member_sha256": "7239223c1bfbca117c08d548535cd9b60f1d64e7c7f5e6ec5258b8eb071e1d29",
+      "source_member_bytes": 31568,
+      "notice_path": "headers/022.txt",
+      "notice_sha256": "c05f94a4bb2de1ce603325e2128cdab00d2648c5ecaeb6f3ac8e7adc0e4e37b1",
+      "notice_bytes": 1642,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        30
+      ],
+      "gn_reference": "lcms/include/lcms2_plugin.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsalpha.c",
+      "source_member_sha256": "ddc2335ae177969bc72634e7649208a53286b0319eb08a99fc3b67070301708d",
+      "source_member_bytes": 18855,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsalpha.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmscam02.c",
+      "source_member_sha256": "f90d321cdb0171ee9cb4e0e00a65847168ba74c8469e826e3671f70d0705914f",
+      "source_member_bytes": 13952,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmscam02.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmscgats.c",
+      "source_member_sha256": "752bbfe6e0d14223c6715fb18dc3f791ddb481c9d5baf86eaea76f455e5395be",
+      "source_member_bytes": 76472,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmscgats.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmscnvrt.c",
+      "source_member_sha256": "d26e2ea94cec438580cdaba8f8a4649e65dff7f01433c91b286a1d2ac91a565b",
+      "source_member_bytes": 43844,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmscnvrt.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmserr.c",
+      "source_member_sha256": "73544037ba15c9b1f30efad414e958a0c0e22261d80b3ef9731a92a04f0bb0d4",
+      "source_member_bytes": 17415,
+      "notice_path": "headers/024.txt",
+      "notice_sha256": "4d772335d81afa7594fa081314be1488459cf247c82a80c1a243293e8aad821f",
+      "notice_bytes": 1332,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "gn_reference": "lcms/src/cmserr.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsgamma.c",
+      "source_member_sha256": "58444837910fbf2fb71de9d3b6621fab42103b5c2171c2e9bc5783e7e1c401f3",
+      "source_member_bytes": 44477,
+      "notice_path": "headers/025.txt",
+      "notice_sha256": "535ac74298062d9d6dee01cde086350843d105239031bf70f80a37718cc7024e",
+      "notice_bytes": 1334,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        25
+      ],
+      "gn_reference": "lcms/src/cmsgamma.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsgmt.c",
+      "source_member_sha256": "c5cbdaca716a466145e94df81e3a2a9253a8f7084c74b8eb10e848e3353fb2ed",
+      "source_member_bytes": 22319,
+      "notice_path": "headers/026.txt",
+      "notice_sha256": "a37b1586a1b3e6479ae4d464c2ebe47a7ef44bf786a82187627a28a7aa4ba771",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsgmt.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmshalf.c",
+      "source_member_sha256": "e439f99ce375261940296800542aa747500ccf24105235ae838d5d03fbe2c60f",
+      "source_member_bytes": 35360,
+      "notice_path": "headers/027.txt",
+      "notice_sha256": "b082b146f35e86f87771323de7300bee7c2e42c48cfba24170c152438d658491",
+      "notice_bytes": 1337,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmshalf.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsintrp.c",
+      "source_member_sha256": "e5e3d07984892f1a3b0e7911c7b46248581230dde430307b1ee0151f44eed51c",
+      "source_member_bytes": 40549,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsintrp.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsio0.c",
+      "source_member_sha256": "99b70313e3de0efc6f728c82df9866007c9f0721cd94425175f8ffae9181073b",
+      "source_member_bytes": 63133,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsio0.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsio1.c",
+      "source_member_sha256": "7fe3abc0d11e5e7c0d253c92ad8873a9a129e5b437aef81eabc5ab90737fe3a9",
+      "source_member_bytes": 35073,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsio1.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmslut.c",
+      "source_member_sha256": "91732f7f7245f637644e1f1028fc281a1d83071cad34eb7849f8de4fc083043d",
+      "source_member_bytes": 52460,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmslut.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsmd5.c",
+      "source_member_sha256": "f2c718c023482455a897a93e9e986a9003bae1d6759e74a1a7b0d027287ba6f5",
+      "source_member_bytes": 9538,
+      "notice_path": "headers/028.txt",
+      "notice_sha256": "315308d3a10925ff037c3f7c5527d86164467773e03666920bd17bbdd7c9728f",
+      "notice_bytes": 1333,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsmd5.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsmtrx.c",
+      "source_member_sha256": "d69e3eb2a76d1dd3e874a00a97208eda7e015a4a4c8928c82d121ebd2f2e4850",
+      "source_member_bytes": 5682,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsmtrx.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsnamed.c",
+      "source_member_sha256": "89d155e384cb356ac8875f1d54b323d14bcbfbbf02c65b80e71e55e51c4797f8",
+      "source_member_bytes": 29247,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsnamed.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsopt.c",
+      "source_member_sha256": "c54c05367a0917020cb6fa701b5767d764aeeb1f506128e8960454675f3baed7",
+      "source_member_bytes": 67301,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsopt.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmspack.c",
+      "source_member_sha256": "4e7394a5ac7fcde6d9c003e971184f98a08b725f80a28b1abe4124412083b18c",
+      "source_member_bytes": 128502,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmspack.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmspcs.c",
+      "source_member_sha256": "093e367537a39f0cdbb953f10606a474190bcd62bf26681732ab3523dbcf3d13",
+      "source_member_bytes": 25741,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmspcs.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsplugin.c",
+      "source_member_sha256": "be3a8d81f511dfc511b9b79f7ec3da558f022007af1b666983694b807253afe6",
+      "source_member_bytes": 31892,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsplugin.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsps2.c",
+      "source_member_sha256": "e9e56ac95f75a48674523a78cb8a28ea926e2299b86e5aba3ae2e8ffee7bbfb6",
+      "source_member_bytes": 48967,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsps2.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmssamp.c",
+      "source_member_sha256": "5adbdd361298b5b16af9dc30702087013b936b6a6589b60a23b11905998f3d0c",
+      "source_member_bytes": 17990,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmssamp.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmssm.c",
+      "source_member_sha256": "2755aa859d1d15842c84e085c4f7fee1982f43acd3d769b4091b6a63716a0a93",
+      "source_member_bytes": 19084,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmssm.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmstypes.c",
+      "source_member_sha256": "ab3d7dae57a22e5000a5e3d41213a4a7331eb09d53b5b61e7d09f2e466f8571c",
+      "source_member_bytes": 189774,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmstypes.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsvirt.c",
+      "source_member_sha256": "4e6da66f80740dbe5159600cf38171c066446a87bad1bb8b2262a5156b990989",
+      "source_member_bytes": 37985,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsvirt.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmswtpnt.c",
+      "source_member_sha256": "1a10395425a429187ff9ed566d870e5102fb9345edc380a652372ee977907bc1",
+      "source_member_bytes": 11145,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmswtpnt.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/lcms/src/cmsxform.c",
+      "source_member_sha256": "e362a99407dde06821694f6c92453cd1b7af72bd3c6218aa1ef6318b70402351",
+      "source_member_bytes": 51262,
+      "notice_path": "headers/023.txt",
+      "notice_sha256": "cfe89d9e002c32d5f2cfc85fc739220e00fd0390b9b7344beaac597c5aaa8488",
+      "notice_bytes": 1335,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        26
+      ],
+      "gn_reference": "lcms/src/cmsxform.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/bio.c",
+      "source_member_sha256": "7c8db305b3cc3812d94075aae9ad8bfe54064ac674e1749e5fbdc65f5be3c198",
+      "source_member_bytes": 5931,
+      "notice_path": "headers/029.txt",
+      "notice_sha256": "52782d1a2533535f2b93b5f6b0d1086432599b58558a52fd2ca1104dcd5a765d",
+      "notice_bytes": 1972,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        37
+      ],
+      "gn_reference": "libopenjpeg/bio.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/cio.c",
+      "source_member_sha256": "5a70f55f8b655f06af55f4750a69a41d12cd813dffd9a6d3f103c28b4dc63b3e",
+      "source_member_bytes": 24430,
+      "notice_path": "headers/030.txt",
+      "notice_sha256": "6d7ed816687a6481b37f11b9ad44c06f8d2bafdb15d8ec65adfab0d2d8534a72",
+      "notice_bytes": 2109,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        39
+      ],
+      "gn_reference": "libopenjpeg/cio.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/dwt.c",
+      "source_member_sha256": "ff0b80d6576f83b6203ef38dd6aa6eec1800a21fca14eac5e59895a316beff29",
+      "source_member_bytes": 138284,
+      "notice_path": "headers/031.txt",
+      "notice_sha256": "7bc6139cb961cc483a048f3509aafbed198599179b4076adea2aa7f2335e3e58",
+      "notice_bytes": 2145,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        40
+      ],
+      "gn_reference": "libopenjpeg/dwt.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/event.c",
+      "source_member_sha256": "6af6dad4e683c22d7ba67159a4e644fee029aea4ec1aa4c4dca754f1b950378e",
+      "source_member_bytes": 5052,
+      "notice_path": "headers/032.txt",
+      "notice_sha256": "d1abbba924f7c0bebf0d44e180f49554f64040f31b01fc816660740d3380dab3",
+      "notice_bytes": 1795,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        33
+      ],
+      "gn_reference": "libopenjpeg/event.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/function_list.c",
+      "source_member_sha256": "4e1888dd7c21911b2baf954ad9cab498433ac37e4cb1ce39220904ae80455869",
+      "source_member_bytes": 4375,
+      "notice_path": "headers/033.txt",
+      "notice_sha256": "351b007cbb8398b8c24b0ad0b2f48e428f3f9a35bc0af6a6d8431d2be8e7b616",
+      "notice_bytes": 1691,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "gn_reference": "libopenjpeg/function_list.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/ht_dec.c",
+      "source_member_sha256": "ade0bca536bab3180d48911f70eeeadb6ea7e6557c676878059f1133491bed7d",
+      "source_member_bytes": 107863,
+      "notice_path": "headers/034.txt",
+      "notice_sha256": "072818d52f2e9571409732f0842efc67d048ae98837be7b87744111949d14a02",
+      "notice_bytes": 2057,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        42
+      ],
+      "gn_reference": "libopenjpeg/ht_dec.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/image.c",
+      "source_member_sha256": "d8cc7e7dd380aa39e8aeebea8bee62790d0fe4f02472eb7cc0e0617fc657ecd9",
+      "source_member_bytes": 9806,
+      "notice_path": "headers/035.txt",
+      "notice_sha256": "7e4796446ad622a90c6ba026634be13f3ca45023d3afad48d2a16b52aa8ab169",
+      "notice_bytes": 1658,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "gn_reference": "libopenjpeg/image.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/invert.c",
+      "source_member_sha256": "387fd5e2b3446b6caf3e29cec51713c0f698c086dca695b67a432e774930197a",
+      "source_member_bytes": 10421,
+      "notice_path": "headers/033.txt",
+      "notice_sha256": "351b007cbb8398b8c24b0ad0b2f48e428f3f9a35bc0af6a6d8431d2be8e7b616",
+      "notice_bytes": 1691,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "gn_reference": "libopenjpeg/invert.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/j2k.c",
+      "source_member_sha256": "4582b44e7030921d9b887daf2a8a2f781a474ebb5a6bb939e4097c29ed31aa45",
+      "source_member_bytes": 497320,
+      "notice_path": "headers/036.txt",
+      "notice_sha256": "a426209f6e1a30c220a154c8b4d9c013b5e57a6150fbb84db5daf9356175128c",
+      "notice_bytes": 2338,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        43
+      ],
+      "gn_reference": "libopenjpeg/j2k.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/jp2.c",
+      "source_member_sha256": "76649ee4cf92c9abd2d310c45531bbaf90f190009ed01b20c45b3432c0e40298",
+      "source_member_bytes": 118680,
+      "notice_path": "headers/037.txt",
+      "notice_sha256": "f11fbcd55be52ea316cce2fbd73d248e35931f01b7dbcc91f4c3fae148bfce3f",
+      "notice_bytes": 2151,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        39
+      ],
+      "gn_reference": "libopenjpeg/jp2.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/mct.c",
+      "source_member_sha256": "2da2c467ace209c95bf12fe99970d2356a8e09cf2dc1d5b3f4c87f1ac7c18ba3",
+      "source_member_bytes": 13746,
+      "notice_path": "headers/030.txt",
+      "notice_sha256": "6d7ed816687a6481b37f11b9ad44c06f8d2bafdb15d8ec65adfab0d2d8534a72",
+      "notice_bytes": 2109,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        39
+      ],
+      "gn_reference": "libopenjpeg/mct.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/mqc.c",
+      "source_member_sha256": "1eed01025ca64b556bb433d8301b759ebba6a6764ef82fa728af2851c4b28f29",
+      "source_member_bytes": 17879,
+      "notice_path": "headers/038.txt",
+      "notice_sha256": "b6b7636f9f56bd4522bc158484fe8a7bf3e01405a24f30df9c804bc4b86d3e57",
+      "notice_bytes": 2057,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        38
+      ],
+      "gn_reference": "libopenjpeg/mqc.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/openjpeg.c",
+      "source_member_sha256": "4243da395e395a9f49082463cf0a38469fc4b6e49c0175e6cd61fb0a69903667",
+      "source_member_bytes": 32071,
+      "notice_path": "headers/032.txt",
+      "notice_sha256": "d1abbba924f7c0bebf0d44e180f49554f64040f31b01fc816660740d3380dab3",
+      "notice_bytes": 1795,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        33
+      ],
+      "gn_reference": "libopenjpeg/openjpeg.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/opj_malloc.h",
+      "source_member_sha256": "fd7e8c01a7dfc2598df42094b4ae76132d79973fc120b527e6581dcf93c02a95",
+      "source_member_bytes": 3804,
+      "notice_path": "headers/039.txt",
+      "notice_sha256": "b31d9ff2348d1434b97b7bd0c5bd9680964d2e9e28ad81b6018e03757384ea71",
+      "notice_bytes": 1712,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "gn_reference": "libopenjpeg/opj_malloc.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/pi.c",
+      "source_member_sha256": "6bda001776659dc35b0ca20ea572eef27d83d5965e8073fd4584af0ccc5904aa",
+      "source_member_bytes": 83615,
+      "notice_path": "headers/040.txt",
+      "notice_sha256": "aab6b2aa81ba0810c1983a55336b9a06af5d6dd27ca3d6229f49840e1314ea16",
+      "notice_bytes": 2019,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        38
+      ],
+      "gn_reference": "libopenjpeg/pi.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/sparse_array.c",
+      "source_member_sha256": "5159bf88dd47abcf73425b478821431183241557c92ce870809e95cb37697a13",
+      "source_member_bytes": 15756,
+      "notice_path": "headers/041.txt",
+      "notice_sha256": "498285c97f3a7e74d8adea5b4f4e1cc5ced7204b3d4e8d4aca08610da4ce6bd5",
+      "notice_bytes": 1662,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "gn_reference": "libopenjpeg/sparse_array.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/sparse_array.h",
+      "source_member_sha256": "14a2b65c50e9bf1a2e0dbe821edcc1c7a3129021897160485f30d261f02eb3ff",
+      "source_member_bytes": 7072,
+      "notice_path": "headers/041.txt",
+      "notice_sha256": "498285c97f3a7e74d8adea5b4f4e1cc5ced7204b3d4e8d4aca08610da4ce6bd5",
+      "notice_bytes": 1662,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "gn_reference": "libopenjpeg/sparse_array.h"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/t1.c",
+      "source_member_sha256": "d5a1614c9420294a8c857aacbff6ffbe1306be7b19d52de8983fbcdb8b286621",
+      "source_member_bytes": 88390,
+      "notice_path": "headers/042.txt",
+      "notice_sha256": "9729c7ab9e59f4749a813289f99e7682c35e5dcff563cf4e4aae7046393cb566",
+      "notice_bytes": 2124,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        40
+      ],
+      "gn_reference": "libopenjpeg/t1.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/t2.c",
+      "source_member_sha256": "4e5539e37571540e16b8df5418507b69a322ab224dba2290843ebd56f10f759b",
+      "source_member_bytes": 63905,
+      "notice_path": "headers/043.txt",
+      "notice_sha256": "1fc8e6bd93fb12da6489b889af0005192a5a6e7c0b75cc214ff61b2b3fe36c72",
+      "notice_bytes": 2165,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        40
+      ],
+      "gn_reference": "libopenjpeg/t2.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/tcd.c",
+      "source_member_sha256": "a1177ee7d2b8c901f00d457e9f67016e4e573e00b52601d4df1872933fbc8463",
+      "source_member_bytes": 114643,
+      "notice_path": "headers/044.txt",
+      "notice_sha256": "d1bcbf4d802ef68fe237c0eac555a95f163b8dd1a17da56e0e882df2fa854670",
+      "notice_bytes": 2212,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        41
+      ],
+      "gn_reference": "libopenjpeg/tcd.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/tgt.c",
+      "source_member_sha256": "d6e01bbfef5f5a698cbfae32dbbd080eb62da60e08f10cc92e9ab8a1d0de4e25",
+      "source_member_bytes": 10571,
+      "notice_path": "headers/030.txt",
+      "notice_sha256": "6d7ed816687a6481b37f11b9ad44c06f8d2bafdb15d8ec65adfab0d2d8534a72",
+      "notice_bytes": 2109,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        39
+      ],
+      "gn_reference": "libopenjpeg/tgt.c"
+    },
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/thread.c",
+      "source_member_sha256": "208c73dce20f4f8ecd9aaf33b2098234c3d403d9c3bd7b0d79947a2286e3be5a",
+      "source_member_bytes": 24529,
+      "notice_path": "headers/045.txt",
+      "notice_sha256": "4d5a50b855894e0a35df7462a60623680eee0ab84f73aba167de3a9d766e12a5",
+      "notice_bytes": 1642,
+      "source_offset": 0,
+      "source_lines": [
+        1,
+        31
+      ],
+      "gn_reference": "libopenjpeg/thread.c"
+    }
+  ],
+  "sources_without_notice": [
+    {
+      "source_member": "qtwebengine-everywhere-src-6.8.3/src/3rdparty/chromium/third_party/pdfium/third_party/libopenjpeg/t1_ht_luts.h",
+      "source_member_sha256": "5988bb6f3da45c4db3f233db782b24b18951f37e38b326c83beb350587e7928e",
+      "source_member_bytes": 17498,
+      "finding": "No copyright/grant phrase found in original source; no notice invented."
+    }
+  ],
+  "licensing_clearance": false,
+  "binary_source_derivation_qualified": false,
+  "shipped_notice_closure_qualified": false,
+  "distribution_qualified": false
+}

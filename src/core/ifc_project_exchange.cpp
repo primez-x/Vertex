@@ -10,6 +10,14 @@
 #include "sketch/ifc_native_geometry.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/stair_semantics.hpp"
+#include "sketch/site_frame.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/terrain_surface.hpp"
+#include "sketch/vertical_levels.hpp"
+#include "sketch/roof_join_semantics.hpp"
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+#include "sketch/document_wall.hpp"
+#endif
 
 #include <algorithm>
 #include <charconv>
@@ -456,15 +464,25 @@ void add_diagnostic(std::vector<IfcProjectDiagnostic>& output, std::string id,
 
 class StepBuilder {
 public:
-    explicit StepBuilder(const IfcExchangeLimits& limits) : limits_(limits) {}
+    explicit StepBuilder(const IfcExchangeLimits& limits) : limits_(limits) {
+        serialized_bytes_ = finish(false).size();
+    }
 
     int add(std::string type, std::string args) {
         require(records_.size() < limits_.max_records);
+        const auto bytes = 6 + std::to_string(next_id_).size() + type.size() + args.size();
+        if (bounded_add_) require(serialized_bytes_ <= limits_.max_bytes && bytes <= limits_.max_bytes - serialized_bytes_);
         records_.push_back({next_id_++, std::move(type), std::move(args)});
+        serialized_bytes_ += bytes;
         return records_.back().id;
     }
 
-    std::string finish() const {
+    struct Checkpoint { std::size_t records; int next_id; std::size_t bytes; bool bounded; };
+    [[nodiscard]] Checkpoint checkpoint() const { return {records_.size(), next_id_, serialized_bytes_, bounded_add_}; }
+    void rollback(Checkpoint point) { records_.resize(point.records); next_id_ = point.next_id; serialized_bytes_ = point.bytes; bounded_add_ = point.bounded; }
+    void bounded_add(bool bounded) { bounded_add_ = bounded; }
+
+    std::string finish(bool bounded = true) const {
         std::string result;
         result.reserve(records_.size() * 80 + 256);
         result += "ISO-10303-21;\nHEADER;\n";
@@ -482,13 +500,15 @@ public:
             result += ");\n";
         }
         result += "ENDSEC;\nEND-ISO-10303-21;\n";
-        require(result.size() <= limits_.max_bytes);
+        if (bounded) require(result.size() <= limits_.max_bytes);
         return result;
     }
 
 private:
     const IfcExchangeLimits& limits_;
     int next_id_{1};
+    std::size_t serialized_bytes_{};
+    bool bounded_add_{};
     std::vector<StepRecord> records_;
 };
 
@@ -535,19 +555,31 @@ struct ExportContext {
     int axis_placement{};
     int placement{};
     int representation_context{};
+    int project{};
+    int world_placement{};
     int storey{};
-    std::vector<int> contained_products;
+    int default_storey{};
+    std::map<int, std::vector<int>> contained_products;
+    std::map<std::string,int,std::less<>> spatial_ids;
+    std::map<std::string,int,std::less<>> spatial_placements;
+    std::map<std::string,int,std::less<>> material_ids;
+    SitePresentationPlacement presentation;
+    std::map<std::string,SitePresentationPlacement,std::less<>> site_placements;
+    std::map<std::string,AssemblyExpansion,std::less<>> assembly_expansions;
+    std::map<std::string,std::vector<const Entity*>,std::less<>> hosted_openings;
+    const Entity* authored_entity{};
     std::size_t ordinal{};
     std::map<std::string, int, std::less<>> product_ids;
     std::vector<std::pair<std::string, std::string>> opening_host_links;
     std::vector<std::pair<std::string, std::string>> railing_host_links;
     std::set<std::string, std::less<>> fresh_stair_proofs;
     project_import_detail::GeometryBudget native_work;
+    project_import_detail::GeometryBudget join_work{0, 0, "ifc_native_join_work_budget_exceeded"};
     std::size_t mesh_vertices{};
     std::size_t mesh_triangles{};
     std::size_t retained_metadata_charge{};
 
-    explicit ExportContext(const IfcExchangeLimits& limits) : limits(limits), builder(limits) {
+    explicit ExportContext(const IfcExchangeLimits& limits, bool authored_spatial) : limits(limits), builder(limits) {
         const auto person = builder.add("IFCPERSON", "$,$,'Vertex',$,$,$,$,$");
         const auto organization = builder.add("IFCORGANIZATION", "$,'Private',$,$,$");
         const auto person_org = builder.add("IFCPERSONANDORGANIZATION",
@@ -562,19 +594,37 @@ struct ExportContext {
         z_direction = builder.add("IFCDIRECTION", "(0.,0.,1.)");
         axis_placement = builder.add("IFCAXIS2PLACEMENT3D", ref(origin) + ",$,$");
         placement = builder.add("IFCLOCALPLACEMENT", "$," + ref(axis_placement));
+        world_placement = placement;
         representation_context = builder.add("IFCGEOMETRICREPRESENTATIONCONTEXT",
             "$,'Model',3,0.0000001," + ref(axis_placement) + ",$");
-        const auto project = builder.add("IFCPROJECT", root("project", "Vertex project") +
+        project = builder.add("IFCPROJECT", root("project", "Vertex project") +
             ",$,$,$,(" + ref(representation_context) + ")," + ref(units));
+        if (!authored_spatial) default_hierarchy();
+    }
+
+    void default_hierarchy() {
+        if (default_storey) { storey=default_storey; return; }
         const auto site = builder.add("IFCSITE", root("site", "Default site") +
-            ",$," + ref(placement) + ",$,$,.ELEMENT.,$,$,$,$,$");
+            ",$," + ref(world_placement) + ",$,$,.ELEMENT.,$,$,$,$,$");
         const auto building = builder.add("IFCBUILDING", root("building", "Default building") +
-            ",$," + ref(placement) + ",$,$,.ELEMENT.,$,$,$");
+            ",$," + ref(world_placement) + ",$,$,.ELEMENT.,$,$,$");
         storey = builder.add("IFCBUILDINGSTOREY", root("storey", "Default storey") +
-            ",$," + ref(placement) + ",$,$,.ELEMENT.,0.");
+            ",$," + ref(world_placement) + ",$,$,.ELEMENT.,0.");
+        default_storey=storey;
         aggregate(project, site, "project-site");
         aggregate(site, building, "site-building");
         aggregate(building, storey, "building-storey");
+    }
+
+    void contain(int product) { require(storey>0); contained_products[storey].push_back(product); }
+
+    int rigid_placement(const SiteRigidTransform& pose, int parent=0) {
+        const auto& t=pose.translation_m;
+        const auto point=builder.add("IFCCARTESIANPOINT","("+real_text(t.x)+","+real_text(t.y)+","+real_text(t.z)+")");
+        const auto x=builder.add("IFCDIRECTION","("+real_text(std::cos(pose.rotation_radians))+","+
+            real_text(std::sin(pose.rotation_radians))+",0.)");
+        const auto axis=builder.add("IFCAXIS2PLACEMENT3D",ref(point)+","+ref(z_direction)+","+ref(x));
+        return builder.add("IFCLOCALPLACEMENT",(parent ? ref(parent) : "$")+","+ref(axis));
     }
 
     std::string root(std::string_view id, std::string_view name) {
@@ -587,8 +637,20 @@ struct ExportContext {
     }
 };
 
-void retain_properties(const Entity& entity, int product_id, ExportContext& context,
+void retain_properties(const Entity& input, int product_id, ExportContext& context,
                        std::vector<IfcProjectDiagnostic>& diagnostics) {
+    auto entity=input;
+    if (context.authored_entity && input.id==context.authored_entity->id &&
+        context.presentation.source_frame.mode!=SiteFrameMode::world && !input.properties.contains("native_entity")) {
+        const auto& source=*context.authored_entity;
+        entity.properties["_vertex_ifc_site_source"]={{"version",1},{"id",source.id},{"type",source.type},
+            {"required",source.required},{"properties",source.properties},{"extensions",source.extensions},
+            {"property_id",context.presentation.source_frame.property_id},
+            {"building_id",context.presentation.source_frame.building_id},
+            {"translation_m",{context.presentation.forward.translation_m.x,context.presentation.forward.translation_m.y,
+                context.presentation.forward.translation_m.z}},
+            {"rotation_radians",context.presentation.forward.rotation_radians}};
+    }
     std::size_t charge = 0;
     try { charge = metadata_charge(entity.properties); }
     catch (const std::invalid_argument&) {
@@ -617,7 +679,8 @@ void retain_properties(const Entity& entity, int product_id, ExportContext& cont
         const bool retained_provenance = retained_type == "property" || retained_type == "building" ||
             retained_type == "floor" || retained_type == "annotation_state" || retained_type == "ifc_source";
         if (((entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) || retained_room ||
-             retained_provenance ||
+             retained_provenance || entity.type=="assembly_instance" || entity.type=="terrain_surface" ||
+             entity.properties.contains("_vertex_ifc_site_source") || entity.properties.contains("_vertex_ifc_join") ||
              ((entity.type == "roof" || entity.type == "room" || entity.type == "stair" || entity.type == "railing") && entity.properties.contains("_vertex_ifc_entity"))) &&
             context.limits.max_string_bytes >= 512 && payload.size() <= 8*1024*1024) {
             const auto chunks = (payload.size() + chunk_size - 1) / chunk_size;
@@ -658,7 +721,7 @@ void export_native_reference(const Entity& entity, ExportContext& context,
     const auto product = context.builder.add("IFCBUILDINGELEMENTPROXY",
         context.root("reference:" + entity.id, entity.id) + "," + step_string(entity.type, context.limits) +
         "," + ref(context.placement) + ",$,$,.NOTDEFINED.");
-    context.contained_products.push_back(product);
+    context.contain(product);
     auto retained = entity;
     // An imported reference already carries the original bounded native payload.
     // Reuse it verbatim so repeated export/import cycles neither grow a recursive
@@ -672,6 +735,50 @@ void export_native_reference(const Entity& entity, ExportContext& context,
     }
     retain_properties(retained, product, context, diagnostics);
     add_diagnostic(diagnostics, entity.id, entity.type, "native_reference_only");
+}
+
+void export_spatial_hierarchy(const DocumentSnapshot& document, ExportContext& context,
+    std::vector<IfcProjectDiagnostic>& diagnostics) {
+    const auto organization=organize_project(document);
+    for (const auto kind : {"property","building","floor"})
+        for (const auto& [id,e]:document.entities()) {
+            if (e.type!=kind) continue;
+            try {
+                const auto& p=context.site_placements.at(id);
+                const auto name=e.properties.value("name",id);
+                const auto& node=organization.nodes.at(id);
+                require(node.issues.empty());
+                int parent=context.project, parent_placement=0;
+                SiteRigidTransform pose=p.forward;
+                double elevation=0;
+                if (e.type!="property") {
+                    const auto parent_id=e.type=="building" ? p.drawing_context.property_id : p.drawing_context.building_id;
+                    require(context.spatial_ids.contains(parent_id));
+                    parent=context.spatial_ids.at(parent_id); parent_placement=context.spatial_placements.at(parent_id);
+                    const auto parent_pose=context.site_placements.at(parent_id).forward;
+                    pose=compose_site_transforms(inverse_site_transform(parent_pose),p.forward);
+                    if (e.type=="floor" && e.properties.contains("vertical_level_binding")) {
+                        const auto binding=VerticalLevelBinding::from_json(e.properties.at("vertical_level_binding"));
+                        const auto& graph=document.entities().at(binding.graph_entity_id);
+                        require(graph.type=="vertical_levels");
+                        const auto levels=VerticalLevelGraph::from_json(graph.properties.at("model"));
+                        const auto level=std::find_if(levels.levels().begin(),levels.levels().end(),[&](const auto& value){
+                            return value.id==binding.level_id;
+                        });
+                        require(level!=levels.levels().end()); elevation=level->elevation_m;
+                        pose.translation_m.z+=elevation;
+                    }
+                }
+                const auto placement=context.rigid_placement(pose,parent_placement);
+                const auto product=context.builder.add(e.type=="property" ? "IFCSITE" : e.type=="building" ? "IFCBUILDING" : "IFCBUILDINGSTOREY",
+                    context.root("spatial:"+id,name)+",$,"+ref(placement)+",$,$,.ELEMENT.,"+
+                    (e.type=="property" ? "$,$,$,$,$" : e.type=="building" ? "$,$,$" : real_text(elevation)));
+                context.spatial_ids[id]=product; context.spatial_placements[id]=placement;
+                context.aggregate(parent,product,"spatial-parent:"+id);
+            } catch (const std::exception&) {
+                add_diagnostic(diagnostics,id,e.type,"site_spatial_hierarchy_not_exported");
+            }
+        }
 }
 
 void export_wall_construction(const Entity& entity, int product, ExportContext& context,
@@ -828,10 +935,11 @@ int fill_placement(const RigidFrame& frame, ExportContext& context) {
         real_text(frame.origin.x) + "," + real_text(frame.origin.y) + "," + real_text(frame.origin.z) + ")");
     const auto x = context.builder.add("IFCDIRECTION", "(" + real_text(frame.x.x) + "," + real_text(frame.x.y) + ",0.)");
     const auto axis = context.builder.add("IFCAXIS2PLACEMENT3D", ref(origin) + "," + ref(context.z_direction) + "," + ref(x));
-    return context.builder.add("IFCLOCALPLACEMENT", "$," + ref(axis));
+    return context.builder.add("IFCLOCALPLACEMENT", ref(context.placement) + "," + ref(axis));
 }
 
-int mesh_shape(const std::vector<IfcNativeMesh>& meshes, ExportContext& context) {
+int mesh_shape(const std::vector<IfcNativeMesh>& meshes, ExportContext& context,
+    std::vector<int>* mesh_items = nullptr) {
     std::string items;
     for (const auto& mesh : meshes) {
         require(mesh.vertices.size() <= context.limits.max_mesh_vertices - context.mesh_vertices &&
@@ -854,6 +962,7 @@ int mesh_shape(const std::vector<IfcNativeMesh>& meshes, ExportContext& context)
         indices += ')';
         const auto item = context.builder.add("IFCTRIANGULATEDFACESET",
             ref(points) + ",$,.T.," + indices + ",$");
+        if (mesh_items) mesh_items->push_back(item);
         if (!items.empty()) items += ',';
         items += ref(item);
     }
@@ -868,6 +977,168 @@ Entity mesh_metadata(const Entity& entity, std::string_view role) {
     retained.properties["_vertex_ifc_mesh"] = {{"version", 1}, {"role", role},
         {"max_deviation_m", ifc_native_mesh_deviation_m}};
     return retained;
+}
+
+void export_native_join(const DocumentSnapshot& document, const Entity& entity,
+    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+    const auto checkpoint = context.builder.checkpoint();
+    const auto ordinal = context.ordinal, vertices = context.mesh_vertices,
+        triangles = context.mesh_triangles, metadata_bytes = context.retained_metadata_charge;
+    const auto diagnostic_count = diagnostics.size();
+    try {
+        context.builder.bounded_add(true);
+        const bool walls = entity.type == "wall_join";
+        const auto ids = walls ? parse_wall_join(entity.properties, entity.id).wall_ids
+                               : parse_roof_join(entity.properties, entity.id).roof_ids;
+        // Reserve aggregate boolean work before OCCT sees any source geometry.
+        // Failed candidates retain their work charge to bound repeated failures.
+        context.join_work.charge(ids.size());
+        std::vector<Entity> resolved;
+        std::vector<Wall> decoded;
+        Json sources = Json::array(), openings = Json::array();
+        for (const auto& id : ids) {
+            const auto& source = document.entities().at(id);
+            require(source.type == (walls ? "wall" : "roof"));
+            const auto& placement = context.site_placements.at(id);
+            require(placement.source_frame == context.presentation.source_frame &&
+                placement.drawing_context.property_id == context.presentation.drawing_context.property_id &&
+                placement.drawing_context.building_id == context.presentation.drawing_context.building_id);
+            resolved.push_back(resolve_vertical_placement(document, source));
+            sources.push_back({{"id", source.id}, {"type", source.type}, {"required", source.required},
+                {"properties", source.properties}, {"extensions", source.extensions},
+                {"resolved_properties", resolved.back().properties},
+                {"physical_context", {{"property_id",placement.drawing_context.property_id},
+                    {"building_id",placement.drawing_context.building_id},{"floor_id",placement.drawing_context.floor_id},
+                    {"layer_id",placement.drawing_context.layer_id},{"level_id",placement.drawing_context.level_id}}}});
+            if (walls) {
+                const auto& hosted = context.hosted_openings[id];
+                for (const auto* opening : hosted)
+                    openings.push_back({{"id", opening->id}, {"type", opening->type}, {"required", opening->required},
+                        {"properties", opening->properties}, {"extensions", opening->extensions}});
+                Wall wall;
+                std::string error;
+                require(read_document_wall(resolved.back(), hosted, wall, error));
+                decoded.push_back(std::move(wall));
+            }
+        }
+        const auto geometry = walls
+            ? ifc_native_wall_join_mesh(parse_wall_join(entity.properties, entity.id), decoded,
+                context.limits.max_mesh_vertices - vertices, context.limits.max_mesh_triangles - triangles)
+            : ifc_native_roof_join_mesh(parse_roof_join(entity.properties, entity.id), resolved,
+                context.limits.max_mesh_vertices - vertices, context.limits.max_mesh_triangles - triangles);
+        require(!geometry.regions.empty() && std::isfinite(geometry.net_volume_m3) && geometry.net_volume_m3 > 0);
+        std::vector<IfcNativeMesh> meshes;
+        Json regions = Json::array();
+        std::vector<std::optional<Json>> assignments;
+        std::vector<std::optional<std::string>> colors;
+        std::vector<std::pair<std::size_t, std::size_t>> mesh_ranges;
+        for (const auto& region : geometry.regions) {
+            const auto member = std::find(ids.begin(), ids.end(), region.source_id);
+            require(member != ids.end());
+            const auto i = static_cast<std::size_t>(member - ids.begin());
+            const auto& binding = entity.properties.contains("material_assignment") ? entity : resolved[i];
+            std::optional<Json> assignment;
+            std::optional<std::string> color;
+            if (region.layer_id && !entity.properties.contains("material_assignment")) {
+                const auto& layers = resolved[i].properties.at("layers");
+                const auto layer = std::find_if(layers.begin(), layers.end(), [&](const Json& candidate) {
+                    return candidate.at("id").get<std::string>() == *region.layer_id;
+                });
+                require(layer != layers.end());
+                if (layer->contains("material_assignment")) assignment = layer->at("material_assignment");
+            } else if (binding.properties.contains("material_assignment"))
+                assignment = binding.properties.at("material_assignment");
+            if (assignment) {
+                const auto& catalog = document.entities().at(assignment->at("catalog_id").get<std::string>());
+                require(catalog.type == "assembly_model");
+                const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
+                const auto material = std::find_if(model.materials().begin(), model.materials().end(), [&](const auto& candidate) {
+                    return candidate.id == assignment->at("material_id").get<std::string>();
+                });
+                require(material != model.materials().end());
+                color = material->color_srgb;
+            }
+            assignments.push_back(assignment); colors.push_back(color);
+            mesh_ranges.emplace_back(meshes.size(), region.meshes.size());
+            meshes.insert(meshes.end(), region.meshes.begin(), region.meshes.end());
+            regions.push_back({{"source_id", region.source_id}, {"authored_priority", i},
+                {"layer_id", region.layer_id ? Json(*region.layer_id) : Json(nullptr)},
+                {"gross_volume_m3", region.gross_volume_m3}, {"net_volume_m3", region.net_volume_m3},
+                {"first_mesh", mesh_ranges.back().first}, {"mesh_count", region.meshes.size()},
+                {"material_assignment", assignment ? *assignment : Json(nullptr)},
+                {"color_srgb", color ? Json(*color) : Json(nullptr)}});
+        }
+        std::vector<int> items;
+        const auto shape = mesh_shape(meshes, context, &items);
+        const auto product = context.builder.add(walls ? "IFCWALL" : "IFCROOF",
+            context.root(entity.id, entity.id) + ",$," + ref(context.placement) + "," + ref(shape) + ",$,.NOTDEFINED.");
+        auto retained = mesh_metadata(entity, entity.type);
+        retained.properties["_vertex_ifc_join"] = {{"version", 1}, {"native_entity", {
+            {"id", entity.id}, {"type", entity.type}, {"required", entity.required},
+            {"properties", entity.properties}, {"extensions", entity.extensions}}},
+            {"members", std::move(sources)}, {"hosted_openings", std::move(openings)},
+            {"regions", std::move(regions)}, {"net_volume_m3", geometry.net_volume_m3},
+            {"priority", "earlier_member_owns_overlap"}};
+        retain_properties(retained, product, context, diagnostics);
+        require(diagnostics.size() == diagnostic_count); // complete source or no physical occurrence
+        std::string constituents;
+        for (std::size_t i = 0; i < geometry.regions.size(); ++i) {
+            const auto& region = geometry.regions[i];
+            if (!assignments[i] || region.meshes.empty()) continue;
+            const auto& assignment = *assignments[i];
+            const auto material = context.builder.add("IFCMATERIAL",
+                step_string(assignment.at("material_id").get<std::string>(), context.limits) + "," +
+                step_string("Native catalog: " + assignment.at("catalog_id").get<std::string>(), context.limits) + ",$");
+            const auto constituent = context.builder.add("IFCMATERIALCONSTITUENT",
+                step_string(Json{{"source_id",region.source_id},{"layer_id",region.layer_id ? Json(*region.layer_id) : Json(nullptr)}}.dump(),
+                    context.limits) + ",$," + ref(material) + "," +
+                real_text(region.net_volume_m3 / geometry.net_volume_m3) + ",$");
+            if (!constituents.empty()) constituents += ',';
+            constituents += ref(constituent);
+            if (colors[i]) {
+                const auto& color = *colors[i];
+                require(color.size() == 7 && color[0] == '#');
+                const auto channel = [&](std::size_t index) {
+                    unsigned value{};
+                    const auto parsed = std::from_chars(color.data() + index, color.data() + index + 2, value, 16);
+                    require(parsed.ec == std::errc{} && parsed.ptr == color.data() + index + 2);
+                    return real_text(value / 255.0);
+                };
+                const auto rgb = context.builder.add("IFCCOLOURRGB", "$," + channel(1) + ',' + channel(3) + ',' + channel(5));
+                const auto surface = context.builder.add("IFCSURFACESTYLESHADING", ref(rgb) + ",$");
+                const auto style = context.builder.add("IFCSURFACESTYLE", "$,.BOTH.,(" + ref(surface) + ")");
+                const auto range = mesh_ranges[i];
+                for (std::size_t mesh = range.first; mesh < range.first + range.second; ++mesh)
+                    context.builder.add("IFCSTYLEDITEM", ref(items.at(mesh)) + ",(" + ref(style) + "),$");
+            }
+        }
+        if (!constituents.empty()) {
+            const auto set = context.builder.add("IFCMATERIALCONSTITUENTSET", "$,$,(" + constituents + ")");
+            context.builder.add("IFCRELASSOCIATESMATERIAL", context.root("join-material:" + entity.id, "") +
+                ",(" + ref(product) + ")," + ref(set));
+        }
+        const auto quantity = context.builder.add("IFCQUANTITYVOLUME", "'NetVolume',$,$," + real_text(geometry.net_volume_m3) + ",$");
+        const auto quantities = context.builder.add("IFCELEMENTQUANTITY", context.root("join-quantity:" + entity.id,
+            walls ? "Qto_WallBaseQuantities" : "Qto_RoofBaseQuantities") + ",$,(" + ref(quantity) + ")");
+        context.builder.add("IFCRELDEFINESBYPROPERTIES", context.root("join-quantity-link:" + entity.id, "") +
+            ",(" + ref(product) + ")," + ref(quantities));
+        auto products = context.product_ids;
+        products[entity.id] = product;
+        for (const auto& id : ids) products[id] = product;
+        auto contained = context.contained_products;
+        require(context.storey > 0); contained[context.storey].push_back(product);
+        context.product_ids.swap(products); context.contained_products.swap(contained);
+        context.builder.bounded_add(checkpoint.bounded);
+    } catch (const std::exception& error) {
+        context.builder.rollback(checkpoint);
+        context.ordinal = ordinal; context.mesh_vertices = vertices; context.mesh_triangles = triangles;
+        context.retained_metadata_charge = metadata_bytes;
+        diagnostics.resize(diagnostic_count);
+        add_diagnostic(diagnostics, entity.id, entity.type,
+            std::string_view(error.what()) == "ifc_mesh_budget_exceeded" ||
+            std::string_view(error.what()) == "ifc_native_join_work_budget_exceeded"
+                ? "native_join_budget_exceeded" : "native_join_geometry_not_representable");
+    }
 }
 
 std::string roof_enum(const Json& properties) {
@@ -1099,7 +1370,7 @@ void export_native_stair_or_railing(const DocumentSnapshot& document, const Enti
             context.root(entity.id, entity.id) + ",$," + ref(context.placement) + "," + ref(shape) + ",$,.NOTDEFINED.");
         context.product_ids[entity.id] = product;
         if (host) context.railing_host_links.emplace_back(entity.id, host->id);
-        else context.contained_products.push_back(product);
+        else context.contain(product);
         const bool retain_source = !context.fresh_stair_proofs.contains(host ? host->id : entity.id);
         auto retained = stair_railing_metadata(document, entity, retain_source);
         if (host) retained.properties["_vertex_ifc_host"] = stair_railing_metadata(document, *host, retain_source).properties;
@@ -1125,7 +1396,7 @@ void export_native_roof_or_room(const DocumentSnapshot& document, const Entity& 
             context.root(entity.id, entity.id) + ",$," + ref(context.placement) + "," + ref(shape) +
             (roof ? ",$," + roof_enum(entity.properties) : ",$,.ELEMENT.,.INTERNAL.,$"));
         context.product_ids[entity.id] = product;
-        if (roof) context.contained_products.push_back(product);
+        if (roof) context.contain(product);
         else context.aggregate(context.storey, product, "storey-space:" + entity.id);
         auto retained = mesh_metadata(entity, roof ? "roof" : "room");
         const auto& authored = document.entities().at(entity.id);
@@ -1213,7 +1484,7 @@ void export_fill(const DocumentSnapshot& document, const Entity& entity, int voi
               : ",.WINDOW.," + window_partition_enum(profile) + "," + window_partition_label(profile, context.limits)));
     context.builder.add("IFCRELFILLSELEMENT", context.root("fills:" + entity.id, "") +
         "," + ref(void_id) + "," + ref(fill));
-    context.contained_products.push_back(fill);
+    context.contain(fill);
     auto retained = mesh_metadata(entity, "fill");
     retained.properties["_vertex_ifc_host"] = host.properties;
     retain_properties(retained, fill, context, diagnostics);
@@ -1240,7 +1511,7 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
     context.product_ids[entity.id] = product;
     auto retained = mesh_metadata(entity, entity.type == "wall" ? "wall" : "void");
     if (entity.type == "wall") {
-        context.contained_products.push_back(product);
+        context.contain(product);
         export_wall_construction(entity, product, context, diagnostics);
     } else {
         context.opening_host_links.emplace_back(entity.id, host.id);
@@ -1252,10 +1523,125 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
 }
 #endif
 
+void export_terrain(const Entity& entity, ExportContext& context,
+    std::vector<IfcProjectDiagnostic>& diagnostics) {
+    try {
+        const auto terrain=TerrainSurface::from_json(entity.properties.at("model"));
+        require(terrain.points().size()<=context.limits.max_mesh_vertices-context.mesh_vertices &&
+            terrain.triangles().size()<=context.limits.max_mesh_triangles-context.mesh_triangles);
+        context.mesh_vertices+=terrain.points().size(); context.mesh_triangles+=terrain.triangles().size();
+        std::string points="(",triangles="(";
+        for (const auto& p:terrain.points()) {
+            if (points.size()>1) points+=',';
+            points+="("+real_text(p.x_m)+","+real_text(p.y_m)+","+real_text(p.elevation_m)+")";
+        }
+        for (const auto& t:terrain.triangles()) {
+            if (triangles.size()>1) triangles+=',';
+            triangles+="("+std::to_string(t.point_indices[0]+1)+","+std::to_string(t.point_indices[1]+1)+","+
+                std::to_string(t.point_indices[2]+1)+")";
+        }
+        const auto coordinates=context.builder.add("IFCCARTESIANPOINTLIST3D",points+")");
+        const auto faces=context.builder.add("IFCTRIANGULATEDFACESET",ref(coordinates)+",$,.F.,"+triangles+"),$");
+        const auto repr=context.builder.add("IFCSHAPEREPRESENTATION",ref(context.representation_context)+",'Body','Tessellation',("+ref(faces)+")");
+        const auto shape=context.builder.add("IFCPRODUCTDEFINITIONSHAPE","$,$,("+ref(repr)+")");
+        const auto product=context.builder.add("IFCGEOGRAPHICELEMENT",context.root(entity.id,entity.id)+",$,"+
+            ref(context.placement)+","+ref(shape)+",$,.TERRAIN.");
+        context.product_ids[entity.id]=product; context.contain(product);
+        auto retained=entity;
+        retained.properties["_vertex_ifc_entity"]={{"id",entity.id},{"type",entity.type},{"required",entity.required},
+            {"properties",entity.properties},{"extensions",entity.extensions}};
+        retain_properties(retained,product,context,diagnostics);
+    } catch (const std::exception&) { add_diagnostic(diagnostics,entity.id,entity.type,"terrain_geometry_not_exported"); }
+}
+
+void export_independent_assembly(const DocumentSnapshot& document, const Entity& entity,
+    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    try {
+        const auto& expansion=context.assembly_expansions.at(entity.id);
+        require(!expansion.profiles.empty());
+        std::vector<std::vector<IfcNativeMesh>> profile_meshes;
+        std::size_t vertices=context.mesh_vertices, triangles=context.mesh_triangles;
+        for (const auto& expanded:expansion.profiles) {
+            const auto& profile=expanded.profile;
+            const auto& transform=expanded.transform;
+            std::size_t work=profile.outer.size();
+            for (const auto& hole:profile.holes) work+=hole.size();
+            context.native_work.charge(work);
+            // Native room admission and final construction each check edges.
+            context.native_work.charge_cross(work);
+            context.native_work.charge_cross(work);
+            const auto boundary=[&](const Boundary& source) {
+                Boundary result=source;
+                for (auto& s:result) {
+                    const auto a=transform_assembly_point({s.start.x,s.start.y,0},transform);
+                    const auto b=transform_assembly_point({s.end.x,s.end.y,0},transform);
+                    s.start={a.x,a.y}; s.end={b.x,b.y};
+                }
+                return result;
+            };
+            Json holes=Json::array(); for (const auto& hole:profile.holes) holes.push_back(boundary_json(boundary(hole)));
+            Entity room{"ifc-assembly-profile","room",{{"boundary",boundary_json(boundary(profile.outer))},
+                {"holes",holes},{"height_m",profile.height_m*transform.scale},
+                {"elevation_m",profile.elevation_m*transform.scale+transform.translation_m.z}}};
+            auto meshes=ifc_native_room_mesh(room,context.limits.max_mesh_vertices-vertices,
+                context.limits.max_mesh_triangles-triangles);
+            for (const auto& mesh:meshes) {
+                require(mesh.vertices.size()<=context.limits.max_mesh_vertices-vertices &&
+                    mesh.triangles.size()<=context.limits.max_mesh_triangles-triangles);
+                vertices+=mesh.vertices.size(); triangles+=mesh.triangles.size();
+            }
+            profile_meshes.push_back(std::move(meshes));
+        }
+        const auto root=context.builder.add("IFCELEMENTASSEMBLY",context.root(entity.id,entity.id)+",'Independent profile assembly',"+
+            ref(context.placement)+",$,$,.NOTDEFINED.,.USERDEFINED.");
+        context.product_ids[entity.id]=root; context.contain(root);
+        Json provenance=Json::array();
+        for (std::size_t i=0;i<expansion.profiles.size();++i) {
+            const auto& p=expansion.profiles[i]; const auto shape=mesh_shape(profile_meshes[i],context);
+            const auto child_id=entity.id+":profile:"+std::to_string(i);
+            const auto child=context.builder.add("IFCBUILDINGELEMENTPROXY",context.root(child_id,p.profile.id)+",$,"+
+                ref(context.placement)+","+ref(shape)+",$,.ELEMENT.");
+            context.aggregate(root,child,"assembly-profile:"+child_id);
+            if (p.material_id) {
+                const auto catalog_id=decode_document_assembly_instance(entity).assembly_catalog_id;
+                const auto key=Json::array({catalog_id,*p.material_id}).dump();
+                auto material=context.material_ids.find(key);
+                if (material==context.material_ids.end()) {
+                    const auto model=AssemblyModel::from_json(document.entities().at(catalog_id).properties.at("model"));
+                    const auto found=std::find_if(model.materials().begin(),model.materials().end(),[&](const auto& m){return m.id==*p.material_id;});
+                    require(found!=model.materials().end());
+                    material=context.material_ids.emplace(key,context.builder.add("IFCMATERIAL",step_string(found->name,context.limits)+",$,$")).first;
+                }
+                context.builder.add("IFCRELASSOCIATESMATERIAL",context.root("assembly-material:"+child_id,"")+",("+ref(child)+"),"+ref(material->second));
+            }
+            provenance.push_back({{"part_path",p.part_path},{"type_id",p.type_id},{"profile_id",p.profile.id},
+                {"transform",encode_assembly_transform(p.transform)},{"material_id",p.material_id ? Json(*p.material_id) : Json(nullptr)},
+                {"geometric_volume_m3",p.volume_m3}});
+        }
+        auto retained=entity;
+        const auto catalog_id=decode_document_assembly_instance(entity).assembly_catalog_id;
+        const auto& catalog=document.entities().at(catalog_id);
+        retained.properties["_vertex_ifc_assembly_source"]={{"version",1},{"id",entity.id},{"required",entity.required},
+            {"properties",entity.properties},{"extensions",entity.extensions},
+            {"catalog",{{"id",catalog.id},{"properties",catalog.properties},{"extensions",catalog.extensions}}},
+            {"profiles",provenance},{"geometric_volume_m3",expansion.volume_m3}};
+        // Declared quantities stay in the exact authored instance/catalog. They
+        // are never serialized as geometric volume or scaled by site placement.
+        retain_properties(retained,root,context,diagnostics);
+    } catch (const std::exception&) { add_diagnostic(diagnostics,entity.id,entity.type,"independent_assembly_geometry_not_exported"); }
+#else
+    (void)document; (void)context;
+    add_diagnostic(diagnostics,entity.id,entity.type,"independent_assembly_runtime_unavailable");
+#endif
+}
+
 void export_product(const DocumentSnapshot& document, const Entity& entity,
                     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics,
                     const PhysicalWallRoomCheck* physical_room = nullptr) {
     const auto& type = entity.type;
+    if (type=="terrain_surface") { export_terrain(entity,context,diagnostics); return; }
+    if (type=="assembly_instance") { export_independent_assembly(document,entity,context,diagnostics); return; }
     std::string product_type;
     Boundary boundary;
     std::vector<Boundary> physical_holes;
@@ -1265,6 +1651,10 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     double local_elevation = 0.0;
 
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    if (type == "wall_join" || type == "roof_join") {
+        export_native_join(document, entity, context, diagnostics);
+        return;
+    }
     if (type == "stair" || type == "railing") {
         export_native_stair_or_railing(document, entity, context, diagnostics);
         return;
@@ -1278,6 +1668,10 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
 #endif
 
 #ifndef SKETCH_IFC_NATIVE_GEOMETRY
+    if (type == "wall_join" || type == "roof_join") {
+        add_diagnostic(diagnostics, entity.id, type, "native_join_runtime_unavailable");
+        return;
+    }
     if (type == "stair" || type == "railing") {
         add_diagnostic(diagnostics, entity.id, type, "native_stair_or_railing_runtime_unavailable");
         return;
@@ -1552,7 +1946,7 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         const auto axis = context.builder.add("IFCAXIS2PLACEMENT3D",
             ref(location) + ",$,$");
         const auto local = context.builder.add("IFCLOCALPLACEMENT",
-            "$," + ref(axis));
+            ref(context.placement) + "," + ref(axis));
         placement = ref(local);
     }
     int product_id{};
@@ -1579,7 +1973,7 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     }
     if (product_id > 0) context.product_ids[entity.id] = product_id;
     if (product_type == "IFCSPACE") context.aggregate(context.storey, product_id, "storey-space:" + entity.id);
-    else if (type != "opening") context.contained_products.push_back(product_id);
+    else if (type != "opening") context.contain(product_id);
     if (type == "wall") export_wall_construction(entity, product_id, context, diagnostics);
     if (type == "wall" || type == "slab" || type == "opening") {
         retain_properties(entity, product_id, context, diagnostics);
@@ -1858,7 +2252,7 @@ bool is_product(std::string_view type) {
            type == "IFCROOF" || type == "IFCSPACE" || type == "IFCDOOR" ||
            type == "IFCWINDOW" || type == "IFCOPENINGELEMENT" || type == "IFCSTAIR" ||
            type == "IFCSTAIRFLIGHT" || type == "IFCRAILING" ||
-           type == "IFCBUILDINGELEMENTPROXY";
+           type == "IFCBUILDINGELEMENTPROXY" || type == "IFCELEMENTASSEMBLY" || type == "IFCGEOGRAPHICELEMENT";
 }
 
 bool is_structural(std::string_view type) {
@@ -2403,20 +2797,145 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
                                           const IfcExchangeLimits& limits) {
     validate_limits(limits);
     IfcProjectExportResult result;
-    ExportContext context(limits);
+    const bool authored_spatial=std::any_of(document.entities().begin(),document.entities().end(),[](const auto& item){
+        return item.second.type=="property";
+    });
+    ExportContext context(limits,authored_spatial);
+    for (const auto& [id, entity] : document.entities()) {
+        (void)id;
+        if (entity.type == "opening" && entity.properties.is_object()) {
+            const auto host = entity.properties.find("wall_id");
+            if (host != entity.properties.end() && host->is_string())
+                context.hosted_openings[host->get<std::string>()].push_back(&entity);
+        }
+    }
+    std::vector<std::string> site_ids;
+    site_ids.reserve(document.entities().size());
+    // Annotation owners are containers of independently scoped children, not
+    // physical model owners. IFC currently retains their exact inert source only.
+    for (const auto& [id,e]:document.entities())
+        if (e.type != "annotation_state") site_ids.push_back(id);
+    try { context.site_placements=resolve_site_presentations(document,site_ids); }
+    catch (const std::exception&) {
+        add_diagnostic(result.diagnostics,{},"PROJECT","site_frame_batch_not_exported");
+    }
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    try {
+        AssemblyExpansionBudget assembly_budget;
+        context.assembly_expansions=expand_document_assembly_instances(document.entities(),assembly_budget);
+    } catch (const std::exception&) {
+        add_diagnostic(result.diagnostics,{},"PROJECT","independent_assembly_expansion_not_exported");
+    }
+#endif
+    export_spatial_hierarchy(document,context,result.diagnostics);
+    std::set<std::string,std::less<>> unsupported_join_members;
+    for (const auto& [id,e]:document.entities()) if (e.type=="wall_join" || e.type=="roof_join") {
+        (void)id;
+        const auto members=e.properties.find(e.type=="wall_join" ? "wall_ids" : "roof_ids");
+        if (members!=e.properties.end() && members->is_array())
+            for (const auto& member:*members) if (member.is_string()) unsupported_join_members.insert(member.get<std::string>());
+    }
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
     context.fresh_stair_proofs = fresh_stair_export_clusters(document);
 #endif
 #ifdef SKETCH_PHYSICAL_ROOMS
     const auto physical_rooms = physical_wall_room_checks(document);
 #endif
+    // Joins publish before members/openings so member aliases and void ownership
+    // do not depend on source-ID lexical order. Failed joins leave all aliases
+    // absent and their complete source members remain inert references.
+    std::vector<const Entity*> export_order;
     for (const auto& [id, entity] : document.entities()) {
-        const auto resolved = resolve_vertical_placement(document, entity);
+        (void)id;
+        if (entity.type == "wall_join" || entity.type == "roof_join") export_order.push_back(&entity);
+    }
+    for (const auto& [id, entity] : document.entities()) {
+        (void)id;
+        if (entity.type != "wall_join" && entity.type != "roof_join") export_order.push_back(&entity);
+    }
+    for (const auto* source_entity : export_order) {
+        const auto& entity = *source_entity;
+        const auto& id = entity.id;
+        context.authored_entity=&entity;
+        context.presentation={}; context.placement=context.world_placement;
+        if (entity.type == "annotation_state") {
+            // No child geometry is emitted here. Never infer one frame from the
+            // owner or a referenced target; any future child route must use the
+            // typed annotation-child resolver and each child's own layer.
+            context.default_hierarchy();
+            export_native_reference(entity, context, result.diagnostics);
+            continue;
+        }
+        bool placed=false;
+        try {
+            context.presentation=context.site_placements.at(id);
+            const auto& drawing=context.presentation.drawing_context;
+            const auto spatial=!drawing.floor_id.empty() ? drawing.floor_id :
+                !drawing.building_id.empty() ? drawing.building_id : drawing.property_id;
+            if (!spatial.empty()) {
+                require(context.spatial_ids.contains(spatial));
+                context.storey=context.spatial_ids.at(spatial);
+            } else if (authored_spatial) {
+                const auto site=std::find_if(document.entities().begin(),document.entities().end(),[&](const auto& item){
+                    return item.second.type=="property" && context.spatial_ids.contains(item.first);
+                });
+                if (site!=document.entities().end()) context.storey=context.spatial_ids.at(site->first);
+                else context.default_hierarchy();
+            } else context.default_hierarchy();
+            const auto& t=context.presentation.forward;
+            if (std::abs(t.translation_m.x)>kTolerance || std::abs(t.translation_m.y)>kTolerance ||
+                std::abs(t.translation_m.z)>kTolerance || std::abs(t.rotation_radians)>kTolerance)
+                context.placement=context.rigid_placement(t);
+            placed=true;
+        } catch (const std::exception&) {
+            add_diagnostic(result.diagnostics,id,entity.type,"site_frame_not_exported");
+            // This identity placement is only for the inert source carrier.
+            // No active source geometry can pass the refused frame below.
+            context.presentation={}; context.default_hierarchy();
+        }
         const PhysicalWallRoomCheck* physical_room = nullptr;
 #ifdef SKETCH_PHYSICAL_ROOMS
         if (const auto found = physical_rooms.find(id); found != physical_rooms.end()) physical_room = &found->second;
 #endif
-        export_product(document, resolved, context, result.diagnostics, physical_room);
+        if (placed) {
+            const auto host=entity.type=="opening" ? entity.properties.value("wall_id",std::string{}) : std::string{};
+            if (unsupported_join_members.contains(id)) {
+                if (!context.product_ids.contains(id))
+                    add_diagnostic(result.diagnostics,id,entity.type,"joined_member_geometry_withheld");
+            } else if (unsupported_join_members.contains(host) && !context.product_ids.contains(host))
+                add_diagnostic(result.diagnostics,id,entity.type,"joined_host_geometry_withheld");
+            else {
+                // A manufactured opening owns its void and fill as one export.
+                // Fill tessellation can refuse after the void has been written;
+                // rewind that occurrence before retaining its inert source.
+                const auto checkpoint = context.builder.checkpoint();
+                const auto ordinal = context.ordinal, vertices = context.mesh_vertices,
+                    triangles = context.mesh_triangles, metadata_bytes = context.retained_metadata_charge;
+                const auto diagnostic_count = result.diagnostics.size(), opening_links = context.opening_host_links.size();
+                const auto contained = context.contained_products.find(context.storey);
+                const bool had_containment = contained != context.contained_products.end();
+                const auto contained_count = had_containment ? contained->second.size() : 0;
+                const auto prior_product = context.product_ids.find(id);
+                const auto prior_id = prior_product == context.product_ids.end() ? std::optional<int>{} : prior_product->second;
+                try {
+                    const auto resolved=resolve_vertical_placement(document,entity);
+                    export_product(document,resolved,context,result.diagnostics,physical_room);
+                } catch (const std::exception&) {
+                    if (entity.type == "opening") {
+                        context.builder.rollback(checkpoint);
+                        context.ordinal = ordinal; context.mesh_vertices = vertices; context.mesh_triangles = triangles;
+                        context.retained_metadata_charge = metadata_bytes;
+                        context.opening_host_links.resize(opening_links);
+                        if (had_containment) context.contained_products.at(context.storey).resize(contained_count);
+                        else context.contained_products.erase(context.storey);
+                        if (prior_id) context.product_ids[id] = *prior_id;
+                        else context.product_ids.erase(id);
+                        result.diagnostics.resize(diagnostic_count);
+                    }
+                    add_diagnostic(result.diagnostics,id,entity.type,"local_geometry_not_exported");
+                }
+            }
+        }
         // Retain the native source descriptor as well as the interoperable
         // footprint, including when stale geometry is withheld.
         if (entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room") && context.product_ids.contains(id))
@@ -2435,18 +2954,23 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
         const auto stair = context.product_ids.find(stair_id);
         if (rail == context.product_ids.end()) continue;
         if (stair == context.product_ids.end()) {
-            context.contained_products.push_back(rail->second);
+            // Keep the rail's own context, even when its host was withheld.
+            const auto& p=context.site_placements.at(rail_id);
+            const auto floor=context.spatial_ids.find(p.drawing_context.floor_id);
+            if (floor!=context.spatial_ids.end()) context.storey=floor->second;
+            else context.default_hierarchy();
+            context.contain(rail->second);
             add_diagnostic(result.diagnostics, rail_id, "railing", "native_railing_host_not_exported");
         } else context.aggregate(stair->second, rail->second, "stair-railing:" + rail_id);
     }
-    if (!context.contained_products.empty()) {
+    for (const auto& [spatial_id, contained] : context.contained_products) if (!contained.empty()) {
         std::string products;
-        for (const auto id : context.contained_products) {
+        for (const auto id : contained) {
             if (!products.empty()) products += ',';
             products += ref(id);
         }
         context.builder.add("IFCRELCONTAINEDINSPATIALSTRUCTURE",
-            context.root("containment", "") + ",(" + products + ")," + ref(context.storey));
+            context.root("containment:"+std::to_string(spatial_id), "") + ",(" + products + ")," + ref(spatial_id));
     }
     for (const auto& [opening_id, host_id] : context.opening_host_links) {
         const auto opening = context.product_ids.find(opening_id);

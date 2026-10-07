@@ -27,11 +27,16 @@ The root CMake integration includes these desktop sources and dependencies:
 | `src/visualization/native_model_view.cpp` | Native OCCT architectural viewport (integrated at the Architectural tab seam) |
 | `tests/desktop_smoke.cpp` | Programmatic Qt smoke coverage for shared document, edits, history, save/reopen, and draft PDF/PNG output |
 
-The target needs Qt 6.8.3 modules `Core`, `Gui`, `Widgets`, and
-`PrintSupport`. The implementation uses Qt 6.8's `QPdfWriter` from `Gui` and
-`QPrintPreviewDialog` from `PrintSupport`; it does not require a direct
-`QtPdf` API call. It does not add a cloud design dependency or a new account
-requirement. The target also links the existing document/storage and precision
+The desktop target selects Qt from `third_party/qt-sdk.json`; the current
+selection is Qt 6.11.2 for `win64_msvc2022_64`, with `Core`, `Gui`, `Widgets`,
+`OpenGL`, `OpenGLWidgets`, `PrintSupport`, `Pdf`, and `Svg`. The
+`scripts/bootstrap-qt.ps1` script verifies those eight components at the
+selected SDK prefix. PDF output uses QtGui's `QPdfWriter` and QtPrintSupport's
+`QPrintPreviewDialog`; PDF reference import and preview use QtPdf's
+`QPdfDocument` in `src/desktop/reference_import_worker.cpp` and
+`src/desktop/main_window.cpp`. The Qt selection is repository-configured. The
+target does not add a cloud design dependency or a new account requirement. It
+also links the existing document/storage and precision
 libraries, plus the repository's nlohmann-json include target. The executable
 loads the bundled `:/fonts/Inter.ttf` resource and sets it as the application
 font before constructing the window; visual smoke exits nonzero if that

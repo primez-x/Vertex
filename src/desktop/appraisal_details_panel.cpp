@@ -108,6 +108,9 @@ QString category(const AppraisalBoundaryStatus& status) {
 struct AppraisalDetailsPanel::Impl {
     std::optional<DocumentSnapshot> source;
     std::optional<AppraisalDocumentReport> report;
+    // Own the mask: callers commonly pass a refresh-local set. Null means all
+    // semantic entities; an empty set means none, so they must stay distinct.
+    std::optional<std::set<std::string,std::less<>>> semantic_phase_ids;
     std::string property;
     bool metric{};
     QLabel *property_name{},*gla{},*status{},*standards{},*policy{},*totals{},*issues{},*trace{};
@@ -434,11 +437,29 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
 AppraisalDetailsPanel::~AppraisalDetailsPanel()=default;
 void AppraisalDetailsPanel::setDocument(const DocumentSnapshot& source,const std::string& property_id,bool metric,
     const std::set<std::string,std::less<>>* semantic_phase_ids) {
-    auto& p=*impl_;const auto selected=p.property==property_id?p.selected():QString{};
+    auto& p=*impl_;
+    // The report builder returns before reading the mask for an unconfigured
+    // property. Configured reports require the exact effective semantic mask.
+    // All reporting/declaration/geometry settings are guarded by the complete
+    // immutable authoring source, never a document ID/revision or entity count.
+    if(p.report && p.source && p.property==property_id && p.metric==metric &&
+        source.shares_authoring_source_with(*p.source) &&
+        (!p.report->configured ||
+            (p.semantic_phase_ids.has_value()==(semantic_phase_ids!=nullptr) &&
+                (!semantic_phase_ids || *p.semantic_phase_ids==*semantic_phase_ids)))) {
+        // Saved/editability metadata can change without changing the report.
+        p.source=source;return;
+    }
+    const auto selected=p.property==property_id?p.selected():QString{};
     p.source=source;p.property=property_id;p.metric=metric;p.report.reset();
+    p.semantic_phase_ids.reset();
     const auto found=source.entities().find(property_id);
     if(found==source.entities().end() || found->second.type!="property") {p.show_report({});return;}
-    try {p.report=build_appraisal_document_report(source,property_id,metric?AreaUnit::square_metre:AreaUnit::square_foot,semantic_phase_ids);p.show_report(selected);}
+    try {
+        p.report=build_appraisal_document_report(source,property_id,metric?AreaUnit::square_metre:AreaUnit::square_foot,semantic_phase_ids);
+        if(p.report->configured && semantic_phase_ids)p.semantic_phase_ids=*semantic_phase_ids;
+        p.show_report(selected);
+    }
     catch(const std::exception& failure) {p.report.reset();p.show_report({});p.status->setText(QStringLiteral("Details unavailable. Use Setup to correct the property declarations. %1").arg(text(failure.what())));}
 }
 void AppraisalDetailsPanel::setSelectedBoundary(const QString& boundary_id) {

@@ -1,4 +1,5 @@
 #include "sketch/desktop/symbol_svg_palette.hpp"
+#include "sketch/desktop/svg_admission.hpp"
 
 #include <QSet>
 #include <QString>
@@ -46,6 +47,7 @@ bool safe_id(const QString& id) {
 } // namespace
 
 QByteArray colored_symbol_svg(const QByteArray& document, const SymbolSvgPalette& palette) {
+    validate_svg_document(document);
     if (palette.profile != "white-outline-2") unsupported("Unsupported SVG palette profile");
     const auto outline = color(palette.outline_color);
     const auto surface = color(palette.surface_color);

@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/workspace_document_history.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <iostream>
@@ -60,8 +61,8 @@ void check() {
     invalid([](auto& h) { h.baseline.source_digest = "forged"; });
     invalid([](auto& h) { h.baseline.document_id = "foreign"; });
     invalid([](auto& h) { h.baseline.baseline_revision = 99; });
-    auto malformed = snapshot;
-    const_cast<std::vector<RevisionRecord>&>(malformed.history()).back().undo_stack.push_back(999);
+    sketch::test::DetachedDocumentSnapshotFixture malformed(snapshot);
+    malformed.history().back().undo_stack.push_back(999);
     rejected([&] { validate_workspace_document_history(malformed, history); });
     history.events[0].event_id = std::string(128, 'x');
     validate_workspace_document_history(snapshot, history);

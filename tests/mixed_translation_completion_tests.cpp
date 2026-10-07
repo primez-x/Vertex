@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/project_exchange.hpp"
@@ -172,15 +173,15 @@ void workflow(const std::filesystem::path& directory,bool curved=false) {
         const std::filesystem::path output(destination);std::filesystem::create_directories(output);
         ProjectStore::save(output/(curved ? "mixed-curved.bldproj" : "mixed-straight.bldproj"),after);
     }
-    auto tampered=after;
-    auto& proof=const_cast<std::vector<RevisionRecord>&>(tampered.history()).back().boundary_constraint_changes;
+    sketch::test::DetachedDocumentSnapshotFixture tampered(after);
+    auto& proof=tampered.history().back().boundary_constraint_changes;
     proof->rigid_group_transform->transformations.front().transform.offset.x+=0.1;
     rejects([&]{(void)Document::fork(tampered);},"Tampered child must fail deterministic retained reconstruction");
     auto stripped=command;stripped.rigid_group_transform.reset();
     require(command_to_json(Command{stripped}).at("version")==16,"Emptied rigid child retains mixed dialect");
     rejects([&]{(void)Document::preview_command(before,stripped);},"Marker cannot lend authority without a rigid child");
-    auto stripped_history=after;
-    const_cast<std::vector<RevisionRecord>&>(stripped_history.history()).back().boundary_constraint_changes->rigid_group_transform.reset();
+    sketch::test::DetachedDocumentSnapshotFixture stripped_history(after);
+    stripped_history.history().back().boundary_constraint_changes->rigid_group_transform.reset();
     require(ProjectStore::required_format_version(stripped_history)==42,"Stripped retained child cannot lower explicit mixed storage floor");
     auto geometry=command;geometry.dimension_placement_completion=false;geometry.dimension_placement_moves.clear();
     require(command_to_json(command_from_json(command_to_json(Command{geometry})))==command_to_json(Command{geometry}),

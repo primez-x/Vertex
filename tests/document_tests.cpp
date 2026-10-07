@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/document.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -858,8 +859,8 @@ void test_command_preview_rejects_invalid_stale_and_read_only_sources() {
         NameRevision{.expected_revision = 0, .name = "forbidden"}); },
         DocumentErrorCode::read_only, "preview must enforce retained read-only semantics");
 
-    auto forged = source;
-    auto& record = const_cast<sketch::RevisionRecord&>(forged.history().front());
+    sketch::test::DetachedDocumentSnapshotFixture forged(source);
+    auto& record = forged.history().front();
     record.action = "apply";
     require_error([&] { (void)Document::preview_command(forged,
         NameRevision{.expected_revision = 0, .name = "forged"}); },
@@ -892,8 +893,8 @@ void test_validated_document_fork_preserves_authority_and_isolation() {
                 sketch::document_snapshot_digest(document.snapshot()) == source_digest &&
                 sketch::document_snapshot_digest(source) == source_digest,
             "editing a private candidate must leave its source and live document intact");
-    auto malformed = source;
-    const_cast<sketch::RevisionRecord&>(malformed.history().front()).action = "apply";
+    sketch::test::DetachedDocumentSnapshotFixture malformed(source);
+    malformed.history().front().action = "apply";
     require_error([&] { (void)Document::fork(malformed); }, DocumentErrorCode::invalid_history,
                   "fork must validate history before accepting a candidate");
     auto read_only = Document::create({entity("future", "future_required_type",
@@ -1017,15 +1018,32 @@ void test_connected_stair_level_edit() {
         {{"model", nlohmann::json::parse(graph.freeze("storey").serialize())}})});
     require_error([&] { (void)sketch::prepare_vertical_level_edit(frozen_source.snapshot(), "levels-1", graph); },
         DocumentErrorCode::invalid_entity, "source frozen link was propagated");
+    const auto source_digest = document_snapshot_digest(source);
+    const auto live_digest = document_snapshot_digest(document.snapshot());
     for (const auto* field : {"form", "total_rise_m", "riser_count"}) {
         auto unsupported = stair;
         if (std::string_view(field) == "form") unsupported.properties[field] = "spiral_stair";
         else unsupported.properties.erase(field);
-        auto unsupported_document = Document::create({unsupported, entity("levels-1", "vertical_levels",
-            {{"model", nlohmann::json::parse(graph.serialize())}})});
-        require_error([&] { (void)sketch::prepare_vertical_level_edit(unsupported_document.snapshot(),
+        const auto unsupported_source = [&] {
+            if (std::string_view(field) == "form") {
+                // Unknown forms remain opaque at admission, but cannot be propagated.
+                return Document::create({unsupported, entity("levels-1", "vertical_levels",
+                    {{"model", nlohmann::json::parse(graph.serialize())}})}).snapshot();
+            }
+            require_error([&] { (void)Document::create({unsupported, entity("levels-1", "vertical_levels",
+                {{"model", nlohmann::json::parse(graph.serialize())}})}); },
+                DocumentErrorCode::invalid_entity, "canonical stair with a missing field was admitted");
+            // Exercise malformed retained-source refusal without bypassing live admission.
+            return sketch::test::DetachedDocumentSnapshotFixture::mutate(source, [&](auto& fixture) {
+                fixture.entities().at(stair.id) = unsupported;
+            });
+        }();
+        require_error([&] { (void)sketch::prepare_vertical_level_edit(unsupported_source,
             "levels-1", graph.with_elevation("first", 3.2)); }, DocumentErrorCode::invalid_entity,
             "noncanonical connected stair was propagated");
+        require(document_snapshot_digest(source) == source_digest &&
+                document_snapshot_digest(document.snapshot()) == live_digest,
+            "rejected malformed stair preview changed its source or live document");
     }
     auto malformed = nlohmann::json::parse(graph.serialize());
     malformed["levels"][1]["elevation_m"] = -1.0;
@@ -1224,8 +1242,8 @@ void test_measured_translation_group_is_atomic_and_replayable() {
             moved_dimension.dimension->segment_id == "first-edge-0" && after.entities().at("label") == label,
             "dependent dimensions and ordinary supplements must move once");
     for (int mutation = 0; mutation < 4; ++mutation) {
-        auto forged = after;
-        auto& record = const_cast<std::vector<RevisionRecord>&>(forged.history()).back();
+        sketch::test::DetachedDocumentSnapshotFixture forged(after);
+        auto& record = forged.history().back();
         if (mutation == 0) record.boundary_translations.reset();
         if (mutation == 1) record.boundary_translations->translations.back().offset.x += 1;
         if (mutation == 2) record.boundary_translations->expected_revision = 1;
@@ -1405,13 +1423,13 @@ void test_boundary_constraint_transaction_preserves_proof_and_is_atomic() {
                 decode_boundary_dimension_entity(dimension).dimension->resolve(edited).segment_length() == 3,
             "dimension must keep its identity and resolve new constrained geometry");
     auto restored = Document::fork(after);
-    auto tampered_history = after;
-    auto& tampered_records = const_cast<std::vector<RevisionRecord>&>(tampered_history.history());
+    sketch::test::DetachedDocumentSnapshotFixture tampered_history(after);
+    auto& tampered_records = tampered_history.history();
     tampered_records.back().boundary_constraint_changes->boundary_edits.pop_back();
     require_error([&] { (void)Document::fork(tampered_history); }, DocumentErrorCode::invalid_history,
                   "history restore must reject an incomplete boundary transaction proof");
     tampered_history = after;
-    auto& missing_records = const_cast<std::vector<RevisionRecord>&>(tampered_history.history());
+    auto& missing_records = tampered_history.history();
     missing_records.back().boundary_constraint_changes.reset();
     require_error([&] { (void)Document::fork(tampered_history); }, DocumentErrorCode::invalid_entity,
                   "history restore must reject stripped receipt mutation proof");
@@ -1753,8 +1771,8 @@ void test_curved_wall_proof_codec_and_replay() {
     (void)document.apply(command_from_json(wire));
     const auto after=document.snapshot();
     require(Document::fork(after).snapshot().entities()==after.entities(),"curved wall-only history replay differs");
-    auto stripped=after;
-    auto& history=const_cast<std::vector<RevisionRecord>&>(stripped.history());
+    sketch::test::DetachedDocumentSnapshotFixture stripped(after);
+    auto& history=stripped.history();
     history.back().boundary_constraint_changes->wall_edits[0].version=1;
     require_error([&] { (void)Document::fork(stripped); },DocumentErrorCode::invalid_history,"downgraded history proof accepted");
     ConstraintWallGeometryEdit straight{"straight",{{0,0},{2,0},0},std::nullopt};

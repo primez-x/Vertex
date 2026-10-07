@@ -1,3 +1,4 @@
+#include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/building_plan_projection.hpp"
@@ -692,7 +693,7 @@ void actual_modal_source_guards() {
         modal(window, "editBuildingObject", [&](BuildingObjectDialog& dialog) {
             field(dialog, "buildingObjectWidth", "1500 mm");
             if (change < 2) {
-                auto replacement = source; auto& record = const_cast<std::vector<RevisionRecord>&>(replacement.history()).front();
+                sketch::test::DetachedDocumentSnapshotFixture replacement(source); auto& record = replacement.history().front();
                 if (change == 0) record.entities.at("legacy").extensions["replacement"] = "same identity and revision";
                 else record.assets.at("opaque-asset") = Asset::create("opaque-asset", "application/octet-stream", {std::byte{9}}, {{"vendor", "changed"}});
                 window.document() = Document::fork(replacement);

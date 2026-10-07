@@ -95,6 +95,48 @@ Entity effective_geometry_entity(const DocumentSnapshot& snapshot, const Entity&
     return resolve_vertical_placement(snapshot, source);
 }
 
+TopoDS_Shape place_native_shape(const TopoDS_Shape& source,
+                               const SitePresentationPlacement& placement) {
+    if (source.IsNull()) return source; // Fully occluded material region.
+    const auto& pose=placement.forward;
+    // The strict resolver has already validated the rigid frame. A zero pose
+    // is a resolved identity, never a fallback for malformed persisted data.
+    if (pose.rotation_radians==0 && pose.translation_m.x==0 &&
+        pose.translation_m.y==0 && pose.translation_m.z==0) return source;
+    gp_Trsf transform;
+    transform.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,0,1)),pose.rotation_radians);
+    transform.SetTranslationPart(gp_Vec(pose.translation_m.x,pose.translation_m.y,pose.translation_m.z));
+    BRepBuilderAPI_Transform placed(source,transform,true);
+    if (!placed.IsDone() || placed.Shape().IsNull())
+        throw std::invalid_argument("native site-frame transform failed");
+    return placed.Shape();
+}
+
+void append_site_placement_content(std::string& content, const DocumentSnapshot& snapshot,
+                                   const SitePresentationPlacement& placement) {
+    // The full resolver digest also binds material assignments/catalog colors.
+    // Retain that receipt on PreparedNativeSolid, but keep reusable geometry
+    // separate from appearance by capturing only coordinate-frame dependencies.
+    auto dependencies=nlohmann::json::array();
+    for (const auto& id:placement.dependency_ids) {
+        const auto& entity=snapshot.entities().at(id);
+        auto frame=nlohmann::json::object();
+        for (const auto* key:{"site_frame","site_placement","presentation_frame",
+            "terrain_elevation_binding","property_id","building_id","floor_id","layer_id",
+            "vertical_level_binding","vertical_placement","level_connection"}) {
+            if (const auto found=entity.properties.find(key);found!=entity.properties.end())
+                frame[key]=*found;
+        }
+        dependencies.push_back({{"id",id},{"type",entity.type},{"frame",std::move(frame)}});
+    }
+    const auto& pose=placement.forward;
+    content.append(nlohmann::json{{"domain","native-site-placement-v1"},
+        {"frame",{{"mode",static_cast<int>(placement.source_frame.mode)},
+            {"property",placement.source_frame.property_id},{"building",placement.source_frame.building_id}}},
+        {"translation",{pose.translation_m.x,pose.translation_m.y,pose.translation_m.z}},
+        {"yaw",pose.rotation_radians},{"dependencies",std::move(dependencies)}}.dump()).push_back('\0');
+}
+
 // Cache identity retains the authored context inputs as well as effective
 // coordinates. A level graph or organizational rebind can change a dependent
 // rail even when its own persisted JSON is byte-for-byte unchanged.
@@ -261,6 +303,24 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     auto& pending = result.pending;
     auto& solids = result.solids;
     const auto& entities = snapshot.entities();
+    // One captured batch shares organization, host/join and frame caches.
+    // Hidden semantic owners are included because this preparation validates
+    // them too; an invalid/cross-frame join must never reach local fusion.
+    std::vector<std::string> site_owner_ids;
+    for (const auto& [id,entity]:entities) {
+        if (cancelled && cancelled()) return std::nullopt;
+        if (entity.type=="wall" || entity.type=="slab" || entity.type=="room" ||
+            entity.type=="terrain_surface" || entity.type=="opening" || entity.type=="wall_join" ||
+            entity.type=="roof_join" || entity.type=="assembly_instance" ||
+            can_recognize_building_entity_type(entity.type)) site_owner_ids.push_back(id);
+    }
+    std::map<std::string,SitePresentationPlacement,std::less<>> site_placements;
+    try { site_placements=resolve_site_presentations(snapshot,site_owner_ids); }
+    catch (const std::exception& error) {
+        append_unique(errors,"native site presentation: "+std::string(error.what()));
+        return result;
+    }
+    if (cancelled && cancelled()) return std::nullopt;
     std::map<std::pair<std::string, std::string>, std::string> material_colors;
     std::set<std::pair<std::string, std::string>> material_bindings;
     for (const auto& [id, entity] : entities) {
@@ -358,6 +418,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 }
                 auto content = entity_content(resolved_host, openings_by_wall[wall_id]);
                 append_entity_content(content, entity);
+                const auto& site_placement=site_placements.at(id);
+                append_site_placement_content(content,snapshot,site_placement);
                 std::optional<std::string> material_color;
                 if (entity.properties.contains("material_assignment")) {
                     const auto& assignment = entity.properties.at("material_assignment");
@@ -377,13 +439,13 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     }
                 }
 
-                const auto shape = make_opening_assembly(host_wall, *hosted, assembly,
-                                                         operation);
+                const auto shape = place_native_shape(make_opening_assembly(host_wall, *hosted, assembly,
+                                                         operation),site_placement);
                 if (cancelled && cancelled()) return std::nullopt;
                 mesh_shape(shape);
                 const bool visible = !visible_ids || visible_ids->contains(id);
                 solids.emplace(id, PreparedNativeSolid{std::move(content), shape,
-                                presentation_color, material_color, visible});
+                                presentation_color, material_color, visible, {}, {}, site_placement});
                 if (progress) progress(solids.size());
             } catch (const std::exception& error) {
                 append_unique(errors, "opening assembly '" + id + "': " + error.what());
@@ -394,8 +456,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             }
             continue;
         }
-        // External assembly roots share one expansion budget after the local
-        // solid loop; they are not unsupported placeholders.
+        // Independent assemblies are expanded together below, sharing the
+        // document-wide budget with all legacy catalog instances.
         if (entity.type == "assembly_instance") continue;
         if (entity.type != "wall" && entity.type != "slab" && entity.type != "room" &&
             entity.type != "terrain_surface" && entity.type != "wall_join" &&
@@ -433,8 +495,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             append_unique(errors, entity.type + " '" + id + "': " + error.what());
             continue;
         }
-        // Independent assemblies are expanded together below, sharing the
-        // document-wide budget with all legacy catalog instances.
+        const auto& site_placement=site_placements.at(id);
+        append_site_placement_content(content,snapshot,site_placement);
         if (geometry_entity.type == "wall_join") {
             try {
                 const auto join = parse_wall_join(geometry_entity.properties, id);
@@ -573,7 +635,6 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                         appearance_content.append("default").push_back('\0');
                     }
                     appearance_content.append(prepared.material_color.value_or("default")).push_back('\0');
-                    if (!prepared.shape.IsNull()) mesh_shape(prepared.shape);
                     if (cancelled && cancelled()) return std::nullopt;
                     material_regions.push_back(std::move(prepared));
                 }
@@ -606,10 +667,18 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             }
 
             if (cancelled && cancelled()) return std::nullopt;
+            // Local vertical placement, openings/rails and joins are complete.
+            // Transform fused truth and each independently colored region once.
+            shape=place_native_shape(shape,site_placement);
+            for (auto& region:material_regions) {
+                if (cancelled && cancelled()) return std::nullopt;
+                region.shape=place_native_shape(region.shape,site_placement);
+                if (!region.shape.IsNull()) mesh_shape(region.shape);
+            }
             mesh_shape(shape);
             solids.emplace(id, PreparedNativeSolid{std::move(content), std::move(shape),
                             presentation_color, material_color, join_presentation_ids.contains(id),
-                            std::move(material_regions), std::move(appearance_content)});
+                            std::move(material_regions), std::move(appearance_content),site_placement});
             if (progress) progress(solids.size());
         } catch (const std::exception& error) {
             append_unique(errors, entity.type + " '" + id + "': " + error.what());
@@ -624,6 +693,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     // profile geometry, provenance and appearance dependencies.
     const auto publish_assembly = [&](const std::string& id, const std::string& catalog_id,
                                       const AssemblyExpansion& expansion) {
+        const auto source=entities.find(id);
+        const auto placement = source==entities.end()
+            ? SitePresentationPlacement{} : site_placements.at(id);
         const auto geometry = make_assembly_geometry(expansion);
         if (geometry.shape.IsNull()) throw std::invalid_argument("assembly has no native profiles");
         std::vector<PreparedNativeMaterialRegion> regions;
@@ -637,7 +709,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             region.source_id = nlohmann::json{{"entity_id", id},
                 {"part_path", profile.source.part_path}, {"type_id", profile.source.type_id},
                 {"profile_id", profile.source.profile.id}}.dump();
-            region.shape = profile.shape;
+            region.shape = place_native_shape(profile.shape,placement);
             region.color = Quantity_Color(0.63, 0.48, 0.78, Quantity_TOC_RGB);
             region.catalog_id = catalog_id;
             region.material_id = profile.source.material_id;
@@ -663,9 +735,14 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             regions.push_back(std::move(region));
         }
         if (cancelled && cancelled()) return false;
-        solids.emplace(id, PreparedNativeSolid{assembly_geometry_content(id,expansion),
-            geometry.shape, Quantity_Color(0.63,0.48,0.78,Quantity_TOC_RGB), std::nullopt,
-            !visible_ids || visible_ids->contains(id), std::move(regions), appearance.dump()});
+        auto content=assembly_geometry_content(id,expansion);
+        if (source!=entities.end()) append_site_placement_content(content,snapshot,placement);
+        auto shape=place_native_shape(geometry.shape,placement);
+        mesh_shape(shape);
+        solids.emplace(id, PreparedNativeSolid{std::move(content),
+            std::move(shape), Quantity_Color(0.63,0.48,0.78,Quantity_TOC_RGB), std::nullopt,
+            !visible_ids || visible_ids->contains(id), std::move(regions), appearance.dump(),
+            source==entities.end() ? std::nullopt : std::optional<SitePresentationPlacement>{placement}});
         if (progress) progress(solids.size());
         return true;
     };

@@ -102,6 +102,27 @@ bool has_architectural_appraisal_v57_semantics(const Entity& entity) {
         [](const auto& room) { return room.is_object() && room.contains("other_description"); });
 }
 
+bool has_site_frame_v58_semantics(const Entity& entity) {
+    if (!entity.properties.is_object()) return false;
+    if (entity.type == "property" && entity.properties.contains("site_frame")) return true;
+    if (entity.type == "building" && entity.properties.contains("site_placement")) return true;
+    if (entity.type == "terrain_surface" && entity.properties.contains("terrain_elevation_binding")) return true;
+
+    const bool container = entity.type == "property" || entity.type == "building" ||
+        entity.type == "floor" || entity.type == "layer";
+    if (!container && entity.properties.contains("presentation_frame")) return true;
+
+    // V3 is the first annotation envelope that requires presentation_frame.
+    // Keep the floor conservative for malformed v3 and opaque future versions
+    // even though the strict annotation/document codecs will reject them.
+    if (entity.type == kAnnotationEntityType) {
+        const auto version = entity.properties.find("version");
+        if (version != entity.properties.end() &&
+            (!version->is_number_integer() || *version >= 3)) return true;
+    }
+    return false;
+}
+
 bool supported_identified_boundary_model(const Entity& entity) noexcept {
     if (!can_recognize_boundary_entity_type(entity.type) || !entity.properties.is_object()) {
         return false;
@@ -353,6 +374,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (has_ansi_appraisal_v2_semantics(entity)) required = std::max(required, 32U);
             if (has_appraisal_reporting_semantics(entity)) required = std::max(required, 56U);
             if (has_architectural_appraisal_v57_semantics(entity)) required = std::max(required, 57U);
+            if (has_site_frame_v58_semantics(entity)) required = std::max(required, 58U);
             if(entity.type==kAnnotationEntityType) {
                 if(entity.properties.contains("version") && entity.properties.at("version").is_number_integer() &&
                     entity.properties.at("version")==2)required=std::max(required,46U);
@@ -485,11 +507,8 @@ public:
         snapshot.revision_ = revision;
         snapshot.saved_revision_ = saved_revision;
     }
-    static std::vector<RevisionRecord>& history(DocumentSnapshot& snapshot) {
-        return snapshot.history_;
-    }
-    static void reserve_history(DocumentSnapshot& snapshot, std::size_t count) {
-        snapshot.history_.reserve(count);
+    static void publish_history(DocumentSnapshot& snapshot, std::vector<RevisionRecord> history) {
+        snapshot.history_ = std::make_shared<const std::vector<RevisionRecord>>(std::move(history));
     }
     static std::map<std::string, Revision, std::less<>>& names(DocumentSnapshot& snapshot) {
         return snapshot.named_revisions_;
@@ -1843,6 +1862,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 58 &&
          sqlite3_column_int(user_version.get(), 0) != 57 &&
          sqlite3_column_int(user_version.get(), 0) != 56 &&
          sqlite3_column_int(user_version.get(), 0) != 55 &&
@@ -2066,12 +2086,12 @@ void verify_sqlite_content_integrity(sqlite3* database) {
 DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nullptr,
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
-    if (format != "57" && format != "56" && format != "55" && format != "54" && format != "53" && format != "52" && format != "51" && format != "50" && format != "49" && format != "48" && format != "47" && format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
+    if (format != "58" && format != "57" && format != "56" && format != "55" && format != "54" && format != "53" && format != "52" && format != "51" && format != "50" && format != "49" && format != "48" && format != "47" && format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
         format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && format != "26" && format != "27" && format != "28" && format != "29" && format != "30" && format != "31" && format != "32" && format != "33" && format != "34" && format != "35" && format != "36" && format != "37" && format != "38" && format != "39" && format != "40" && format != "41" && format != "42" && format != "43" && format != "44" && format != "45" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "57" ? 57U : format == "56" ? 56U : format == "55" ? 55U : format == "54" ? 54U : format == "53" ? 53U : format == "52" ? 52U : format == "51" ? 51U : format == "50" ? 50U : format == "49" ? 49U : format == "48" ? 48U : format == "47" ? 47U : format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "58" ? 58U : format == "57" ? 57U : format == "56" ? 56U : format == "55" ? 55U : format == "54" ? 54U : format == "53" ? 53U : format == "52" ? 52U : format == "51" ? 51U : format == "50" ? 50U : format == "49" ? 49U : format == "48" ? 48U : format == "47" ? 47U : format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -2093,7 +2113,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::set_identity(snapshot, document_id, head_revision, stored_saved);
     const auto expected_digest = required_metadata(database, "logical_digest");
     const auto counts = enforce_preallocation_budgets(database, recovery != nullptr);
-    ProjectStoreAccess::reserve_history(snapshot, static_cast<std::size_t>(counts.revisions));
+    std::vector<RevisionRecord> history;
+    history.reserve(static_cast<std::size_t>(counts.revisions));
     DecodeBudget decode_budget(recovery != nullptr || format_number >= 5);
 
     Statement revisions(database,
@@ -2119,7 +2140,6 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
               "undo_stack_json,redo_stack_json FROM revisions ORDER BY revision");
     std::map<Revision,nlohmann::json> deferred_asset_proofs;
     while (revisions.row()) {
-        auto& history = ProjectStoreAccess::history(snapshot);
         if (history.size() >= static_cast<std::size_t>(ProjectStore::maximum_revision_count)) {
             storage_error(StorageErrorCode::integrity_failure, "project has too many revisions");
         }
@@ -2234,8 +2254,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         }
         history.push_back(std::move(record));
     }
-    if (ProjectStoreAccess::history(snapshot).empty() ||
-        snapshot.revision() >= ProjectStoreAccess::history(snapshot).size()) {
+    if (history.empty() ||
+        snapshot.revision() >= history.size()) {
         storage_error(StorageErrorCode::integrity_failure, "project head revision is absent");
     }
 
@@ -2248,7 +2268,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
             storage_error(StorageErrorCode::integrity_failure, "project has too many entity rows");
         }
         const auto revision = column_revision(entities.get(), 0, "entity revision");
-        if (revision >= ProjectStoreAccess::history(snapshot).size()) {
+        if (revision >= history.size()) {
             storage_error(StorageErrorCode::integrity_failure, "entity references an absent revision");
         }
         Entity entity;
@@ -2265,7 +2285,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         entity.extensions = parse_budgeted_json(
             column_text(entities.get(), 5, kMaximumJsonBytes, "extensions_json"), true,
             "extensions_json", decode_budget);
-        auto& target = ProjectStoreAccess::history(snapshot)[static_cast<std::size_t>(revision)].entities;
+        auto& target = history[static_cast<std::size_t>(revision)].entities;
         if (!target.emplace(entity.id, std::move(entity)).second) {
             storage_error(StorageErrorCode::integrity_failure, "project contains duplicate entity ids");
         }
@@ -2280,7 +2300,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
             storage_error(StorageErrorCode::integrity_failure, "project has too many asset rows");
         }
         const auto revision = column_revision(assets.get(), 0, "asset revision");
-        if (revision >= ProjectStoreAccess::history(snapshot).size()) {
+        if (revision >= history.size()) {
             storage_error(StorageErrorCode::integrity_failure, "asset references an absent revision");
         }
         Asset asset;
@@ -2308,7 +2328,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
             storage_error(StorageErrorCode::integrity_failure,
                           "asset SHA-256 does not match stored bytes: " + asset.id);
         }
-        auto& target = ProjectStoreAccess::history(snapshot)[static_cast<std::size_t>(revision)].assets;
+        auto& target = history[static_cast<std::size_t>(revision)].assets;
         if (!target.emplace(asset.id, std::move(asset)).second) {
             storage_error(StorageErrorCode::integrity_failure, "project contains duplicate asset ids");
         }
@@ -2317,7 +2337,6 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // Hydrate only from independently validated assets in this result revision.
     // Normal history replay then compares the complete before/after state.
     for(const auto& [revision,proof]:deferred_asset_proofs) {
-        auto& history=ProjectStoreAccess::history(snapshot);
         if(revision>=history.size() || history[static_cast<std::size_t>(revision)].revision!=revision)
             storage_error(StorageErrorCode::integrity_failure,"compact asset proof revision is invalid");
         auto& record=history[static_cast<std::size_t>(revision)];
@@ -2341,8 +2360,15 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         }
     }
 
+    // Entity/asset rows and deferred compact proofs are fully hydrated before
+    // publishing immutable history to format, recovery and digest consumers.
+    ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format >= 58)
+            storage_error(StorageErrorCode::unsupported_format,
+                "retained site-frame coordinate contracts or framed annotation history require project format v" +
+                    std::to_string(required_format));
         const auto reason = required_format >= 56 ? "form-specific appraisal reporting or typed limitation declarations" : required_format >= 55 ? "physical wall axis dimensions" : required_format >= 54 ? "owned stair landing railings" : required_format >= 53 ? "exact physical-source translation lineage" : required_format >= 52 ? "owned stair-flight railings" : required_format >= 51 ? "multi-flight stair topology" : required_format >= 50 ? "source-qualified physical-room dimensions" : required_format >= 49 ? "atomic reviewed physical-room dispositions" : required_format >= 48 ? "persistent analytical tangent junctions" : required_format >= 47 ? "joint hard-connected translation" : required_format >= 46 ? "scoped annotations and explicit opacity or patterns" : required_format >= 45 ? "aligned text and independent live area callouts" : required_format >= 44 ? "reviewed physical room repair authority" : required_format >= 43 ? "source-bound physical clear rooms and analytic holes" : required_format >= 42 ? "typed mixed rigid group completion" : required_format >= 41 ? "typed saved-callout placement completion" : required_format >= 40 ? "source-derived exterior segment arc authority or physical line-origin curve provenance" : required_format >= 39 ? "source-derived exterior segment resize authority" : required_format >= 38 ? "logical wall-chain room relationships or future relationship models" : required_format >= 37 ? "wall split authority, physical arc-chain constraints or whole-span dimensions" : required_format >= 36 ? "saved dimensions on measured strokes" : required_format >= 35 ? "persistent measured-stroke constraints or simultaneous endpoint derivation" : required_format >= 34 ? "curved survey source provenance" : required_format >= 33 ? "grouped measured-region source evidence" : required_format >= 32 ? "finished-room appraisal rule v2" : required_format >= 31 ? "typed chord construction input" : required_format >= 30 ? "reviewed measured-area source replacement" : required_format >= 29 ? "measured stroke geometry edit derivations" : required_format >= 28 ? "measurement linework rigid transform or source lineage" : required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
