@@ -768,8 +768,9 @@ private:
         bool segment{};
     };
     void ensureLocalSnapIndex() const;
-    [[nodiscard]] std::optional<std::vector<LocalSnapTarget>> localSnapCandidates(
-        QPointF point, double radius_pixels) const;
+    [[nodiscard]] std::optional<std::vector<LocalSnapTarget>> retainedSnapCandidates(
+        QPointF point, double radius_pixels,
+        std::optional<Vec2> alignment_anchor = std::nullopt) const;
     void ensureEntityHitIndex() const;
     [[nodiscard]] std::optional<std::vector<std::size_t>> entityHitCandidates(
         QPointF point, double hit_pixels) const;

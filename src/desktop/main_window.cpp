@@ -734,7 +734,14 @@ std::optional<std::string> annotation_parent_for_child(const DocumentSnapshot& s
 
 std::optional<std::string> assembly_host_for_child(const DocumentSnapshot& snapshot,
                                                     std::string_view child_id) {
-    for (const auto& [catalog_id, catalog_entity] : snapshot.entities()) {
+    constexpr std::string_view marker = ":instance:";
+    // Every matching catalog ID is a prefix ending at this delimiter. Prefixes
+    // in increasing length preserve the map's original lexicographic order.
+    for (auto separator = child_id.find(marker); separator != std::string_view::npos;
+         separator = child_id.find(marker, separator + 1)) {
+        const auto catalog = snapshot.entities().find(child_id.substr(0, separator));
+        if (catalog == snapshot.entities().end()) continue;
+        const auto& [catalog_id, catalog_entity] = *catalog;
         if (catalog_entity.type != "assembly_model" ||
             !catalog_entity.properties.contains("model")) continue;
         const std::string prefix = catalog_id + ":instance:";
@@ -773,8 +780,14 @@ std::optional<AssemblyDocumentInstance> geometric_assembly_for_catalog_child(con
 
 std::optional<AssemblyDocumentInstance> geometric_assembly_for_child(const DocumentSnapshot& snapshot,
                                                                    std::string_view child_id) {
-    for (const auto& [catalog_id, entity] : snapshot.entities())
-        if (const auto child = geometric_assembly_for_catalog_child(catalog_id, entity, child_id)) return child;
+    constexpr std::string_view marker = ":instance:";
+    for (auto separator = child_id.find(marker); separator != std::string_view::npos;
+         separator = child_id.find(marker, separator + 1)) {
+        const auto catalog = snapshot.entities().find(child_id.substr(0, separator));
+        if (catalog != snapshot.entities().end())
+            if (const auto child = geometric_assembly_for_catalog_child(catalog->first, catalog->second, child_id))
+                return child;
+    }
     return std::nullopt;
 }
 
@@ -31573,13 +31586,20 @@ private:
 
     std::optional<EntityValue> propertyEntity() const {
         const auto snapshot = m_document->snapshot();
-        for (const auto& [id, entity] : snapshot.entities()) {
-            (void)id;
-            if (entity.type == "property") {
-                return entity;
+        if (!m_property_lookup_source || !m_property_lookup_source->shares_authoring_source_with(snapshot)) {
+            m_property_lookup_id.reset();
+            for (const auto& [id, entity] : snapshot.entities()) {
+                if (entity.type == "property") {
+                    m_property_lookup_id = id;
+                    break;
+                }
             }
+            m_property_lookup_source = snapshot;
         }
-        return std::nullopt;
+        if (!m_property_lookup_id) return std::nullopt;
+        const auto property = snapshot.entities().find(*m_property_lookup_id);
+        if (property == snapshot.entities().end()) return std::nullopt;
+        return property->second;
     }
 
     template <typename Edit>
@@ -45753,6 +45773,8 @@ private:
     std::map<std::string, PresentationOverride, std::less<>> m_object_appearance_defaults;
     std::map<std::string, std::pair<std::string, CanvasSelectionFrame>> m_plan_transform_frame_cache;
     std::optional<DocumentSnapshot> m_view_projection_source;
+    mutable std::optional<DocumentSnapshot> m_property_lookup_source;
+    mutable std::optional<std::string> m_property_lookup_id;
     std::map<std::pair<std::string, std::string>, std::optional<Boundary>> m_view_projection_cache;
 
     std::array<std::vector<CanvasEntity>, 3> m_architectural_view_entities;

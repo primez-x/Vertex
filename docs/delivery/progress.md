@@ -83,6 +83,22 @@ alignment searches remain intact. Every entity replacement invalidates the
 indexes; unsafe inputs and active transforms retain the full traversal path.
 Runtime speed has not been measured for this batch.
 
+The following source edit also reuses the snap-target index for drawing guides.
+Horizontal and vertical coordinate strips retain eligible distant endpoints;
+an anchor-radius query retains segments whose endpoints can supply a normal
+guide. Original projection calculations, tie order and the final four guides
+through the drawing origin remain intact. Independent source review found no
+confirmed regression in that candidate query; it has not been compiled or measured.
+
+Assembly-child resolution now visits only catalog IDs that can actually prefix
+the selected child token. It preserves the original lexical precedence,
+including overlapping delimiters, and ordinary model IDs no longer trigger a
+walk of every entity. Property lookup retains the first property ID against the
+complete immutable source; selection-only refreshes reuse it, including the
+known absence of a property. Same-ID/revision document replacement and all
+authoring changes invalidate that source guard. Root reviewed these lookup
+changes; runtime effects remain unobserved.
+
 Assistance now captures the destination property/building/floor/layer and the
 complete drawing context at generation. Site Plan previews and accepted traces,
 linked dimensions and labels convert through the reference and destination

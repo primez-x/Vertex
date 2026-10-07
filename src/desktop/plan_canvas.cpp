@@ -4959,7 +4959,7 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
         }
     };
 
-    const auto local_targets = localSnapCandidates(screen_point, snap_radius_pixels);
+    const auto local_targets = retainedSnapCandidates(screen_point, snap_radius_pixels);
     if (local_targets) {
         for (const auto& target : *local_targets) {
             if (target.segment) continue;
@@ -5011,43 +5011,56 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
     if (origin) {
         const auto anchor = *origin;
         const auto snap_radius = snap_radius_pixels / std::max(m_scale, 1e-9);
-        for (const auto& entity : m_entities) {
-            for (const auto endpoint_point : entity.snap_points) {
-                // Resolve both axes together before choosing a single guide.
-                // Otherwise a perfectly horizontal run can miss the nearby
-                // x-coordinate of its starting corner and skew the last wall.
-                for (const auto corner : {Vec2{endpoint_point.x, anchor.y},
-                                          Vec2{anchor.x, endpoint_point.y}}) {
-                    if (std::hypot(corner.x - anchor.x, corner.y - anchor.y) <= snap_radius)
-                        continue;
-                    consider(axis_intersection, corner, SnapKind::alignment, endpoint_point,
-                             Segment{endpoint_point, corner, 0.0});
-                }
-                for (const auto direction : {Vec2{1.0, 0.0}, Vec2{0.0, 1.0}}) {
-                    const auto amount = (raw.x - endpoint_point.x) * direction.x +
-                                        (raw.y - endpoint_point.y) * direction.y;
-                    const Vec2 projected{endpoint_point.x + amount * direction.x,
-                                         endpoint_point.y + amount * direction.y};
-                    consider(alignment, projected, SnapKind::alignment, endpoint_point,
-                             Segment{endpoint_point, projected, 0.0});
-                }
+        const auto consider_endpoint_guides = [&](Vec2 endpoint_point) {
+            // Resolve both axes together before choosing a single guide.
+            // Otherwise a perfectly horizontal run can miss the nearby
+            // x-coordinate of its starting corner and skew the last wall.
+            for (const auto corner : {Vec2{endpoint_point.x, anchor.y},
+                                      Vec2{anchor.x, endpoint_point.y}}) {
+                if (std::hypot(corner.x - anchor.x, corner.y - anchor.y) <= snap_radius)
+                    continue;
+                consider(axis_intersection, corner, SnapKind::alignment, endpoint_point,
+                         Segment{endpoint_point, corner, 0.0});
             }
-            for (const auto& segment : entity.snap_segments) {
-                const auto dx = segment.end.x - segment.start.x;
-                const auto dy = segment.end.y - segment.start.y;
-                const auto length = std::hypot(dx, dy);
-                if (!std::isfinite(length) || length <= 1e-9) continue;
-                const Vec2 tangent{dx / length, dy / length};
-                const Vec2 normal{-tangent.y, tangent.x};
-                for (const auto endpoint_point : {segment.start, segment.end}) {
-                    if (std::hypot(anchor.x - endpoint_point.x, anchor.y - endpoint_point.y) > snap_radius) continue;
-                    const auto amount = (raw.x - anchor.x) * normal.x +
-                                        (raw.y - anchor.y) * normal.y;
-                    const Vec2 projected{anchor.x + amount * normal.x,
-                                         anchor.y + amount * normal.y};
-                    consider(perpendicular, projected, SnapKind::perpendicular, endpoint_point,
-                             Segment{endpoint_point, projected, 0.0});
-                }
+            for (const auto direction : {Vec2{1.0, 0.0}, Vec2{0.0, 1.0}}) {
+                const auto amount = (raw.x - endpoint_point.x) * direction.x +
+                                    (raw.y - endpoint_point.y) * direction.y;
+                const Vec2 projected{endpoint_point.x + amount * direction.x,
+                                     endpoint_point.y + amount * direction.y};
+                consider(alignment, projected, SnapKind::alignment, endpoint_point,
+                         Segment{endpoint_point, projected, 0.0});
+            }
+        };
+        const auto consider_segment_guides = [&](const Segment& segment) {
+            const auto dx = segment.end.x - segment.start.x;
+            const auto dy = segment.end.y - segment.start.y;
+            const auto length = std::hypot(dx, dy);
+            if (!std::isfinite(length) || length <= 1e-9) return;
+            const Vec2 tangent{dx / length, dy / length};
+            const Vec2 normal{-tangent.y, tangent.x};
+            for (const auto endpoint_point : {segment.start, segment.end}) {
+                if (std::hypot(anchor.x - endpoint_point.x, anchor.y - endpoint_point.y) > snap_radius) continue;
+                const auto amount = (raw.x - anchor.x) * normal.x +
+                                    (raw.y - anchor.y) * normal.y;
+                const Vec2 projected{anchor.x + amount * normal.x,
+                                     anchor.y + amount * normal.y};
+                consider(perpendicular, projected, SnapKind::perpendicular, endpoint_point,
+                         Segment{endpoint_point, projected, 0.0});
+            }
+        };
+        // Coordinate strips retain guides from arbitrarily distant endpoints.
+        // Segment normals need only the original anchor-near endpoint test.
+        const auto guide_targets = retainedSnapCandidates(screen_point, snap_radius_pixels, anchor);
+        if (guide_targets) {
+            for (const auto& target : *guide_targets) {
+                const auto& entity = m_entities[target.entity_index];
+                if (target.segment) consider_segment_guides(entity.snap_segments[target.target_index]);
+                else consider_endpoint_guides(entity.snap_points[target.target_index]);
+            }
+        } else {
+            for (const auto& entity : m_entities) {
+                for (const auto endpoint_point : entity.snap_points) consider_endpoint_guides(endpoint_point);
+                for (const auto& segment : entity.snap_segments) consider_segment_guides(segment);
             }
         }
         constexpr double diagonal = 0.7071067811865475244;
@@ -5316,8 +5329,8 @@ void PlanCanvas::ensureLocalSnapIndex() const {
     m_local_snap_index_ready = true;
 }
 
-std::optional<std::vector<PlanCanvas::LocalSnapTarget>> PlanCanvas::localSnapCandidates(
-    QPointF point, double radius_pixels) const {
+std::optional<std::vector<PlanCanvas::LocalSnapTarget>> PlanCanvas::retainedSnapCandidates(
+    QPointF point, double radius_pixels, std::optional<Vec2> alignment_anchor) const {
     // Previews/pending releases keep the original traversal and input authority.
     constexpr double safe_extent = 1e12;
     const auto viewport = QRectF(rect());
@@ -5332,6 +5345,9 @@ std::optional<std::vector<PlanCanvas::LocalSnapTarget>> PlanCanvas::localSnapCan
     const auto model = toModel(point, viewport);
     if (!std::isfinite(model.x) || !std::isfinite(model.y) ||
         std::abs(model.x) > safe_extent || std::abs(model.y) > safe_extent) return std::nullopt;
+    const auto anchor = alignment_anchor.value_or(model);
+    if (!std::isfinite(anchor.x) || !std::isfinite(anchor.y) ||
+        std::abs(anchor.x) > safe_extent || std::abs(anchor.y) > safe_extent) return std::nullopt;
     ensureLocalSnapIndex();
     auto result = m_local_snap_index_fallback;
     const auto overlaps = [](const QRectF& left, const QRectF& right) {
@@ -5346,8 +5362,11 @@ std::optional<std::vector<PlanCanvas::LocalSnapTarget>> PlanCanvas::localSnapCan
         pending.pop_back();
         const auto& node = m_local_snap_index_nodes[node_index];
         // Bound inverse mapping and the unchanged screen-space distance test.
-        const auto rounding = 64.0 * std::numeric_limits<double>::epsilon() *
+        // Unbounded projection subtracts then adds the source coordinate. Its
+        // roundoff includes the distant endpoint, even when the cursor is local.
+        const auto rounding = (alignment_anchor ? 256.0 : 64.0) * std::numeric_limits<double>::epsilon() *
             std::max({1.0, std::abs(model.x), std::abs(model.y),
+                std::abs(anchor.x), std::abs(anchor.y),
                 std::abs(m_view_center.x), std::abs(m_view_center.y),
                 std::abs(node.bounds.left()), std::abs(node.bounds.right()),
                 std::abs(node.bounds.top()), std::abs(node.bounds.bottom()),
@@ -5356,14 +5375,28 @@ std::optional<std::vector<PlanCanvas::LocalSnapTarget>> PlanCanvas::localSnapCan
         const auto padding = radius_pixels / m_scale + rounding;
         const QRectF query(QPointF(model.x - padding, model.y - padding),
                            QPointF(model.x + padding, model.y + padding));
+        const QRectF anchor_query(QPointF(anchor.x - padding, anchor.y - padding),
+                                  QPointF(anchor.x + padding, anchor.y + padding));
         if (!std::isfinite(padding) || !finite_rect(query) ||
             !std::isfinite(query.width()) || !std::isfinite(query.height()) ||
+            !finite_rect(anchor_query) || !std::isfinite(anchor_query.width()) ||
+            !std::isfinite(anchor_query.height()) ||
             !finite_rect(node.bounds)) return std::nullopt;
-        if (!overlaps(node.bounds, query)) continue;
+        const auto overlaps_axis = [&](const QRectF& bounds) {
+            return !(bounds.right() < query.left() || bounds.left() > query.right()) ||
+                   !(bounds.bottom() < query.top() || bounds.top() > query.bottom());
+        };
+        const bool node_admitted = alignment_anchor
+            ? overlaps_axis(node.bounds) || overlaps(node.bounds, anchor_query)
+            : overlaps(node.bounds, query);
+        if (!node_admitted) continue;
         if (node.count) {
             for (std::size_t offset = 0; offset < node.count; ++offset) {
                 const auto& entry = m_local_snap_index_entries[node.first + offset];
-                if (overlaps(entry.bounds, query)) result.push_back(entry.target);
+                const bool admitted = alignment_anchor
+                    ? (entry.target.segment ? overlaps(entry.bounds, anchor_query) : overlaps_axis(entry.bounds))
+                    : overlaps(entry.bounds, query);
+                if (admitted) result.push_back(entry.target);
             }
         } else {
             pending.push_back(node.right);
