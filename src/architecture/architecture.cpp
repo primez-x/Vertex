@@ -15,6 +15,7 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GProp_GProps.hxx>
@@ -25,6 +26,7 @@
 #include <TopoDS_Compound.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
@@ -271,15 +273,46 @@ Boundary strip(const Segment& baseline, double thickness) {
     return strip_range(baseline, -thickness * 0.5, thickness * 0.5);
 }
 
-TopoDS_Shape sloped_layer(const Segment& baseline, double inner_offset,
-                          double outer_offset, double elevation, double start_height,
-                          double rise) {
-    if (baseline.sweep_radians != 0.0 && std::abs(rise) > tolerance) {
-        throw std::invalid_argument("Sloped wall layers require a straight baseline");
-    }
-    if (std::abs(rise) <= tolerance) {
+TopoDS_Shape sloped_layer(const Wall& wall, double inner_offset, double outer_offset) {
+    const auto& baseline = wall.baseline;
+    const double elevation = wall.elevation;
+    const double start_height = wall.height;
+    const double rise = wall.slope_rise.value_or(0.0);
+    const auto gradient = wall_top_gradient(wall);
+    if (gradient.x == 0.0 && gradient.y == 0.0) {
         return extrude(strip_range(baseline, inner_offset, outer_offset),
                        elevation, start_height);
+    }
+    if (baseline.sweep_radians != 0.0 || wall.top_gradient_m_per_m) {
+        const auto top_range = wall_top_height_range(wall, 0.0, segment_length(baseline),
+                                                      inner_offset, outer_offset);
+        const auto prism = extrude(strip_range(baseline, inner_offset, outer_offset),
+                                   elevation, top_range.maximum);
+        // Intersect the exact strip prism with the half-space beneath the
+        // shared planar top. The circle/cylinder surfaces and radial end faces
+        // remain analytical; this never tessellates the baseline or layers.
+        const double normal_length = std::hypot(std::hypot(gradient.x, gradient.y), 1.0);
+        BRepBuilderAPI_MakeFace plane(gp_Pln(
+            gp_Pnt(baseline.start.x, baseline.start.y, elevation + start_height),
+            gp_Dir(-gradient.x / normal_length, -gradient.y / normal_length, 1.0 / normal_length)));
+        if (!plane.IsDone()) {
+            throw std::invalid_argument("Wall top plane construction failed");
+        }
+        BRepPrimAPI_MakeHalfSpace half_space(plane.Face(),
+            gp_Pnt(baseline.start.x, baseline.start.y, elevation));
+        // Unbounded half-spaces are boolean tools; generic solid validation
+        // applies to the finite intersection rather than the half-space itself.
+        if (half_space.Solid().IsNull()) {
+            throw std::invalid_argument("Wall top half-space construction failed");
+        }
+        BRepAlgoAPI_Common operation(prism, half_space.Solid());
+        operation.Build();
+        if (!operation.IsDone() || operation.HasErrors() || operation.Shape().IsNull() ||
+            !BRepCheck_Analyzer(operation.Shape()).IsValid() ||
+            solid_volume(operation.Shape()) <= tolerance * tolerance * tolerance) {
+            throw std::invalid_argument("Sloped wall clipping did not produce a valid solid");
+        }
+        return operation.Shape();
     }
     const double length = segment_length(baseline);
     const double dx = (baseline.end.x - baseline.start.x) / length;
@@ -561,11 +594,9 @@ TopoDS_Shape make_wall(const Wall& wall) {
             return result;
         };
 
-        const auto rise = wall.slope_rise.value_or(0.0);
         if (wall.layers.empty()) {
-            return cut_openings(sloped_layer(wall.baseline, -wall.thickness * 0.5,
-                                             wall.thickness * 0.5, wall.elevation,
-                                             wall.height, rise));
+            return cut_openings(sloped_layer(wall, -wall.thickness * 0.5,
+                                             wall.thickness * 0.5));
         }
 
         TopoDS_Compound compound;
@@ -574,8 +605,7 @@ TopoDS_Shape make_wall(const Wall& wall) {
         double inner_offset = -wall.thickness * 0.5;
         for (const auto& layer : wall.layers) {
             const auto outer_offset = inner_offset + layer.thickness;
-            auto layer_shape = sloped_layer(wall.baseline, inner_offset, outer_offset,
-                                            wall.elevation, wall.height, rise);
+            auto layer_shape = sloped_layer(wall, inner_offset, outer_offset);
             layer_shape = cut_openings(std::move(layer_shape));
             builder.Add(compound, layer_shape);
             inner_offset = outer_offset;

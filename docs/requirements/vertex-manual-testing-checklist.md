@@ -524,8 +524,10 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U080 — Draw and edit a curved architectural wall**
-  - Steps: Draw a curved wall and note its curved length. Select it, open **Dimensions and constraints**, and choose **Change curve length**. Check that the prefilled length matches the arc. Choose **Keep start fixed**, enter a new length, Preview and Apply. Repeat with **Keep end fixed**. Try each connected-movement option on a joined wall or area; cancel an edit once before applying.
+  - Steps: Draw a curved wall and note its curved length. Select it, open **Dimensions and constraints**, and choose **Change curve length**. Check that the prefilled length matches the arc. Choose **Keep start fixed**, enter a new length, Preview and Apply. Repeat with **Keep end fixed**. Try each connected-movement option on a joined wall or area; cancel an edit once before applying. With nonzero Top rise, edit the curve again and inspect the start and end top heights.
+  - Top-rise check: Set a positive Top rise in Properties. Inspect the wall in 3D, save and reopen, then split it with **Tools > Insert point** and inspect both pieces. Set Top rise to zero and inspect it again.
   - Expected: Its curvature and thickness remain consistent in plan and 3D.
+  - Top-plane check: On a curved wall, Top rise is measured between the chord endpoints, and the top stays one plane across the curve. Editing the curve keeps its top grade in the same model direction and retains the start top height while the end height follows the changed chord. Both split pieces keep the original plane continuous; zero flattens the wall.
   - Also check: The chosen endpoint stays fixed and the final arc length matches your entry. No permanent length lock is added unless you explicitly add one. Existing locks or frozen connections that make the edit impossible produce a conflict without changing the project. Undo, redo, save and reopen; verify the resulting wall, hosted openings and entered length.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -985,8 +987,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U159 — Create a sloped wall**
-  - Steps: In a horizontal architectural plan, begin a sloped wall and cancel its uncommitted start with Undo. Repeat, place the second endpoint and enter its rise. Inspect plan and 3D, then Undo and Redo the completed wall.
-  - Expected: The entered height/rise is visible in the correct direction.
+  - Steps: In a horizontal architectural plan, begin a sloped wall and cancel its uncommitted start with Undo. Repeat, place the second endpoint and enter its rise. Inspect plan and 3D, then Undo and Redo the completed wall. In Properties, try positive and negative Top rise on one straight and one curved wall, save and reopen, then set Top rise to zero.
+  - Expected: The entered height/rise is visible in the correct direction. On a curved wall, Top rise follows the start-to-end chord and the top remains one plane across the curve. Setting it to zero flattens the wall.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1000,6 +1002,7 @@ drawing; switching modes does not change existing geometry.
   - Library check: Place a door from the component list on an existing wall. Confirm it becomes a hosted opening, rather than a floating furniture symbol. Try placement away from a wall; the app should explain the missing host without adding an unrelated annotation.
   - Expected: Choose Door in the Library tab, set its width and height, then move onto an existing wall. A placement preview shows the opening and swing before clicking. The door cuts that wall and remains hosted there after save/reopen.
   - Also check: Placement stays in the selected plan. Only visible walls on the active layer accept it; a cropped-out continuation does not. An elevation or section explains that a horizontal plan is needed. Changing the layer, view or source while placing refuses the old placement. Recover unsaved wall changes and confirm the preview uses those recovered walls. One Undo removes the placed door and restores its wall cut.
+  - Curved-slope check: Set a curved wall's Top rise and try to place a door whose head fits below the high side but reaches above the lowest top across its opening and wall thickness. The placement must be refused. Lower the door until it fits, then place it and save/reopen.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1026,6 +1029,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Place a window through the Library action and through a hosted library item in Measurement and a horizontal Architectural plan. Repeat in a shifted or rotated saved plan; verify that the preview and final opening occupy the same wall position.
   - Library check: Repeat using a window from the component list. The library and Window action must use the same hosted placement and wall cut. Undo, redo, save and reopen the result.
   - Expected: Choose Window in the Library tab, set its width, height and sill, then click the placement preview on an existing wall. The window and opening appear in that wall in 2D, elevation and 3D.
+  - Curved-slope check: Set Top rise on a curved wall and try a window whose head fits the high side but reaches above the lowest top across its opening and wall thickness. The placement must be refused. Lower or shorten it until it fits, place it and save/reopen.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1165,6 +1169,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U189 — Duplicate, rotate and delete a building object**
+  - Rotation steps: In Measurement, select a column, roof, stair, independent railing, beam with a visible plan axis, or placed assembly. Drag its rotation handle to 45, 90 and 180 degrees, releasing between turns. Hold Shift for an angle between the snapping points. Return to the starting angle, cancel another turn with Escape, then accept one rotation and Undo/Redo it. Repeat in a shifted, rotated or reflected horizontal Architectural plan and with a cropped view. Save and reopen.
+  - Rotation check: The handle retains the object's saved orientation, the degree readout agrees with Properties, and the preview matches the accepted plan and 3D geometry. Width, depth, height, rise and level assignments stay unchanged. Hosted stair rails follow their stair. A connected configuration that cannot support the edit explains the conflict and leaves the original geometry intact. A vertical beam uses its physical transform controls rather than a plan-axis rotation grip.
   - Expected: The object and its relationships remain valid; undo restores it.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -2160,8 +2166,8 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U353 — Rotate and reflect a measured curved wall**
-  - Steps: Create a curved wall from an arc length. Open Transform selection, flip it horizontally, then vertically, then flip both axes together. Rotate it by 37 degrees and translate it. Repeat with Copy enabled. Undo and Redo each edit, change the copied wall's length, then save and reopen.
-  - Expected: The actual curve follows the chosen rigid transform. A single reflection reverses its bend; two reflections preserve its bend. Rotation and translation preserve arc length. Copy leaves the original in place. Original construction information and properties survive the edits, Undo/Redo and reopening. Conflicting locked connections refuse the complete change with an explanation.
+  - Steps: Create a curved wall from an arc length. Open Transform selection, flip it horizontally, then vertically, then flip both axes together. Rotate it by 37 degrees and translate it. Repeat with Copy enabled. Undo and Redo each edit, change the copied wall's length, then save and reopen. Repeat the rigid transforms on a straight wall with nonzero Top rise.
+  - Expected: The actual curve follows the chosen rigid transform. A single reflection reverses its bend; two reflections preserve its bend. Rotation and translation preserve arc length. The straight wall's top grade follows rotation and reflection, its start top height is preserved, and both survive reopening. Copy leaves the original in place. Original construction information and properties survive the edits, Undo/Redo and reopening. Conflicting locked connections refuse the complete change with an explanation.
   - Result: Not tested
   - Notes: ______________________________
 
@@ -2612,8 +2618,8 @@ drawing; switching modes does not change existing geometry.
 ## Insert points in walls
 
 - [ ] **U419 — Split a wall with Insert point**
-  - Steps: Draw and select a wall. Choose Tools > Insert point. Change the position from 0.5 to 0.4, inspect the two wall lengths and seam, and Cancel. Reopen and Apply. Undo and Redo.
-  - Expected: Preview and Cancel leave the drawing unchanged. Apply creates two connected walls with the original thickness and layer, in one reversible edit. Invalid or endpoint positions cannot apply.
+  - Steps: Draw a straight wall with nonzero Top rise and select it. Choose Tools > Insert point. Change the position from 0.5 to 0.4, inspect the two wall lengths and seam in 3D, and Cancel. Reopen and Apply, then save and reopen. Undo and Redo.
+  - Expected: Preview and Cancel leave the drawing unchanged. Apply creates two connected walls with the original thickness and layer, in one reversible edit. Their top remains in the same plane, with no step at the split. Invalid or endpoint positions cannot apply.
   - Result: Not tested
   - Notes: ______________________________
 
@@ -2630,8 +2636,8 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U422 — Split a curved wall with a physical-length lock**
-  - Steps: Draw a curved wall and add Fixed physical arc length through Dimensions and constraints. Insert an interior point, then inspect the curve and retained relationship. Split again to make three pieces. Reopen the existing relationship, change its total length, Preview and Cancel once, then Preview and Apply. Try a compatible connected edit, Undo and save/reopen.
-  - Expected: Splitting reconstructs the original curve. The saved relationship retains one total physical arc length across all pieces; it does not replace it with separate fixed lengths. Editing that total identifies the complete chain and retains every member. Cancel changes nothing; Apply and Undo change the total and connected geometry together. Conflicts explain the problem and cannot apply.
+  - Steps: Draw a curved wall, set nonzero Top rise in Properties, and add Fixed physical arc length through Dimensions and constraints. Insert an interior point, then inspect the curve, top and retained relationship. Split again to make three pieces. Reopen the existing relationship, change its total length, Preview and Cancel once, then Preview and Apply. Try a compatible connected edit, Undo and save/reopen.
+  - Expected: Splitting reconstructs the original curve and keeps the same top plane continuous across all pieces. The saved relationship retains one total physical arc length across all pieces; it does not replace it with separate fixed lengths. Editing that total identifies the complete chain and retains every member. Cancel changes nothing; Apply and Undo change the total and connected geometry together. Conflicts explain the problem and cannot apply.
   - Result: Not tested
   - Notes: ______________________________
 

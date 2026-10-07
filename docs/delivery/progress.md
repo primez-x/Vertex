@@ -112,6 +112,51 @@ source changes; custom plans retain their frame/depth/crop, including solid crop
 faces. Metadata and committed sources remain authoritative. Source was inspected
 by root; no runtime drag, build or test was executed for this correction.
 
+The subsequent source batch adds captured-command plan rotation for columns,
+roofs, stairs, independent railings, beams with an authored plan axis and placed
+assemblies. It carries the original object's orientation through the actual
+saved-plan frame and admits the exact proposed command on release. Candidate
+geometry includes typed assembly roots, dependent roof joins and linked view
+dimensions. Physical uniform plan scaling is disabled so it cannot silently
+change height, rise or level placement; those edits remain typed dimensions.
+Compilation and interactive behavior remain unverified, and the installed
+candidate is unchanged.
+
+The same candidate projector now regenerates legacy assembly host copies from
+the complete candidate host, its openings and dependent geometry. It retains
+each captured presentation identity and admits empty overrides when geometry
+leaves a crop. Independent source review identified missing authored rotation
+frames for placed assemblies in Site Plan; their scene and exact-preview frames
+now retain the original axes before the Site transform is applied once.
+
+The following implementation fills the curved sloped-wall gap. A shared top
+plane supplies exact station heights and full-thickness extrema, opening-fit
+validation and depth-aware snap spans. The wall factory clips an analytical
+curved strip prism with that plane. Subarc splitting retains the original plane
+and rebases child start heights. Physical transforms rotate its gradient; plan
+axis resizing preserves corresponding top heights through the inverse
+transpose. Explicit Top rise edits reset the inherited plane, and zero clears
+both scalar aliases. Opening authoring previews draw the actual top profile.
+
+Straight walls with explicit planes now use a separately versioned exact rigid
+proof through the connected-wall solver, including reflections that change
+only the transverse grade. The original curved proof remains unchanged.
+Native format v62 and extraction v60 retain planes, curved slopes and the new
+straight proof across current and historical revisions. Shared desktop and
+exchange codecs preserve those fields. These are source implementations; no
+build, test run, package, native job or installation was performed.
+Independent source review identified a discarded plane-only reflection and
+inconsistent legacy scalar decoding. Both were corrected, along with a rigid
+identity accepted only through metadata normalization. The scoped source review
+approved the revised implementation; geometry-kernel execution and observed
+interaction remain unverified.
+
+Root also removed a complete proposal-vector copy during canvas movement and
+replaced repeated full-scene selection searches with indexed membership during
+move and rotation completion. Reference identity and every selected move owner
+retain their existing admission rules. This is source implementation, not a
+measured responsiveness result; no builds or test runs were started.
+
 The next source batch retains an immutable architectural-view source instead
 of copying its complete entity map. Separate retained spatial indexes enumerate
 pointer-hit geometry and nearby actual snap endpoints/segments. Source-order

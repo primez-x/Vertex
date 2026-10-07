@@ -48,10 +48,50 @@ struct Wall {
     std::vector<HostedOpening> openings;
     std::vector<WallLayer> layers;
     // Optional signed change in wall-top height from baseline start to end.
-    // A nonzero slope is currently supported for straight baselines; the
-    // bottom remains at `elevation` and `height` is the start height.
+    // Without a retained gradient, the top is a plane with its gradient along
+    // the start-to-end chord, including for circular baselines. The bottom
+    // remains at `elevation` and `height` is the centreline start height.
+    // A curved wall's station heights follow chord projection, not a linear
+    // ramp along arc length.
     std::optional<double> slope_rise;
+    // Optional retained top plane, in metres of vertical rise per horizontal
+    // metre. This preserves a plane across subarc splits whose chords differ.
+    // When set, height is the relative top at baseline.start and slope_rise,
+    // if supplied, must agree with the gradient projected along the chord.
+    std::optional<Vec2> top_gradient_m_per_m;
 };
+
+struct WallTopHeightRange {
+    double minimum{};
+    double maximum{};
+};
+
+// Shared planar-top equation. Heights exclude Wall::elevation. Station is
+// distance along the directed centreline; normal offsets follow its left
+// normal, matching the layer order. Unset gradients derive from slope_rise;
+// scalar rises within geometry tolerance are flat. Explicit gradients retain
+// their supplied plane, including gradients perpendicular to the chord.
+// Invalid/non-finite or unrepresentable inputs throw std::invalid_argument;
+// these helpers do not validate openings, materials or positive top heights.
+[[nodiscard]] Vec2 wall_top_gradient(const Wall& wall);
+[[nodiscard]] double wall_top_height(const Wall& wall, double station_metres,
+                                     double normal_offset_metres = 0.0);
+// Analytic extrema over the entire closed station/normal-offset rectangle,
+// including interior arc extrema. Equal stations or offsets are permitted.
+// Stations outside the baseline by at most geometry tolerance are clamped.
+[[nodiscard]] WallTopHeightRange wall_top_height_range(
+    const Wall& wall, double from_metres, double to_metres,
+    double inner_offset_metres, double outer_offset_metres);
+// Centreline stations where the top crosses a relative height. Circular
+// extrema partition monotone intervals; roots settle at double precision.
+// A constant top has no isolated crossings.
+[[nodiscard]] std::vector<double> wall_top_height_crossings(
+    const Wall& wall, double relative_height_metres);
+
+// Strict version-1 retained plane codec:
+// {"version":1,"gradient_m_per_m":[gx,gy]}.
+[[nodiscard]] Vec2 parse_wall_top_plane(const nlohmann::json& value);
+[[nodiscard]] nlohmann::json wall_top_plane_json(Vec2 gradient);
 
 // A wall join is a first-class architectural relationship.  The v1 fused
 // style keeps each wall's semantic identity and hosted openings while the

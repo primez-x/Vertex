@@ -282,6 +282,7 @@ std::vector<IfcNativeMesh> ifc_native_void_mesh(const Wall& wall, const HostedOp
     cut.baseline = hosted_opening_span(wall.baseline, opening.offset, opening.width);
     cut.elevation = wall.elevation + opening.sill;
     cut.height = opening.height; cut.openings.clear(); cut.layers.clear(); cut.slope_rise.reset();
+    cut.top_gradient_m_per_m.reset();
     return tessellate(make_wall(cut), vertices, triangles);
 }
 std::vector<IfcNativeMesh> ifc_native_fill_mesh(const Wall& wall, const HostedOpening& opening,

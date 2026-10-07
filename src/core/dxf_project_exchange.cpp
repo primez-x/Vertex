@@ -1008,6 +1008,8 @@ Entity detached_native_entity(const Entity& source, const std::map<std::string, 
         result.properties["height_m"] = decoded.height;
         result.properties["elevation_m"] = decoded.elevation;
         if (decoded.slope_rise) result.properties["slope_rise_m"] = *decoded.slope_rise;
+        if (decoded.top_gradient_m_per_m)
+            result.properties["top_plane"] = wall_top_plane_json(*decoded.top_gradient_m_per_m);
         for (const auto* key : {"thickness", "height", "elevation", "slope_rise"}) result.properties.erase(key);
     } else {
         result.properties["wall_id"] = ids.at(source.properties.at("wall_id").get<std::string>());

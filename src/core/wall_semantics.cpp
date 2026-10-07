@@ -439,7 +439,256 @@ double wall_baseline_length(const Segment& baseline) {
     return length;
 }
 
+struct WallTopData {
+    double length;
+    double chord;
+    double rise;
+    Vec2 gradient;
+    double along_gradient;
+    double across_gradient;
+    bool explicit_plane;
+    std::optional<ArcData> arc;
+};
+
+WallTopData wall_top_data(const Wall& wall) {
+    const double length = wall_baseline_length(wall.baseline);
+    if (!std::isfinite(wall.height) ||
+        (wall.slope_rise && !std::isfinite(*wall.slope_rise))) {
+        reject("Wall top height and rise must be finite");
+    }
+    const double dx = wall.baseline.end.x - wall.baseline.start.x;
+    const double dy = wall.baseline.end.y - wall.baseline.start.y;
+    const double chord = std::hypot(dx, dy);
+    if (!std::isfinite(chord) || !(chord > 0.0)) {
+        reject("Wall top chord must have a representable positive length");
+    }
+    const double supplied_rise = wall.slope_rise.value_or(0.0);
+    const double rise = std::abs(supplied_rise) <= tolerance ? 0.0 : supplied_rise;
+    const Vec2 direction{dx / chord, dy / chord};
+    const double along = rise / chord;
+    Vec2 gradient{direction.x * along, direction.y * along};
+    if (wall.top_gradient_m_per_m) {
+        gradient = *wall.top_gradient_m_per_m;
+        if (!finite(gradient)) reject("Wall top gradient must be finite");
+        const double end_rise = dx * gradient.x + dy * gradient.y;
+        if (!std::isfinite(end_rise)) {
+            reject("Wall top end rise exceeds the supported numeric range");
+        }
+        if (wall.slope_rise && std::abs(end_rise - supplied_rise) >
+            std::max(tolerance, std::max(std::abs(end_rise), std::abs(supplied_rise)) * 1e-9)) {
+            reject("Wall slope rise disagrees with its retained top plane");
+        }
+    }
+    const double along_gradient = wall.top_gradient_m_per_m
+        ? direction.x * gradient.x + direction.y * gradient.y : along;
+    const double across_gradient = wall.top_gradient_m_per_m
+        ? -direction.y * gradient.x + direction.x * gradient.y : 0.0;
+    if (!finite(gradient) || !std::isfinite(std::hypot(gradient.x, gradient.y)) ||
+        !std::isfinite(along_gradient) || !std::isfinite(across_gradient) || !finite(direction)) {
+        reject("Wall top gradient exceeds the supported numeric range");
+    }
+    return {length, chord, rise, gradient, along_gradient, across_gradient,
+            wall.top_gradient_m_per_m.has_value(),
+            wall.baseline.sweep_radians == 0.0
+                ? std::nullopt : std::optional<ArcData>(arc_data(wall.baseline))};
+}
+
+double top_station(double station, double length) {
+    if (!std::isfinite(station) || station < -tolerance ||
+        station > length + tolerance) {
+        reject("Wall top station lies outside its baseline");
+    }
+    return std::clamp(station, 0.0, length);
+}
+
+double top_radius(const Wall& wall, const WallTopData& data, double offset) {
+    if (!std::isfinite(offset)) reject("Wall top normal offset must be finite");
+    const double direction = wall.baseline.sweep_radians > 0.0 ? 1.0 : -1.0;
+    const double radius = data.arc->radius - direction * offset;
+    positive(radius, "Wall top normal offset crosses its arc centre");
+    return radius;
+}
+
+double top_height_at_position(const Wall& wall, const WallTopData& data,
+                              double along, double across) {
+    const double height = wall.height + data.along_gradient * along +
+                          data.across_gradient * across;
+    if (!std::isfinite(along) || !std::isfinite(across) || !std::isfinite(height)) {
+        reject("Wall top height exceeds the supported numeric range");
+    }
+    return height;
+}
+
+// Unwrapped start radial angle relative to the chord direction. Express it
+// using the sweep to avoid subtracting large absolute world coordinates.
+double top_start_angle(const Wall& wall) {
+    return (wall.baseline.sweep_radians > 0.0 ? -std::numbers::pi * 0.5
+                                            : std::numbers::pi * 0.5) -
+           wall.baseline.sweep_radians * 0.5;
+}
+
+double top_station_height(const Wall& wall, const WallTopData& data,
+                           double station, double offset) {
+    if (!std::isfinite(offset)) reject("Wall top normal offset must be finite");
+    if (!data.arc) {
+        if (!data.explicit_plane) {
+            const double height = wall.height + data.rise * (station / data.length);
+            if (!std::isfinite(height)) reject("Wall top height exceeds the supported numeric range");
+            return height;
+        }
+        return top_height_at_position(wall, data, station, offset);
+    }
+    const double radius = top_radius(wall, data, offset);
+    if (data.along_gradient == 0.0 && data.across_gradient == 0.0) return wall.height;
+    const double centre_along = data.chord * 0.5;
+    const double centre_across = data.chord / (2.0 * std::tan(wall.baseline.sweep_radians * 0.5));
+    // Local chord coordinates avoid subtracting large world coordinates.
+    // Across the thickness the plane is affine in radius; along the arc it
+    // is sinusoidal. Endpoint radial coordinates avoid trig cancellation.
+    double along, across;
+    if (station == 0.0) {
+        const double scale = 1.0 - radius / data.arc->radius;
+        along = centre_along * scale;
+        across = centre_across * scale;
+    } else if (station == data.length) {
+        const double scale = radius / data.arc->radius;
+        along = centre_along * (1.0 + scale);
+        across = centre_across * (1.0 - scale);
+    } else {
+        const double angle = wall.baseline.sweep_radians * (station / data.length);
+        const double scale = radius / data.arc->radius;
+        const double half_sine = std::sin(angle * 0.5);
+        // 1 - scale*cos(angle), written without subtracting nearly equal
+        // numbers on shallow arcs. Rotate the start radial vector relative
+        // to the start point rather than adding huge circle coordinates.
+        const double radial_change = (1.0 - scale) + 2.0 * scale * half_sine * half_sine;
+        along = centre_along * radial_change + scale * centre_across * std::sin(angle);
+        across = centre_across * radial_change - scale * centre_along * std::sin(angle);
+    }
+    return top_height_at_position(wall, data, along, across);
+}
+
 }  // namespace
+
+Vec2 wall_top_gradient(const Wall& wall) {
+    const auto data = wall_top_data(wall);
+    return data.gradient;
+}
+
+double wall_top_height(const Wall& wall, double station_metres,
+                       double normal_offset_metres) {
+    const auto data = wall_top_data(wall);
+    return top_station_height(wall, data, top_station(station_metres, data.length),
+                              normal_offset_metres);
+}
+
+WallTopHeightRange wall_top_height_range(const Wall& wall, double from_metres,
+                                        double to_metres, double inner_offset_metres,
+                                        double outer_offset_metres) {
+    const auto data = wall_top_data(wall);
+    if (!std::isfinite(inner_offset_metres) || !std::isfinite(outer_offset_metres) ||
+        inner_offset_metres > outer_offset_metres || from_metres > to_metres) {
+        reject("Wall top interval and offsets must form ordered finite ranges");
+    }
+    const double from = top_station(from_metres, data.length);
+    const double to = top_station(to_metres, data.length);
+    WallTopHeightRange range{std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity()};
+    const auto retain = [&](double height) {
+        range.minimum = std::min(range.minimum, height);
+        range.maximum = std::max(range.maximum, height);
+    };
+    for (double offset : {inner_offset_metres, outer_offset_metres}) {
+        retain(top_station_height(wall, data, from, offset));
+        retain(top_station_height(wall, data, to, offset));
+        if (!data.arc || (data.along_gradient == 0.0 && data.across_gradient == 0.0)) continue;
+        const double first_angle = top_start_angle(wall) +
+            wall.baseline.sweep_radians * (from / data.length);
+        const double sweep = wall.baseline.sweep_radians * ((to - from) / data.length);
+        // A directed interval below one full turn contains at most one of
+        // each plane-height extremum. Include both for major/negative arcs.
+        const double maximum_angle = std::atan2(data.across_gradient, data.along_gradient);
+        for (double extremum : {maximum_angle, maximum_angle + std::numbers::pi}) {
+            double travel = std::fmod(sweep >= 0.0 ? extremum - first_angle
+                                                  : first_angle - extremum, full_turn);
+            if (travel < 0.0) travel += full_turn;
+            if (travel <= std::abs(sweep)) {
+                const double station = std::clamp(from + data.length *
+                    (travel / std::abs(wall.baseline.sweep_radians)), from, to);
+                retain(top_station_height(wall, data, station, offset));
+            }
+        }
+    }
+    return range;
+}
+
+std::vector<double> wall_top_height_crossings(const Wall& wall, double relative_height_metres) {
+    if (!std::isfinite(relative_height_metres)) reject("Wall top crossing height must be finite");
+    const auto data = wall_top_data(wall);
+    if (data.along_gradient == 0.0 && (!data.arc || data.across_gradient == 0.0)) return {};
+    std::vector<double> intervals{0.0, data.length};
+    if (data.arc) {
+        const auto first_angle = top_start_angle(wall);
+        const auto sweep = wall.baseline.sweep_radians;
+        const auto maximum_angle = std::atan2(data.across_gradient, data.along_gradient);
+        for (const auto extremum : {maximum_angle, maximum_angle + std::numbers::pi}) {
+            auto travel = std::fmod(sweep > 0.0 ? extremum - first_angle : first_angle - extremum, full_turn);
+            if (travel < 0.0) travel += full_turn;
+            if (travel > 0.0 && travel < std::abs(sweep))
+                intervals.push_back(data.length * (travel / std::abs(sweep)));
+        }
+    }
+    std::sort(intervals.begin(), intervals.end());
+    intervals.erase(std::unique(intervals.begin(), intervals.end()), intervals.end());
+    std::vector<double> roots;
+    for (std::size_t index = 1; index < intervals.size(); ++index) {
+        auto low = intervals[index - 1], high = intervals[index];
+        const auto low_height = top_station_height(wall, data, low, 0.0);
+        const auto high_height = top_station_height(wall, data, high, 0.0);
+        if (low_height == relative_height_metres) roots.push_back(low);
+        if (high_height == relative_height_metres) roots.push_back(high);
+        if (low_height == high_height || relative_height_metres <= std::min(low_height, high_height) ||
+            relative_height_metres >= std::max(low_height, high_height)) continue;
+        const bool increasing = high_height > low_height;
+        // Finite station endpoints bracket one root on each monotone arc.
+        // Midpoint stagnation is the representable-precision stopping point.
+        for (int step = 0; step < 96; ++step) {
+            const auto middle = std::midpoint(low, high);
+            if (middle == low || middle == high) break;
+            const auto height = top_station_height(wall, data, middle, 0.0);
+            if (height == relative_height_metres) { low = high = middle; break; }
+            if ((height < relative_height_metres) == increasing) low = middle;
+            else high = middle;
+        }
+        roots.push_back(std::midpoint(low, high));
+    }
+    std::sort(roots.begin(), roots.end());
+    roots.erase(std::unique(roots.begin(), roots.end(), [](double first, double second) {
+        return std::abs(first - second) <= tolerance;
+    }), roots.end());
+    return roots;
+}
+
+Vec2 parse_wall_top_plane(const nlohmann::json& value) {
+    if (!value.is_object() || value.size() != 2 || !value.contains("version") ||
+        !value.at("version").is_number_integer() || value.at("version") != 1 ||
+        !value.contains("gradient_m_per_m")) {
+        reject("Wall top plane requires version 1 and gradient_m_per_m");
+    }
+    const auto& components = value.at("gradient_m_per_m");
+    if (!components.is_array() || components.size() != 2 ||
+        !components.at(0).is_number() || !components.at(1).is_number()) {
+        reject("Wall top plane gradient must be a finite two-vector");
+    }
+    const Vec2 gradient{components.at(0).get<double>(), components.at(1).get<double>()};
+    if (!finite(gradient)) reject("Wall top plane gradient must be finite");
+    return gradient;
+}
+
+nlohmann::json wall_top_plane_json(Vec2 gradient) {
+    if (!finite(gradient)) reject("Wall top plane gradient must be finite");
+    return {{"version", 1}, {"gradient_m_per_m", {gradient.x, gradient.y}}};
+}
 
 void validate_wall_semantics(const Wall& wall) {
     positive(wall.thickness, "Wall thickness must be positive");
@@ -454,9 +703,6 @@ void validate_wall_semantics(const Wall& wall) {
     if (wall.slope_rise.has_value()) {
         if (!std::isfinite(*wall.slope_rise)) {
             reject("Wall slope rise must be finite");
-        }
-        if (std::abs(*wall.slope_rise) > tolerance && wall.baseline.sweep_radians != 0.0) {
-            reject("Sloped walls require a straight baseline");
         }
         const auto end_height = wall.height + *wall.slope_rise;
         if (!std::isfinite(end_height) || end_height <= tolerance) {
@@ -481,9 +727,16 @@ void validate_wall_semantics(const Wall& wall) {
         require_finite_arc_strip(wall.baseline, arc, wall.thickness);
     }
 
+    const auto top_range = wall_top_height_range(wall, 0.0, length,
+                                                 -wall.thickness * 0.5,
+                                                 wall.thickness * 0.5);
+    positive(top_range.minimum, "Wall slope leaves a non-positive top height");
+    require_finite_sum(wall.elevation, top_range.minimum,
+                       "Wall minimum top elevation exceeds the supported numeric range");
+    require_finite_sum(wall.elevation, top_range.maximum,
+                       "Wall maximum top elevation exceeds the supported numeric range");
     const double length_limit = length + tolerance;
-    const double height_limit = wall.height + tolerance;
-    if (!std::isfinite(length_limit) || !std::isfinite(height_limit)) {
+    if (!std::isfinite(length_limit) || !std::isfinite(top_range.maximum + tolerance)) {
         reject("Wall bounds exceed the supported numeric range");
     }
 
@@ -510,19 +763,14 @@ void validate_wall_semantics(const Wall& wall) {
                            "Opening sill elevation exceeds the supported numeric range");
         require_finite_sum(wall.elevation + opening.sill, opening.height,
                            "Opening top elevation exceeds the supported numeric range");
-        if (end > length_limit || top > height_limit) {
+        if (end > length_limit) {
             reject("Opening extends beyond its wall");
         }
-        if (wall.slope_rise.has_value() &&
-            std::abs(*wall.slope_rise) > tolerance) {
-            const auto start_fraction = opening.offset / length;
-            const auto end_fraction = end / length;
-            const auto start_height = wall.height + *wall.slope_rise * start_fraction;
-            const auto end_height = wall.height + *wall.slope_rise * end_fraction;
-            const auto local_height = std::min(start_height, end_height);
-            if (!std::isfinite(local_height) || top > local_height + tolerance) {
-                reject("Opening extends beyond the sloped wall top");
-            }
+        const auto local_top = wall_top_height_range(wall, opening.offset, end,
+                                                      -wall.thickness * 0.5,
+                                                      wall.thickness * 0.5);
+        if (top > local_top.minimum + tolerance) {
+            reject("Opening extends beyond its wall top");
         }
         bounds.push_back({opening.offset, end, opening.sill, top});
     }
@@ -533,7 +781,8 @@ void validate_wall_semantics(const Wall& wall) {
     // wall height. It intentionally does not treat a positive gap smaller
     // than tolerance as covered; the OCCT volume check remains authoritative
     // for such numerically ambiguous near-boundary states.
-    if ((!wall.slope_rise.has_value() || std::abs(*wall.slope_rise) <= tolerance) &&
+    const auto gradient = wall_top_gradient(wall);
+    if (gradient.x == 0.0 && gradient.y == 0.0 &&
         openings_cover_wall(bounds, length, wall.height)) {
         reject("Openings remove the entire wall");
     }

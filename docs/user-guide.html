@@ -267,6 +267,14 @@
   endpoints, sweep and arc length. You can change the curve and Classification
   together before applying; one Undo restores both. Hosted openings stay attached,
   and the wall name and other properties remain in place.</p>
+  <p>To slope a wall, edit <strong>Top rise</strong> in its Properties. This sets
+  the difference in top height from the start to the end of its baseline chord
+  and replaces the previous top profile. On a curved wall,
+  the top follows one plane across the curve; the rise is not measured along the
+  curved length. Doors and windows must fit below the plane's lowest point across
+  their opening and the full wall thickness. <strong>Tools &gt; Insert point</strong>
+  splits a sloped wall while keeping that same top plane continuous across both
+  pieces. Set Top rise to zero to flatten the wall.</p>
   <p>Wall endpoints authored together in the same floor, layer and design phase
   retain their connection. To change a wall length, use its dimensions and
   constraints editor and review connected movement before applying the edit.
@@ -600,6 +608,16 @@
   Shifted and rotated saved plans preserve their model coordinates. Hosted
   railing geometry follows its supported stair; a proposal that breaks a required
   landing or support is refused.</p>
+  <p>Select a column, roof, stair, independent railing, beam with a visible plan
+  axis, or placed assembly to use its rotation handle. The handle stays attached
+  to the object's orientation after release. Rotation snaps to 45-degree steps;
+  hold <kbd>Shift</kbd> for a fine angle and use the live degree readout. The same
+  action works in Measurement and horizontal Architectural plans, including
+  shifted, rotated and reflected saved views. Escape cancels; an accepted
+  rotation undoes in one step. Hosted stair railings rotate with their stair.</p>
+  <p>Change a physical object's width, depth, height or rise in its dimensions
+  editor. Plan rotation keeps those dimensions and level assignments intact;
+  it does not resize the object's 3D geometry.</p>
 
   <h2>Dimensions in plans, elevations and sections</h2>
   <p>In an Architectural view, right-click one wall, opening, room, slab, roof,

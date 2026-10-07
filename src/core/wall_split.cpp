@@ -4,6 +4,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
@@ -169,14 +170,48 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
     auto result=source;
     result.at(intent.wall_id)=reconstruct_split_wall(found->second,first,intent.fraction,false);
     auto child=reconstruct_split_wall(found->second,second,intent.fraction,true);child.id=intent.second_wall_id;
-    if(found->second.properties.contains("slope_rise_m")) {
-        const auto rise=found->second.properties.at("slope_rise_m").get<double>();
+    const auto station=segment_length(old)*intent.fraction;
+    const bool retained_plane=found->second.properties.contains("top_plane");
+    const auto scalar=found->second.properties.find("slope_rise_m");
+    const auto legacy_scalar=found->second.properties.find("slope_rise");
+    const auto* rise_value=scalar!=found->second.properties.end() ? &*scalar :
+        legacy_scalar!=found->second.properties.end() ? &*legacy_scalar : nullptr;
+    if (retained_plane || (old.sweep_radians!=0.0 && rise_value &&
+        std::abs(rise_value->get<double>())>default_geometry_tolerance_metres)) {
+        Wall wall;
+        std::string diagnostic;
+        if (!read_document_wall(found->second,{},wall,diagnostic)) reject(diagnostic);
+        validate_wall_semantics(wall);
+        const auto gradient=wall_top_gradient(wall);
+        const auto inherited=wall_top_plane_json(gradient);
+        const auto set_top=[&](Entity& piece,const Segment& axis,double height) {
+            const auto chord=axis.end-axis.start;
+            const auto rise=gradient.x*chord.x+gradient.y*chord.y;
+            if (!std::isfinite(height) || !std::isfinite(rise))
+                reject("Split wall top height exceeds the supported range");
+            piece.properties["top_plane"]=inherited;
+            piece.properties["height_m"]=height;
+            piece.properties["slope_rise_m"]=rise;
+            if (piece.properties.contains("height")) piece.properties["height"]=height;
+            if (piece.properties.contains("slope_rise")) piece.properties["slope_rise"]=rise;
+        };
+        set_top(result.at(intent.wall_id),first,wall.height);
+        set_top(child,second,wall_top_height(wall,station));
+    } else if(rise_value) {
+        Wall wall;
+        std::string diagnostic;
+        if (!read_document_wall(found->second,{},wall,diagnostic)) reject(diagnostic);
+        const auto rise=wall.slope_rise.value_or(0.0);
         result.at(intent.wall_id).properties["slope_rise_m"]=rise*intent.fraction;
         child.properties["slope_rise_m"]=rise*(1-intent.fraction);
-        child.properties["height_m"]=found->second.properties.at("height_m").get<double>()+rise*intent.fraction;
+        if (result.at(intent.wall_id).properties.contains("slope_rise"))
+            result.at(intent.wall_id).properties["slope_rise"]=rise*intent.fraction;
+        if (child.properties.contains("slope_rise"))
+            child.properties["slope_rise"]=rise*(1-intent.fraction);
+        child.properties["height_m"]=wall.height+rise*intent.fraction;
+        if (child.properties.contains("height")) child.properties["height"]=child.properties["height_m"];
     }
     result.emplace(child.id,std::move(child));
-    const auto station=segment_length(old)*intent.fraction;
     for(const auto& [id,entity]:source) {
         auto unhandled=entity;
         if(entity.type=="room_relationships") {

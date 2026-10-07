@@ -63,8 +63,9 @@ struct WallGeometryMoveTarget {
     std::string wall_id;
     Vec2 proposed_start;
     Vec2 proposed_end;
-    // Selected curves may carry exact rigid intent; connected owners continue
-    // to solve through ordinary endpoint edits without this authority.
+    // Selected walls may carry exact rigid intent (curved v4, straight v5);
+    // explicit top-plane gradients follow its orthogonal XY basis. Connected
+    // owners continue to solve through ordinary endpoint edits without this authority.
     std::optional<PlanarTransform> rigid_transform;
 };
 

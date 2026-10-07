@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v61
+# Vertex project formats v1 through v62
+
+## Planar wall tops and curved slopes (v62)
+
+Native format 62 and JSON/assets extraction version 60 protect explicit wall-top
+planes and curved walls with nonzero top rise. Native format 62 also protects
+retained straight-wall geometry proof 5. The native reader-floor scan includes
+every retained revision, including undone edits and deleted walls. Existing
+format 61 rules remain the historical contract described below.
+
+A wall top is one plane in model XY. Its elevation at point `XY`, relative to
+`properties.elevation_m`, is `height_m + gradient dot (XY - baseline.start)`.
+The optional `properties.top_plane` is the strict object
+`{"version": 1, "gradient_m_per_m": [gx, gy]}`: it has exactly those two
+keys, an integer version 1, and a finite two-number gradient. The gradient is
+dimensionless. If `top_plane` is absent, signed `slope_rise_m` (or the legacy
+`slope_rise`) derives a gradient along the baseline's start-to-end chord; a
+curved wall's rise is therefore measured across its chord, not its arc length.
+If both the plane and scalar rise are present, the rise must agree with the
+plane's projection across that chord.
+
+Curved walls retain their analytical arc strip and intersect its genuine prism
+with the half-space below the shared plane. Hosted openings must fit below the
+minimum top over the opening span and both wall faces. Splitting a wall retains
+the same plane on both pieces, rebases each piece's start height, and recomputes
+its scalar rise across that piece's chord. An endpoint edit retains the gradient
+in world XY, keeps `height_m` at the new `baseline.start`, and recomputes the
+scalar end rise for the changed chord; unlike splitting, it does not preserve
+the original absolute plane. A full rigid transform preserves top height at the
+mapped start and applies its rotation or reflection to the gradient; translation
+does not change the gradient. Uniform physical scaling preserves the
+dimensionless grade ratio. Plan-axis width/depth scaling instead applies the
+inverse-transpose XY scale to the gradient so corresponding top heights remain;
+it does not scale wall height or rise vertically.
 
 ## Annotations and linked dimensions in every saved view (v61)
 
@@ -973,7 +1006,23 @@ Replaying the original analytical segment must reproduce the submitted baseline
 exactly. The original construction input and earlier operations remain intact;
 one rigid operation is appended and any existing exact length receipt is rebased.
 Missing or substituted receipts, malformed transforms and mismatched baselines
-are rejected. Proofs 1 through 3 retain their old wire and replay contracts.
+are rejected. Proof 4 retains its curve-only contract.
+
+Selected straight-wall proof 5 has exactly `version`, `wall_id`, `baseline`,
+`length_entry` and `rigid_transform`, with `version: 5` and a straight baseline
+whose `sweep_radians` is zero. Replay reconstructs source start to transformed
+start and source end to transformed end, retaining the physical length. An
+existing exact length receipt is retained or rebased without losing its exact
+quantity, unit, rational value or opaque members. The explicit XY gradient
+follows the transform's rotation and reflection, while pivot and translation do
+not affect it, and legacy scalar rise fields stay synchronized. A reflection
+may leave the baseline unchanged while changing a transverse gradient; that is
+a real edit, while a complete no-op is rejected. The UI emits proof 5 for
+straight walls with an explicit plane. The proof uses the existing rigid or
+composed rigid command lane. Any retained proof 5, including one in a completion
+receipt or history, requires native format 62. A rigid transform may exchange
+named endpoint coordinates; ordinary endpoint-only reversal under older proofs
+remains rejected. Proofs 1 through 3 retain their old wire and replay contracts.
 
 Connected owners continue through existing endpoint solving. Only independently
 verified selected rigid wall IDs receive the endpoint-coordinate exchange
@@ -1524,10 +1573,13 @@ precision tolerance. A layer material points to an `assembly_model` entity and
 its cataloged material. The same hosted opening geometry is cut through every
 layer, while the layer stack remains available for schedules and future
 assembly editing. An empty array is equivalent to a monolithic wall.
-An optional signed `slope_rise_m` changes the wall-top height linearly from
-the baseline start to its end while keeping the bottom at `elevation_m`;
-`height_m` is the start height. Nonzero sloped walls currently require a
-straight baseline, and hosted openings must fit below the local sloped top.
+An optional signed `slope_rise_m` (or legacy `slope_rise`) gives the change in
+top height from `baseline.start` to `baseline.end`, while the bottom stays at
+`elevation_m` and `height_m` is the top height at the start. Without an explicit
+`top_plane`, this rise defines a chord-aligned grade, including on curved
+baselines. Native v62 also admits the explicit planar gradient described above,
+which can include a component across the wall. Hosted openings must fit below
+the local minimum top over their span and the full wall thickness.
 
 A `wall_join` is a version-1 architectural relationship that preserves the
 source wall entities while providing one derived fused solid for coordinated

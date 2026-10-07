@@ -156,7 +156,9 @@ public:
     // revision, including deleted, undone and abandoned symbol presentation.
     // Sheet/view model v8 annotations in plans/elevations require v61,
     // including when retained only in history or a deleted view graph.
-    static constexpr std::uint32_t format_version = 61;
+    // Curved sloped walls, explicit retained top planes and straight rigid
+    // wall proofs require v62 across every retained revision and receipt.
+    static constexpr std::uint32_t format_version = 62;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

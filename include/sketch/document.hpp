@@ -149,7 +149,9 @@ struct ConstraintWallGeometryEdit {
     // Version three records a physical curve-length entry at that fixed sweep.
     std::uint64_t version{1};
     // Version four independently reconstructs a selected curved wall's rigid
-    // motion. Dependent endpoint edits retain versions one through three.
+    // motion. Version five reconstructs a selected straight wall's rigid motion
+    // and explicit top-plane basis. Dependent endpoint edits retain versions one
+    // through three.
     std::optional<PlanarTransform> rigid_transform;
 };
 

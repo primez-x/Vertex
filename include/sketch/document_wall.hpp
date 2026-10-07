@@ -10,6 +10,10 @@ namespace sketch {
 // of display visibility. Solid builders validate the decoded geometry.
 [[nodiscard]] bool read_document_wall(const Entity& entity,
     const std::vector<const Entity*>& openings, Wall& output, std::string& error);
+// Decode the optional top profile onto an already decoded baseline/height.
+// Shared by full decoding and native consumers that supply their own openings.
+[[nodiscard]] bool read_document_wall_top_profile(const Entity& entity,
+    Wall& output, std::string& error);
 [[nodiscard]] bool read_document_wall_id(const Entity& entity, std::string& wall_id,
                                          std::string& error);
 

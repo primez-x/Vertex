@@ -6,11 +6,14 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
+#include <QPolygonF>
 #include <QPushButton>
 #include <QUuid>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 #include <optional>
+#include <stdexcept>
 
 namespace sketch::desktop {
 namespace {
@@ -28,21 +31,68 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
         painter.fillRect(rect(),palette().base());
-        const auto length=segment_length(host.baseline);
-        const double scale=std::min((width()-32.0)/length,(height()-36.0)/host.height);
-        const QRectF wall((width()-length*scale)/2,(height()-host.height*scale)/2,length*scale,host.height*scale);
-        painter.setPen(QPen(palette().mid().color(),1));
-        painter.setBrush(palette().alternateBase());
-        painter.drawRect(wall);
-        const auto draw=[&](const HostedOpening& opening, bool active) {
-            const QRectF box(wall.left()+opening.offset*scale,
-                wall.bottom()-(opening.sill+opening.height)*scale,opening.width*scale,opening.height*scale);
-            painter.setPen(QPen(active ? palette().highlight().color() : palette().mid().color(),active?2:1));
-            painter.setBrush(active ? palette().highlight().color().lighter(180) : palette().base().color());
-            painter.drawRect(box);
-        };
-        for(const auto& opening:host.openings) draw(opening,false);
-        if(draft) draw(*draft,true);
+        try {
+            const auto length=segment_length(host.baseline);
+            const auto top=wall_top_height_range(host,0,length,-host.thickness/2,host.thickness/2);
+            if(!std::isfinite(length) || length<=0 || !std::isfinite(top.maximum) || top.maximum<=0 ||
+                !std::isfinite(top.minimum) || top.minimum<=0)
+                throw std::invalid_argument("Invalid wall elevation");
+            const double scale=std::min((width()-32.0)/length,(height()-36.0)/top.maximum);
+            if(!std::isfinite(scale) || scale<=0) throw std::invalid_argument("Invalid preview size");
+            const QRectF wall((width()-length*scale)/2,(height()-top.maximum*scale)/2,length*scale,top.maximum*scale);
+            // Sample only the painted elevation, at approximately one point per device pixel.
+            // The shared analytic extrema above determine the fit, including arc interiors.
+            const double pixels=wall.width()*devicePixelRatioF();
+            if(!std::isfinite(pixels)) throw std::invalid_argument("Invalid preview resolution");
+            const int steps=static_cast<int>(std::clamp(std::ceil(pixels),2.0,16384.0));
+            QPolygonF upper,lower;
+            for(int i=0;i<=steps;++i) {
+                const double station=length*(static_cast<double>(i)/steps);
+                const double first=wall_top_height(host,station,-host.thickness/2);
+                const double second=wall_top_height(host,station,host.thickness/2);
+                if(!std::isfinite(first) || !std::isfinite(second) || first<=0 || second<=0)
+                    throw std::invalid_argument("Invalid wall top profile");
+                const double x=wall.left()+station*scale;
+                const double upperY=wall.bottom()-std::max(first,second)*scale;
+                const double lowerY=wall.bottom()-std::min(first,second)*scale;
+                if(!std::isfinite(x) || !std::isfinite(upperY) || !std::isfinite(lowerY))
+                    throw std::invalid_argument("Invalid preview coordinates");
+                upper << QPointF(x,upperY);
+                lower << QPointF(x,lowerY);
+            }
+            QPolygonF outline=upper;
+            outline << wall.bottomRight() << wall.bottomLeft();
+            QPolygonF band=upper;
+            for(auto i=lower.crbegin();i!=lower.crend();++i) band << *i;
+            painter.setPen(QPen(palette().text().color(),1));
+            painter.setBrush(palette().base());
+            painter.drawPolygon(outline);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(palette().alternateBase());
+            painter.drawPolygon(band);
+            painter.setPen(QPen(palette().text().color(),1));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolygon(outline);
+            painter.setPen(QPen(palette().mid().color(),1));
+            painter.drawPolyline(lower);
+            const auto draw=[&](const HostedOpening& opening, bool active) {
+                const QRectF box(wall.left()+opening.offset*scale,
+                    wall.bottom()-(opening.sill+opening.height)*scale,opening.width*scale,opening.height*scale);
+                if(!std::isfinite(box.x()) || !std::isfinite(box.y()) ||
+                    !std::isfinite(box.width()) || !std::isfinite(box.height()))
+                    throw std::invalid_argument("Invalid opening preview coordinates");
+                painter.setPen(QPen(active ? palette().highlight().color() : palette().mid().color(),active?2:1));
+                painter.setBrush(active ? palette().highlight().color().lighter(180) : palette().base().color());
+                painter.drawRect(box);
+            };
+            for(const auto& opening:host.openings) draw(opening,false);
+            if(draft) draw(*draft,true);
+        } catch(...) {
+            painter.fillRect(rect(),palette().base());
+            painter.setPen(palette().text().color());
+            painter.drawText(rect().adjusted(16,16,-16,-16),Qt::AlignCenter | Qt::TextWordWrap,
+                "Wall elevation preview unavailable");
+        }
     }
 };
 }

@@ -44,6 +44,18 @@ struct Resize {
         const auto xy = point(Vec2{p.x,p.y});
         p.x = xy.x; p.y = xy.y;
     }
+    Vec2 top_gradient(Vec2 gradient) const {
+        const double c = std::cos(angle), s = std::sin(angle);
+        // A plan resize leaves every corresponding top height unchanged.
+        // A plane gradient therefore follows the inverse transpose of its
+        // XY transform, rather than scaling like a point or direction.
+        const double u = (c*gradient.x+s*gradient.y)/x;
+        const double v = (-s*gradient.x+c*gradient.y)/y;
+        const Vec2 result{c*u-s*v,s*u+c*v};
+        if (!std::isfinite(result.x) || !std::isfinite(result.y))
+            throw std::invalid_argument("Plan resize wall top gradient overflows");
+        return result;
+    }
     std::pair<double,double> local_factors(double natural_angle) const {
         if (equal_factors(x,y)) return {x,x};
         const double c = std::cos(natural_angle-angle);
@@ -411,11 +423,21 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
         if (!read_document_wall(original,children,wall,error)) throw std::invalid_argument(error);
         const auto [along,across] = resize.local_factors(wall_frame(original));
         wall.baseline = resize.segment(wall.baseline);
+        if (wall.top_gradient_m_per_m) {
+            wall.top_gradient_m_per_m = resize.top_gradient(*wall.top_gradient_m_per_m);
+            const auto gradient = *wall.top_gradient_m_per_m;
+            wall.slope_rise = gradient.x * (wall.baseline.end.x-wall.baseline.start.x) +
+                              gradient.y * (wall.baseline.end.y-wall.baseline.start.y);
+        }
         wall.thickness *= across;
         for (auto& layer : wall.layers) layer.thickness *= across;
         for (auto& opening : wall.openings) { opening.offset *= along; opening.width *= along; }
         (void)make_wall(wall);
         update_segment(result.properties["baseline"],wall.baseline);
+        if (wall.top_gradient_m_per_m) {
+            result.properties["top_plane"] = wall_top_plane_json(*wall.top_gradient_m_per_m);
+            set_dimension(result.properties,"slope_rise_m","slope_rise",*wall.slope_rise);
+        }
         set_dimension(result.properties,"thickness_m","thickness",wall.thickness);
         if (result.properties.contains("layers")) result.properties["layers"] = wall_layers_json(wall.layers);
         for (std::size_t i=0; i<children.size(); ++i) {

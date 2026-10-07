@@ -1,6 +1,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/constraint_entity.hpp"
 #include <algorithm>
@@ -89,8 +90,35 @@ void update_baseline_json(json& target, const Segment& baseline) {
     target["sweep_radians"] = baseline.sweep_radians;
 }
 
-void set_baseline(Entity& wall, const Segment& baseline) {
+void set_baseline(Entity& wall, const Segment& baseline,
+                  const PlanarTransform* transform = nullptr) {
+    if (const auto plane = wall.properties.find("top_plane"); plane != wall.properties.end()) {
+        auto gradient = parse_wall_top_plane(*plane);
+        if (transform) {
+            // Gradients follow the same orthogonal XY basis as the baseline;
+            // pivots and translations have no effect on a direction.
+            const PlanarTransform basis{{0, 0}, transform->rotation_radians,
+                transform->flip_horizontal, transform->flip_vertical, {0, 0}};
+            gradient = transform_point(gradient, basis);
+            wall.properties["top_plane"] = wall_top_plane_json(gradient);
+        }
+        const auto rise = gradient.x * (baseline.end.x - baseline.start.x) +
+                          gradient.y * (baseline.end.y - baseline.start.y);
+        if (!std::isfinite(rise)) invalid("Wall top plane rise exceeds the supported range");
+        wall.properties["slope_rise_m"] = rise;
+        if (wall.properties.contains("slope_rise")) wall.properties["slope_rise"] = rise;
+    }
     update_baseline_json(wall.properties.at("baseline"), baseline);
+}
+
+bool same_wall_top_properties(const Entity& expected, const Entity& actual) {
+    for (const auto* key : {"top_plane", "slope_rise_m", "slope_rise"}) {
+        const auto left = expected.properties.find(key);
+        const auto right = actual.properties.find(key);
+        if ((left == expected.properties.end()) != (right == actual.properties.end()) ||
+            (left != expected.properties.end() && *left != *right)) return false;
+    }
+    return true;
 }
 
 // Unknown members are opaque metadata. Updating recognized fields preserves
@@ -323,6 +351,21 @@ Segment rigid_curve_baseline(const Segment& source,const PlanarTransform& transf
         invalid("Wall curve transform must preserve finite physical length and sweep magnitude");
     return result;
 }
+Segment rigid_straight_baseline(const Segment& source,const PlanarTransform& transform) {
+    const auto result=transform_segment(source,transform);
+    const auto original_length=segment_length(source), length=segment_length(result);
+    if (source.sweep_radians!=0.0 || result.sweep_radians!=0.0 ||
+        !std::isfinite(source.start.x) || !std::isfinite(source.start.y) ||
+        !std::isfinite(source.end.x) || !std::isfinite(source.end.y) ||
+        !std::isfinite(result.start.x) || !std::isfinite(result.start.y) ||
+        !std::isfinite(result.end.x) || !std::isfinite(result.end.y) ||
+        !std::isfinite(original_length) || !std::isfinite(length) ||
+        original_length<=constraint_linear_tolerance_metres ||
+        length<=constraint_linear_tolerance_metres ||
+        std::abs(length-original_length)>constraint_linear_tolerance_metres)
+        invalid("Straight wall transform must preserve finite nondegenerate physical length");
+    return result;
+}
 json rigid_curve_input(const json& source,const Segment& baseline,const PlanarTransform& transform) {
     if (transform.flip_horizontal!=transform.flip_vertical) return derived_angle_input(source,baseline);
     auto result=source;
@@ -418,7 +461,7 @@ void transform_wall_curve_input(Entity& wall,const PlanarTransform& transform) {
     (*proof)["operations"].push_back({{"kind","rigid_transform"},
         {"transform",encode_rigid_transform(transform)},{"baseline",recorded_baseline}});
     candidate.extensions["curve_input"]=rigid_curve_input(*input,transformed,transform);
-    set_baseline(candidate,transformed);
+    set_baseline(candidate,transformed,&transform);
     validate_wall_curve_input(candidate);
     // Publish only after the entire detached reconstruction has validated.
     wall.extensions["curve_input"]=std::move(candidate.extensions["curve_input"]);
@@ -681,8 +724,9 @@ void validate_constraint_wall_geometry_transition(const std::map<std::string,Ent
             const auto transform=decode_rigid_transform(operation.at("transform"));
             const auto transformed=rigid_curve_baseline(old,transform);
             transform_wall_curve_input(expected,transform);
-            set_baseline(expected,transformed);
+            set_baseline(expected,transformed,&transform);
             if (expected.properties.at("baseline")!=found->second.properties.at("baseline") ||
+                !same_wall_top_properties(expected,found->second) ||
                 expected.extensions.at("curve_input")!=found->second.extensions.at("curve_input") ||
                 expected.extensions.at("curve_input_derivation")!=found->second.extensions.at("curve_input_derivation"))
                 invalid("Wall rigid transform did not retain its exact source and independently reconstructed provenance: "+id);
@@ -736,15 +780,17 @@ bool valid_wall_identifier(const std::string& id) {
 void validate_edit(const ConstraintWallGeometryEdit& edit) {
     const auto& b = edit.baseline;
     const auto baseline_length = std::hypot(b.end.x-b.start.x,b.end.y-b.start.y);
-    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2 && edit.version!=3 && edit.version!=4) ||
-        (edit.version==1 ? b.sweep_radians!=0.0 : b.sweep_radians==0.0) || !std::isfinite(b.sweep_radians) ||
+    const bool straight=edit.version==1 || edit.version==5;
+    const bool rigid=edit.version==4 || edit.version==5;
+    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2 && edit.version!=3 && edit.version!=4 && edit.version!=5) ||
+        (straight ? b.sweep_radians!=0.0 : b.sweep_radians==0.0) || !std::isfinite(b.sweep_radians) ||
         !std::isfinite(b.start.x) || !std::isfinite(b.start.y) ||
         !std::isfinite(b.end.x) || !std::isfinite(b.end.y) ||
         !std::isfinite(baseline_length) || baseline_length <= constraint_linear_tolerance_metres)
         invalid("Wall constraint edit requires an identified finite versioned nondegenerate baseline");
-    if (edit.version>=2) (void)arc_from_chord_angle(b.start,b.end,b.sweep_radians);
-    if ((edit.version==4) != edit.rigid_transform.has_value())
-        invalid("Selected rigid wall proof requires its exact transform and version four");
+    if (!straight) (void)arc_from_chord_angle(b.start,b.end,b.sweep_radians);
+    if (rigid != edit.rigid_transform.has_value())
+        invalid("Selected rigid wall proof requires its exact transform and version four or five");
     if (edit.rigid_transform) (void)decode_rigid_transform(encode_rigid_transform(*edit.rigid_transform));
     if (edit.version==3 && !edit.length_entry) invalid("Curved physical length proof requires an exact length entry");
     if (edit.length_entry) {
@@ -768,11 +814,13 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
     if (source.id != edit.wall_id || source.type != "wall")
         invalid("Wall constraint edit owner is not its original wall");
     const auto old = read_baseline(source);
-    if (edit.version==4) {
-        if (old.sweep_radians==0.0)
-            invalid("Selected rigid wall proof requires an original curved wall");
-        const auto expected=rigid_curve_baseline(old,*edit.rigid_transform);
-        if (!same_baseline(expected,edit.baseline) || same_baseline(old,expected))
+    if (edit.version==4 || edit.version==5) {
+        const bool straight=edit.version==5;
+        if (straight ? old.sweep_radians!=0.0 : old.sweep_radians==0.0)
+            invalid("Selected rigid wall proof does not match its original straight or curved wall");
+        const auto expected=straight ? rigid_straight_baseline(old,*edit.rigid_transform) :
+            rigid_curve_baseline(old,*edit.rigid_transform);
+        if (!same_baseline(expected,edit.baseline) || (!straight && same_baseline(old,expected)))
             invalid("Selected rigid wall proof does not exactly reconstruct its changed baseline");
         const auto section=source.extensions.find("constraint_authoring");
         const json* receipt=nullptr;
@@ -790,11 +838,22 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
                 invalid("Selected rigid wall proof cannot replace its existing exact length entry");
         }
         auto result=source;
-        transform_wall_curve_input(result,*edit.rigid_transform);
+        if (!straight) transform_wall_curve_input(result,*edit.rigid_transform);
         rebase_wall_length_receipt(result,expected);
-        set_baseline(result,expected);
+        set_baseline(result,expected,&*edit.rigid_transform);
         validate_wall_curve_input(result);
         validate_wall_length_input(result);
+        // A straight-axis reflection can preserve both endpoints while changing
+        // the transverse grade. Canonicalizing an omitted scalar under an
+        // identity transform is not a physical edit.
+        bool changed_plane=false;
+        if (straight && source.properties.contains("top_plane")) {
+            const auto before=parse_wall_top_plane(source.properties.at("top_plane"));
+            const auto after=parse_wall_top_plane(result.properties.at("top_plane"));
+            changed_plane=before.x!=after.x || before.y!=after.y;
+        }
+        if (straight && same_baseline(old,expected) && !changed_plane)
+            invalid("Selected rigid straight wall proof must change its source wall");
         return result;
     }
     if ((edit.version==1 && old.sweep_radians!=0.0) ||
@@ -827,15 +886,15 @@ nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edi
     }
     json result={{"wall_id",edit.wall_id},{"baseline",b},{"length_entry",receipt}};
     if (edit.version>=2) result["version"]=edit.version;
-    if (edit.version==4) result["rigid_transform"]=encode_rigid_transform(*edit.rigid_transform);
+    if (edit.version==4 || edit.version==5) result["rigid_transform"]=encode_rigid_transform(*edit.rigid_transform);
     return result;
 }
 
 ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& value) {
     if (value.contains("version")) {
-        if (value.at("version")==4) exact_fields(value,{"version","wall_id","baseline","length_entry","rigid_transform"});
+        if (value.at("version")==4 || value.at("version")==5) exact_fields(value,{"version","wall_id","baseline","length_entry","rigid_transform"});
         else exact_fields(value,{"version","wall_id","baseline","length_entry"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4))
+        if (!value.at("version").is_number_integer() || (value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5))
             invalid("Unsupported wall constraint proof version");
     } else exact_fields(value,{"wall_id","baseline","length_entry"});
     exact_fields(value.at("baseline"),{"start","end","sweep_radians"});
@@ -843,7 +902,7 @@ ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& val
     Entity temporary{value.at("wall_id").get<std::string>(),"wall",{{"baseline",value.at("baseline")}}};
     ConstraintWallGeometryEdit result{temporary.id,read_baseline(temporary),std::nullopt};
     result.version=value.contains("version") ? value.at("version").get<std::uint64_t>() : 1;
-    if (result.version==4) result.rigid_transform=decode_rigid_transform(value.at("rigid_transform"));
+    if (result.version==4 || result.version==5) result.rigid_transform=decode_rigid_transform(value.at("rigid_transform"));
     const auto& entry = value.at("length_entry");
     if (!entry.is_null()) {
         exact_fields(entry,{"original_expression","entered_unit","exact_metres"});
@@ -881,13 +940,8 @@ void validate_constraint_wall_host(const std::string& wall_id, const std::map<st
             layers != entity.properties.end()) {
             wall.layers = parse_wall_layers(layers.value(), wall.thickness);
         }
-        if (const auto slope = entity.properties.find("slope_rise_m");
-            slope != entity.properties.end()) {
-            if (!slope->is_number()) {
-                invalid("Wall slope_rise_m must be a finite number");
-            }
-            wall.slope_rise = slope->get<double>();
-        }
+        std::string top_error;
+        if (!read_document_wall_top_profile(entity,wall,top_error)) invalid(top_error);
         for (const auto& [id, candidate] : entities) {
             if (candidate.type != "opening" || !candidate.properties.is_object()) {
                 continue;

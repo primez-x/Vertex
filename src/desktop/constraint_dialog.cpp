@@ -2,6 +2,7 @@
 #include "sketch/desktop/constraint_preview_canvas.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/document_wall.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -126,10 +127,8 @@ void validate_solids(const ConstraintAuthoringPreview& preview) {
         if (const auto layers = p.find("layers"); layers != p.end()) {
             wall.layers = parse_wall_layers(layers.value(), wall.thickness);
         }
-        if (const auto slope = p.find("slope_rise_m"); slope != p.end()) {
-            if (!slope->is_number()) throw std::invalid_argument("Wall slope_rise_m must be a finite number");
-            wall.slope_rise = slope->get<double>();
-        }
+        std::string top_error;
+        if (!read_document_wall_top_profile(entity,wall,top_error)) throw std::invalid_argument(top_error);
         for (const auto& [id, opening] : preview.candidate_entities()) {
             if (opening.type != "opening" || opening.properties.value("wall_id", std::string{}) != entity.id)
                 continue;

@@ -15,9 +15,7 @@
 #include "sketch/terrain_surface.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/roof_join_semantics.hpp"
-#ifdef SKETCH_IFC_NATIVE_GEOMETRY
 #include "sketch/document_wall.hpp"
-#endif
 
 #include <algorithm>
 #include <charconv>
@@ -831,12 +829,15 @@ void export_wall_construction(const Entity& entity, int product, ExportContext& 
 }
 
 Wall native_wall(const Entity& entity) {
-    const auto axis = read_baseline(entity);
-    require(axis.has_value());
-    Wall wall{entity.id, *axis, entity.properties.at("thickness_m").get<double>(),
-        entity.properties.at("height_m").get<double>(), entity.properties.value("elevation_m", 0.0)};
-    if (entity.properties.contains("slope_rise_m"))
-        wall.slope_rise = entity.properties.at("slope_rise_m").get<double>();
+    auto normalized = entity;
+    if (!normalized.properties.contains("elevation_m") && !normalized.properties.contains("elevation"))
+        normalized.properties["elevation_m"] = 0.0;
+    Wall wall;
+    std::string error;
+    require(read_document_wall(normalized, {}, wall, error));
+    // This body carrier remains one wall mesh. The retained layer metadata
+    // and material associations are exported separately.
+    wall.layers.clear();
     validate_wall_semantics(wall);
     return wall;
 }
@@ -1496,8 +1497,16 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
     if (entity.type == "opening") host = resolve_vertical_placement(document,
         document.entities().at(entity.properties.at("wall_id").get<std::string>()));
     const auto axis = read_baseline(host);
-    if (!axis || std::abs(axis->sweep_radians) <= kTolerance) return false;
+    if (!axis) return false;
+    if (std::abs(axis->sweep_radians) <= kTolerance && !host.properties.contains("top_plane") &&
+        std::abs(host.properties.contains("slope_rise_m")
+            ? host.properties.value("slope_rise_m", 0.0)
+            : host.properties.value("slope_rise", 0.0)) <= kTolerance)
+        return false;
     const auto wall = native_wall(host);
+    const auto gradient = wall_top_gradient(wall);
+    if (std::abs(axis->sweep_radians) <= kTolerance && gradient.x == 0.0 && gradient.y == 0.0)
+        return false;
     const auto meshes = entity.type == "wall"
         ? ifc_native_wall_mesh(wall, context.limits.max_mesh_vertices - context.mesh_vertices,
                               context.limits.max_mesh_triangles - context.mesh_triangles)
@@ -1701,8 +1710,9 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
                 add_diagnostic(diagnostics, entity.id, type, "wall_profile_metadata_missing");
                 return;
             }
+            const auto gradient = wall_top_gradient(native_wall(entity));
             if (std::abs(baseline->sweep_radians) > kTolerance ||
-                std::abs(entity.properties.value("slope_rise_m", 0.0)) > kTolerance) {
+                gradient.x != 0.0 || gradient.y != 0.0) {
                 add_diagnostic(diagnostics, entity.id, type, "wall_body_not_representable");
                 return;
             }
@@ -1824,6 +1834,11 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             std::abs(resolved_host.properties.value("slope_rise_m", 0.0)) > kTolerance ||
             !resolved_host.properties.contains("height_m") ||
             !resolved_host.properties.contains("thickness_m")) {
+            add_diagnostic(diagnostics, entity.id, type, "opening_host_body_not_representable");
+            return;
+        }
+        const auto host_gradient = wall_top_gradient(native_wall(resolved_host));
+        if (host_gradient.x != 0.0 || host_gradient.y != 0.0) {
             add_diagnostic(diagnostics, entity.id, type, "opening_host_body_not_representable");
             return;
         }
@@ -3145,6 +3160,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                             {"classification", "ifc_wall_axis"}, {"ifc_type", record.type},
                             {"ifc_name", product_string(record, 2, argument_count, limits)}};
                         if (wall.slope_rise) active["slope_rise_m"] = *wall.slope_rise;
+                        if (wall.top_gradient_m_per_m)
+                            active["top_plane"] = wall_top_plane_json(*wall.top_gradient_m_per_m);
                         if (metadata.contains("layers")) {
                             auto layers = parse_wall_layers(metadata.at("layers"), wall.thickness);
                             for (auto& layer : layers) layer.material.reset();
@@ -3205,7 +3222,29 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 const auto height = positive_property(metadata, "height_m");
                 const auto axis = reconstructed_wall_axis(geometry, metadata);
                 if (thickness && height && axis && !same_point(axis->start, axis->end)) {
-                    entity_type = "wall";
+                    // An extrusion cannot establish a nonflat retained top.
+                    // Activate only strictly decoded, geometrically flat plane
+                    // metadata; keep incompatible native metadata as evidence.
+                    bool supported_top = true;
+                    try {
+                        Wall decoded{"ifc-" + std::to_string(record.id), *axis, *thickness,
+                                     *height, geometry.elevation};
+                        const Entity metadata_source{decoded.id,"wall",metadata};
+                        std::string top_error;
+                        if (!read_document_wall_top_profile(metadata_source,decoded,top_error))
+                            throw std::invalid_argument(top_error);
+                        validate_wall_semantics(decoded);
+                        const auto gradient = wall_top_gradient(decoded);
+                        supported_top = gradient.x == 0.0 && gradient.y == 0.0;
+                        if (supported_top) {
+                            if (decoded.slope_rise) properties["slope_rise_m"] = *decoded.slope_rise;
+                            if (decoded.top_gradient_m_per_m)
+                                properties["top_plane"] = wall_top_plane_json(*decoded.top_gradient_m_per_m);
+                        }
+                    } catch (const std::exception&) { supported_top = false; }
+                    if (supported_top) entity_type = "wall";
+                    else add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                                        "wall_top_plane_not_reconstructed");
                     properties["baseline"] = boundary_json(Boundary{*axis})[0];
                     properties["thickness_m"] = *thickness;
                     properties["height_m"] = *height;

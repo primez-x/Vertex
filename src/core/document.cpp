@@ -425,6 +425,14 @@ void validate_entity(const Entity& entity) {
                            "wall slope_rise_m must be a finite number");
         }
     }
+    if (entity.type == "wall" && entity.properties.contains("top_plane")) {
+        try {
+            (void)parse_wall_top_plane(entity.properties.at("top_plane"));
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid wall top plane: ") + error.what());
+        }
+    }
     if (entity.properties.contains("opening_assembly")) {
         if (entity.type != "opening") {
             document_error(DocumentErrorCode::invalid_entity,
@@ -1741,7 +1749,7 @@ static void attach_disto_measurement(
 
 static bool has_rigid_wall_transform(const ApplyBoundaryConstraintChanges& command) {
     return command.rigid_wall_transform_completion || std::any_of(command.wall_edits.begin(),command.wall_edits.end(),
-        [](const auto& edit){return edit.version==4;});
+        [](const auto& edit){return edit.version==4 || edit.version==5;});
 }
 
 static bool has_measured_source_completion(const ApplyBoundaryConstraintChanges& command) {
@@ -2113,7 +2121,7 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
         return;
     }
     std::set<std::string,std::less<>> rigid_ids;
-    for(const auto& edit:command.wall_edits)if(edit.version==4) {
+    for(const auto& edit:command.wall_edits)if(edit.version==4 || edit.version==5) {
         const auto found=before.find(edit.wall_id);
         if(found==before.end() || !after.contains(edit.wall_id) ||
             !exact_entity_payload(replay_constraint_wall_edit(found->second,edit),after.at(edit.wall_id)))
@@ -2328,7 +2336,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             document_error(DocumentErrorCode::invalid_entity,"Wall constraint edit owner does not exist");
         try { result.at(edit.wall_id) = replay_constraint_wall_edit(previous->second, edit); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
-        if(edit.version==4)rigid_wall_ids.insert(edit.wall_id);
+        if(edit.version==4 || edit.version==5)rigid_wall_ids.insert(edit.wall_id);
     }
     for(const auto& edit:command.measured_stroke_edits) {
         if(!touched.insert(edit.stroke_id).second)
@@ -3212,7 +3220,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
         Ids rigid_wall_ids;
         for (const auto& id : rigid_scope)
             if (source.contains(id) && source.at(id).type == "wall") rigid_wall_ids.insert(id);
-        for (const auto& edit : partial.wall_edits) if (edit.version == 4) rigid_wall_ids.insert(edit.wall_id);
+        for (const auto& edit : partial.wall_edits) if (edit.version == 4 || edit.version == 5) rigid_wall_ids.insert(edit.wall_id);
         (void)validate_constraint_integrity(result);
         validate_constraint_transition(source, result, false, rigid_wall_ids);
         validate_constraint_edit_topology(source, result, rigid_wall_ids);
@@ -4278,7 +4286,7 @@ Command command_from_json(const nlohmann::json& value,
                         document_error(DocumentErrorCode::invalid_entity,"Versioned wall transaction requires nonempty wall edits");
                     for (const auto& edit : value.at("wall_edits"))
                         result.wall_edits.push_back(decode_constraint_wall_edit(edit));
-                    if(!rigid_envelope && std::any_of(result.wall_edits.begin(),result.wall_edits.end(),[](const auto& edit){return edit.version==4;}))
+                    if(!rigid_envelope && std::any_of(result.wall_edits.begin(),result.wall_edits.end(),[](const auto& edit){return edit.version==4 || edit.version==5;}))
                         document_error(DocumentErrorCode::invalid_entity,"Rigid wall proof requires command envelope 10");
                     const bool physical_curve=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
                         [](const auto& edit) { return edit.version==3; });

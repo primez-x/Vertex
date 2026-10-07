@@ -9,6 +9,8 @@ void validate_wall_split_archive(const Entity& wall);
 // unrelated wall and receipt metadata remains owned by the original entity.
 // Version four first verifies the exact selected curve transform, then rebases
 // its retained construction archive and physical receipt independently.
+// Version five verifies a straight rigid transform and rebases its physical
+// receipt and explicit top-plane basis without changing curve proof dialects.
 [[nodiscard]] Entity replay_constraint_wall_edit(
     const Entity& source, const ConstraintWallGeometryEdit& edit);
 [[nodiscard]] nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edit);

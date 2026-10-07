@@ -1268,7 +1268,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 if (target.rigid_transform) {
                     const auto entry=unchanged_wall_length_entry(snapshot.entities().at(target.wall_id),old,proposed);
                     (void)replay_constraint_wall_edit(snapshot.entities().at(target.wall_id),
-                        {target.wall_id,proposed,entry,4,target.rigid_transform});
+                        {target.wall_id,proposed,entry,old.sweep_radians==0.0 ? 5ULL : 4ULL,target.rigid_transform});
                 }
                 const auto proposed_length = segment_length(proposed);
                 if (!std::isfinite(proposed_length) ||
@@ -1500,7 +1500,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     points_exact(old.end, proposed.end))) {
                 proposed = old;
             }
-            if (proposed.start.x == old.start.x && proposed.start.y == old.start.y &&
+            const bool rigid_top_plane_edit=rigid_transform && old.sweep_radians==0.0 &&
+                snapshot.entities().at(wall_id).properties.contains("top_plane");
+            if (!rigid_top_plane_edit && proposed.start.x == old.start.x && proposed.start.y == old.start.y &&
                 proposed.end.x == old.end.x && proposed.end.y == old.end.y && proposed.sweep_radians == old.sweep_radians) {
                 // A saved constraint can solve an attachment back to its
                 // original geometry. Discard its provisional contact redraw.
@@ -1517,11 +1519,12 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 ? std::optional<Quantity>{intent.wall_resize->exact_length}
                 : unchanged_wall_length_entry(original_wall, old, proposed);
             auto proof_rigid_transform=rigid_transform;
-            // Historical v4 is selected rigid curve authority. Joint replay
-            // independently verifies exact translated straight-wall targets;
-            // its lower proof uses the existing ordinary straight dialect.
-            if (intent.joint_translation && old.sweep_radians==0.0) proof_rigid_transform.reset();
-            const auto proof_version = proof_rigid_transform ? 4ULL : old.sweep_radians == 0.0
+            // Ordinary straight joint translation keeps its historical proof.
+            // Explicit top planes use straight v5 rigid replay, while curved
+            // rigid authority remains exclusively historical v4.
+            if (intent.joint_translation && old.sweep_radians==0.0 &&
+                !original_wall.properties.contains("top_plane")) proof_rigid_transform.reset();
+            const auto proof_version = proof_rigid_transform ? (old.sweep_radians==0.0 ? 5ULL : 4ULL) : old.sweep_radians == 0.0
                 ? 1ULL : length_entry.has_value() ? 3ULL : 2ULL;
             if (exterior_ring_ids.contains(wall_id)) {
                 // The perimeter is pinned to the independently reconstructed
@@ -2042,8 +2045,9 @@ Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision
                     wall.old_baseline, wall.proposed_baseline);
             const auto rigid_transform=selected_wall_rigid_transform(recomputed.normalized_intent_,wall.wall_id);
             auto proof_rigid_transform=rigid_transform;
-            if (recomputed.normalized_intent_.joint_translation && wall.old_baseline.sweep_radians==0.0) proof_rigid_transform.reset();
-            const auto proof_version = proof_rigid_transform ? 4ULL : wall.old_baseline.sweep_radians == 0.0
+            if (recomputed.normalized_intent_.joint_translation && wall.old_baseline.sweep_radians==0.0 &&
+                !current.at(wall.wall_id).properties.contains("top_plane")) proof_rigid_transform.reset();
+            const auto proof_version = proof_rigid_transform ? (wall.old_baseline.sweep_radians==0.0 ? 5ULL : 4ULL) : wall.old_baseline.sweep_radians == 0.0
                 ? 1ULL : length_entry.has_value() ? 3ULL : 2ULL;
             command.wall_edits.push_back({wall.wall_id, wall.proposed_baseline,
                 length_entry, proof_version,proof_rigid_transform});

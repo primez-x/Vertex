@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <initializer_list>
+#include <stdexcept>
 #include <string_view>
 
 namespace sketch {
@@ -104,6 +105,34 @@ bool required_segment(const Json& value, Segment& output, std::string_view label
 
 } // namespace
 
+bool read_document_wall_top_profile(const Entity& entity, Wall& output, std::string& error) {
+    output.slope_rise.reset();
+    output.top_gradient_m_per_m.reset();
+    if (!entity.properties.is_object()) {
+        error = "properties must be an object";
+        return false;
+    }
+    if (const auto* slope = property(entity.properties, {"slope_rise_m", "slope_rise"})) {
+        if (!finite_number(*slope, output.slope_rise.emplace(), "slope_rise_m", error)) return false;
+    }
+    if (const auto* plane = property(entity.properties, {"top_plane"})) {
+        try {
+            output.top_gradient_m_per_m = parse_wall_top_plane(*plane);
+            if (!output.slope_rise) {
+                const auto gradient = *output.top_gradient_m_per_m;
+                const auto chord = output.baseline.end - output.baseline.start;
+                const auto rise = gradient.x * chord.x + gradient.y * chord.y;
+                if (!std::isfinite(rise)) throw std::invalid_argument("Wall top plane rise is not finite");
+                output.slope_rise = rise;
+            }
+        } catch (const std::exception& exception) {
+            error = exception.what();
+            return false;
+        }
+    }
+    return true;
+}
+
 bool read_document_wall(const Entity& entity, const std::vector<const Entity*>& opening_entities,
                Wall& output, std::string& error) {
     if (!entity.properties.is_object()) {
@@ -134,11 +163,7 @@ bool read_document_wall(const Entity& entity, const std::vector<const Entity*>& 
             return false;
         }
     }
-    if (const auto* slope = property(entity.properties, {"slope_rise_m", "slope_rise"})) {
-        if (!finite_number(*slope, output.slope_rise.emplace(), "slope_rise_m", error)) {
-            return false;
-        }
-    }
+    if (!read_document_wall_top_profile(entity, output, error)) return false;
 
     output.openings.reserve(opening_entities.size());
     for (const auto* opening_entity : opening_entities) {

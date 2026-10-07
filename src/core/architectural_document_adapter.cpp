@@ -401,6 +401,16 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
     wall.height *= transform.scale;
     wall.elevation = wall.elevation * transform.scale + transform.z;
     if (wall.slope_rise.has_value()) *wall.slope_rise *= transform.scale;
+    if (wall.top_gradient_m_per_m) {
+        const auto gradient = *wall.top_gradient_m_per_m;
+        const auto cosine = std::cos(transform.rotation_z_radians);
+        const auto sine = std::sin(transform.rotation_z_radians);
+        wall.top_gradient_m_per_m = Vec2{cosine * gradient.x - sine * gradient.y,
+                                        sine * gradient.x + cosine * gradient.y};
+        const auto rotated = *wall.top_gradient_m_per_m;
+        wall.slope_rise = rotated.x * (wall.baseline.end.x - wall.baseline.start.x) +
+                          rotated.y * (wall.baseline.end.y - wall.baseline.start.y);
+    }
     for (auto& layer : wall.layers) layer.thickness *= transform.scale;
     for (auto& opening : wall.openings) {
         opening.offset *= transform.scale;
@@ -436,6 +446,8 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
     if (result.properties.contains("elevation")) result.properties["elevation"] = wall.elevation;
     if (wall.slope_rise.has_value()) result.properties["slope_rise_m"] = *wall.slope_rise;
     else result.properties.erase("slope_rise_m");
+    if (wall.top_gradient_m_per_m)
+        result.properties["top_plane"] = wall_top_plane_json(*wall.top_gradient_m_per_m);
     if (result.properties.contains("slope_rise")) {
         if (wall.slope_rise.has_value()) result.properties["slope_rise"] = *wall.slope_rise;
         else result.properties.erase("slope_rise");
@@ -955,7 +967,7 @@ void validate_architectural_geometry_changes(
         bool physical_change = false;
         if (entity.type == "wall")
             physical_change = changed(before, entity, {"baseline", "thickness_m", "thickness",
-                "height_m", "height", "elevation_m", "elevation", "slope_rise_m", "slope_rise",
+                "height_m", "height", "elevation_m", "elevation", "slope_rise_m", "slope_rise", "top_plane",
                 "layers", "vertical_placement", "layer_id", "floor_id", "building_id", "property_id"});
         else if (entity.type == "opening")
             physical_change = changed(before, entity, {"wall_id", "offset_m", "offset", "width_m",
