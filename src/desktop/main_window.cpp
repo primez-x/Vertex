@@ -5263,6 +5263,7 @@ class MainWindow::Impl {
         bool site{};
         bool had_focus{};
         std::shared_ptr<const SiteEndpointPreviewInput> site_input;
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source;
     };
     struct PlanEndpointPreviewCommand {
         std::shared_ptr<const PlanEndpointCapture> capture;
@@ -5270,6 +5271,7 @@ class MainWindow::Impl {
         QString vertex_id;
         Vec2 position;
         Command command;
+        std::shared_ptr<PreparedCanvasEdit> prepared;
     };
 
     struct PendingOpeningPreview {
@@ -20774,7 +20776,8 @@ public:
         const QString& entity_id,const QString& vertex_id,Vec2 position,
         const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font,
         std::optional<Command>* admitted_command = nullptr,
-        const SiteEndpointPreviewInput* site_input=nullptr) {
+        const SiteEndpointPreviewInput* site_input=nullptr,
+        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr) {
         try {
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
@@ -20785,7 +20788,8 @@ public:
             const auto candidate_snapshot = [&] {
                 if (endpoint_object) {
                     vertex_command = augmentAuthoredCommand(planEndpointCommand(source, entity_id, vertex_id, position), source);
-                    const auto candidate = Document::preview_command(source, *vertex_command);
+                    const auto candidate = prepared ? prepareCanvasEdit(source, *vertex_command, edit_source, *prepared)
+                        : Document::preview_command(source, *vertex_command);
                     if (owner.type == "room") validate_architectural_geometry_changes(source, candidate);
                     else validate_architectural_geometry_changes(source, candidate, {edit.boundary_id});
                     return candidate;
@@ -22165,7 +22169,8 @@ public:
                         }
                     } else *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
                         *label_footprints,*component_bounds,id,vertex,position,view_context,label_font,
-                        endpoint_command ? endpoint_command.get() : nullptr,site_input.get());
+                        endpoint_command ? endpoint_command.get() : nullptr,site_input.get(),edit_source,
+                        endpoint_command ? prepared_move.get() : nullptr);
                     if (*result && site_input && !cancellation.is_cancelled()) {
                         auto& projection = **result;
                         // The worker owns immutable local geometry and frame
@@ -22291,7 +22296,7 @@ public:
             canvas, m_document, std::move(source), std::move(authority),
             id, canvas->viewCenter(), canvas->viewScale(), canvas->size(), canvas->devicePixelRatioF(),
             canvas->navigationGeneration(), site ? m_site_edit_generation : 0, site, canvas->hasFocus(),
-            std::move(site_input)});
+            std::move(site_input),planEndpointObjectType(type) ? captureCanvasEditSource() : nullptr});
     }
 
     void clearOpeningWidthCapture() {
@@ -22370,22 +22375,24 @@ public:
     bool commitPlanEndpointFromCanvas(PlanCanvas* canvas, const QString& id,
         const QString& endpoint, Vec2 position, std::uint64_t revision) {
         const auto capture = m_plan_endpoint_capture;
+        auto preview = std::move(m_plan_endpoint_preview);
+        m_plan_endpoint_preview.reset();
         if (!planEndpointCaptureCurrent(capture) || capture->canvas != canvas || capture->entity_id != id ||
-            capture->source->revision() != revision || !m_plan_endpoint_preview ||
-            m_plan_endpoint_preview->capture != capture || m_plan_endpoint_preview->vertex_id != endpoint ||
-            m_plan_endpoint_preview->serial == std::numeric_limits<std::uint64_t>::max() ||
-            canvas->boundaryVertexPreviewSerial() != m_plan_endpoint_preview->serial + 1)
+            capture->source->revision() != revision || !preview ||
+            preview->capture != capture || preview->vertex_id != endpoint ||
+            (capture->edit_source && !preview->prepared) ||
+            preview->serial == std::numeric_limits<std::uint64_t>::max() ||
+            canvas->boundaryVertexPreviewSerial() != preview->serial + 1)
             throw std::invalid_argument("The endpoint preview or its displayed context changed. Start the drag again.");
         if (capture->site) position = site_source_plan_point(position, siteEditFrame({id}));
         else if (m_vertex_preview_view_context)
             position = unproject_plan_point(position, m_vertex_preview_view_context->frame);
-        if (position.x != m_plan_endpoint_preview->position.x || position.y != m_plan_endpoint_preview->position.y)
+        if (position.x != preview->position.x || position.y != preview->position.y)
             throw std::invalid_argument("The endpoint release differs from its admitted preview.");
-        const auto command = m_plan_endpoint_preview->command;
-        m_plan_endpoint_preview.reset();
-        // Publish the same source-bound command admitted by the latest preview.
-        // Do not solve, augment or regenerate a different edit on release.
-        applyAuthoredCommand(command);
+        // Physical endpoint publication consumes the worker's native-admitted
+        // candidate; boundary and measured-linework gestures retain their lane.
+        if (capture->edit_source) publishPreparedCanvasEdit(preview->prepared,capture->edit_source);
+        else applyAuthoredCommand(preview->command);
         clearError();
         refresh();
         return true;
@@ -23253,6 +23260,8 @@ public:
                 request.label_font = input->label_font;
                 request.plan_endpoint_capture = endpoint_capture;
                 request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
+                request.model_edit_source = endpoint_capture->edit_source;
+                if (request.model_edit_source) request.model_edit_prepared = std::make_shared<PreparedCanvasEdit>();
                 if (m_running_vertex_preview) {
                     (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
                     m_pending_vertex_preview = std::move(request);
@@ -23278,6 +23287,8 @@ public:
         request.label_font=canvas->font();
         request.plan_endpoint_capture = endpoint_capture;
         request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
+        request.model_edit_source = endpoint_capture->edit_source;
+        if (request.model_edit_source) request.model_edit_prepared = std::make_shared<PreparedCanvasEdit>();
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
             m_pending_vertex_preview=std::move(request);
@@ -23286,6 +23297,13 @@ public:
     }
 
     void pollVertexPreview() {
+        // Canvas-only cancellation has no shell callback. Its serial/display
+        // reset retires the physical publication before this poll goes idle.
+        if (m_plan_endpoint_preview && m_plan_endpoint_preview->capture->edit_source &&
+            (!m_plan_endpoint_preview->capture->canvas ||
+             m_plan_endpoint_preview->capture->canvas->boundaryVertexPreviewSerial()!=m_plan_endpoint_preview->serial ||
+             m_plan_endpoint_preview->capture->canvas->boundaryVertexPreviewEntities().empty()))
+            m_plan_endpoint_preview.reset();
         const auto reject=[&](const PendingVertexPreview& request) {
             if (!request.canvas) return;
             if (m_plan_move_preview && m_plan_move_preview->capture==request.plan_move_capture &&
@@ -23307,7 +23325,9 @@ public:
                     !sourceEditAuthorityCurrent(*request.authority) || m_boundary_session || m_linework_drawing ||
                     m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
                     fullSnapshotDigest(*request.source) != request.authority->source_digest) return false;
-                if (request.plan_endpoint_capture && !planEndpointCaptureCurrent(request.plan_endpoint_capture)) return false;
+                if (request.plan_endpoint_capture &&
+                    (!planEndpointCaptureCurrent(request.plan_endpoint_capture) ||
+                     request.model_edit_source != request.plan_endpoint_capture->edit_source)) return false;
                 if (request.plan_endpoint_capture && request.plan_endpoint_capture->site) {
                     if (request.source != request.plan_endpoint_capture->source ||
                         request.canvas != request.plan_endpoint_capture->canvas ||
@@ -23369,7 +23389,8 @@ public:
                 continue;
             }
             auto& projection=**request.result;
-            if ((request.plan_move || request.site_wall_move) &&
+            if ((request.plan_move || request.site_wall_move ||
+                 (request.plan_endpoint_capture && request.plan_endpoint_capture->edit_source)) &&
                 (!request.model_edit_source || !request.model_edit_prepared ||
                  (!request.model_edit_prepared->document &&
                   (!request.model_edit_prepared->workspace || !request.model_edit_prepared->mirror))))
@@ -23387,7 +23408,7 @@ public:
             if (request.plan_endpoint_capture) {
                 if (!request.plan_endpoint_command || !*request.plan_endpoint_command) { reject(request); continue; }
                 m_plan_endpoint_preview = PlanEndpointPreviewCommand{request.plan_endpoint_capture, request.serial,
-                    request.vertex_id, request.position, **request.plan_endpoint_command};
+                    request.vertex_id, request.position, **request.plan_endpoint_command,request.model_edit_prepared};
             }
             if (request.entity_transform_preview) {
                 if (request.physical_rotation_command) {
@@ -23408,8 +23429,13 @@ public:
                     if (request.plan_move) m_plan_move_preview.reset();
                 }
             }
-            else (void)request.canvas->completeBoundaryVertexPreview(request.serial,
-                std::move(projection.entities),std::move(projection.labels),projection.metrics);
+            else {
+                const bool completed=request.canvas->completeBoundaryVertexPreview(request.serial,
+                    std::move(projection.entities),std::move(projection.labels),projection.metrics);
+                if (request.plan_endpoint_capture && request.plan_endpoint_capture->edit_source &&
+                    (!completed || request.canvas->boundaryVertexPreviewEntities().empty()))
+                    m_plan_endpoint_preview.reset();
+            }
         }
         if (!m_running_vertex_preview && m_pending_vertex_preview) {
             auto request=std::move(*m_pending_vertex_preview);
@@ -23417,7 +23443,9 @@ public:
             if (current(request)) startVertexPreviewJob(std::move(request));
             else reject(request);
         }
-        if (!m_running_vertex_preview && !m_pending_vertex_preview) m_vertex_preview_timer->stop();
+        if (!m_running_vertex_preview && !m_pending_vertex_preview &&
+            (!m_plan_endpoint_preview || !m_plan_endpoint_preview->capture->edit_source))
+            m_vertex_preview_timer->stop();
     }
 
     void startOpeningPreviewJob(PendingOpeningPreview request) {

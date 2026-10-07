@@ -14,6 +14,19 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 physical endpoint publication
+
+Existing wall, beam, independent railing, slab and room endpoint gestures now
+capture publication authority at press and prepare the complete admitted edit
+in their preview worker. Ordinary plans and Site release that exact candidate
+without replaying native command application. Boundary and measured-linework
+gestures retain their existing path. Source, context, selection, viewport,
+revision, serial and exact release point remain required. Invalid projection,
+failed release and canvas cancellation retire the stored ticket; returning to
+the original point adds no history. Independent source review accepted this
+change. Roof footprint grips remain a separate implementation gap. No runtime
+work ran; compilation and interaction remain unverified.
+
 ### October 7 furniture placement dimensions
 
 Furniture previews now reuse the canvas dimension callout to show their real
