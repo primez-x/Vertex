@@ -1656,7 +1656,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             drawEntity(painter, entity, output, background, paper_pixels_per_mm,
                        painted_entity.geometry);
             painter.restore();
-        } else if (!output && entity.selected && m_transform_frame_start &&
+        } else if (!output && entity.selected && m_transform_frame_start && !m_transform_preview_exact &&
                    m_left_gesture == LeftGesture::selection_axis_resize) {
             painter.save();
             painter.translate(m_axis_anchor.x, m_axis_anchor.y);
@@ -2986,6 +2986,10 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 else m_axis_scale_y_preview = std::clamp(factor, .05, 20.0);
             }
             setCursor(horizontal ? Qt::SizeHorCursor : Qt::SizeVerCursor);
+            m_axis_resize_preview_pointer = position;
+            const QPointer<PlanCanvas> guard(this);
+            updateEntityTransformPreview();
+            if (!guard) return;
             update();
         }
     } else if (m_left_gesture == LeftGesture::selection_resize ||
@@ -3020,7 +3024,9 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 }
                 setCursor(Qt::CrossCursor);
             }
+            const QPointer<PlanCanvas> guard(this);
             updateEntityTransformPreview();
+            if (!guard) return;
             update();
         }
     } else if (m_left_gesture == LeftGesture::vertex_move) {
@@ -3109,14 +3115,18 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         // Consume the final location even if the platform omitted a move event.
         if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::canvas_pan ||
             m_left_gesture == LeftGesture::object_move ||
-            m_left_gesture == LeftGesture::selection_axis_resize ||
+            (m_left_gesture == LeftGesture::selection_axis_resize &&
+             (!m_axis_resize_preview_pointer || *m_axis_resize_preview_pointer != position)) ||
             m_left_gesture == LeftGesture::selection_resize ||
             m_left_gesture == LeftGesture::selection_rotate ||
             (m_left_gesture == LeftGesture::opening_width_resize &&
              (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position)) ||
             (m_left_gesture == LeftGesture::vertex_move &&
-             (!m_boundary_vertex_preview_pointer || *m_boundary_vertex_preview_pointer != position)))
+             (!m_boundary_vertex_preview_pointer || *m_boundary_vertex_preview_pointer != position))) {
+            const QPointer<PlanCanvas> guard(this);
             pointerMove(position, modifiers);
+            if (!guard) return;
+        }
         const auto gesture = m_left_gesture;
         const auto start = m_left_start;
         const auto selection_start = m_selection_start;
@@ -3156,7 +3166,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 finishBoundaryVertexPreview(m_boundary_vertex_preview_serial);
             return;
         }
-        if ((gesture == LeftGesture::selection_resize || gesture == LeftGesture::selection_rotate) &&
+        if ((gesture == LeftGesture::selection_resize || gesture == LeftGesture::selection_rotate ||
+             gesture == LeftGesture::selection_axis_resize) &&
             dragging && m_transform_preview_exact) {
             if (m_transform_preview_pending) {
                 m_transform_release_pending = true;
@@ -3311,6 +3322,7 @@ void PlanCanvas::resetGesture() {
     m_axis_handle = SelectionHandle::none;
     m_axis_scale_x_preview = 1.0;
     m_axis_scale_y_preview = 1.0;
+    m_axis_resize_preview_pointer.reset();
     m_vertex_move_handle.reset();
     m_vertex_move_press_pointer.reset();
     m_vertex_move_preview.reset();
@@ -3939,7 +3951,8 @@ QRectF PlanCanvas::selectionControlRect(const QRectF& viewport) const {
 QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
     QTransform transform;
     if (auto axes = selectionAxes()) {
-        if (m_transform_frame_start && m_left_gesture == LeftGesture::selection_axis_resize) {
+        if (m_transform_frame_start && !m_transform_preview_exact &&
+            m_left_gesture == LeftGesture::selection_axis_resize) {
             const auto dx = axes->center.x-m_axis_anchor.x;
             const auto dy = axes->center.y-m_axis_anchor.y;
             const auto c = std::cos(m_axis_rotation), s = std::sin(m_axis_rotation);
@@ -3964,7 +3977,8 @@ QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
         transform.rotate(-axes->rotation_radians*180/pi);
         return transform;
     }
-    if (m_transform_frame_start && m_left_gesture == LeftGesture::selection_axis_resize) {
+    if (m_transform_frame_start && !m_transform_preview_exact &&
+        m_left_gesture == LeftGesture::selection_axis_resize) {
         const auto anchor = toScreen(m_axis_anchor, viewport);
         transform.translate(anchor.x(), anchor.y());
         transform.rotate(-m_axis_rotation*180/pi);
@@ -6659,15 +6673,29 @@ void PlanCanvas::updateEntityTransformPreview() {
     m_transform_preview_exact = false;
     m_transform_preview_valid = false;
     m_transform_preview_pending = false;
-    if (!m_entity_transform_preview_requested || m_transform_source_id.isEmpty()) return;
+    m_transform_preview_request_in_progress = false;
+    const bool axis_resize = m_left_gesture == LeftGesture::selection_axis_resize;
+    const auto callback = axis_resize ? m_entity_axis_resize_preview_requested
+                                     : m_entity_transform_preview_requested;
+    if (!callback || m_transform_source_id.isEmpty()) return;
     m_transform_preview_request_in_progress = true;
     std::optional<std::vector<CanvasEntity>> proposed;
+    bool provider_failed = false;
+    const QPointer<PlanCanvas> guard(this);
     try {
-        proposed = m_entity_transform_preview_requested(m_transform_source_id,
-            m_transform_scale_preview, m_transform_rotation_preview, m_transform_pivot, serial);
-    } catch (const std::exception&) { proposed = std::vector<CanvasEntity>{}; }
-    if (serial != m_transform_preview_serial || !m_transform_preview_request_in_progress) return;
+        proposed = callback(m_transform_source_id,
+            axis_resize ? m_axis_scale_x_preview : m_transform_scale_preview,
+            axis_resize ? m_axis_scale_y_preview : m_transform_rotation_preview,
+            axis_resize ? m_axis_anchor : m_transform_pivot, serial);
+    } catch (...) { provider_failed = true; }
+    if (!guard || serial != m_transform_preview_serial || !m_transform_preview_request_in_progress) return;
     m_transform_preview_request_in_progress = false;
+    // Failure after marking pending must reject rather than wait forever or
+    // authorize the providerless affine release path.
+    if (provider_failed) {
+        (void)applyEntityTransformPreview(serial, std::vector<CanvasEntity>{});
+        return;
+    }
     // A host can supply labels by marking/completing this serial inside the
     // callback. Its completion is authoritative over the callback's return.
     if (!m_transform_preview_exact && proposed)
@@ -6678,7 +6706,8 @@ bool PlanCanvas::markEntityTransformPreviewPending(std::uint64_t serial) {
     if (serial != m_transform_preview_serial || !m_transform_preview_request_in_progress ||
         !m_transform_frame_start || m_transform_source_id.isEmpty() ||
         (m_left_gesture != LeftGesture::selection_resize &&
-         m_left_gesture != LeftGesture::selection_rotate)) return false;
+         m_left_gesture != LeftGesture::selection_rotate &&
+         m_left_gesture != LeftGesture::selection_axis_resize)) return false;
     m_transform_preview_exact = true;
     m_transform_preview_pending = true;
     return true;
@@ -6695,7 +6724,8 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
     if (serial != m_transform_preview_serial || !m_transform_frame_start ||
         m_transform_source_id.isEmpty() ||
         (m_left_gesture != LeftGesture::selection_resize &&
-         m_left_gesture != LeftGesture::selection_rotate)) return false;
+         m_left_gesture != LeftGesture::selection_rotate &&
+         m_left_gesture != LeftGesture::selection_axis_resize)) return false;
     m_transform_preview_pending = false;
     m_transform_preview_exact = true;
     m_transform_preview_valid = result && valid_reference_previews(references, m_references) && unambiguous_entity_presentations(*result, m_entities) && (
@@ -6731,9 +6761,14 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
             proposed.selected = selected != selected_labels.cend() && selected.value().contains(proposed.callout_role);
         }
     }
-    setCursor(m_transform_preview_valid
-        ? m_left_gesture == LeftGesture::selection_rotate ? Qt::CrossCursor : Qt::SizeFDiagCursor
-        : Qt::ForbiddenCursor);
+    auto cursor = Qt::ForbiddenCursor;
+    if (m_transform_preview_valid) {
+        cursor = m_left_gesture == LeftGesture::selection_rotate ? Qt::CrossCursor : Qt::SizeFDiagCursor;
+        if (m_left_gesture == LeftGesture::selection_axis_resize)
+            cursor = m_axis_handle == SelectionHandle::left || m_axis_handle == SelectionHandle::right
+                ? Qt::SizeHorCursor : Qt::SizeVerCursor;
+    }
+    setCursor(cursor);
     update();
     if (m_transform_release_pending) {
         QTimer::singleShot(0, this, [this, serial] {
@@ -6749,17 +6784,38 @@ void PlanCanvas::finishEntityTransformPreview(std::uint64_t serial) {
     const auto id = m_transform_source_id;
     const auto scale = m_transform_scale_preview;
     const auto radians = m_transform_rotation_preview;
+    const auto axis_scale_x = m_axis_scale_x_preview;
+    const auto axis_scale_y = m_axis_scale_y_preview;
+    const auto axis_anchor = m_axis_anchor;
+    const auto gesture = m_left_gesture;
     const auto accepted = m_transform_preview_valid;
+    // Consume release before the host can run a nested event loop, while
+    // retaining the serial and source capture for its command admission.
+    m_transform_release_pending = false;
+    m_gesture_button = Qt::NoButton;
     // The host admits the captured exact command using this live serial.
     // Scene replacement in the callback may itself invalidate the gesture.
-    if (accepted && m_entity_transform_requested)
-        (void)m_entity_transform_requested(id, scale, radians);
-    resetGesture();
+    const QPointer<PlanCanvas> guard(this);
+    if (accepted && gesture == LeftGesture::selection_axis_resize) {
+        const auto callback = m_entity_axis_resize_requested;
+        if (callback) (void)callback(id, axis_scale_x, axis_scale_y, axis_anchor);
+    } else if (accepted) {
+        const auto callback = m_entity_transform_requested;
+        if (callback) (void)callback(id, scale, radians);
+    }
+    if (guard && serial == m_transform_preview_serial) resetGesture();
 }
 
 void PlanCanvas::setEntityAxisResizeRequested(
     std::function<bool(QString, double, double, Vec2)> callback) {
     m_entity_axis_resize_requested = std::move(callback);
+}
+
+void PlanCanvas::setEntityAxisResizePreviewRequested(
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, double, Vec2, std::uint64_t)> callback) {
+    resetGesture();
+    m_entity_axis_resize_preview_requested = std::move(callback);
 }
 
 void PlanCanvas::setOpeningWidthPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(

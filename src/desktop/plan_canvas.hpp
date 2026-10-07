@@ -539,6 +539,10 @@ public:
     // Capability gating belongs to the document; rejected previews restore.
     void setEntityAxisResizeRequested(
         std::function<bool(QString, double, double, Vec2)> callback);
+    // Uses the transform serial/completion protocol with local-axis scales
+    // and the model-space anchor. Unmarked nullopt keeps the affine preview.
+    void setEntityAxisResizePreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, double, Vec2, std::uint64_t)> callback);
     // Analytical document projection supplies opening and host-wall overrides
     // for interactive rendering only. nullopt rejects the candidate unless
     // the callback marks this serial pending for deferred exact projection.
@@ -1032,6 +1036,7 @@ private:
     double m_axis_extent{};
     double m_axis_scale_x_preview{1.0};
     double m_axis_scale_y_preview{1.0};
+    std::optional<QPointF> m_axis_resize_preview_pointer;
     double m_transform_initial_rotation{};
     std::optional<double> m_transform_source_rotation;
     double m_transform_source_rotation_direction{1.0};
@@ -1115,6 +1120,8 @@ private:
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, double, Vec2, std::uint64_t)> m_entity_transform_preview_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, double, Vec2, std::uint64_t)> m_entity_axis_resize_preview_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, bool, std::uint64_t)> m_opening_width_preview_requested;
     std::function<bool(QString, double, bool, std::uint64_t)> m_opening_width_resize_requested;

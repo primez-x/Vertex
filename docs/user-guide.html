@@ -618,6 +618,19 @@
   <p>Change a physical object's width, depth, height or rise in its dimensions
   editor. Plan rotation keeps those dimensions and level assignments intact;
   it does not resize the object's 3D geometry.</p>
+  <p>For a supported physical object, drag a side handle to change its plan width
+  or depth while the opposite side stays fixed. The preview uses the proposed
+  document geometry, including hosted openings, dependent objects and linked
+  dimensions. A saved plan's crop and depth still apply. Release accepts the
+  same proposal when it is ready; <kbd>Escape</kbd> cancels it. The edit preserves
+  height, rise and level placement. A resize that cannot be represented by the
+  object's physical dimensions leaves the original unchanged and explains the
+  conflict.</p>
+  <p>Straight and U-shaped stairs can change their plan run and width separately;
+  their connecting landings and return gaps follow the edit. Stair rise, riser
+  counts and floor connections stay fixed. A stair with quarter turns currently
+  shares its going and width across all flights, so use proportional plan sizing
+  for that layout. An unequal resize explains the shared-dimension conflict.</p>
 
   <h2>Dimensions in plans, elevations and sections</h2>
   <p>In an Architectural view, right-click one wall, opening, room, slab, roof,

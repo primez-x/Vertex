@@ -7,6 +7,36 @@ claimed by this record.
 
 ## Current delivery state
 
+### October 7 exact side-handle implementation
+
+Architectural side-handle resizing now requests a candidate document projection
+through the existing preview worker instead of stretching the retained drawing
+and generating its physical geometry only after release. The proposed command
+completes authored consequences before projection. Saved-plan frames, crop,
+depth, dependent objects and linked dimensions use that candidate source; Site
+Plan applies its local frame and presentation once. Selection controls retain
+the admitted object's full physical footprint without scaling the exact body
+twice. Site and ordinary plans share the same authored physical frames; mitered
+display envelopes cannot inflate dimensions. A body leaving a saved crop loses
+its preview frame. Assembly roots retain their authored rigid rotation frames.
+
+Release waits for the final serial and commits its captured command. Source,
+selection or view changes reject it; Escape cancels it. Failed physical resizes
+report their reason and cannot fall through to an affine edit. SVG artwork
+retains its exact affine width/depth behavior. These are source changes only:
+no builds, tests, probes, native jobs, packages or installations ran. The existing
+installed candidate is unchanged, and the manual checks remain Not tested.
+
+The typed plan resize also supports aligned straight, half-turn/U-shaped and
+repeated-return stairs. Shared going/width, incoming-frame landing depth,
+return gaps and final landing depth follow the requested plan factors while
+vertical measurements and ordered identities remain unchanged. Reconstructed
+flight endpoints, footprints and landing corners must agree with the requested
+plan transform. Equal-factor quarter-turn stairs are supported; unequal factors
+are refused because their current model shares going and width across flights.
+Landing metadata and hosted railing ownership are retained. This addition was
+reviewed from source only and has no compilation or runtime acceptance.
+
 The checked human-test package is `artifacts/packages/vertex-candidate`, with
 its installation at `artifacts/installed/candidate/bin/vertex.exe`. The desktop
 Vertex shortcut targets that executable. The cutover completed on October 6,

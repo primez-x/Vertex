@@ -4984,6 +4984,9 @@ class MainWindow::Impl {
         std::shared_ptr<const SourceEditAuthority> authority;
         std::shared_ptr<const PlanEndpointCapture> plan_endpoint_capture;
         std::shared_ptr<std::optional<Command>> plan_endpoint_command;
+        std::optional<std::pair<double,double>> axis_resize_scales;
+        double axis_resize_model_angle{};
+        std::shared_ptr<std::optional<Command>> axis_resize_command;
     };
 
 public:
@@ -19904,6 +19907,10 @@ public:
             type == "railing" || type == "beam" || type == "assembly_instance";
     }
 
+    static bool physicalPlanAxisResizeFamily(std::string_view type) {
+        return can_transform_architectural_entity_type(type) && type!="assembly_instance";
+    }
+
     static double physicalPlanRotationAngle(const Entity& entity) {
         if (entity.type=="assembly_instance")
             return decode_document_assembly_instance(entity).instance.root_transform.value().rotation_radians;
@@ -20918,6 +20925,41 @@ public:
           catch (const std::exception&) { return std::nullopt; }
     }
 
+    static CanvasSelectionFrame physicalPlanResizeFrame(const Entity& entity,
+        const BuildingViewFrame* projection=nullptr) {
+        const auto angle=physicalPlanRotationFamily(entity.type)
+            ? physicalPlanRotationAngle(entity) : plan_axis_resize_frame(entity);
+        const auto bounds=plan_axis_resize_bounds(entity);
+        const auto x=std::midpoint(bounds.minimum.x,bounds.maximum.x);
+        const auto y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
+        const auto c=std::cos(angle),s=std::sin(angle);
+        CanvasSelectionFrame frame{{c*x-s*y,s*x+c*y},angle,
+            bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+        if (!std::isfinite(frame.center.x) || !std::isfinite(frame.center.y) ||
+            !std::isfinite(frame.width_metres) || !std::isfinite(frame.depth_metres))
+            throw std::invalid_argument("The physical selection frame exceeds the supported range.");
+        if (physicalPlanRotationFamily(entity.type) || projection)
+            frame.source_rotation_radians=angle;
+        if (projection) {
+            frame.source_rotation_direction=model_plan_rotation_delta(1.0,*projection);
+            frame.center=project_plan_point(frame.center,*projection);
+            frame.rotation_radians=project_plan_angle(angle,*projection);
+        }
+        return frame;
+    }
+
+    static void refreshAxisResizeFrame(std::vector<CanvasEntity>& proposed,
+        const DocumentSnapshot& candidate,const QString& id,const BuildingViewFrame* projection=nullptr) {
+        const auto& owner=candidate.entities().at(id.toStdString());
+        std::optional<CanvasSelectionFrame> frame;
+        for (auto& item : proposed) {
+            if (item.id!=id) continue;
+            if (item.segments.empty()) { item.resize_frame.reset();continue; }
+            if (!frame) frame=physicalPlanResizeFrame(owner,projection);
+            item.resize_frame=*frame;
+        }
+    }
+
     void startVertexPreviewJob(PendingVertexPreview request) {
         const auto source=request.source;
         const auto retained=request.retained;
@@ -20937,11 +20979,28 @@ public:
         const auto entities_move_candidate=request.entities_move_candidate;
         const auto rigid_transform=request.rigid_transform;
         const auto endpoint_command=request.plan_endpoint_command;
+        const auto axis_scales=request.axis_resize_scales;
+        const auto axis_angle=request.axis_resize_model_angle;
+        const auto axis_command=request.axis_resize_command;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,axis_scales,axis_angle,axis_command]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
-                    if (entities_move_candidate) {
+                    if (axis_scales && axis_command) {
+                        auto command=augmentAuthoredCommand(plan_axis_resize_command(*source,id.toStdString(),
+                            axis_scales->first,axis_scales->second,position,axis_angle),*source);
+                        if (!cancellation.is_cancelled()) {
+                            const auto candidate=Document::preview_command(*source,command);
+                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,
+                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
+                                view_context,label_font);
+                            if (*result && !cancellation.is_cancelled()) {
+                                refreshAxisResizeFrame((**result).entities,candidate,id,
+                                    view_context ? &view_context->frame : nullptr);
+                                *axis_command=std::move(command);
+                            } else result->reset();
+                        }
+                    } else if (entities_move_candidate) {
                         *result=computeConstraintGeometryProjection(*source,*entities_move_candidate,*retained,
                             *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,label_font);
                         if (*result && rigid_transform) {
@@ -21275,9 +21334,89 @@ public:
         m_entity_transform_command.reset();
         m_entity_transform_ready=false;
         m_entity_transform_serial=0;
+        m_entity_transform_axis_resize=false;
         // A same-revision view or scene change also needs a fresh capture.
         m_vertex_preview_source.reset();
         m_vertex_preview_authority.reset();
+    }
+
+    std::optional<std::vector<CanvasEntity>> previewEntityAxisResizeFromCanvas(
+        PlanCanvas* canvas,const QString& id,double scale_x,double scale_y,Vec2 canvas_anchor,std::uint64_t serial) {
+        if (!canvas || !m_entity_transform_source) return std::vector<CanvasEntity>{};
+        const auto found=m_entity_transform_source->entities().find(id.toStdString());
+        // SVG symbol axes are an exact affine operation in their existing
+        // overlay frame. Physical objects require regenerated document geometry.
+        if (found==m_entity_transform_source->entities().end() ||
+            !physicalPlanAxisResizeFamily(found->second.type)) return std::nullopt;
+        m_entity_transform_command.reset();
+        m_entity_transform_ready=false;
+        m_entity_transform_serial=serial;
+        m_entity_transform_axis_resize=true;
+        m_entity_axis_scale_x=scale_x;
+        m_entity_axis_scale_y=scale_y;
+        m_entity_axis_anchor=canvas_anchor;
+        try {
+            if (!m_document->is_editable() || !entityTransformContextUnchanged() ||
+                m_entity_transform_canvas!=canvas || m_entity_transform_id!=id ||
+                m_selected_ids.size()!=1 || m_selected_ids.front()!=id ||
+                !std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x<=0.0 || scale_y<=0.0 ||
+                !std::isfinite(canvas_anchor.x) || !std::isfinite(canvas_anchor.y))
+                throw std::invalid_argument("The project, selection or view changed during this resize. Start again.");
+            const auto angle=plan_axis_resize_frame(found->second);
+            if (siteCanvas(canvas)) {
+                if (!sitePreviewContextCurrent())
+                    throw std::invalid_argument("The Site Plan resize source changed. Start again.");
+                if (!m_site_preview_dispatching) {
+                    if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
+                    const auto generation=m_site_edit_generation;
+                    queueSitePreview([this,target=QPointer<PlanCanvas>(canvas),id,scale_x,scale_y,canvas_anchor,serial,generation] {
+                        if (!target || generation!=m_site_edit_generation ||
+                            target->entityTransformPreviewSerial()!=serial) return;
+                        auto proposed=previewEntityAxisResizeFromCanvas(target,id,scale_x,scale_y,canvas_anchor,serial);
+                        if (!target->completeEntityTransformPreview(serial,std::move(proposed),m_site_preview_labels,m_site_preview_references))
+                            m_entity_transform_ready=false;
+                    });
+                    return std::nullopt;
+                }
+                const auto anchor=site_source_plan_point(canvas_anchor,siteEditFrame({id}));
+                auto command=augmentAuthoredCommand(plan_axis_resize_command(*m_site_edit_source,id.toStdString(),
+                    scale_x,scale_y,anchor,angle),*m_site_edit_source);
+                const auto candidate=Document::preview_command(*m_site_edit_source,command);
+                auto proposed=sitePreviewGeometry(candidate,{id},SiteEditTransform{{},0.0,1.0});
+                m_entity_transform_command=std::move(command);
+                m_entity_transform_ready=true;
+                return proposed;
+            }
+            captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
+            if (!m_vertex_preview_source || !m_vertex_preview_authority ||
+                fullSnapshotDigest(*m_vertex_preview_source)!=fullSnapshotDigest(*m_entity_transform_source))
+                throw std::invalid_argument("The project changed during this resize. Start again.");
+            auto anchor=canvas_anchor;
+            if (m_entity_transform_frame) anchor=unproject_plan_point(anchor,*m_entity_transform_frame);
+            if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
+            PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,
+                m_vertex_preview_eligible,m_vertex_preview_labels,m_vertex_preview_appraisal_area_ids,
+                m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,id,{},anchor,
+                m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>()};
+            request.authority=m_vertex_preview_authority;
+            request.label_font=canvas->font();
+            request.entity_transform_preview=true;
+            request.axis_resize_scales=std::pair{scale_x,scale_y};
+            request.axis_resize_model_angle=angle;
+            request.axis_resize_command=std::make_shared<std::optional<Command>>();
+            if (m_running_vertex_preview) {
+                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+                m_pending_vertex_preview=std::move(request);
+            } else startVertexPreviewJob(std::move(request));
+            return std::nullopt;
+        } catch (const Standard_Failure& error) {
+            const auto* message=error.GetMessageString();
+            setError(message && *message ? QString::fromUtf8(message)
+                : QStringLiteral("The resize preview could not be generated."));
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Resize: %1").arg(QString::fromUtf8(error.what())));
+        }
+        return std::vector<CanvasEntity>{};
     }
 
     std::optional<std::vector<CanvasEntity>> previewEntityTransformFromCanvas(
@@ -21724,8 +21863,22 @@ public:
             if (!m_running_vertex_preview || completion.sequence!=m_vertex_preview_sequence) continue;
             auto request=std::move(*m_running_vertex_preview);
             m_running_vertex_preview.reset();
-            if (!current(request) || !completion.succeeded() ||
+            const bool request_current=current(request);
+            if (!request_current || !completion.succeeded() ||
                 completion.receipt->source_revision != request.source->revision() || !*request.result) {
+                if (request_current && request.axis_resize_scales &&
+                    completion.kind!=RegenerationCompletionKind::cancelled) {
+                    auto message=QStringLiteral("The resized object could not be projected in the current view.");
+                    try {
+                        if (completion.error) std::rethrow_exception(completion.error);
+                    } catch (const Standard_Failure& error) {
+                        const auto* detail=error.GetMessageString();
+                        if (detail && *detail) message=QString::fromUtf8(detail);
+                    } catch (const std::exception& error) {
+                        message=QString::fromUtf8(error.what());
+                    } catch (...) {}
+                    setError(QStringLiteral("Resize: %1").arg(message));
+                }
                 reject(request);
                 continue;
             }
@@ -21736,6 +21889,10 @@ public:
                     request.vertex_id, request.position, **request.plan_endpoint_command};
             }
             if (request.entity_transform_preview) {
+                if (request.axis_resize_scales) {
+                    if (!request.axis_resize_command || !*request.axis_resize_command) { reject(request); continue; }
+                    m_entity_transform_command=std::move(**request.axis_resize_command);
+                }
                 m_entity_transform_ready=true;
                 if (!request.canvas->completeEntityTransformPreview(request.serial,
                     std::move(projection.entities),std::move(projection.labels)))
@@ -22133,6 +22290,19 @@ public:
                 !std::isfinite(anchor.x) || !std::isfinite(anchor.y))
                 throw std::invalid_argument("The resize dimensions are invalid.");
             const auto source = authoringSnapshot();
+            if (m_entity_transform_axis_resize) {
+                const auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+                if (!m_entity_transform_ready || !m_entity_transform_command || !m_entity_transform_source ||
+                    !entityTransformContextUnchanged() || m_entity_transform_id!=requested_id ||
+                    m_entity_transform_canvas!=canvas || canvas->entityTransformPreviewSerial()!=m_entity_transform_serial ||
+                    scale_x!=m_entity_axis_scale_x || scale_y!=m_entity_axis_scale_y ||
+                    anchor.x!=m_entity_axis_anchor.x || anchor.y!=m_entity_axis_anchor.y ||
+                    fullSnapshotDigest(*m_entity_transform_source)!=fullSnapshotDigest(source))
+                    throw std::invalid_argument("The exact resize preview or its editing source changed. Start again.");
+                if (siteCanvas(canvas)) requireSiteEditCurrent();
+                applyAuthoredCommand(*m_entity_transform_command);
+                clearError();refresh();return true;
+            }
             if (siteCanvas(m_architecturalCanvas)) {
                 anchor=site_source_plan_point(anchor,siteEditFrame({requested_id}));
                 if (m_site_edit_annotation_targets.contains(requested_id)) {
@@ -22193,6 +22363,12 @@ public:
             clearError();
             refresh();
             return true;
+        } catch (const Standard_Failure& error) {
+            const auto* detail=error.GetMessageString();
+            setError(detail && *detail ? QStringLiteral("Resize: %1").arg(QString::fromUtf8(detail))
+                : QStringLiteral("The physical object could not be resized."));
+            refresh();
+            return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Resize: %1").arg(QString::fromUtf8(error.what())));
             refresh();
@@ -22207,6 +22383,8 @@ public:
             return false;
         }
         try {
+            if (m_entity_transform_axis_resize)
+                throw std::invalid_argument("The active preview is a side-handle resize. Start the rotation or corner resize again.");
             if (m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
                 throw std::invalid_argument(
                     "Finish or cancel the active drawing command before transforming an object.");
@@ -37534,6 +37712,10 @@ private:
             [this](QString id, double x, double y, Vec2 anchor) {
                 return resizeSelectionAxesFromCanvas(id, x, y, anchor);
             });
+        canvas->setEntityAxisResizePreviewRequested(
+            [this,canvas](QString id,double x,double y,Vec2 anchor,std::uint64_t serial) {
+                return previewEntityAxisResizeFromCanvas(canvas,id,x,y,anchor,serial);
+            });
         canvas->setOpeningWidthPreviewRequested(
             [this, canvas](QString id, double scale, bool keep_start, std::uint64_t revision) {
                 try { return previewOpeningWidthFromCanvas(canvas, id, scale, keep_start, revision); }
@@ -37906,6 +38088,7 @@ private:
             m_entity_transform_frame.reset();
             m_entity_transform_command.reset();
             m_entity_transform_ready=false;
+            m_entity_transform_axis_resize=false;
             setError(QStringLiteral("Refresh: %1").arg(QString::fromUtf8(error.what())));
         }
     }
@@ -39521,7 +39704,14 @@ private:
                     item.snap_segments = {*baseline};
                 }
             }
-            if(!item.resize_frame && entity!=source.entities().end() && !item.segments.empty()) {
+            if (entity!=source.entities().end() && !item.segments.empty() &&
+                physicalPlanAxisResizeFamily(entity->second.type)) {
+                // Joins and view clipping are presentation geometry. Physical
+                // handles use the same full authored dimensions as other plans.
+                try { item.resize_frame=physicalPlanResizeFrame(entity->second); }
+                catch (const Standard_Failure&) { item.resize_frame.reset(); }
+                catch (const std::exception&) { item.resize_frame.reset(); }
+            } else if(!item.resize_frame && entity!=source.entities().end() && !item.segments.empty()) {
                 try {
                     const auto angle=physicalPlanRotationFamily(entity->second.type)
                         ? physicalPlanRotationAngle(entity->second) : plan_axis_resize_frame(entity->second);
@@ -39736,7 +39926,10 @@ private:
             }
             if (ids.contains(item.id) && item.resize_frame) {
                 const auto owner=candidate.entities().find(item.id.toStdString());
-                if (owner!=candidate.entities().end() && physicalPlanRotationFamily(owner->second.type)) {
+                if (owner!=candidate.entities().end() && physicalPlanAxisResizeFamily(owner->second.type)) {
+                    if (proposed.segments.empty()) proposed.resize_frame.reset();
+                    else proposed.resize_frame=physicalPlanResizeFrame(owner->second);
+                } else if (owner!=candidate.entities().end() && physicalPlanRotationFamily(owner->second.type)) {
                     // The exact projector replaces the body, not its authored
                     // axes. Retain the captured physical frame under this rigid
                     // local edit before applying the Site presentation once.
@@ -40119,6 +40312,7 @@ private:
         m_entity_transform_context.reset();
         m_entity_transform_command.reset();
         m_entity_transform_ready=false;
+        m_entity_transform_axis_resize=false;
         m_pending_vertex_preview.reset();
         if (m_running_vertex_preview)
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
@@ -40856,18 +41050,10 @@ private:
                             const auto key = found->second.properties.dump();
                             auto cached = m_plan_transform_frame_cache.find(found->first);
                             if (cached == m_plan_transform_frame_cache.end() || cached->second.first != key) {
-                                const auto bounds = plan_axis_resize_bounds(found->second);
-                                const auto x = std::midpoint(bounds.minimum.x, bounds.maximum.x);
-                                const auto y = std::midpoint(bounds.minimum.y, bounds.maximum.y);
-                                const auto c = std::cos(angle), s = std::sin(angle);
                                 cached = m_plan_transform_frame_cache.insert_or_assign(found->first,
-                                    std::make_pair(key, CanvasSelectionFrame{{c*x-s*y, s*x+c*y}, angle,
-                                        bounds.maximum.x-bounds.minimum.x,
-                                        bounds.maximum.y-bounds.minimum.y})).first;
+                                    std::make_pair(key,physicalPlanResizeFrame(found->second))).first;
                             }
                             canvas_entity.resize_frame = cached->second.second;
-                            if (physicalPlanRotationFamily(found->second.type))
-                                canvas_entity.resize_frame->source_rotation_radians=angle;
                             project_frame(canvas_entity);
                             continue;
                         }
@@ -48192,6 +48378,10 @@ private:
     double m_entity_transform_scale{};
     double m_entity_transform_radians{};
     bool m_entity_transform_ready{};
+    bool m_entity_transform_axis_resize{};
+    double m_entity_axis_scale_x{1.0};
+    double m_entity_axis_scale_y{1.0};
+    Vec2 m_entity_axis_anchor;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_eligible;
     std::set<std::string, std::less<>> m_plan_semantic_model_ids;

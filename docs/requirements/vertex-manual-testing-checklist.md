@@ -1082,6 +1082,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U173 — Create and resize a column**
   - Canvas move check: Select the column in a plan, then drag from inside its selection boundary. The proposed column follows the pointer; Escape restores it. Accept a move, check its plan and 3D location, then Undo and Redo. Repeat in a shifted or rotated Architectural plan, including a crop. Leaving the crop removes the preview from that view; it must not leave a ghost at its old position.
+  - Side-handle check: Select a rectangular column, rotate it, then drag its width and depth handles separately. The opposite side stays fixed and the on-canvas dimensions agree with Properties. Repeat in a cropped saved plan and Site Plan. Release while the preview is still being prepared; only that final proposal may be accepted. Cancel with Escape, switch views before it finishes, then Undo and Redo a valid edit. Height and level stay unchanged, and the committed body agrees with the preview.
   - Expected: Plan and 3D reflect the selected section and height.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1094,6 +1095,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U175 — Create a flat roof**
   - Canvas move check: Move an independent roof by dragging its selected plan boundary. The preview and final location agree in ordinary and rotated plans. Cancel and Undo restore the original; save/reopen retains the accepted location.
+  - Side-handle check: Drag the roof's width and depth handles in a saved plan with a crop. Check that its physical body, roof openings and linked view dimensions update together, including portions entering or leaving the crop. The accepted edit agrees with the preview and keeps its elevation and thickness. Escape and Undo restore the original roof and its dependent geometry.
   - Expected: The roof footprint, elevation and material are editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1121,6 +1123,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U180 — Create stairs between levels**
   - Canvas move check: Select a stair and drag it in a plan. A valid proposal follows the pointer and accepts as one move; Cancel restores it. Repeat in a saved plan. Hosted rails must follow their supported host geometry. A move that breaks a required landing or support is refused and retains the original stair and railing.
+  - Side-handle check: Create a U-shaped stair with a connecting landing and return gap. Drag its run handle, then its width handle. Check that the landing, gap and hosted rails follow the preview while floor connections, total rise and riser counts stay fixed. Repeat with a straight stair and a return stair with several flights; Cancel and Undo restore the full layout. For an L-shaped stair with shared flight dimensions, an unequal resize must explain the conflict and leave the original unchanged; proportional sizing must preserve the turn and landing contacts.
   - Expected: The stair dimensions and level connection are understandable and editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

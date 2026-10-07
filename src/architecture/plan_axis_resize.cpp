@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 namespace sketch {
@@ -150,13 +151,60 @@ double building_frame(const BuildingObject& object) {
     },object);
 }
 
+void resize_stair(StairFlight& stair, const Resize& resize, double along, double across) {
+    const auto before = derive_stair_layout(stair);
+    // All flights share one authored going and width. Parallel/return flights
+    // can retain those semantics under independent factors; a quarter turn
+    // would need different per-flight going/width when the factors differ.
+    for (const auto& flight : before.flights) {
+        const auto [flight_along,flight_across] = resize.local_factors(flight.orientation_radians);
+        if (!equal_factors(flight_along,along) || !equal_factors(flight_across,across))
+            throw std::invalid_argument(
+                "Independent plan-axis resizing of quarter-turn stairs requires per-flight going and width; this stair uses shared dimensions");
+    }
+    resize.point(stair.base_position);
+    stair.going *= along;
+    stair.width *= across;
+    for (std::size_t i=0; i<stair.landings.size(); ++i) {
+        const auto [landing_along,landing_across] =
+            resize.local_factors(before.flights[i].orientation_radians);
+        stair.landings[i].depth *= landing_along;
+        stair.landings[i].return_gap *= landing_across;
+    }
+    if (stair.top_landing) {
+        const auto factors = resize.local_factors(before.flights.back().orientation_radians);
+        stair.top_landing->depth *= factors.first;
+    }
+
+    // Prove the typed reconstruction is the requested affine plan edit. This
+    // checks placement and contacts, including right turns and repeated returns,
+    // rather than accepting only a matching overall bounding rectangle.
+    const auto after = derive_stair_layout(stair);
+    const auto check_point = [&](Vec3 original, Vec3 actual) {
+        resize.point(original);
+        const double roundoff = 32 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0,std::abs(original.x),std::abs(original.y),
+                      std::abs(actual.x),std::abs(actual.y)});
+        if (std::hypot(original.x-actual.x,original.y-actual.y) >
+                default_geometry_tolerance_metres+roundoff || original.z != actual.z)
+            throw std::invalid_argument(
+                "Requested plan resize cannot preserve this stair's flight and landing geometry");
+    };
+    for (std::size_t i=0; i<before.flights.size(); ++i) {
+        check_point(before.flights[i].base_position,after.flights[i].base_position);
+        check_point(before.flights[i].end_position,after.flights[i].end_position);
+        for (std::size_t corner=0; corner<4; ++corner)
+            check_point(before.flights[i].footprint[corner],after.flights[i].footprint[corner]);
+    }
+    for (std::size_t i=0; i<before.landings.size(); ++i)
+        for (std::size_t corner=0; corner<4; ++corner)
+            check_point(before.landings[i].footprint[corner],after.landings[i].footprint[corner]);
+}
+
 Entity resize_building(const Entity& original, const Resize& resize) {
     auto object = decode_building_entity(original);
     if (const auto* railing=std::get_if<Railing>(&object); railing && (railing->host || railing->landing_host))
         throw std::invalid_argument("Hosted railing plan dimensions follow its stair; resize the host stair instead");
-    if (const auto* stair=std::get_if<StairFlight>(&object);
-        stair && (stair->flights.size()>1 || !stair->landings.empty()))
-        throw std::invalid_argument("Multi-flight and turned stairs require family dimension edits; independent plan-axis resizing is unsupported");
     std::optional<Bounds2> original_bounds;
     if (original.type == "roof" || original.type == "railing")
         original_bounds = plan_axis_resize_bounds(original);
@@ -186,9 +234,7 @@ Entity resize_building(const Entity& original, const Resize& resize) {
                 throw std::invalid_argument("Plan resize currently requires a horizontal beam with a vertical section frame");
             resize.point(value.start); resize.point(value.end); value.width *= across;
         } else if constexpr (std::is_same_v<T,StairFlight>) {
-            resize.point(value.base_position);
-            value.going *= along; value.width *= across;
-            if (value.top_landing) value.top_landing->depth *= along;
+            resize_stair(value,resize,along,across);
         } else if constexpr (std::is_same_v<T,Railing>) {
             resize.point(value.base_position);
             const double old_length = value.length;
@@ -241,7 +287,17 @@ Entity resize_building(const Entity& original, const Resize& resize) {
     const auto canonical = encode_building_entity(object,original.extensions);
     Entity result = original;
     for (const auto& [key,value] : canonical.properties.items()) {
-        if (key=="flights" || key=="landings") continue; // Stable records and their metadata are unchanged.
+        if (key=="flights") continue; // Stable records and their metadata are unchanged.
+        if (key=="landings") {
+            // Update only dimensions: child IDs, turns, thicknesses, order and
+            // opaque per-landing authoring data retain their original values.
+            auto& landings = result.properties.at(key);
+            for (std::size_t i=0; i<value.size(); ++i) {
+                landings[i]["depth_m"] = value[i].at("depth_m");
+                landings[i]["return_gap_m"] = value[i].at("return_gap_m");
+            }
+            continue;
+        }
         if (key=="top_landing" && result.properties.contains(key) && result.properties.at(key).is_object() && value.is_object()) {
             for (const auto& [field,dimension] : value.items()) result.properties[key][field]=dimension;
         } else result.properties[key] = value;
