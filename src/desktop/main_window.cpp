@@ -21787,17 +21787,18 @@ public:
     }
 
     void refreshRoofDimensionPreview() {
-        if (!m_roof_edit_context || m_roof_properties_group->isHidden()) return;
-        const auto& context = *m_roof_edit_context;
+        if (!m_roof_edit_context || !m_roof_edit_source || m_roof_properties_group->isHidden()) return;
+        const auto authority = *m_roof_edit_context;
         try {
-            if (m_document != context.document || m_document->revision() != context.revision ||
-                m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
-                m_metric_units != context.metric_units) {
+            if (!sourceEditAuthorityCurrent(authority, false)) {
                 throw std::invalid_argument("The roof editing context changed. Reselect the roof.");
             }
-            const auto original = selectedEntity();
-            if (!original) throw std::invalid_argument("Reselect the roof to preview dimensions.");
-            const auto roof_form = read_string(original->properties, "form");
+            const auto& source = *m_roof_edit_source;
+            const auto found = source.entities().find(authority.context.selected_id.toStdString());
+            if (found == source.entities().end())
+                throw std::invalid_argument("Reselect the roof to preview dimensions.");
+            const auto& original = found->second;
+            const auto roof_form = read_string(original.properties, "form");
             const bool symmetric_roof = roof_form == std::optional<std::string>("gable_roof") ||
                                roof_form == std::optional<std::string>("hip_roof");
             const auto read = [&](QLineEdit* field, const QString& initial, const char* key,
@@ -21806,7 +21807,7 @@ public:
                 // Untouched rounded display values must not change the preview's
                 // geometry any more than they change the committed geometry.
                 if (field->text().trimmed() == initial.trimmed()) {
-                    value = original->properties.at(key).get<double>();
+                    value = original.properties.at(key).get<double>();
                 } else {
                     try {
                         value = parse_quantity(field->text().trimmed().toStdString(),
@@ -21845,22 +21846,26 @@ public:
                                          const QString& rise_text,
                                          const QString& overhang_text,
                                          const QString& thickness_text) {
-        if (!m_roof_edit_context || !modalContextUnchanged(*m_roof_edit_context)) {
+        if (!m_roof_edit_context || !m_roof_edit_source) {
             setError(QStringLiteral("The roof editing context changed. Reselect the roof before applying dimensions."));
             return false;
         }
-        const auto context = *m_roof_edit_context;
-        const auto original = selectedEntity();
-        const auto form = original ? read_string(original->properties, "form") : std::nullopt;
-        const bool symmetric_roof = form == std::optional<std::string>("gable_roof") ||
-                           form == std::optional<std::string>("hip_roof");
-        if (!original || original->type != "roof" ||
-            (!symmetric_roof && form != std::optional<std::string>("sloped_roof_panel"))) {
-            setError(QStringLiteral("Select a supported roof before applying dimensions."));
-            return false;
-        }
+        const auto authority = *m_roof_edit_context;
+        const auto source = *m_roof_edit_source;
         try {
-            BuildingObjectDialog dialog(m_document->snapshot(), *original, m_metric_units, owner);
+            if (!sourceEditAuthorityUnchanged(authority)) return false;
+            const auto found = source.entities().find(authority.context.selected_id.toStdString());
+            const auto original = found == source.entities().end()
+                ? std::optional<Entity>{} : std::optional<Entity>{found->second};
+            const auto form = original ? read_string(original->properties, "form") : std::nullopt;
+            const bool symmetric_roof = form == std::optional<std::string>("gable_roof") ||
+                               form == std::optional<std::string>("hip_roof");
+            if (!original || original->type != "roof" ||
+                (!symmetric_roof && form != std::optional<std::string>("sloped_roof_panel"))) {
+                setError(QStringLiteral("Select a supported roof before applying dimensions."));
+                return false;
+            }
+            BuildingObjectDialog dialog(source, *original, m_metric_units, owner);
             const auto set_field = [&](const char* name, const QString& value) {
                 auto* field = dialog.findChild<QLineEdit*>(QString::fromLatin1(name));
                 if (field == nullptr) {
@@ -21892,8 +21897,8 @@ public:
                 setError(QStringLiteral("Roof dimensions did not produce an editable candidate."));
                 return false;
             }
-            if (!modalContextUnchanged(context)) return false;
-            return !commitBuildingObject(*candidate, context.revision, true).isEmpty();
+            if (!sourceEditAuthorityUnchanged(authority)) return false;
+            return !commitBuildingObject(*candidate, source.revision(), true).isEmpty();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Roof dimensions: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -22237,19 +22242,18 @@ public:
             m_building_dimensions_error->show();
             return false;
         };
-        if (!m_building_edit_context || !modalContextUnchanged(*m_building_edit_context))
+        if (!m_building_edit_context || !m_building_edit_source)
             return fail(QStringLiteral("The object editing context changed. Reselect the object before applying changes."));
-        if (!m_building_edit_source || !m_building_edit_workspace ||
-            *m_building_edit_workspace != m_workspace || m_building_edit_selection != m_selected_ids ||
-            document_snapshot_digest(*m_building_edit_source) != document_snapshot_digest(m_document->snapshot()))
-            return fail(QStringLiteral("The object source changed. Reselect it before applying changes."));
-        const auto context = *m_building_edit_context;
-        const auto original = selectedEntity();
-        if (!original || (original->type != "column" && original->type != "beam" &&
-                          original->type != "stair" && original->type != "railing"))
-            return fail(QStringLiteral("Select a column, beam, stair or railing before applying changes."));
+        const auto authority = *m_building_edit_context;
+        const auto source = *m_building_edit_source;
         try {
-            BuildingObjectDialog dialog(*m_building_edit_source, *original, m_metric_units, owner);
+            if (!sourceEditAuthorityUnchanged(authority)) return fail(m_last_error);
+            const auto found = source.entities().find(authority.context.selected_id.toStdString());
+            if (found == source.entities().end() ||
+                (found->second.type != "column" && found->second.type != "beam" &&
+                 found->second.type != "stair" && found->second.type != "railing"))
+                return fail(QStringLiteral("Select a column, beam, stair or railing before applying changes."));
+            BuildingObjectDialog dialog(source, found->second, m_metric_units, owner);
             bool changed = false;
             for (const auto& dimension : m_building_dimensions) {
                 if (dimension.edit->isHidden() ||
@@ -22275,8 +22279,8 @@ public:
             if (!dialog.submit()) return fail(QStringLiteral("Object changes: %1").arg(dialog.lastError()));
             const auto candidate = dialog.candidate();
             if (!candidate) return fail(QStringLiteral("Object changes did not produce an editable candidate."));
-            if (!modalContextUnchanged(context)) return fail(m_last_error);
-            if (commitBuildingObject(*candidate, context.revision, true,
+            if (!sourceEditAuthorityUnchanged(authority)) return fail(m_last_error);
+            if (commitBuildingObject(*candidate, source.revision(), true,
                     dialog.relatedCandidates()).isEmpty()) return fail(m_last_error);
             return true;
         } catch (const std::exception& error) {
@@ -40354,9 +40358,24 @@ private:
     void refreshInspector() {
         refreshAreaClassPalette();
         refreshAppraisalDetails();
-        const auto entity = selectedEntity();
-        const auto editable = m_document->is_editable();
-        const auto inspector_snapshot = m_document->snapshot();
+        std::optional<DocumentSnapshot> inspector_source;
+        try {
+            inspector_source = authoringSnapshot();
+        } catch (const std::exception& error) {
+            m_roof_edit_context.reset();
+            m_roof_edit_source.reset();
+            m_building_edit_context.reset();
+            m_building_edit_source.reset();
+            m_roof_properties_group->setEnabled(false);
+            m_building_properties_group->setEnabled(false);
+            setError(QStringLiteral("Object source: %1").arg(QString::fromUtf8(error.what())));
+            return;
+        }
+        const auto& inspector_snapshot = *inspector_source;
+        const auto selected = inspector_snapshot.entities().find(m_selected_id.toStdString());
+        const auto entity = m_selected_id.isEmpty() || selected == inspector_snapshot.entities().end()
+            ? std::optional<EntityValue>{} : std::optional<EntityValue>{selected->second};
+        const auto editable = inspector_snapshot.is_editable() && m_document->is_editable();
         if (m_inspector_heading) m_inspector_heading->setText(QStringLiteral("Properties"));
         m_dimension_edit_context.reset();
         m_dimension_properties_group->hide();
@@ -40550,10 +40569,9 @@ private:
         m_roof_properties_group->setVisible(false);
         m_roof_properties_group->setEnabled(false);
         m_roof_edit_context.reset();
+        m_roof_edit_source.reset();
         m_building_edit_context.reset();
         m_building_edit_source.reset();
-        m_building_edit_workspace.reset();
-        m_building_edit_selection.clear();
         const bool dimension_object = building_object &&
             (entity->type == "column" || entity->type == "beam" ||
              entity->type == "stair" || entity->type == "railing");
@@ -40561,10 +40579,8 @@ private:
         m_building_properties_group->setEnabled(dimension_object && editable);
         m_building_dimensions_error->hide();
         if (dimension_object) {
-            m_building_edit_context = captureModalContext();
             m_building_edit_source = inspector_snapshot;
-            m_building_edit_workspace = m_workspace;
-            m_building_edit_selection = m_selected_ids;
+            m_building_edit_context = captureSourceEditAuthority(inspector_snapshot);
             m_building_properties_group->setTitle(QStringLiteral("%1")
                 .arg(entity->type == "column" ? QStringLiteral("Column") :
                      entity->type == "beam" ? QStringLiteral("Beam") :
@@ -41040,7 +41056,8 @@ private:
         }
         m_inspector_context->setText(context);
         if (sloped_roof_panel || symmetric_roof_form) {
-            m_roof_edit_context = captureModalContext();
+            m_roof_edit_source = inspector_snapshot;
+            m_roof_edit_context = captureSourceEditAuthority(inspector_snapshot);
             m_roof_properties_group->setVisible(true);
             m_roof_properties_group->setEnabled(editable);
             m_roof_run_label->setText(symmetric_roof_form ? QStringLiteral("Length") : QStringLiteral("Run"));
@@ -45982,10 +45999,8 @@ private:
     QLabel* m_building_dimensions_error{};
     std::vector<BuildingDimensionField> m_building_dimensions;
     std::vector<BuildingDimensionField> m_building_placement;
-    std::optional<ModalContext> m_building_edit_context;
+    std::optional<SourceEditAuthority> m_building_edit_context;
     std::optional<DocumentSnapshot> m_building_edit_source;
-    std::optional<Workspace> m_building_edit_workspace;
-    QStringList m_building_edit_selection;
     QWidget* m_material_group{};
     QPushButton* m_door_swing_button{};
     QPushButton* m_opening_assembly_button{};
@@ -46007,7 +46022,8 @@ private:
     QString m_roof_overhang_original_text;
     QString m_roof_rise_original_text;
     QString m_roof_thickness_original_text;
-    std::optional<ModalContext> m_roof_edit_context;
+    std::optional<SourceEditAuthority> m_roof_edit_context;
+    std::optional<DocumentSnapshot> m_roof_edit_source;
     QGroupBox* m_area_attributes_group{};
     QFormLayout* m_area_attributes_layout{};
     QLineEdit* m_area_name_edit{};

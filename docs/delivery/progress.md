@@ -248,6 +248,16 @@ unobserved for these source changes.
 Independent source review approved geometry precedence, quantity provenance and
 the retained schedule editing boundary.
 
+Roof and building dimension panels now retain the authoritative source and the
+complete edit context used to initialize their fields. Roof pitch preview,
+candidate construction and Apply read that captured entity; Apply checks the
+source and context again before the existing atomic commit. This includes
+recovered workspace history, saved markers, selection, layer, units, visibility
+and view ownership. Failed source acquisition disables these retained panels.
+Exact untouched inputs, quantity receipts, native admission and connected stair
+candidates remain on their existing paths. Independent source review approved
+the integrated changes. They have not been compiled or observed in the UI.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and
