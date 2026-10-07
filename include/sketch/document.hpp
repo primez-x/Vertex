@@ -5,6 +5,7 @@
 #include "sketch/geometry.hpp"
 #include "sketch/quantity.hpp"
 #include "sketch/field_adapter_contract.hpp"
+#include "sketch/physical_room_split_ids.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -199,6 +200,10 @@ struct WallSplitIntent {
     double fraction{};
     std::string seam_constraint_id;
     std::vector<WallSplitMeasuredOwnerIds> measured_owners;
+    // Nested version two retains every initially-current clear-room owner.
+    // The same rooms survive; only frozen analytical child IDs may be new.
+    bool physical_room_completion{};
+    std::vector<WallSplitPhysicalRoomIds> physical_room_owners;
 };
 
 // One source-reconstructed directed physical union. The first wall survives;

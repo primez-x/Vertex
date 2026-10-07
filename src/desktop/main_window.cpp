@@ -569,6 +569,25 @@ void visit_merge_copy_operation(std::string_view kind, json& value, const Identi
         for (auto& id : value.at("seam_vertex_ids")) identity(id,"vertex");
         visit_merge_copy_room_descriptor(value.at("source_descriptor"),identity);
         visit_merge_copy_room_descriptor(value.at("descriptor"),identity);
+    } else if (kind=="physical_room_wall_split") {
+        require_merge_copy_fields(value,{"version","wall_id","second_wall_id","fraction","source_descriptor","descriptor","insertions","segments"});
+        if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
+            !value.at("fraction").is_number() || !value.at("insertions").is_array())
+            throw std::invalid_argument("Physical room wall split copy operation is unsupported.");
+        identity(value.at("wall_id"),"wall-source");
+        // The second wall can disappear in a later merge while its retained
+        // source proof still needs a consistent identity in this copied graph.
+        identity(value.at("second_wall_id"),"retired-wall");
+        for (auto& insertion:value.at("insertions")) {
+            require_merge_copy_fields(insertion,{"segment_id","new_vertex_id","new_segment_id","fraction"});
+            if (!insertion.at("fraction").is_number())
+                throw std::invalid_argument("Physical room copied insertion fraction is invalid.");
+            identity(insertion.at("segment_id"),"segment");
+            identity(insertion.at("new_vertex_id"),"vertex");
+            identity(insertion.at("new_segment_id"),"segment");
+        }
+        visit_merge_copy_room_descriptor(value.at("source_descriptor"),identity);
+        visit_merge_copy_room_descriptor(value.at("descriptor"),identity);
     } else throw std::invalid_argument("Boundary merge copy operation kind is unsupported.");
     visit_merge_copy_segments(value.at("segments"),identity);
 }
@@ -584,7 +603,7 @@ void remap_copy_room_repair_history(json& operations,
         if (const auto found=identities.find(id);found!=identities.end()) value=found->second;
     };
     for (auto& operation : operations) {
-        if (operation.at("kind")=="physical_room_wall_merge") {
+        if (operation.at("kind")=="physical_room_wall_merge" || operation.at("kind")=="physical_room_wall_split") {
             const auto& value=operation.at("value");
             preceding_room=Entity{"merge-copy-validation","room_boundary",
                 {{"boundary_model_version",1},{"segments",value.at("segments")}},false,
@@ -796,7 +815,8 @@ void remap_entity_references(Entity& entity,
                         auto transform = decode_boundary_transform(operation.at("value"));
                         remapped_id(transform.boundary_id);
                         operation["value"] = encode_boundary_transform(transform);
-                    } else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge") {
+                    } else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge" ||
+                               operation.at("kind") == "physical_room_wall_split") {
                         visit_merge_copy_operation(operation.at("kind").get<std::string>(),operation.at("value"),
                             [&](json& id,std::string_view) {
                                 auto value=id.get<std::string>();
@@ -7976,7 +7996,8 @@ public:
                             const auto edit = decode_boundary_geometry_edit(item);
                             identities.try_emplace(edit.target_id, new_id("vertex"));
                         }
-                    } else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge") {
+                    } else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge" ||
+                               operation.at("kind") == "physical_room_wall_split") {
                         auto retained=operation.at("value");
                         visit_merge_copy_operation(operation.at("kind").get<std::string>(),retained,
                             [&](json& value,std::string_view role) {
@@ -8081,7 +8102,7 @@ public:
                         transform.boundary_id = clone_id;
                         operations.push_back({{"kind", "transform"},
                             {"value", encode_boundary_transform(transform)}});
-                    } else if (kind == "wall_merge" || kind == "physical_room_wall_merge") {
+                    } else if (kind == "wall_merge" || kind == "physical_room_wall_merge" || kind == "physical_room_wall_split") {
                         auto retained=operation.at("value");
                         visit_merge_copy_operation(kind,retained,[&](json& value,std::string_view role) {
                             const auto id=value.get<std::string>();
@@ -10646,9 +10667,12 @@ public:
             WallSplitMeasuredOwnerIds children{id,new_id("vertex"),new_id("segment"),{}};
             for(const auto& [dimension_id,candidate]:source.entities()) {
                 (void)dimension_id;
-                if(candidate.type!="dimension") continue;
+                if(!can_recognize_boundary_dimension_entity_type(candidate.type)) continue;
                 const auto decoded=decode_boundary_dimension_entity(candidate);
-                if(!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                // An unrelated future dimension does not prevent preparing a
+                // wall edit. Replay still refuses an unhandled live reference
+                // to this wall or its changing measured boundary children.
+                if(!decoded.supported()) continue;
                 const auto& dimension=*decoded.dimension;
                 if(dimension.boundary_id==id && dimension.kind==BoundaryDimensionKind::segment_length &&
                    dimension.segment_id==target && dimension.segment_chain_ids.empty() &&
@@ -10665,6 +10689,8 @@ public:
         const auto context=captureModalContext();
         const auto workspace=m_workspace;
         const auto source=authoringSnapshot();
+        const auto source_digest=fullSnapshotDigest(source);
+        const auto selection=m_selected_ids;
         const auto selected=selectedEntity();
         std::optional<Command> candidate;
         std::optional<DocumentSnapshot> proposed;
@@ -10695,8 +10721,11 @@ public:
         SnapshotPlanSceneOptions options;options.metric_units=context.metric_units;
         options.label_font=preview->font();options.label_device=preview;
         const auto context_valid=[&] {
-            return modalContextUnchanged(context) && m_selected_ids.size()==1 && workspace==m_workspace && m_document->is_editable() &&
-                !m_boundary_session && !m_pending_wall_start;
+            if (!modalContextUnchanged(context) || m_selected_ids!=selection || selection.size()!=1 ||
+                workspace!=m_workspace || !m_document->is_editable() || m_boundary_session || m_pending_wall_start || m_linework_drawing)
+                return false;
+            try { return source_digest==fullSnapshotDigest(authoringSnapshot()); }
+            catch (const std::exception&) { return false; }
         };
         const auto update=[&] {
             candidate.reset();proposed.reset();summary->clear();freedom->clear();status->clear();
@@ -10715,6 +10744,14 @@ public:
                     item.stroke_color=QColor(160,168,181);geometry.push_back(std::move(item));
                 }
                 std::set<std::string> represented{intent.wall_id,intent.second_wall_id};
+                std::size_t updated_dimensions=0;
+                for(const auto& [id,entity]:result.entities()) {
+                    if(!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+                    const auto previous=source.entities().find(id);
+                    if(previous==source.entities().end() || previous->second!=entity) {
+                        represented.insert(id);++updated_dimensions;
+                    }
+                }
                 for(const auto& [id,entity]:result.entities()) if(entity.type=="opening" || entity.type=="window") {
                     const auto host=entity.properties.find("wall_id");
                     if(host!=entity.properties.end() && host->is_string() && represented.contains(host->get<std::string>()))
@@ -10724,7 +10761,7 @@ public:
                     item.selected=false;geometry.push_back(std::move(item));
                 }
                 for(const auto& label:after.all_labels) {
-                    if(label.id.toStdString()==intent.wall_id || label.id.toStdString()==intent.second_wall_id ||
+                    if(represented.contains(label.id.toStdString()) ||
                        label.id.startsWith(id_from(intent.wall_id)+QStringLiteral(":")) ||
                        label.id.startsWith(id_from(intent.second_wall_id)+QStringLiteral(":"))) labels.push_back(label);
                 }
@@ -10738,6 +10775,10 @@ public:
                 marker.stroke_color=QColor(22,150,85);geometry.push_back(std::move(marker));
                 summary->setText(QStringLiteral("First wall: %1    Second wall: %2")
                     .arg(format_length(segment_length(*first),context.metric_units),format_length(segment_length(*second),context.metric_units)));
+                const auto& captured=std::get<ApplyBoundaryConstraintChanges>(command).wall_split;
+                if(captured && (!captured->physical_room_owners.empty() || updated_dimensions!=0))
+                    summary->setText(summary->text()+QStringLiteral("\n%1 rooms retained \u00b7 %2 dimensions updated")
+                        .arg(captured->physical_room_owners.size()).arg(updated_dimensions));
                 freedom->setText(persistentFreedomSummary(source,result,selected->id,selected->id));
                 candidate=std::move(command);proposed=std::move(result);
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
@@ -24710,7 +24751,8 @@ public:
                             if (operation.at("kind") == "geometry_edit") add_edit(operation.at("value"));
                             else if (operation.at("kind") == "vertex_batch")
                                 for (const auto& edit : operation.at("value")) add_edit(edit);
-                            else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge") {
+                            else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge" ||
+                                     operation.at("kind") == "physical_room_wall_split") {
                                 auto retained=operation.at("value");
                                 visit_merge_copy_operation(operation.at("kind").get<std::string>(),retained,
                                     [&](json& value,std::string_view role) {

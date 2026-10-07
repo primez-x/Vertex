@@ -14,6 +14,38 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 room-preserving physical wall splits
+
+The companion split implementation continues initially current authored rooms
+through the physical wall partition. Preparation derives exact required point
+counts and freezes identities once; replay requires the complete eligible owner
+list and proves unchanged analytical regions, holes, source inventory and
+directed intervals. Stable old corners and segment identities survive genuine
+same-support partitions. Room facts and classifications remain attached to their
+original owner; no room or area assignment is inferred.
+
+Full-span dimensions bind the resulting ordered segment chain, keeping their
+placement and presentation; angle targets follow their original corner edges.
+Supported corner constraints keep their original coordinates and bindings;
+directed arc-length constraints expand over the exact child chain. Physical
+wall-axis dimensions keep the surviving wall identity, with automatic labels
+repositioned for that piece and manual callouts unchanged. The preview shows
+the affected dimensions and retained room count.
+Descriptor-only updates include unchanged remote rooms on the same captured
+plane. Stale, inactive and future owners remain unchanged. Strict split
+operations chain full source descriptors with room merge/repair provenance.
+Clipboard and clone paths remap that schema, and Insert wall point binds both
+preview and Apply to the captured authoring snapshot and selection.
+
+Native format 65 / extraction 63 protects the new nested split dialect and
+entity-only operation across retained history. Child reservations include
+boundary, measured-line, qualified construction/derivation and validated
+historical wall identities; the new command cannot borrow another edit or
+observation lane. Independent source review identified and corrected corner
+constraint migration and retired-child identity reuse. No builds, tests,
+probes, native jobs, packages or installations
+ran, and the installed candidate remains unchanged.
+
 ### October 7 physical wall merge implementation
 
 A dedicated source-reconstructed merge joins compatible directed straight walls

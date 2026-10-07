@@ -1628,6 +1628,10 @@ void validate_physical_room_source_transition(
     // The exclusive merge replay likewise reconstructs every affected room
     // from both original physical walls. Generic payloads cannot enter it.
     if (reviewed_batch && reviewed_batch->wall_merge) return;
+    // Room-aware splits admit descriptor changes only under their complete,
+    // independently reconstructed exclusive command result.
+    if (reviewed_batch && reviewed_batch->wall_split &&
+        reviewed_batch->wall_split->physical_room_completion) return;
     if (reviewed_edit && reviewed_edit->physical_wall_room_repair) {
         const auto descriptor=validate_physical_wall_room_repair(before,*reviewed_edit);
         const auto replacement=after.find(reviewed_edit->boundary_id);
@@ -1857,6 +1861,23 @@ static bool has_joint_translation_completion(const ApplyBoundaryConstraintChange
 
 static bool has_room_review_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.room_review_completion || !command.room_review_intent.is_null();
+}
+
+static void validate_room_aware_wall_split_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.wall_split || (!command.wall_split->physical_room_completion &&
+        command.wall_split->physical_room_owners.empty())) return;
+    if (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
+        !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
+        !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
+        !command.measured_stroke_edits.empty() || !command.dimension_placement_moves.empty() ||
+        command.exterior_source_completion || command.supplemental_source_completion ||
+        command.supplemental_asset_reference_completion || command.rigid_wall_transform_completion ||
+        command.measured_source_completion || command.dimension_placement_completion ||
+        command.rigid_group_completion || command.rigid_group_transform || command.wall_merge ||
+        command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
+        has_joint_translation_completion(command) || has_room_review_completion(command) ||
+        has_disto_measurement_completion(command))
+        throw std::invalid_argument("Room-aware wall split intent cannot borrow another command lane");
 }
 
 static void validate_wall_merge_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -2114,7 +2135,7 @@ std::map<std::string, Entity, std::less<>> replay_retained_wall_split(
             known.erase(id);
         }
     }
-    auto expected = replayed_wall_split_entities(known, intent);
+    auto expected = replayed_wall_split_entities(known, intent, true);
     for (auto& [id, entity] : opaque) {
         if (!expected.emplace(id, std::move(entity)).second)
             throw std::invalid_argument("Retained wall split collides with an opaque relationship entity");
@@ -2147,7 +2168,7 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    try { validate_wall_merge_mode(command); }
+    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation, error.what()); }
     if (has_disto_measurement_completion(command)) {
         if (!command.disto_measurement_completion || !command.disto_measurement)
@@ -2273,18 +2294,272 @@ static void validate_exterior_source_redraw(const BoundaryGeometryEdit& edit) {
         throw std::invalid_argument("Automatic exterior source updates require typed retained-topology redraws");
 }
 
+// This visitor only vetoes reuse of identities in already validated, supported
+// provenance. It never treats a receipt or a same-named vendor field as edit
+// authority, and never traverses opaque extensions or local alternative IDs.
+class WallSplitRetainedIdentityCheck {
+public:
+    WallSplitRetainedIdentityCheck(const std::set<std::string>& fresh, const Entity& owner)
+        : fresh_(fresh), owner_(owner) {}
+
+    void boundary_provenance() {
+        if (const auto authoring = owner_.properties.find("boundary_authoring"); authoring != owner_.properties.end())
+            (void)construction(*authoring);
+        const auto derivation = owner_.extensions.find("boundary_geometry_derivation");
+        if (derivation == owner_.extensions.end()) return;
+        bounded(*derivation);
+        if (!derivation->is_object() || derivation->size() != 3 || !derivation->contains("version") ||
+            !derivation->at("version").is_number_integer() || !derivation->contains("operations") ||
+            !derivation->at("operations").is_array()) return;
+        if (derivation->at("version") == 1) {
+            if (!derivation->contains("source_boundary_authoring") ||
+                !construction(derivation->at("source_boundary_authoring"))) return;
+        } else if (derivation->at("version") == 2) {
+            if (!derivation->contains("source_boundary")) return;
+            const auto& origin = derivation->at("source_boundary");
+            if (!origin.is_object() || origin.size() != 2 || !origin.contains("boundary_model_version") ||
+                !origin.at("boundary_model_version").is_number_integer() || origin.at("boundary_model_version") != 1 ||
+                !origin.contains("segments")) return;
+            segments(origin.at("segments"));
+        } else return;
+        for (const auto& operation : derivation->at("operations")) {
+            rows(1);
+            if (!operation.is_object() || operation.size() != 2 || !operation.contains("kind") ||
+                !operation.at("kind").is_string() || !operation.contains("value")) return;
+            const auto& kind = operation.at("kind").get_ref<const std::string&>();
+            const auto& value = operation.at("value");
+            if (kind == "geometry_edit") edit(decode_boundary_geometry_edit(value));
+            else if (kind == "vertex_batch") {
+                if (!value.is_array()) return;
+                for (const auto& member : value) { rows(1); edit(decode_boundary_geometry_edit(member)); }
+            } else if (kind == "transform") identity(decode_boundary_transform(value).boundary_id);
+            else if (kind == "wall_merge") {
+                if (!fields(value, {"version", "vertex_id", "segments", "wall_source_ids", "removed_wall_id"})) return;
+                identity(value.at("vertex_id"));
+                identity(value.at("removed_wall_id"));
+                identities(value.at("wall_source_ids"));
+                segments(value.at("segments"));
+            } else if (kind == "physical_room_wall_merge") {
+                if (!fields(value, {"version", "first_wall_id", "second_wall_id", "source_descriptor", "descriptor", "seam_vertex_ids", "segments"})) return;
+                identity(value.at("first_wall_id"));
+                identity(value.at("second_wall_id"));
+                identities(value.at("seam_vertex_ids"));
+                room_descriptor(value.at("source_descriptor"));
+                room_descriptor(value.at("descriptor"));
+                segments(value.at("segments"));
+            } else if (kind == "physical_room_wall_split") {
+                if (!fields(value, {"version", "wall_id", "second_wall_id", "fraction", "source_descriptor", "descriptor", "insertions", "segments"})) return;
+                identity(value.at("wall_id"));
+                identity(value.at("second_wall_id"));
+                room_descriptor(value.at("source_descriptor"));
+                room_descriptor(value.at("descriptor"));
+                const auto& insertions = value.at("insertions");
+                rows(insertions.size());
+                for (const auto& insertion : insertions) {
+                    identity(insertion.at("segment_id"));
+                    identity(insertion.at("new_vertex_id"));
+                    identity(insertion.at("new_segment_id"));
+                }
+                segments(value.at("segments"));
+            } else return;
+        }
+    }
+
+private:
+    const std::set<std::string>& fresh_;
+    const Entity& owner_;
+    std::size_t rows_{};
+
+    void rows(std::size_t count) {
+        // Count semantic records, not coordinates, keys or other scalar nodes.
+        // A legitimate 10,000-edge origin must fit this traversal budget.
+        if (count > kMaximumJsonValues - rows_)
+            throw std::invalid_argument("Wall split retained identity proof exceeds its work budget");
+        rows_ += count;
+    }
+    static void bounded(const nlohmann::json& value) {
+        // Match the retained physical-room proof envelope limit. The preceding
+        // state's ordinary entity JSON limits have also already been checked.
+        if (value.dump().size() > 16ULL * 1024ULL * 1024ULL)
+            throw std::invalid_argument("Wall split retained identity proof exceeds 16 MiB");
+    }
+    void identity(const std::string& id) const {
+        if (!id.empty() && fresh_.contains(id))
+            throw std::invalid_argument("Wall split identity was already used in retained boundary provenance: " + owner_.id);
+    }
+    void identity(const nlohmann::json& value) const {
+        if (!value.is_null()) identity(value.get_ref<const std::string&>());
+    }
+    void identities(const nlohmann::json& values) {
+        rows(values.size());
+        for (const auto& value : values) identity(value);
+    }
+    static bool keys(const nlohmann::json& value, std::initializer_list<const char*> keys) {
+        if (!value.is_object() || value.size() != keys.size()) return false;
+        return std::all_of(keys.begin(), keys.end(), [&](const auto* key) { return value.contains(key); });
+    }
+    static bool fields(const nlohmann::json& value, std::initializer_list<const char*> expected) {
+        return keys(value, expected) && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version") == 1;
+    }
+    void segments(const nlohmann::json& values) {
+        rows(values.size());
+        for (const auto& edge : values) {
+            identity(edge.at("segment_id"));
+            identity(edge.at("start_vertex_id"));
+            identity(edge.at("end_vertex_id"));
+        }
+    }
+    bool construction(const nlohmann::json& value) {
+        bounded(value);
+        // Bound supported edge inventories before the strict decoder's replay.
+        // Unknown replay envelopes retain their existing opaque decode policy.
+        const auto version = inspect_boundary_receipt_envelope(value);
+        const bool understood = version.format != BoundaryReceiptEnvelopeFormat::unsupported_version &&
+            value.contains("replay_version") && value.at("replay_version").is_number_integer() &&
+            value.at("replay_version") == boundary_receipt_replay_version;
+        if (understood && value.contains("segments") && value.at("segments").is_array())
+            rows(value.at("segments").size());
+        const auto decoded = decode_boundary_receipt_envelope(value);
+        if (!decoded.supported()) return false;
+        identity(decoded.record->boundary_id);
+        for (const auto& edge : decoded.record->edges) {
+            identity(edge.segment_id);
+            identity(edge.start_vertex_id);
+            identity(edge.end_vertex_id);
+        }
+        return true;
+    }
+    void context(const nlohmann::json& value) {
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"})
+            if (value.contains(key)) identity(value.at(key));
+    }
+    void room_lineage(const nlohmann::json& value) {
+        if (!fields(value, {"version", "basis", "context", "physical_sources", "semantic_phases", "outer", "holes", "component_index"}) ||
+            value.at("basis") != "physical_wall_clear") return;
+        const auto& sources = value.at("physical_sources");
+        const auto& phases = value.at("semantic_phases");
+        if (!keys(value.at("context"), {"property_id", "building_id", "floor_id", "layer_id", "level_id"}) ||
+            !sources.is_array() || !phases.is_array()) return;
+        rows(sources.size() + phases.size());
+        // Only the understood physical inventory and phase registry define
+        // owned identities. Similar fields in other lineage shapes stay opaque.
+        for (const auto& source : sources)
+            if (!keys(source, {"owner_id", "segment_id", "baseline", "thickness_m", "source_elevation_m", "effective_elevation_m", "source_context", "vertical_placement"}) ||
+                source.at("segment_id") != "baseline" || !source.at("owner_id").is_string() ||
+                !keys(source.at("source_context"), {"property_id", "building_id", "floor_id", "layer_id"})) return;
+        for (const auto& phase : phases) {
+            if (!keys(phase, {"id", "active_alternative", "owners"}) || !phase.at("id").is_string() ||
+                !phase.at("owners").is_array()) return;
+            rows(phase.at("owners").size());
+            for (const auto& owner : phase.at("owners"))
+                if (!keys(owner, {"owner_id", "active_state"}) || !owner.at("owner_id").is_string()) return;
+        }
+        context(value.at("context"));
+        for (const auto& source : sources) {
+            identity(source.at("owner_id"));
+            context(source.at("source_context"));
+            // These sources are physical wall axes: their segment_id is the
+            // local feature token "baseline", not a document child identity.
+        }
+        for (const auto& phase : phases) {
+            identity(phase.at("id"));
+            const auto& owners = phase.at("owners");
+            for (const auto& owner : owners) identity(owner.at("owner_id"));
+        }
+        // Directed face uses refer only to the captured wall inventory above;
+        // their edge indices and "baseline" tokens carry no new identities.
+    }
+    void room_descriptor(const nlohmann::json& value) {
+        if (!fields(value, {"version", "selected_wall_id", "source_lineage", "holes"})) return;
+        identity(value.at("selected_wall_id"));
+        room_lineage(value.at("source_lineage"));
+    }
+    void edit(const BoundaryGeometryEdit& value) {
+        identity(value.boundary_id);
+        identity(value.target_id);
+        identity(value.new_vertex_id);
+        identity(value.new_segment_id);
+        identity(value.new_dimension_id);
+        if (!value.replacement_segments.is_null()) segments(value.replacement_segments);
+        if (!value.replacement_authoring.is_null()) (void)construction(value.replacement_authoring);
+        rows(value.replacement_dimension_ids.size() + value.replacement_removed_reference_ids.size() + value.replacement_wall_source_ids.size());
+        for (const auto& id : value.replacement_dimension_ids) identity(id);
+        for (const auto& id : value.replacement_removed_reference_ids) identity(id);
+        for (const auto& id : value.replacement_wall_source_ids) identity(id);
+        for (const auto* group : {"segments", "vertices"})
+            if (value.replacement_child_mapping.contains(group)) {
+                const auto& mapping = value.replacement_child_mapping.at(group);
+                rows(mapping.size());
+                for (const auto& [old_id, new_id] : mapping.items()) { identity(old_id); identity(new_id); }
+            }
+        if (value.replacement_linework_sources)
+            for (const auto& edge : *value.replacement_linework_sources) {
+                rows(edge.size());
+                for (const auto& use : edge) { identity(use.at("owner_id")); identity(use.at("segment_id")); }
+            }
+        if (value.physical_wall_room_repair) {
+            identity(value.physical_wall_room_repair->selected_wall_id);
+            room_lineage(value.physical_wall_room_repair->reviewed_source_lineage);
+        }
+        if (value.wall_source_translation && value.wall_source_translation->contains("genesis")) {
+            const auto& walls = value.wall_source_translation->at("genesis").at("walls");
+            rows(walls.size());
+            for (const auto& wall : walls) { identity(wall.at("id")); context(wall.at("context")); }
+        }
+    }
+};
+
 static void validate_wall_split_lifetime(const WallSplitIntent& intent,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
-    std::set<std::string> fresh{intent.second_wall_id,intent.seam_constraint_id};
+    std::set<std::string> fresh;
+    const auto reserve = [&](const std::string& id) {
+        if (!is_valid_identifier(id) || !fresh.insert(id).second)
+            throw std::invalid_argument("Wall split fresh identities are invalid or overlap");
+    };
+    reserve(intent.second_wall_id);
+    reserve(intent.seam_constraint_id);
     for(const auto& owner:intent.measured_owners) {
-        if(!fresh.insert(owner.vertex_id).second || !fresh.insert(owner.segment_id).second ||
-            (!owner.automatic_dimension_id.empty() && !fresh.insert(owner.automatic_dimension_id).second))
-            throw std::invalid_argument("Wall split fresh identities overlap");
+        reserve(owner.vertex_id);
+        reserve(owner.segment_id);
+        if (!owner.automatic_dimension_id.empty()) reserve(owner.automatic_dimension_id);
+    }
+    for (const auto& owner : intent.physical_room_owners) {
+        for (const auto* ids : {&owner.new_segment_ids, &owner.new_vertex_ids})
+            for (const auto& id : *ids) reserve(id);
     }
     for(std::size_t i=0;i<preceding_records;++i)for(const auto& [id,entity]:history[i].entities) {
         if(fresh.contains(id))throw std::invalid_argument("Wall split identity was already used in retained history: "+id);
+        // Loose strokes share the analytical identity namespaces. Preserve
+        // historical v1 replay while protecting all room-aware child IDs.
+        if (intent.physical_room_completion && entity.type == "measurement_linework") {
+            const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+            if (decoded.supported())
+                for (const auto& edge : decoded.model->edges)
+                    if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
+                        throw std::invalid_argument("Wall split child identity was already used in retained linework history: " + id);
+        }
+        if (intent.physical_room_completion && entity.type == "wall" &&
+            entity.extensions.contains("wall_merge_archive") &&
+            entity.extensions.at("wall_merge_archive").at("version") == 1) {
+            validate_wall_merge_archive(entity);
+            std::vector<const nlohmann::json*> pending{&entity.extensions.at("wall_merge_archive")};
+            while (!pending.empty()) {
+                const auto* retained = pending.back();
+                pending.pop_back();
+                for (const auto& original : retained->at("sources")) {
+                    if (fresh.contains(original.at("id").get<std::string>()))
+                        throw std::invalid_argument("Wall split identity was already used in retained merge archive: " + id);
+                    const auto& extensions = original.at("extensions");
+                    if (extensions.contains("wall_merge_archive"))
+                        pending.push_back(&extensions.at("wall_merge_archive"));
+                }
+            }
+        }
         if(!can_recognize_boundary_entity_type(entity.type) ||
             inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1)continue;
+        if (intent.physical_room_completion)
+            WallSplitRetainedIdentityCheck(fresh, entity).boundary_provenance();
         for(const auto& edge:decode_identified_boundary_entity(entity).segments)
             if(fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
                 throw std::invalid_argument("Wall split child identity was already used in retained history: "+id);
@@ -2324,7 +2599,7 @@ static void validate_room_review_lifetime(const nlohmann::json& encoded,
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    try { validate_wall_merge_mode(command); validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); }
+    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if(command.wall_merge) {
         (void)command_to_json(Command{command});
@@ -3027,7 +3302,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    try { validate_wall_merge_mode(command); }
+    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     if (has_disto_measurement_completion(command)) {
         try {
@@ -3696,7 +3971,7 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
-            try { validate_wall_merge_mode(typed); }
+            try { validate_room_aware_wall_split_mode(typed); validate_wall_merge_mode(typed); }
             catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
             if (typed.wall_merge) {
                 if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
@@ -4678,7 +4953,9 @@ Command complete_disto_measurement_command(
     const auto* ordinary = std::get_if<ApplyEntityChanges>(&geometry_command);
     const auto* constrained = std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if ((!ordinary && !constrained) || (constrained &&
-        (constrained->wall_merge || has_disto_measurement_completion(*constrained))))
+        (constrained->wall_merge || (constrained->wall_split &&
+            (constrained->wall_split->physical_room_completion || !constrained->wall_split->physical_room_owners.empty())) ||
+         has_disto_measurement_completion(*constrained))))
         document_error(DocumentErrorCode::invalid_entity, "DISTO attachment requires one original geometry command");
     const DistoMeasurementAttachment attachment{std::string(owner_id), record, replace_existing};
     const auto geometry = Document::preview_command(source, geometry_command);

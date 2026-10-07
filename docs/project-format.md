@@ -1,4 +1,48 @@
-# Vertex project formats v1 through v64
+# Vertex project formats v1 through v65
+
+## Current-room continuity during physical wall splits (v65)
+
+Native format 65 and JSON/assets extraction version 63 protect the room-aware
+version-2 `wall_split` intent within the existing exclusive command envelope 12.
+The earlier six fields remain: `version`, `wall_id`, `second_wall_id`, `fraction`,
+`seam_constraint_id` and `measured_owners`. Version 2 adds exactly
+`physical_room_owners`, whose records have `boundary_id`, `new_segment_ids` and
+`new_vertex_ids`. Completion authority follows from this dialect, not a generic
+entity payload. Version-1 retained commands replay their original semantics.
+
+Preparation partitions the physical source in a detached map, proves current
+room correspondence, then freezes only the required fresh child identities.
+Replay requires the complete original-current owner list, including unchanged
+remote rooms that share the captured physical inventory. Ordered analytical
+supports, source intervals and the full region with its holes prove each room's
+continuation. Existing owner facts, classifications and deductions survive.
+There is no new room-owner assignment or inferred classification in this edit.
+Stale, inactive, future and unrelated rooms remain unchanged.
+
+The retained `physical_room_wall_split` operation has exactly eight value fields:
+`version: 1`, `wall_id`, `second_wall_id`, `fraction`, `source_descriptor`,
+`descriptor`, `insertions` and `segments`. Each sequential insertion has exactly
+`segment_id`, `new_vertex_id`, `new_segment_id` and `fraction`; final segments use
+the six-field identified-geometry vocabulary. Complete descriptors chain across
+room wall splits and merges, reconcile with the final room marker and supply the
+digest for a following explicit repair. Full-span dimensions continue across
+their new ordered segment chains; angle dimensions retain their original corner.
+Supported corner relations retain their original point coordinates and raw
+binding metadata; directed arc-length constraints expand over the child chain.
+Physical wall-axis dimensions remain attached to the surviving first wall and
+measure that piece, rather than acquiring an implicit whole-span target.
+Automatic axis callouts follow that piece; manual text positions and presentation
+remain unchanged.
+
+Every frozen child must be fresh across entity, boundary, measured-line,
+qualified construction/derivation and validated historical wall-archive
+identities in all retained revisions. The bounded provenance visitor enumerates
+typed identity fields, including retired original children, without assigning
+authority to opaque metadata or local feature/alternative tokens.
+Exact undo and redo can restore previous states. Version-2 splits cannot combine
+with DISTO attachment or another authority lane. The nested intent and the
+entity-only operation independently own the format-65 floor, even after undo,
+deletion or abandonment of a branch. Unchanged earlier forms keep their floors.
 
 ## Source-reconstructed physical wall merges (v64)
 

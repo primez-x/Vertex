@@ -4,7 +4,8 @@
 namespace sketch {
 [[nodiscard]] Command make_wall_split_command(const DocumentSnapshot& source, const WallSplitIntent& intent);
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replayed_wall_split_entities(
-    const std::map<std::string, Entity, std::less<>>& source, const WallSplitIntent& intent);
+    const std::map<std::string, Entity, std::less<>>& source, const WallSplitIntent& intent,
+    bool retained_replay = false);
 [[nodiscard]] nlohmann::json encode_wall_split(const WallSplitIntent& intent);
 [[nodiscard]] WallSplitIntent decode_wall_split(const nlohmann::json& value);
 // Detached normalization is allowed only after exact complete reconstruction.

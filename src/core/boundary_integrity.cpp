@@ -3,6 +3,7 @@
 #include "sketch/wall_merge.hpp"
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
 #include "sketch/physical_wall_room_merge.hpp"
+#include "sketch/physical_wall_room_split.hpp"
 #endif
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -321,6 +322,12 @@ IdentifiedBoundary replay_geometry_derivation(const Entity& entity) {
             result = replay_physical_room_wall_merge(entity, result, operation.at("value"));
 #else
             throw std::invalid_argument("Physical room wall merging requires the architectural geometry engine");
+#endif
+        } else if (kind == "physical_room_wall_split") {
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            result = replay_physical_room_wall_split(entity,result,operation.at("value"));
+#else
+            throw std::invalid_argument("Physical room wall splitting requires the architectural geometry engine");
 #endif
         } else if (kind == "wall_merge") {
             const auto& value=operation.at("value");
@@ -1383,14 +1390,14 @@ std::optional<std::string> validate_boundary_integrity(
                 std::optional<PhysicalWallRoomRepairIntent> reviewed_room;
                 std::optional<nlohmann::json> reviewed_room_descriptor;
                 for (const auto& operation : entity.extensions.at("boundary_geometry_derivation").at("operations")) {
-                    if (operation.at("kind") == "physical_room_wall_merge") {
+                    if (operation.at("kind") == "physical_room_wall_merge" || operation.at("kind") == "physical_room_wall_split") {
                         const auto& value = operation.at("value");
                         const auto& captured = value.at("source_descriptor");
                         if (reviewed_room_descriptor && *reviewed_room_descriptor != captured)
-                            throw std::invalid_argument("Boundary " + id + ": physical room merge source breaks its retained descriptor chain");
+                            throw std::invalid_argument("Boundary " + id + ": physical room wall edit breaks its retained descriptor chain");
                         if (reviewed_room && (captured.at("selected_wall_id") != reviewed_room->selected_wall_id ||
                             captured.at("source_lineage") != reviewed_room->reviewed_source_lineage))
-                            throw std::invalid_argument("Boundary " + id + ": physical room merge source differs from its preceding repair");
+                            throw std::invalid_argument("Boundary " + id + ": physical room wall edit source differs from its preceding repair");
                         reviewed_room_descriptor = value.at("descriptor");
                         reviewed_room.reset();
                         continue;
@@ -1417,7 +1424,7 @@ std::optional<std::string> validate_boundary_integrity(
                             auto captured = entity;
                             captured.extensions["physical_wall_room"] = *reviewed_room_descriptor;
                             if (physical_wall_room_descriptor_digest(captured) != edit.physical_wall_room_repair->expected_descriptor_digest)
-                                throw std::invalid_argument("Boundary " + id + ": physical room repair source differs from its preceding merge");
+                                throw std::invalid_argument("Boundary " + id + ": physical room repair source differs from its preceding wall edit");
                         }
                         reviewed_room = edit.physical_wall_room_repair;
                         reviewed_room_descriptor.reset();
@@ -1425,7 +1432,7 @@ std::optional<std::string> validate_boundary_integrity(
                 }
                 if (reviewed_room_descriptor && (!is_physical_wall_room(entity) ||
                     entity.extensions.at("physical_wall_room") != *reviewed_room_descriptor))
-                    throw std::invalid_argument("Boundary " + id + ": physical room source differs from its retained merge descriptor");
+                    throw std::invalid_argument("Boundary " + id + ": physical room source differs from its retained wall edit descriptor");
                 if (reviewed_room) {
                     const auto descriptor=decode_physical_wall_room_descriptor(entity);
                     if (descriptor.selected_wall_id!=reviewed_room->selected_wall_id ||

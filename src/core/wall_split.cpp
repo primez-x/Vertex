@@ -7,9 +7,14 @@
 #include "sketch/wall_semantics.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/physical_wall_room_data.hpp"
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+#include "sketch/physical_wall_room_split.hpp"
+#endif
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -41,6 +46,25 @@ void validate(const WallSplitIntent& intent) {
         if(!valid_id(ids.boundary_id) || !valid_id(ids.vertex_id) || !valid_id(ids.segment_id) ||
             (!ids.automatic_dimension_id.empty() && !valid_id(ids.automatic_dimension_id)) ||
             !owners.insert(ids.boundary_id).second)reject("Wall split measured identities are invalid or repeated");
+    if ((!intent.physical_room_completion && !intent.physical_room_owners.empty()) ||
+        intent.physical_room_owners.size()>2048)
+        reject("Wall split room continuation requires its explicit bounded completion dialect");
+    std::set<std::string> fresh{intent.second_wall_id,intent.seam_constraint_id};
+    const auto reserve=[&](const std::string& id) {
+        if (!valid_id(id) || id==intent.wall_id || !fresh.insert(id).second)
+            reject("Wall split requires distinct fresh child identities");
+    };
+    for (const auto& ids:intent.measured_owners) {
+        reserve(ids.vertex_id);reserve(ids.segment_id);
+        if (!ids.automatic_dimension_id.empty()) reserve(ids.automatic_dimension_id);
+    }
+    for (const auto& ids:intent.physical_room_owners) {
+        if (!valid_id(ids.boundary_id) || !owners.insert(ids.boundary_id).second ||
+            ids.new_segment_ids.size()!=ids.new_vertex_ids.size() || ids.new_segment_ids.size()>10000)
+            reject("Wall split room child allocation is invalid or repeated");
+        for (const auto& id:ids.new_segment_ids) reserve(id);
+        for (const auto& id:ids.new_vertex_ids) reserve(id);
+    }
 }
 Segment baseline(const Entity& wall) {
     const auto& b=wall.properties.at("baseline");
@@ -137,13 +161,23 @@ Json encode_wall_split(const WallSplitIntent& intent) {
         {"segment_id",ids.segment_id},{"automatic_dimension_id",ids.automatic_dimension_id}});
     Json result={{"version",1},{"wall_id",intent.wall_id},{"second_wall_id",intent.second_wall_id},
         {"fraction",intent.fraction},{"seam_constraint_id",intent.seam_constraint_id},{"measured_owners",std::move(owners)}};
+    if (intent.physical_room_completion) {
+        auto rooms=Json::array();
+        for (const auto& ids:intent.physical_room_owners) rooms.push_back({{"boundary_id",ids.boundary_id},
+            {"new_segment_ids",ids.new_segment_ids},{"new_vertex_ids",ids.new_vertex_ids}});
+        result["version"]=2;result["physical_room_owners"]=std::move(rooms);
+    }
     if(result.dump().size()>1024*1024)reject("Wall split proof exceeds the persisted proof budget");
     return result;
 }
 WallSplitIntent decode_wall_split(const Json& value) {
     if(value.dump().size()>1024*1024)reject("Wall split proof exceeds the persisted proof budget");
-    exact(value,{"version","wall_id","second_wall_id","fraction","seam_constraint_id","measured_owners"});
-    if(!value.at("version").is_number_integer() || value.at("version")!=1 || !value.at("fraction").is_number() ||
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version")!=1 && value.at("version")!=2)) reject("Wall split proof has unsupported version");
+    const bool room_completion=value.at("version")==2;
+    if (room_completion) exact(value,{"version","wall_id","second_wall_id","fraction","seam_constraint_id","measured_owners","physical_room_owners"});
+    else exact(value,{"version","wall_id","second_wall_id","fraction","seam_constraint_id","measured_owners"});
+    if(!value.at("fraction").is_number() ||
         !value.at("measured_owners").is_array())reject("Wall split proof has invalid version or identities");
     WallSplitIntent intent{value.at("wall_id").get<std::string>(),value.at("second_wall_id").get<std::string>(),
         value.at("fraction").get<double>(),value.at("seam_constraint_id").get<std::string>(),{}};
@@ -152,10 +186,20 @@ WallSplitIntent decode_wall_split(const Json& value) {
         intent.measured_owners.push_back({ids.at("boundary_id").get<std::string>(),ids.at("vertex_id").get<std::string>(),
             ids.at("segment_id").get<std::string>(),ids.at("automatic_dimension_id").get<std::string>()});
     }
+    intent.physical_room_completion=room_completion;
+    if (room_completion) {
+        if (!value.at("physical_room_owners").is_array()) reject("Wall split room allocation must be an array");
+        for (const auto& ids:value.at("physical_room_owners")) {
+            exact(ids,{"boundary_id","new_segment_ids","new_vertex_ids"});
+            intent.physical_room_owners.push_back({ids.at("boundary_id").get<std::string>(),
+                ids.at("new_segment_ids").get<std::vector<std::string>>(),ids.at("new_vertex_ids").get<std::vector<std::string>>()});
+        }
+    }
     validate(intent);return intent;
 }
 
-Entities replayed_wall_split_entities(const Entities& source,const WallSplitIntent& intent) {
+static Entities replay_wall_split(const Entities& source,const WallSplitIntent& intent,
+    bool retained_replay,bool preparation_only) {
     validate(intent);
     const auto found=source.find(intent.wall_id);
     if(found==source.end() || found->second.type!="wall")reject("Wall split source wall is unavailable: "+intent.wall_id);
@@ -215,6 +259,36 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
     result.emplace(child.id,std::move(child));
     for(const auto& [id,entity]:source) {
         auto unhandled=entity;
+        if ((intent.physical_room_completion || preparation_only) &&
+            can_recognize_boundary_dimension_entity_type(entity.type)) {
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if (decoded.supported() && decoded.dimension->boundary_id==intent.wall_id) {
+                const auto& dimension=*decoded.dimension;
+                if (dimension.kind!=BoundaryDimensionKind::wall_axis_length)
+                    reject("Wall split cannot reinterpret an unsupported physical dimension target: "+id);
+                // A wall-axis dimension measures one physical owner. The
+                // surviving first wall retains that identity; it must not
+                // silently become a dimension of the complete two-wall span.
+                auto& updated=result.at(id);
+                if (dimension.placement==BoundaryDimensionPlacement::automatic) {
+                    Wall wall;std::string diagnostic;
+                    if (!read_document_wall(result.at(intent.wall_id),{},wall,diagnostic)) reject(diagnostic);
+                    validate_wall_semantics(wall);
+                    const auto midpoint=split_point(first,0.5);
+                    const auto dx=first.end.x-first.start.x,dy=first.end.y-first.start.y,chord=std::hypot(dx,dy);
+                    const auto clearance=wall.thickness/2+0.25;
+                    const Vec2 position{midpoint.x-dy/chord*clearance,midpoint.y+dx/chord*clearance};
+                    if (!std::isfinite(position.x) || !std::isfinite(position.y))
+                        reject("Wall split automatic axis dimension exceeds range: "+id);
+                    updated.properties["text_position"]={position.x,position.y};
+                }
+                // Manual placement, presentation and adjacent opaque data stay
+                // verbatim. Only the admitted canonical target is exempted.
+                unhandled.properties.at("target").erase("entity_id");
+                const auto rehosted=decode_boundary_dimension_entity(updated);
+                (void)rehosted.dimension->resolve(result);
+            }
+        }
         if(entity.type=="room_relationships") {
             const auto relationships=RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
             auto& model=result.at(id).properties.at("model");
@@ -280,6 +354,26 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
             unhandled.properties.erase("wall_ids");unhandled.properties.erase("entity_ids");
         }
         if(entity.type=="measurement_boundary")unhandled.properties.erase("wall_measurement_source");
+        if (can_recognize_boundary_entity_type(entity.type) &&
+            inspect_boundary_entity_version(entity).format==BoundaryEntityFormat::identified_v1 &&
+            (entity.extensions.contains("boundary_geometry_derivation") || entity.properties.contains("boundary_authoring"))) {
+            if (const auto diagnostic=validate_boundary_integrity({{id,entity}})) reject(*diagnostic);
+            unhandled.extensions.erase("boundary_geometry_derivation");unhandled.properties.erase("boundary_authoring");
+        }
+        if (is_physical_wall_room(entity)) {
+            const auto& marker=entity.extensions.at("physical_wall_room");
+            if (marker.is_object() && marker.contains("version") && marker.at("version")==1) {
+                (void)decode_physical_wall_room_descriptor(entity);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                unhandled.extensions.erase("physical_wall_room");
+#else
+                try { unknown_refs(marker,intent,id,"/extensions/physical_wall_room"); }
+                catch (const std::invalid_argument&) {
+                    reject("Wall split requires the architectural geometry engine to preserve physical room "+id);
+                }
+#endif
+            }
+        }
         if(entity.type=="wall" && entity.extensions.contains("wall_split_archive")) {
             validate_wall_split_archive(entity);
             // These identities identify historical source receipts. They are
@@ -300,6 +394,18 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
     result.emplace(seam.id,encode_constraint_entity(seam));
     validate_constraint_wall_host(intent.wall_id,result);validate_constraint_wall_host(intent.second_wall_id,result);
     result=complete_wall_split_measurement_sources(source,result,intent);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (!preparation_only) {
+        if (intent.physical_room_completion)
+            result=complete_wall_split_physical_room_sources(source,result,intent);
+        else if (!retained_replay && !prepare_wall_split_physical_room_ids(source,result,intent).empty())
+            reject("Wall split requires captured room continuation; prepare the split command before applying it");
+    }
+#else
+    (void)retained_replay;(void)preparation_only;
+    if (intent.physical_room_completion)
+        reject("Physical room wall splitting requires the architectural geometry engine");
+#endif
     if(const auto unsupported=validate_boundary_integrity(result))reject(*unsupported);
     if(const auto unsupported=validate_constraint_integrity(result))reject(*unsupported);
     // Existing source topology is replaced by its proved directed children in
@@ -309,20 +415,33 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
     return result;
 }
 
+Entities replayed_wall_split_entities(const Entities& source,const WallSplitIntent& intent,bool retained_replay) {
+    return replay_wall_split(source,intent,retained_replay,false);
+}
+
 Entities wall_split_validation_source(const Entities& source,const Entities& reconstructed,const WallSplitIntent& intent) {
     auto normalized=source;
     for(const auto& [id,entity]:reconstructed) {
         if(id==intent.wall_id || id==intent.second_wall_id || entity.type=="constraint" || entity.type=="room_relationships" ||
-            std::any_of(intent.measured_owners.begin(),intent.measured_owners.end(),[&](const auto& owner){return owner.boundary_id==id;}))
+            std::any_of(intent.measured_owners.begin(),intent.measured_owners.end(),[&](const auto& owner){return owner.boundary_id==id;}) ||
+            std::any_of(intent.physical_room_owners.begin(),intent.physical_room_owners.end(),[&](const auto& owner){return owner.boundary_id==id;}))
             normalized.insert_or_assign(id,entity);
     }
     return normalized;
 }
 
 Command make_wall_split_command(const DocumentSnapshot& source,const WallSplitIntent& intent) {
-    (void)replayed_wall_split_entities(source.entities(),intent);
+    auto captured=intent;
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (!captured.physical_room_completion) {
+        const auto physical=replay_wall_split(source.entities(),captured,true,true);
+        captured.physical_room_owners=prepare_wall_split_physical_room_ids(source.entities(),physical,captured);
+        captured.physical_room_completion=true;
+    }
+#endif
+    (void)replayed_wall_split_entities(source.entities(),captured);
     ApplyBoundaryConstraintChanges command;command.expected_revision=source.revision();
-    command.message="Insert wall vertex";command.wall_split=intent;
+    command.message="Insert wall vertex";command.wall_split=std::move(captured);
     const Command result{command};(void)Document::preview_command(source,result);return result;
 }
 }

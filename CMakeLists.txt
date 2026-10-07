@@ -381,7 +381,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_document PRIVATE sketch_physical_clear_kernel)
   target_sources(sketch_document PRIVATE src/core/physical_wall_spaces.cpp
     src/core/physical_wall_room.cpp src/core/physical_wall_room_review.cpp
-    src/core/physical_room_dimension_source.cpp src/architecture/physical_wall_room_merge.cpp)
+    src/core/physical_room_dimension_source.cpp src/architecture/physical_wall_room_merge.cpp
+    src/architecture/physical_wall_room_split.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_PHYSICAL_ROOM_REVIEW)
   # Level edits validate the resulting stair/railing shapes through the shared
   # building codec. Propagate its static link dependency to every document user.
