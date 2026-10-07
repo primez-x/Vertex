@@ -462,6 +462,27 @@ The existing project/session reset boundaries clear every slot. Root reviewed th
 source change; no performance result is claimed. None of these source changes
 started an application build, test, probe, package or installed cutover.
 
+Plan click and Ctrl marquee picking now consume the cached rendered curve and
+custom stroke paths, with the same model, paper and cosmetic line-width rules
+used by painting. The retained picking tree encloses those widths and actual
+curve controls at every zoom. Independent source review found two edge defects:
+compound symbol artwork was not one closed footprint, and Qt winding excluded
+one exact outer tolerance boundary. The corrected source shares physical symbol
+axes/SVG footprints with a conservative legacy fallback, and includes a subpixel
+outward margin in admission and the spatial query. Stroke and fill marquee paths
+are tested separately, preserving real holes without odd-even overlap artifacts.
+The final source review approved these corrections; picking, visuals and
+responsiveness have not been observed in an application run.
+
+Plan wheel zoom now supports pixel-only vertical touchpad events. Native 3D
+preserves fractional movement below one native pixel while retaining ordinary
+detent rounding and limits. Full source, camera, navigation, device, display,
+pointer and scroll-boundary guards own each remainder. Independent source review
+identified stale carry surviving gesture retirement; resetInteraction now clears
+it before a later context can revive it. The corrected source was approved.
+No application build, test, probe, package or installation was started for this
+batch; the installed checkpoint above is unchanged.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

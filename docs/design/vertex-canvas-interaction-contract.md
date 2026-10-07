@@ -65,6 +65,14 @@ Synthetic mouse events cannot duplicate a pen or touch action. One-finger input
 uses the plan pointer contract; a second finger cancels that edit and starts
 pan/pinch navigation until all fingers lift.
 
+Vertical wheel input zooms at the pointer in both plans and 3D. Angular wheel
+deltas take priority when a driver reports both forms; pixel-only touchpad
+input is supported without applying display scaling twice. Native 3D retains
+fractional movements until they produce a native pixel, only within the same
+source, camera, display, device and pointer anchor. Ending a scroll, retiring an
+interaction or changing that context discards the remainder. Horizontal-only
+scrolling does not create vertical zoom.
+
 ## Explicit 3D Move
 
 `Move object` is available from the 3D context menu for a selected transformable
@@ -100,6 +108,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 - In 3D, right-clicking or double-clicking a selected group member preserves the whole selection. Object-specific actions apply only to a single object; Copy and Delete use the shared selection. A changed source or selection invalidates retained menu actions, and a pending plan placement prevents unrelated 3D object actions.
 - Pan, zoom, fit, and overview navigation refresh the effective cursor position used by measurements and contextual UI.
 - Selection and move previews are screen-only and never appear in print or export.
+- Plan picking and Ctrl marquee use the rendered curve paths, custom stroke outlines and effective paper, model or cosmetic line weights. Round caps and joins retain a small selection tolerance. Filled regions preserve their actual holes, and explicit opening spans remain selectable without painting an imaginary closed pane. Furniture remains selectable within its physical footprint. The spatial picking envelope retains these width rules at every zoom and DPI.
 
 ## Keyboard behavior
 
@@ -118,7 +127,6 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
 - Direct endpoint grips for additional architectural object types.
 - Windows hardware qualification of pen barrel mappings and touch navigation.
-- Shared painted-footprint hit testing for every filled and custom-stroke entity type.
 
 ## Acceptance sequences
 

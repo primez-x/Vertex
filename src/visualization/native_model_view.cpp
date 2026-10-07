@@ -52,7 +52,9 @@
 #include <QPaintEngine>
 #include <QPaintEvent>
 #include <QPointer>
+#include <QPointingDevice>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QShowEvent>
 #include <QWheelEvent>
 #include <QTimer>
@@ -231,6 +233,17 @@ public:
         std::uint64_t navigation_generation{};
     };
     std::optional<SelectionCapture> selection_capture;
+
+    struct WheelScroll {
+        SelectionCapture context;
+        QPointer<const QPointingDevice> device;
+        QPointer<QScreen> screen;
+        QPoint anchor;
+        double remainder{};
+        std::chrono::steady_clock::time_point last_event;
+        bool pixel_input{};
+    };
+    std::optional<WheelScroll> wheel_scroll;
 
     enum class Gesture { none, select, additive_select, overlap_select, overlap_pan, edit, pan, orbit, move, manipulate };
     Gesture gesture = Gesture::none;
@@ -1504,6 +1517,10 @@ void NativeModelView::cancelInteraction() {
 }
 
 void NativeModelView::resetInteraction(bool restore_controls) {
+    // A retired gesture cannot revive a fractional wheel burst after focus,
+    // capture or selection returns. wheelEvent computes carry before this
+    // reset and publishes its own new context only after navigation succeeds.
+    m_impl->wheel_scroll.reset();
     if (!m_impl->manipulator.IsNull()) {
         try {
             if (m_impl->manipulator->HasActiveTransformation())
@@ -2015,29 +2032,74 @@ bool NativeModelView::admitSceneInput(bool starting) {
 }
 
 void NativeModelView::wheelEvent(QWheelEvent* event) {
+    if (event->phase()==Qt::ScrollBegin) m_impl->wheel_scroll.reset();
+    const QPointer<NativeModelView> owner_guard(this);
+    struct ScrollEndReset {
+        QPointer<NativeModelView> owner;
+        bool ending;
+        ~ScrollEndReset() { if (owner && ending) owner->m_impl->wheel_scroll.reset(); }
+    } reset_scroll{owner_guard,event->phase()==Qt::ScrollEnd};
     if (!m_impl->native_ready || m_impl->view.IsNull()) {
+        m_impl->wheel_scroll.reset();
         event->ignore();
         return;
     }
-    const QPointer<NativeModelView> owner_guard(this);
     m_impl->complete_initial_fit();
     if (!owner_guard) { event->accept(); return; }
-    int delta = event->angleDelta().y();
-    if (delta == 0) {
-        delta = event->pixelDelta().y() * 8;
-    }
-    if (delta != 0) {
-        cancelInteraction();
-        const auto point = m_impl->input_point(event->position());
-        const auto movement = std::clamp(delta / 8, -120, 120);
-        const auto native_movement = qRound(static_cast<qreal>(movement) * m_impl->input_scale());
-        m_impl->navigation_changed();
-        m_impl->view->StartZoomAtPoint(point.x, point.y);
-        m_impl->view->ZoomAtPoint(point.x, point.y, point.x, point.y + native_movement);
-        event->accept();
+    const auto angle=event->angleDelta().y();
+    const bool pixel_input=angle==0;
+    const auto logical_movement=std::clamp(pixel_input ? static_cast<double>(event->pixelDelta().y())
+                                                      : static_cast<double>(angle)/8.0,-120.0,120.0);
+    if (logical_movement==0.0) {
+        QWidget::wheelEvent(event);
         return;
     }
-    QWidget::wheelEvent(event);
+    const auto refuse=[&](const QString& message) noexcept {
+        if (!owner_guard) return;
+        m_impl->wheel_scroll.reset();
+        try { cancelInteraction(); } catch (...) {}
+        if (owner_guard) { try { m_impl->show_input_error(message); } catch (...) {} }
+    };
+    try {
+        const auto point=m_impl->input_point(event->position());
+        const auto ratio=m_impl->input_scale();
+        const auto exact_native=logical_movement*ratio;
+        if (!std::isfinite(ratio) || ratio<=0 || !std::isfinite(exact_native) ||
+            std::abs(exact_native)>static_cast<double>(std::numeric_limits<int>::max())/2.0)
+            throw std::invalid_argument("The native wheel pixel mapping is unavailable.");
+        const auto now=std::chrono::steady_clock::now();
+        const auto& previous=m_impl->wheel_scroll;
+        const bool carry=previous && previous->device && previous->screen &&
+            previous->device.data()==event->pointingDevice() && previous->screen.data()==screen() &&
+            previous->anchor==QPoint(point.x,point.y) && previous->pixel_input==pixel_input &&
+            now-previous->last_event<=std::chrono::milliseconds(500) &&
+            m_impl->selection_current(previous->context);
+        // Whole wheel detents retain their existing independently rounded
+        // displacement. Continuous input carries less than one native pixel.
+        const bool detent=!pixel_input && angle%120==0;
+        const auto accumulated=exact_native+(!detent && carry ? previous->remainder : 0.0);
+        const auto native_movement=detent ? qRound(exact_native) : static_cast<int>(std::trunc(accumulated));
+        const auto end_y=static_cast<std::int64_t>(point.y)+native_movement;
+        if (end_y<std::numeric_limits<int>::min() || end_y>std::numeric_limits<int>::max())
+            throw std::invalid_argument("The native wheel anchor is outside the supported pixel range.");
+        cancelInteraction();
+        if (!owner_guard) { event->accept(); return; }
+        if (native_movement!=0) {
+            m_impl->navigation_changed();
+            m_impl->view->StartZoomAtPoint(point.x,point.y);
+            m_impl->view->ZoomAtPoint(point.x,point.y,point.x,static_cast<int>(end_y));
+        }
+        if (detent) m_impl->wheel_scroll.reset();
+        else m_impl->wheel_scroll=Impl::WheelScroll{m_impl->capture_selection(),event->pointingDevice(),
+            screen(),QPoint(point.x,point.y),accumulated-native_movement,now,pixel_input};
+    } catch (const Standard_Failure& error) {
+        refuse(QStringLiteral("3D zoom failed: ")+exception_text(error));
+    } catch (const std::exception& error) {
+        refuse(QStringLiteral("3D zoom failed: ")+exception_text(error));
+    } catch (...) {
+        refuse(QStringLiteral("3D zoom failed: unknown failure"));
+    }
+    event->accept();
 }
 
 QPaintEngine* NativeModelView::paintEngine() const {

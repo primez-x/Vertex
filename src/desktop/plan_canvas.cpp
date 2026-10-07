@@ -491,6 +491,59 @@ EntityStrokeWidth entity_stroke_width(const CanvasEntity& entity, bool output,
     return {output ? default_pixels_per_mm * 0.25 : entity.selected ? 3.0 : 1.5, true};
 }
 
+struct EntityStrokeEnvelope {
+    double model_width{};
+    double cosmetic_pixels{};
+    double symbol_metres{};
+    double paper_mm{};
+};
+
+// Qt's winding test excludes one side of an exact path boundary. A subpixel
+// outward margin preserves inclusive pointer tolerance without changing any
+// model measurement; the retained query includes the same margin.
+constexpr double pick_edge_padding_pixels = 1.0 / 1024.0;
+
+// Retain the same width precedence as entity_stroke_width without binding an
+// index to the current zoom, DPI or selection. Both paint and picking consume
+// these coefficients; the default encloses either selected cosmetic width.
+std::optional<EntityStrokeEnvelope> entity_stroke_envelope(const CanvasEntity& entity) {
+    EntityStrokeEnvelope envelope;
+    if (entity.paper_stroke_width_on_screen &&
+        std::isfinite(entity.output_stroke_width_mm) && entity.output_stroke_width_mm > 0.0) {
+        envelope.paper_mm = entity.output_stroke_width_mm;
+        envelope.cosmetic_pixels = 0.1;
+    } else if (entity.type == QStringLiteral("symbol")) {
+        if (!std::isfinite(entity.stroke_width_metres)) return std::nullopt;
+        envelope.cosmetic_pixels = 1.15;
+        envelope.symbol_metres = std::max(0.0, entity.stroke_width_metres);
+    } else if (wall_baseline_only(entity)) {
+        if (!std::isfinite(entity.thickness_metres)) return std::nullopt;
+        envelope.model_width = std::max(entity.thickness_metres, 0.04);
+    } else if (entity.stroke_width_metres > 0.0 && std::isfinite(entity.stroke_width_metres)) {
+        envelope.model_width = entity.stroke_width_metres;
+    } else envelope.cosmetic_pixels = 3.0;
+    return envelope;
+}
+
+double entity_screen_stroke_width(const CanvasEntity& entity, double model_scale,
+                                  double pixels_per_mm) {
+    const auto stroke = entity_stroke_width(entity, false, model_scale,
+                                            pixels_per_mm, pixels_per_mm);
+    const auto width = stroke.cosmetic ? stroke.width : stroke.width * model_scale;
+    return std::isfinite(width) && width > 0.0 ? width : 0.0;
+}
+
+double point_path_distance(QPointF point, const QPainterPath& screen_path) {
+    auto best = std::numeric_limits<double>::max();
+    // Qt flattens the actual painted cubics at the current screen scale. Fixed
+    // model-space arc samples leave increasingly large unpickable gaps on zoom.
+    for (const auto& polygon : screen_path.toSubpathPolygons()) {
+        for (qsizetype i = 1; i < polygon.size(); ++i)
+            best = std::min(best, point_segment_distance(point, polygon[i - 1], polygon[i]));
+    }
+    return best;
+}
+
 bool finite_rect(const QRectF& rect) {
     return std::isfinite(rect.left()) && std::isfinite(rect.right()) &&
            std::isfinite(rect.top()) && std::isfinite(rect.bottom());
@@ -594,6 +647,34 @@ void append_boundary_strokes(QPainterPath& path, const Boundary& boundary) {
                        -segment.sweep_radians * 180.0 / pi);
         }
     }
+}
+
+QPainterPath symbol_pick_footprint(const CanvasEntity& entity, const QPainterPath& stroke) {
+    std::optional<CanvasSelectionFrame> frame = entity.resize_frame;
+    if (!frame && entity.svg_symbol) {
+        const auto& symbol = *entity.svg_symbol;
+        frame = CanvasSelectionFrame{symbol.position, symbol.rotation_radians,
+            symbol.width_metres, symbol.depth_metres};
+    }
+    if (frame && std::isfinite(frame->center.x) && std::isfinite(frame->center.y) &&
+        std::isfinite(frame->rotation_radians) && std::isfinite(frame->width_metres) &&
+        std::isfinite(frame->depth_metres) && frame->width_metres > 0.0 && frame->depth_metres > 0.0) {
+        QPainterPath footprint;
+        footprint.addRect(-frame->width_metres * 0.5, -frame->depth_metres * 0.5,
+                           frame->width_metres, frame->depth_metres);
+        QTransform placement;
+        placement.translate(frame->center.x, frame->center.y);
+        placement.rotate(frame->rotation_radians * 180.0 / pi);
+        auto placed = placement.map(footprint);
+        if (finite_rect(placed.controlPointRect())) return placed;
+    }
+    // Older vector symbols have a footprint loop plus independent artwork
+    // chains, so they are not one closed boundary. Preserve their established
+    // complete bounding footprint when no physical axes were retained.
+    QPainterPath footprint;
+    if (!stroke.isEmpty() && finite_rect(stroke.controlPointRect()))
+        footprint.addRect(stroke.controlPointRect());
+    return footprint;
 }
 
 }  // namespace
@@ -4829,7 +4910,10 @@ void PlanCanvas::mouseReleaseEvent(QMouseEvent* event) {
 void PlanCanvas::wheelEvent(QWheelEvent* event) {
     m_pending_dimension_space_tap.reset();
     beginPerformanceMeasurement(PerformanceMetric::input);
-    const auto steps = static_cast<double>(event->angleDelta().y()) / 120.0;
+    // Prefer angular deltas when both representations are supplied. Pixel-only
+    // scrolling uses the same continuous detent scale in logical coordinates.
+    const auto delta = event->angleDelta().y() != 0 ? event->angleDelta().y() : event->pixelDelta().y();
+    const auto steps = static_cast<double>(delta) / 120.0;
     if (steps != 0.0) {
         zoomBy(std::pow(1.18, steps), event->position());
     }
@@ -5459,28 +5543,31 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
     model_to_screen.translate(QRectF(rect()).center().x(), QRectF(rect()).center().y());
     model_to_screen.scale(m_scale, -m_scale);
     model_to_screen.translate(-m_view_center.x, -m_view_center.y);
-    for (const auto& entity : m_entities) {
+    ensurePublishedEntityGeometry();
+    for (std::size_t index = 0; index < m_entities.size(); ++index) {
+        const auto& entity = m_entities[index];
         if (!matchesSelectionType(entity.type)) continue;
-        QPainterPath path;
-        append_boundary_strokes(path, entity.segments);
-        for (const auto& hole : entity.holes) append_boundary_strokes(path, hole);
+        auto path = m_published_entity_geometry[index].stroke;
+        append_boundary_strokes(path, entity.hit_segments);
         QPainterPathStroker stroker;
-        const auto width = entity.paper_stroke_width_on_screen
-            ? paper_stroke_pixels(entity, logicalDpiX()/25.4)
-            : wall_baseline_only(entity)
-            ? std::max(entity.thickness_metres, 0.04) * m_scale
-            : entity.stroke_width_metres * m_scale;
-        stroker.setWidth(std::isfinite(width) ? std::max(3.0, width) : 3.0);
+        stroker.setWidth(std::max(3.0, entity_screen_stroke_width(entity, m_scale, logicalDpiX()/25.4)));
         stroker.setCapStyle(Qt::RoundCap);
         stroker.setJoinStyle(Qt::RoundJoin);
         // Stroke open paths before intersection so Qt cannot implicitly fill
         // an open chain and select empty space between unrelated segments.
-        auto screen_path = stroker.createStroke(model_to_screen.map(path));
-        if (entity.filled) {
-            if (const auto fill = closed_entity_path(entity))
-                screen_path.addPath(model_to_screen.map(*fill));
-        }
-        if (matches(screen_path)) add(entity.id);
+        const auto screen_stroke = stroker.createStroke(model_to_screen.map(path));
+        QPainterPath screen_fill;
+        if (entity.type == QStringLiteral("symbol"))
+            screen_fill = model_to_screen.map(symbol_pick_footprint(entity, path));
+        else if (entity.filled)
+            if (const auto fill = closed_entity_path(entity)) screen_fill = model_to_screen.map(*fill);
+        // Test the two footprints separately. Adding a fill to an odd-even
+        // stroke path would turn their overlap into an artificial empty hole.
+        const bool has_stroke = !screen_stroke.isEmpty(), has_fill = !screen_fill.isEmpty();
+        const bool hit = crossing ? matches(screen_stroke) || matches(screen_fill)
+            : (has_stroke || has_fill) && (!has_stroke || matches(screen_stroke)) &&
+                (!has_fill || matches(screen_fill));
+        if (hit) add(entity.id);
     }
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!matchesSelectionFilter(label.id)) continue;
@@ -5775,8 +5862,8 @@ void PlanCanvas::ensureEntityHitIndex() const {
     nodes.clear();
     fallback.clear();
     entries.reserve(m_entities.size());
-    // Keep extreme inputs on the original path. This also bounds the squared
-    // distances and affine arithmetic used by the unchanged narrow test.
+    // Keep extreme inputs on the full traversal. Retained envelopes include
+    // actual paint curves, interaction-only spans and device width coefficients.
     constexpr double safe_extent = 1e12;
     const auto safe_point = [safe_extent](Vec2 point) {
         return std::isfinite(point.x) && std::isfinite(point.y) &&
@@ -5811,31 +5898,46 @@ void PlanCanvas::ensureEntityHitIndex() const {
                     return;
                 }
                 include(segment.start);
-                if (segment.sweep_radians == 0.0) include(segment.end);
-                else {
+                include(segment.end);
+                if (segment.sweep_radians != 0.0) {
                     const auto arc = arc_info(segment);
                     if (!arc || !safe_point(arc->center) || arc->radius > safe_extent) {
                         safe = false;
                         return;
                     }
-                    // The pick path uses these same forty straight chords,
-                    // including their endpoints, rather than the paint arc.
-                    constexpr int samples = 40;
-                    for (int sample = 1; sample <= samples; ++sample)
-                        include(arc_point(segment, *arc, static_cast<double>(sample) / samples));
+                }
+            }
+            QPainterPath path;
+            append_boundary_strokes(path, boundary);
+            if (!path.isEmpty()) {
+                const auto controls = path.controlPointRect();
+                if (!finite_rect(controls)) safe = false;
+                else {
+                    include({controls.left(), controls.top()});
+                    include({controls.right(), controls.bottom()});
                 }
             }
         };
-        include_boundary(entity.segments);
+        include_boundary(entity.stroke_segments ? *entity.stroke_segments : entity.segments);
         for (const auto& hole : entity.holes) include_boundary(hole);
         include_boundary(entity.hit_segments);
+        if (safe && entity.type == QStringLiteral("symbol")) {
+            QPainterPath stroke;
+            append_boundary_strokes(stroke, entity.stroke_segments ? *entity.stroke_segments : entity.segments);
+            const auto footprint = symbol_pick_footprint(entity, stroke);
+            if (!footprint.isEmpty()) {
+                const auto controls = footprint.controlPointRect();
+                include({controls.left(), controls.top()});
+                include({controls.right(), controls.bottom()});
+            }
+        }
         const bool area = entity.type == QStringLiteral("boundary") ||
             entity.type == QStringLiteral("measurement_boundary") ||
             entity.type == QStringLiteral("room_boundary");
         if (safe && (entity.filled || entity.type == QStringLiteral("wall") || area)) {
             if (const auto fill = closed_entity_path(entity)) {
-                // Closed analytical curves may extend beyond the sampled pick
-                // chords. Control bounds enclose filled AND outline interiors.
+                // Complete fill geometry remains selectable when custom paint
+                // omits internal seams. Control bounds also enclose interiors.
                 const auto controls = fill->controlPointRect();
                 if (!finite_rect(controls)) safe = false;
                 else {
@@ -5844,19 +5946,19 @@ void PlanCanvas::ensureEntityHitIndex() const {
                 }
             }
         }
-        if (!safe || !has_bounds) { fallback.push_back(index); continue; }
+        const auto envelope = entity_stroke_envelope(entity);
+        if (!safe || !has_bounds || !envelope) { fallback.push_back(index); continue; }
         const auto rounding = 32.0 * std::numeric_limits<double>::epsilon() *
             std::max({1.0, std::abs(left_edge), std::abs(right_edge),
-                      std::abs(top_edge), std::abs(bottom_edge)});
+                      std::abs(top_edge), std::abs(bottom_edge), envelope->model_width});
+        const auto padding = envelope->model_width * 0.5 + rounding;
         HitIndexEntry entry;
         entry.entity_index = index;
-        entry.bounds = QRectF(QPointF(left_edge - rounding, top_edge - rounding),
-                             QPointF(right_edge + rounding, bottom_edge + rounding));
-        // Match hitTest, independent of paint's stroke precedence. Invalid
-        // paper widths contribute zero there and therefore need no expansion.
-        if (entity.paper_stroke_width_on_screen &&
-            std::isfinite(entity.output_stroke_width_mm) && entity.output_stroke_width_mm > 0.0)
-            entry.paper_mm = entity.output_stroke_width_mm;
+        entry.bounds = QRectF(QPointF(left_edge - padding, top_edge - padding),
+                             QPointF(right_edge + padding, bottom_edge + padding));
+        entry.cosmetic_pixels = envelope->cosmetic_pixels;
+        entry.symbol_metres = envelope->symbol_metres;
+        entry.paper_mm = envelope->paper_mm;
         if (!finite_rect(entry.bounds) || !std::isfinite(entry.bounds.width()) ||
             !std::isfinite(entry.bounds.height())) { fallback.push_back(index); continue; }
         entries.push_back(entry);
@@ -5874,6 +5976,8 @@ void PlanCanvas::ensureEntityHitIndex() const {
             top_edge = std::min(top_edge, entry.bounds.top());
             right_edge = std::max(right_edge, entry.bounds.right());
             bottom_edge = std::max(bottom_edge, entry.bounds.bottom());
+            node.cosmetic_pixels = std::max(node.cosmetic_pixels, entry.cosmetic_pixels);
+            node.symbol_metres = std::max(node.symbol_metres, entry.symbol_metres);
             node.paper_mm = std::max(node.paper_mm, entry.paper_mm);
         }
         const auto rounding = 4.0 * std::numeric_limits<double>::epsilon() *
@@ -5940,11 +6044,12 @@ std::optional<std::vector<std::size_t>> PlanCanvas::entityHitCandidates(
         const auto node_index = pending.back();
         pending.pop_back();
         const auto& node = m_entity_hit_index_nodes[node_index];
-        const auto paper_width = node.paper_mm > 0.0
-            ? std::max(0.1, node.paper_mm * pixels_per_mm) : 0.0;
+        const auto cosmetic_width = std::max({node.cosmetic_pixels,
+            node.symbol_metres * m_scale, node.paper_mm * pixels_per_mm});
         // Nine-pixel strokes also enclose the symbol's four-pixel expanded
-        // bounding rectangle. Paper half-width is subtracted by the narrow test.
-        const auto radius = (std::max(hit_pixels, 4.0) + paper_width * 0.5) / m_scale;
+        // bounding rectangle. Model-width padding is already in the bounds.
+        const auto radius = (std::max(hit_pixels, 4.0) + pick_edge_padding_pixels +
+                             cosmetic_width * 0.5) / m_scale;
         // Cover both toScreen's subtraction and the fill QTransform's affine
         // translation, plus inverse mapping and closest-point arithmetic.
         const auto rounding = 64.0 * std::numeric_limits<double>::epsilon() *
@@ -6145,61 +6250,41 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlappi
     QString result;
     QString interior_area;
     const auto model_point = toModel(point, rect());
+    QTransform model_to_screen;
+    model_to_screen.translate(QRectF(rect()).center().x(), QRectF(rect()).center().y());
+    model_to_screen.scale(m_scale, -m_scale);
+    model_to_screen.translate(-m_view_center.x, -m_view_center.y);
     auto best = std::numeric_limits<double>::max();
     const auto candidates = entityHitCandidates(point, hit_pixels);
     const auto candidate_count = candidates ? candidates->size() : m_entities.size();
+    ensurePublishedEntityGeometry();
     for (std::size_t index = 0; index < candidate_count; ++index) {
-        const auto& entity = m_entities[candidates ? (*candidates)[index] : index];
+        const auto entity_index = candidates ? (*candidates)[index] : index;
+        const auto& entity = m_entities[entity_index];
         if (filtered && !matchesSelectionType(entity.type)) continue;
         auto entity_best = std::numeric_limits<double>::max();
         bool entity_interior = false;
-        const auto painted_half_width = entity.paper_stroke_width_on_screen
-            ? paper_stroke_pixels(entity, logicalDpiX()/25.4)*0.5 : 0.0;
-        QPainterPath painted_footprint;
-        const auto test_boundary = [&](const Boundary& boundary) {
-            for (const auto& segment : boundary) {
-                const auto start = toScreen(segment.start, rect());
-                painted_footprint.moveTo(start);
-                if (segment.sweep_radians == 0.0) {
-                    const auto end = toScreen(segment.end, rect());
-                    painted_footprint.lineTo(end);
-                    const auto candidate = std::max(0.0, point_segment_distance(point, start, end)-painted_half_width);
-                    if (overlapping) entity_best = std::min(entity_best,candidate);
-                    if (candidate < best) {
-                        best = candidate;
-                        result = entity.id;
-                    }
-                    continue;
-                }
-                const auto arc = arc_info(segment);
-                if (!arc.has_value()) {
-                    continue;
-                }
-                auto previous = start;
-                constexpr int samples = 40;
-                for (int index = 1; index <= samples; ++index) {
-                    const auto current = toScreen(
-                        arc_point(segment, *arc, static_cast<double>(index) / samples), rect());
-                    painted_footprint.lineTo(current);
-                    const auto candidate = std::max(0.0, point_segment_distance(point, previous, current)-painted_half_width);
-                    if (overlapping) entity_best = std::min(entity_best,candidate);
-                    if (candidate < best) {
-                        best = candidate;
-                        result = entity.id;
-                    }
-                    previous = current;
-                }
+        const auto painted_half_width = entity_screen_stroke_width(entity, m_scale, logicalDpiX()/25.4) * 0.5;
+        auto pick_path = m_published_entity_geometry[entity_index].stroke;
+        append_boundary_strokes(pick_path, entity.hit_segments);
+        const auto painted_footprint = model_to_screen.map(pick_path);
+        QPainterPathStroker pick_stroker;
+        pick_stroker.setWidth(2.0 * (hit_pixels + pick_edge_padding_pixels + painted_half_width));
+        pick_stroker.setCapStyle(Qt::RoundCap);
+        pick_stroker.setJoinStyle(Qt::RoundJoin);
+        if (pick_stroker.createStroke(painted_footprint).contains(point)) {
+            // The stroked paint path owns admission, including round caps and
+            // custom seam omissions. Adaptive screen-distance only ranks hits;
+            // its flattening cannot discard a point on the actual curve.
+            entity_best = std::min(hit_pixels, std::max(0.0,
+                point_path_distance(point, painted_footprint) - painted_half_width));
+            if (entity_best < best) {
+                best = entity_best;
+                result = entity.id;
             }
-        };
-        test_boundary(entity.segments);
-        for (const auto& hole : entity.holes) test_boundary(hole);
-        test_boundary(entity.hit_segments);
+        }
         if (entity.filled || entity.type == QStringLiteral("wall")) {
             if (const auto fill = closed_entity_path(entity)) {
-                QTransform model_to_screen;
-                model_to_screen.translate(QRectF(rect()).center().x(), QRectF(rect()).center().y());
-                model_to_screen.scale(m_scale, -m_scale);
-                model_to_screen.translate(-m_view_center.x, -m_view_center.y);
                 if (model_to_screen.map(*fill).contains(point)) {
                     entity_interior = true;
                     if (entity.type == QStringLiteral("boundary") || entity.type == QStringLiteral("measurement_boundary") ||
@@ -6218,11 +6303,17 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlappi
         // Plan components are picked by their complete painted footprint, not
         // only by a thin stroke. This keeps an empty-looking seat cushion or
         // appliance centre from being misclassified as canvas space and panned.
-        if (entity.type == QStringLiteral("symbol") && !painted_footprint.isEmpty() &&
-            painted_footprint.boundingRect().adjusted(-4.0, -4.0, 4.0, 4.0).contains(point)) {
-            best = 0.0;
-            result = entity.id;
-            entity_interior = true;
+        if (entity.type == QStringLiteral("symbol")) {
+            const auto footprint = model_to_screen.map(symbol_pick_footprint(entity, pick_path));
+            QPainterPathStroker tolerance;
+            tolerance.setWidth(2.0 * (4.0 + pick_edge_padding_pixels));
+            tolerance.setCapStyle(Qt::RoundCap);
+            tolerance.setJoinStyle(Qt::RoundJoin);
+            if (footprint.contains(point) || tolerance.createStroke(footprint).contains(point)) {
+                best = 0.0;
+                result = entity.id;
+                entity_interior = true;
+            }
         }
         if (entity_best <= hit_pixels || entity_interior) add_overlap(entity.id);
     }
@@ -6937,28 +7028,12 @@ void PlanCanvas::ensurePublishedGeometryIndex() const {
         }
         GeometryIndexEntry entry;
         entry.entity_index = index;
-        double model_width = 0.0;
-        // Match entity_stroke_width's precedence. Keep device-dependent widths
-        // as coefficients instead of binding retained bounds to zoom or DPI.
-        if (entity.paper_stroke_width_on_screen &&
-            std::isfinite(entity.output_stroke_width_mm) && entity.output_stroke_width_mm > 0.0) {
-            entry.paper_mm = entity.output_stroke_width_mm;
-            entry.cosmetic_pixels = 0.1;
-        } else if (entity.type == QStringLiteral("symbol")) {
-            entry.cosmetic_pixels = 1.15;
-            entry.symbol_metres = std::max(0.0, entity.stroke_width_metres);
-            if (!std::isfinite(entity.stroke_width_metres)) {
-                fallback.push_back(index);
-                continue;
-            }
-        } else if (wall_baseline_only(entity)) {
-            model_width = std::max(entity.thickness_metres, 0.04);
-        } else if (entity.stroke_width_metres > 0.0 && std::isfinite(entity.stroke_width_metres)) {
-            model_width = entity.stroke_width_metres;
-        } else {
-            // Includes both unselected and selected default cosmetic pens.
-            entry.cosmetic_pixels = 3.0;
-        }
+        const auto envelope = entity_stroke_envelope(entity);
+        if (!envelope) { fallback.push_back(index); continue; }
+        const auto model_width = envelope->model_width;
+        entry.paper_mm = envelope->paper_mm;
+        entry.cosmetic_pixels = envelope->cosmetic_pixels;
+        entry.symbol_metres = envelope->symbol_metres;
         const auto& bounds = *geometry.bounds;
         // Outward rounding protects huge survey coordinates and degenerate
         // horizontal/vertical paths. Unrepresentable envelopes stay unindexed.

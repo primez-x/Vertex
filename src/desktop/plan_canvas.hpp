@@ -885,10 +885,14 @@ private:
     struct HitIndexEntry {
         QRectF bounds; // Exact pick strokes/symbol footprint and interior controls.
         std::size_t entity_index{};
+        double cosmetic_pixels{};
+        double symbol_metres{};
         double paper_mm{};
     };
     struct HitIndexNode {
         QRectF bounds;
+        double cosmetic_pixels{};
+        double symbol_metres{};
         double paper_mm{};
         std::size_t first{};
         std::size_t count{}; // Nonzero only for leaves.

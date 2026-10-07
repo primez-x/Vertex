@@ -373,12 +373,14 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U055 — Click a line or room to select it**
   - Steps: Click a line, room or furniture item. Place overlapping furniture, a text label and a room over a reference image. Alt-click the same point repeatedly to reach the items underneath; then Alt-drag and Alt-click empty space.
+  - Outline check: Give a measured line a wide stroke, join two walls, and draw a curved outline. Click near the outer edge of the wide stroke and along the curve at a close zoom. Try a room with a hole. A visible stroke selects its owner; the empty hole does not count as the room's interior. An omitted wall seam is not a separate line to select.
   - Expected: A selected object visibly highlights and its name appears in the selection badge. Double-click opens its quick properties. Repeated Alt-clicks cycle distinct eligible overlapping items. Alt-drag pans, and an empty Alt-click adds no drawing point.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U056 — Drag a selection rectangle**
   - Steps: Place furniture and labels inside two rooms. Choose Areas in the selection filter beside the bottom-right canvas controls. Ctrl-drag a window around everything, then repeat with Symbols and Text labels. Return to All items. Try Ctrl-click, Alt-click overlapping items, double-click and right-click under each filter.
+  - Outline check: Ctrl-drag right to left across a thick stroke, a curve and the centre of a furniture item. Repeat left to right with each complete item enclosed. Try a crossing rectangle wholly inside a room hole: it must not select the room through the hole. Open window casements remain selectable across their actual opening span.
   - Expected: Ctrl-drag shows a visible marquee and objects in the selected region are selected on release.
     Only the chosen item kinds become new selections. Filtering leaves every item visible and does not change totals. Clicking an excluded item does not start a drawing. Existing selections retain their transform controls.
   - Result: Not tested
@@ -913,7 +915,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U148 — Zoom in and out at the pointer**
-  - Expected: The intended drawing location stays in view.
+  - Steps: Zoom with ordinary wheel detents, then with small vertical touchpad movements if available. Repeat with the pointer over a corner, at a close zoom and at a wide zoom. Try a horizontal-only scroll.
+  - Expected: The intended drawing location stays under the pointer. Small vertical movements zoom progressively, ordinary detents retain their normal response, and a horizontal-only scroll does not cause vertical zoom.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1197,6 +1200,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U197 — Orbit, pan and zoom the 3D view**
   - Steps: Right-drag to orbit, middle-drag to pan, hold Space and left-drag to pan, and use the wheel to zoom. Repeat over an object and empty space, then release Space and click an object.
+  - Wheel check: Use tiny vertical touchpad movements if available, then ordinary wheel detents. Finish scrolling, navigate or switch focus, and start a new scroll. The new scroll must not inherit an unfinished movement from the previous interaction. Horizontal-only scrolling must not zoom.
   - Expected: Navigation is predictable and does not edit objects.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
