@@ -291,6 +291,13 @@ void validate_dependent_geometry(const DocumentSnapshot& source,
         validate_architectural_geometry_changes(source,preview,{changed_id});
         return;
     }
+    if (changed.type == "room" && !has_document_room_volume_fields(changed)) {
+        DocumentRoomFootprint footprint;
+        std::string error;
+        if (!read_document_room_footprint(changed,footprint,error))
+            throw std::invalid_argument(error);
+        return;
+    }
     (void)entity_shape(resolve_vertical_placement(preview,changed));
 
     // Roof-dependent admission remains on its existing native path.
@@ -315,9 +322,15 @@ double plan_axis_resize_frame(const Entity& entity) {
         Boundary boundary;
         std::string error;
         if (entity.type == "room") {
-            RoomVolume room;
-            if (!read_document_room(entity,room,error)) throw std::invalid_argument(error);
-            boundary = std::move(room.boundary);
+            if (has_document_room_volume_fields(entity)) {
+                RoomVolume room;
+                if (!read_document_room(entity,room,error)) throw std::invalid_argument(error);
+                boundary = std::move(room.boundary);
+            } else {
+                DocumentRoomFootprint footprint;
+                if (!read_document_room_footprint(entity,footprint,error)) throw std::invalid_argument(error);
+                boundary = std::move(footprint.boundary);
+            }
         } else {
             Slab slab;
             if (!read_document_slab(entity,slab,error)) throw std::invalid_argument(error);
@@ -360,6 +373,14 @@ double plan_axis_resize_frame(const Entity& entity) {
 
 Bounds2 plan_axis_resize_bounds(const Entity& entity) {
     const double angle = plan_axis_resize_frame(entity);
+    if (entity.type == "room" && !has_document_room_volume_fields(entity)) {
+        DocumentRoomFootprint footprint;
+        std::string error;
+        if (!read_document_room_footprint(entity,footprint,error)) throw std::invalid_argument(error);
+        const PlanarTransform rotation{{0,0},-angle,false,false,{0,0}};
+        for (auto& edge : footprint.boundary) edge = transform_segment(edge,rotation);
+        return boundary_bounds(footprint.boundary);
+    }
     gp_Trsf rotation;
     rotation.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,0,1)),-angle);
     const auto shape = BRepBuilderAPI_Transform(entity_shape(entity),rotation,true).Shape();
@@ -413,12 +434,22 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
             if (opening != *children[i]) command.entity_changes.push_back(EntityChange::upsert(std::move(opening)));
         }
     } else if (original.type == "room") {
-        RoomVolume room;
-        if (!read_document_room(original,room,error)) throw std::invalid_argument(error);
-        room.boundary = resize.boundary(room.boundary);
-        for (auto& hole : room.holes) hole = resize.boundary(hole);
-        (void)make_room_volume(room);
-        update_footprint(result,room.boundary,room.holes);
+        if (has_document_room_volume_fields(original)) {
+            RoomVolume room;
+            if (!read_document_room(original,room,error)) throw std::invalid_argument(error);
+            room.boundary = resize.boundary(room.boundary);
+            for (auto& hole : room.holes) hole = resize.boundary(hole);
+            (void)make_room_volume(room);
+            update_footprint(result,room.boundary,room.holes);
+        } else {
+            DocumentRoomFootprint footprint;
+            if (!read_document_room_footprint(original,footprint,error)) throw std::invalid_argument(error);
+            footprint.boundary = resize.boundary(footprint.boundary);
+            for (auto& hole : footprint.holes) hole = resize.boundary(hole);
+            if (const auto invalid = validate_boundary_holes(footprint.boundary,footprint.holes))
+                throw std::invalid_argument(*invalid);
+            update_footprint(result,footprint.boundary,footprint.holes);
+        }
     } else if (original.type == "slab") {
         Slab slab;
         if (!read_document_slab(original,slab,error)) throw std::invalid_argument(error);

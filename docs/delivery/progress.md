@@ -185,6 +185,30 @@ passed independent integrated source review, including the material-only join
 correction and the CMake dependency direction. They have not been compiled,
 linked or exercised in the application.
 
+The next implementation separates a saved room's analytical plan footprint
+from its measured volume. Valid historical plan-only rooms remain visible in
+the ordinary plan and horizontal coordinated plans, including holes and crop.
+They can move, rotate and resize without gaining fabricated height/elevation
+fields. Complete rooms retain native solid admission, and an edit cannot strip
+their required volume fields to evade that admission. A legitimate 2D footprint
+does not block unrelated native 3D geometry; physical assembly hosts and native
+IFC room export still require measured volume geometry.
+
+Room dimensions now opens for a retained 2D room. Missing height and elevation
+inputs stay blank and must be entered explicitly before a volume can be
+previewed or applied. The editor shares its rectangle eligibility with the core,
+preserves exact original doubles when fields are unchanged, and binds preview
+and commit to the complete source/context authority. Cancel and invalid input
+restore the current authoritative native scene. Direct height/elevation edits
+can complete measurements one field at a time, retaining legacy aliases. No new
+format floor or inferred appraisal contribution is introduced. This source batch
+has not been built, tested, packaged, installed or observed in the application.
+Independent integrated source review found three boundary defects: premature
+level resolution for plan-only rooms, legacy elevation aliases preventing
+explicit volume promotion, and inspector fallbacks displaying unknown dimensions
+as zero. All three were corrected before source integration approval. That
+approval covers source behavior and does not establish runtime resolution.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

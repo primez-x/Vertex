@@ -1,5 +1,7 @@
 #include "sketch/document_solid.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <string_view>
@@ -164,14 +166,19 @@ bool read_document_slab(const Entity& entity, Slab& output, std::string& error) 
     return true;
 }
 
-bool read_document_room(const Entity& entity, RoomVolume& output, std::string& error) {
+bool has_document_room_volume_fields(const Entity& entity) {
+    return property(entity.properties, {"height_m", "height"}) != nullptr &&
+        property(entity.properties, {"elevation_m", "elevation"}) != nullptr;
+}
+
+bool read_document_room_footprint(const Entity& entity, DocumentRoomFootprint& output,
+                                  std::string& error) {
     if (!entity.properties.is_object()) {
         error = "properties must be an object";
         return false;
     }
 
-    RoomVolume candidate;
-    candidate.id = entity.id;
+    DocumentRoomFootprint candidate;
     const auto* boundary = property(entity.properties, {"boundary", "segments"});
     if (boundary == nullptr ||
         !required_boundary(*boundary, candidate.boundary, "boundary", error)) {
@@ -192,6 +199,55 @@ bool read_document_room(const Entity& entity, RoomVolume& output, std::string& e
             candidate.holes.push_back(std::move(hole));
         }
     }
+    try {
+        if (const auto invalid = validate_boundary_holes(candidate.boundary, candidate.holes)) {
+            error = *invalid;
+            return false;
+        }
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        return false;
+    }
+    output = std::move(candidate);
+    return true;
+}
+
+std::optional<Vec2> room_footprint_rectangle_dimensions(const DocumentRoomFootprint& footprint) {
+    const auto& boundary = footprint.boundary;
+    if (!footprint.holes.empty() || boundary.size() != 4 ||
+        std::any_of(boundary.begin(), boundary.end(),
+            [](const Segment& edge) { return edge.sweep_radians != 0; })) return std::nullopt;
+    const auto origin = boundary[0].start;
+    const auto& first = boundary[0];
+    const auto& second = boundary[1];
+    const double width = std::hypot(first.end.x-first.start.x, first.end.y-first.start.y);
+    const double depth = std::hypot(second.end.x-second.start.x, second.end.y-second.start.y);
+    if (!std::isfinite(width) || !std::isfinite(depth) || width <= 0 || depth <= 0)
+        return std::nullopt;
+    const Vec2 u{(first.end.x-first.start.x)/width, (first.end.y-first.start.y)/width};
+    const Vec2 v{(second.end.x-second.start.x)/depth, (second.end.y-second.start.y)/depth};
+    if (std::abs(u.x*v.x + u.y*v.y) > 1e-10) return std::nullopt;
+    const auto corner = [&](double x, double y) {
+        return Vec2{origin.x + u.x*x + v.x*y, origin.y + u.y*x + v.y*y};
+    };
+    const std::array<Vec2, 4> expected{origin, corner(width, 0),
+        corner(width, depth), corner(0, depth)};
+    const auto close = [](Vec2 a, Vec2 b) {
+        return std::hypot(a.x-b.x, a.y-b.y) <= default_geometry_tolerance_metres;
+    };
+    for (std::size_t i = 0; i < 4; ++i)
+        if (!close(boundary[i].start, expected[i]) ||
+            !close(boundary[i].end, expected[(i+1)%4])) return std::nullopt;
+    return Vec2{width,depth};
+}
+
+bool read_document_room(const Entity& entity, RoomVolume& output, std::string& error) {
+    DocumentRoomFootprint footprint;
+    if (!read_document_room_footprint(entity, footprint, error)) return false;
+    RoomVolume candidate;
+    candidate.id = entity.id;
+    candidate.boundary = std::move(footprint.boundary);
+    candidate.holes = std::move(footprint.holes);
     if (!required_number(entity.properties, {"height_m", "height"}, candidate.height,
                          "height_m", error) ||
         !required_number(entity.properties, {"elevation_m", "elevation"}, candidate.elevation,

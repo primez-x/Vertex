@@ -500,14 +500,21 @@ Entity transform_slab_entity(const Entity& source, const ArchitecturalTransform&
 }
 
 Entity transform_room_entity(const Entity& source, const ArchitecturalTransform& transform) {
-    RoomVolume room;
+    DocumentRoomFootprint room;
     std::string error;
-    if (!read_document_room(source, room, error)) throw std::invalid_argument(error);
+    const bool complete = has_document_room_volume_fields(source);
+    if (complete) {
+        RoomVolume volume;
+        if (!read_document_room(source, volume, error)) throw std::invalid_argument(error);
+        room = {std::move(volume.boundary),std::move(volume.holes)};
+    } else if (!read_document_room_footprint(source, room, error)) {
+        throw std::invalid_argument(error);
+    }
+    if (transform.z != 0 && !source.properties.contains("elevation_m") &&
+        !source.properties.contains("elevation"))
+        throw std::invalid_argument("Room Z movement requires an authored elevation");
     room.boundary = transform_plan_boundary(room.boundary, transform);
     for (auto& hole : room.holes) hole = transform_plan_boundary(hole, transform);
-    room.height *= transform.scale;
-    room.elevation = room.elevation * transform.scale + transform.z;
-    (void)make_room_volume(room);
     Entity result = source;
     if (result.properties.contains("boundary")) {
         result.properties["boundary"] = updated_boundary_geometry(
@@ -528,10 +535,31 @@ Entity transform_room_entity(const Entity& source, const ArchitecturalTransform&
         }
         result.properties["holes"] = std::move(holes);
     }
-    result.properties["height_m"] = room.height;
-    if (result.properties.contains("height")) result.properties["height"] = room.height;
-    result.properties["elevation_m"] = room.elevation;
-    if (result.properties.contains("elevation")) result.properties["elevation"] = room.elevation;
+    // Canonical-first decoding and alias synchronization match the existing
+    // volume path. A missing measurement stays absent; aliases describe the
+    // same authored number rather than independent dimensions.
+    const auto transform_dimension = [&](const char* canonical, const char* legacy, bool height) {
+        auto found = source.properties.find(canonical);
+        if (found == source.properties.end()) found = source.properties.find(legacy);
+        if (found == source.properties.end()) return;
+        if (!found->is_number()) throw std::invalid_argument(std::string(canonical) + " must be finite");
+        const double value = found->get<double>();
+        const double transformed = value * transform.scale + (height ? 0 : transform.z);
+        if (!std::isfinite(value) || !std::isfinite(transformed) ||
+            (height && (value <= default_geometry_tolerance_metres ||
+                        transformed <= default_geometry_tolerance_metres)))
+            throw std::invalid_argument(std::string(canonical) + " must be finite and height positive");
+        if (result.properties.contains(canonical)) result.properties[canonical] = transformed;
+        if (result.properties.contains(legacy)) result.properties[legacy] = transformed;
+    };
+    transform_dimension("height_m", "height", true);
+    transform_dimension("elevation_m", "elevation", false);
+    if (complete) {
+        RoomVolume volume;
+        if (!read_document_room(result, volume, error)) throw std::invalid_argument(error);
+    } else if (!read_document_room_footprint(result, room, error)) {
+        throw std::invalid_argument(error);
+    }
     result.properties.erase("transform");
     return result;
 }
@@ -886,7 +914,7 @@ void validate_architectural_geometry_changes(
     const DocumentSnapshot& source, const DocumentSnapshot& candidate,
     const std::vector<std::string>& required_ids) {
     const auto& entities = candidate.entities();
-    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids;
+    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids;
     const auto include = [&](const Entity& entity, bool required) {
         const auto& p = entity.properties;
         if (entity.type == "wall" && (required || p.contains("baseline"))) {
@@ -901,10 +929,9 @@ void validate_architectural_geometry_changes(
         } else if (entity.type == "slab" && (required || p.contains("boundary"))) {
             slab_ids.insert(entity.id);
         } else if (entity.type == "room" &&
-                   (required || ((p.contains("boundary") || p.contains("segments")) &&
-                       (p.contains("height_m") || p.contains("height")) &&
-                       (p.contains("elevation_m") || p.contains("elevation"))))) {
+                   (required || p.contains("boundary") || p.contains("segments"))) {
             room_ids.insert(entity.id);
+            if (required || has_document_room_volume_fields(entity)) full_room_ids.insert(entity.id);
         }
     };
     const auto changed = [](const Entity* before, const Entity& after,
@@ -1047,11 +1074,16 @@ void validate_architectural_geometry_changes(
     for (const auto& id : room_ids) {
         const auto found = entities.find(id);
         if (found == entities.end()) continue;
-        RoomVolume room;
         std::string error;
-        if (!read_document_room(resolve_vertical_placement(candidate, found->second), room, error))
-            throw std::invalid_argument("Room " + id + ": " + error);
-        (void)make_room_volume(room);
+        if (full_room_ids.contains(id)) {
+            RoomVolume room;
+            if (!read_document_room(resolve_vertical_placement(candidate, found->second), room, error))
+                throw std::invalid_argument("Room " + id + ": " + error);
+        } else {
+            DocumentRoomFootprint footprint;
+            if (!read_document_room_footprint(found->second, footprint, error))
+                throw std::invalid_argument("Room " + id + ": " + error);
+        }
     }
 }
 
@@ -1155,41 +1187,36 @@ Entity resized_room_volume_entity(const Entity& source, const RoomDimensionEdit&
     }
     RoomVolume room;
     std::string error;
-    if (!read_document_room(source, room, error)) throw std::invalid_argument(error);
+    const bool source_is_volume = has_document_room_volume_fields(source);
+    if (source_is_volume) {
+        if (!read_document_room(source, room, error)) throw std::invalid_argument(error);
+    } else {
+        DocumentRoomFootprint footprint;
+        if (!read_document_room_footprint(source, footprint, error)) throw std::invalid_argument(error);
+        room.id = source.id;
+        room.boundary = std::move(footprint.boundary);
+        room.holes = std::move(footprint.holes);
+        // Mandatory measured replacement fields explicitly promote the room.
+        room.height = edit.height_metres;
+        room.elevation = edit.elevation_metres;
+    }
     Entity result = source;
     if (edit.width_metres) {
         const double width = *edit.width_metres, depth = *edit.depth_metres;
         if (!std::isfinite(width) || !std::isfinite(depth) || width <= 0 || depth <= 0)
             throw std::invalid_argument("room width and depth must be positive and finite");
-        if (!room.holes.empty())
-            throw std::invalid_argument("room footprint resize does not support holes");
-        if (room.boundary.size() != 4 || std::any_of(room.boundary.begin(), room.boundary.end(),
-                [](const Segment& edge) { return edge.sweep_radians != 0; }))
-            throw std::invalid_argument("room footprint resize requires four straight rectangle edges");
+        const auto dimensions = room_footprint_rectangle_dimensions({room.boundary,room.holes});
+        if (!dimensions)
+            throw std::invalid_argument("room footprint resize requires a closed straight rectangle without holes");
+        const double old_width = dimensions->x, old_depth = dimensions->y;
         const auto origin = room.boundary[0].start;
         const auto& first = room.boundary[0];
         const auto& second = room.boundary[1];
-        const double old_width = std::hypot(first.end.x-first.start.x, first.end.y-first.start.y);
-        const double old_depth = std::hypot(second.end.x-second.start.x, second.end.y-second.start.y);
-        if (!std::isfinite(old_width) || !std::isfinite(old_depth) || old_width <= 0 || old_depth <= 0)
-            throw std::invalid_argument("room rectangle dimensions are degenerate");
         const Vec2 u{(first.end.x-first.start.x)/old_width, (first.end.y-first.start.y)/old_width};
         const Vec2 v{(second.end.x-second.start.x)/old_depth, (second.end.y-second.start.y)/old_depth};
-        if (std::abs(u.x*v.x + u.y*v.y) > 1e-10)
-            throw std::invalid_argument("room footprint edges must be orthogonal");
         const auto corner = [&](double x, double y) {
             return Vec2{origin.x + u.x*x + v.x*y, origin.y + u.y*x + v.y*y};
         };
-        const std::array<Vec2, 4> expected{origin, corner(old_width, 0),
-            corner(old_width, old_depth), corner(0, old_depth)};
-        const auto close = [](Vec2 a, Vec2 b) {
-            return std::hypot(a.x-b.x, a.y-b.y) <= default_geometry_tolerance_metres;
-        };
-        for (std::size_t i = 0; i < 4; ++i) {
-            if (!close(room.boundary[i].start, expected[i]) ||
-                !close(room.boundary[i].end, expected[(i+1)%4]))
-                throw std::invalid_argument("room footprint must be a closed rectangle");
-        }
         const auto unchanged_length = [](double requested, double current) {
             const double scale = std::max({1.0, std::abs(requested), std::abs(current)});
             return std::abs(requested - current) <= 1e-13 * scale;
@@ -1210,16 +1237,15 @@ Entity resized_room_volume_entity(const Entity& source, const RoomDimensionEdit&
             }
         }
     }
-    if (result.properties.contains("height_m") || !result.properties.contains("height"))
+    if (!source_is_volume || result.properties.contains("height_m") || !result.properties.contains("height"))
         result.properties["height_m"] = edit.height_metres;
-    if (result.properties.contains("elevation_m") || !result.properties.contains("elevation"))
+    if (!source_is_volume || result.properties.contains("elevation_m") || !result.properties.contains("elevation"))
         result.properties["elevation_m"] = edit.elevation_metres;
     if (result.properties.contains("height")) result.properties["height"] = edit.height_metres;
     if (result.properties.contains("elevation")) result.properties["elevation"] = edit.elevation_metres;
     // Decode the exact returned JSON, including aliases, through the shared
     // solid admission path. No caller state changes if any validation fails.
     if (!read_document_room(result, room, error)) throw std::invalid_argument(error);
-    (void)make_room_volume(room);
     return result;
 }
 
@@ -1227,7 +1253,12 @@ ApplyEntityChanges room_dimension_update_command(const DocumentSnapshot& source,
     const std::string& entity_id, const RoomDimensionEdit& edit, Revision expected_revision) {
     auto entity = semantic_entity(source, entity_id, "room", expected_revision);
     entity = resized_room_volume_entity(entity, edit);
-    return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Resize room volume"};
+    ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Resize room volume"};
+    const auto candidate = Document::preview_command(source, Command{command});
+    // The supplied dimensions are local measurements. Admission also resolves
+    // the completed floor/level placement before any caller can publish them.
+    validate_architectural_geometry_changes(source, candidate, {entity_id});
+    return command;
 }
 
 ApplyEntityChanges assembly_type_update_command(const DocumentSnapshot& source,

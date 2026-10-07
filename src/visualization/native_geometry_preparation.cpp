@@ -476,6 +476,17 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             continue;
         }
 
+        if (entity.type == "room" && !has_document_room_volume_fields(entity)) {
+            // Historical rooms can be authoritative 2D footprints. Validate
+            // their plan topology without inventing a solid or blocking the
+            // complete 3D scene, just as analytical area boundaries are 2D.
+            DocumentRoomFootprint footprint;
+            std::string error;
+            if (!read_document_room_footprint(entity, footprint, error))
+                append_unique(errors, "room '" + id + "': " + error);
+            continue;
+        }
+
         Entity geometry_entity;
         try {
             geometry_entity = effective_geometry_entity(snapshot, entity);

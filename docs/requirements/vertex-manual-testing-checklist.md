@@ -1189,6 +1189,7 @@ drawing; switching modes does not change existing geometry.
   - Expected: One **Room dimensions** dialog opens for the room under the pointer. The preview reports updated floor area and volume. The room retains its center, and plan, elevation, section, 3D and the room schedule all show the new dimensions. One Undo restores every prior value; Redo reapplies them. Save and reopen preserves the edit.
   - Additional check: Enter an invalid width, verify **Apply** is disabled, then select **Cancel**. No geometry, schedule value or undo-history entry changes.
   - Level check: Bind the room's floor to a nonzero building level and reopen the editor. The elevation field identifies that it is local to the bound level, while the preview reports the resolved project base including any placement offset.
+  - Saved 2D room check: Open a project containing a 2D room, select it in the plan, move it, rotate it, and resize it with a side handle. Open **Room dimensions**. Enter its measured height and base elevation, review the 3D preview, and apply. Undo should restore the 2D room; Redo should restore its measured volume. Cancel before applying should retain the original room, and other walls and roofs should remain visible in 3D throughout.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

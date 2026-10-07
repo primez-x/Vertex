@@ -1330,6 +1330,11 @@ std::optional<double> read_finite_number(const json& object, std::string_view ke
     return std::isfinite(value) ? std::optional<double>(value) : std::nullopt;
 }
 
+std::optional<double> read_finite_number(const json& object, std::string_view canonical,
+                                        std::string_view legacy) {
+    return read_finite_number(object, object.contains(std::string(canonical)) ? canonical : legacy);
+}
+
 SlabElementKind read_slab_element_kind(const json& properties) {
     if (!properties.contains("element_kind")) return SlabElementKind::slab;
     const auto& value = properties.at("element_kind");
@@ -17531,36 +17536,45 @@ public:
     void editRoomVolumeFromDialog() {
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
+        const auto authority = captureSourceEditAuthority(source);
         const auto found = source.entities().find(context.selected_id.toStdString());
         if (found == source.entities().end() || found->second.type != "room") {
             setError(QStringLiteral("Select an architectural room volume before editing it."));
             return;
         }
         RoomVolume original_room;
+        DocumentRoomFootprint original_footprint;
         std::string decode_error;
-        if (!read_document_room(found->second, original_room, decode_error)) {
-            setError(QStringLiteral("Room volume: %1").arg(QString::fromStdString(decode_error)));
+        const bool original_is_volume = has_document_room_volume_fields(found->second);
+        if (original_is_volume) {
+            if (read_document_room(found->second, original_room, decode_error)) {
+                original_footprint = {original_room.boundary, original_room.holes};
+            }
+        } else if (read_document_room_footprint(found->second, original_footprint, decode_error)) {
+            original_room.id = found->first;
+            original_room.boundary = original_footprint.boundary;
+            original_room.holes = original_footprint.holes;
+        }
+        if (original_footprint.boundary.empty()) {
+            setError(QStringLiteral("Room: %1").arg(QString::fromStdString(decode_error)));
             return;
         }
-
+        const auto original_height = read_finite_number(found->second.properties, "height_m", "height");
+        const auto original_elevation = read_finite_number(found->second.properties, "elevation_m", "elevation");
+        const bool has_original_height = original_height &&
+            *original_height > default_geometry_tolerance_metres;
+        const bool has_original_elevation = original_elevation.has_value();
+        if (has_original_height) original_room.height = *original_height;
+        if (has_original_elevation) original_room.elevation = *original_elevation;
         const double original_width = original_room.boundary.empty()
             ? 0.0 : segment_length(original_room.boundary.front());
         const double original_depth = original_room.boundary.size() < 2
             ? 0.0 : segment_length(original_room.boundary[1]);
-        bool footprint_editable = original_width > 0.0 && original_depth > 0.0;
-        QString footprint_reason;
-        if (footprint_editable) {
-            try {
-                (void)resized_room_volume_entity(found->second, RoomDimensionEdit{
-                    original_width, original_depth, original_room.height,
-                    original_room.elevation, RoomFootprintAnchor::first_corner});
-            } catch (const std::exception& error) {
-                footprint_editable = false;
-                footprint_reason = QString::fromUtf8(error.what());
-            }
-        } else {
-            footprint_reason = QStringLiteral("The room footprint has no editable width and depth.");
-        }
+        const bool footprint_editable =
+            room_footprint_rectangle_dimensions(original_footprint).has_value();
+        const auto footprint_reason = original_footprint.holes.empty()
+            ? QStringLiteral("Width and depth require a rectangular footprint with four straight edges.")
+            : QStringLiteral("Use the canvas resize handles to resize a footprint containing holes.");
         const auto placement = found->second.properties.find("vertical_placement");
         const bool level_relative = placement != found->second.properties.end() &&
             placement->is_object() && placement->value("mode", std::string{}) == "level";
@@ -17605,8 +17619,10 @@ public:
         };
         const auto initial_width = editable_length(original_width);
         const auto initial_depth = editable_length(original_depth);
-        const auto initial_height = editable_length(original_room.height);
-        const auto initial_elevation = editable_length(original_room.elevation);
+        const auto initial_height = has_original_height
+            ? editable_length(original_room.height) : QString{};
+        const auto initial_elevation = has_original_elevation
+            ? editable_length(original_room.elevation) : QString{};
 
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -17615,9 +17631,9 @@ public:
         dialog.setModal(true);
         dialog.resize(480, footprint_editable ? 360 : 400);
         auto* layout = new QVBoxLayout(&dialog);
-        auto* help = new QLabel(QStringLiteral(
-            "Edit the room's local footprint and vertical dimensions. The 3D view previews valid values; Apply commits one undoable change."),
-            &dialog);
+        auto* help = new QLabel(original_is_volume ? QStringLiteral(
+            "Edit the room's local footprint and vertical dimensions. The 3D view previews valid values; Apply commits one undoable change.") : QStringLiteral(
+            "Enter a measured height and base elevation to give this 2D room a 3D volume. Apply preserves its footprint and commits one undoable change."), &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
         auto* form = new QFormLayout;
@@ -17644,6 +17660,8 @@ public:
                                         ? QStringLiteral("Elevation above bound level")
                                         : QStringLiteral("Base elevation"),
                                     initial_elevation);
+        height->setPlaceholderText(QStringLiteral("Enter measured height"));
+        elevation->setPlaceholderText(QStringLiteral("Enter base elevation"));
         auto* anchor = new QComboBox(&dialog);
         anchor->setObjectName(QStringLiteral("roomDimensionAnchor"));
         anchor->setAccessibleName(QStringLiteral("Footprint anchor"));
@@ -17659,13 +17677,23 @@ public:
         anchor->setEnabled(footprint_editable);
         layout->addLayout(form);
         if (level_relative) {
-            const auto resolved = resolve_vertical_placement(source, found->second);
-            const auto resolved_elevation = read_number(
-                resolved.properties, "elevation_m", original_room.elevation);
-            auto* placement_note = new QLabel(
-                QStringLiteral("Resolved project base: %1. This includes the bound level and a %2 placement offset; the editable value remains local to that level.")
-                    .arg(format_length(resolved_elevation, m_metric_units),
-                         format_length(placement_offset, m_metric_units)), &dialog);
+            auto* placement_note = new QLabel(&dialog);
+            if (has_original_elevation) {
+                try {
+                    const auto resolved = resolve_vertical_placement(source, found->second);
+                    const auto resolved_elevation = read_number(
+                        resolved.properties, "elevation_m", original_room.elevation);
+                    placement_note->setText(QStringLiteral("Resolved project base: %1. This includes the bound level and a %2 placement offset; the editable value remains local to that level.")
+                        .arg(format_length(resolved_elevation, m_metric_units),
+                             format_length(placement_offset, m_metric_units)));
+                } catch (const std::exception& error) {
+                    placement_note->setText(QStringLiteral("Level placement: %1")
+                        .arg(QString::fromUtf8(error.what())));
+                }
+            } else {
+                placement_note->setText(QStringLiteral("Enter an elevation relative to the bound level. The preview includes its %1 placement offset.")
+                    .arg(format_length(placement_offset, m_metric_units)));
+            }
             placement_note->setObjectName(QStringLiteral("roomDimensionPlacement"));
             placement_note->setWordWrap(true);
             layout->addWidget(placement_note);
@@ -17695,20 +17723,24 @@ public:
                                            const QLineEdit* field,
                                            const QString& initial,
                                            double original) {
-            return field->text().trimmed() == initial.trimmed()
+            return !initial.isEmpty() && field->text().trimmed() == initial.trimmed()
                 ? original
                 : parse_quantity(field->text().trimmed().toStdString(), unit).metres;
         };
         const auto restore_authoritative_view = [&] {
             if (m_nativeModelView)
-                m_nativeModelView->setSnapshot(m_document->snapshot(), m_native_visible_ids);
+                m_nativeModelView->setSnapshot(authoringSnapshot(), m_native_visible_ids);
         };
         const auto update_preview = [&] {
             try {
                 if (!m_document->is_editable())
                     throw std::invalid_argument("This document is read-only.");
-                if (!modalContextUnchanged(context))
+                if (!sourceEditAuthorityUnchanged(authority))
                     throw std::invalid_argument(lastError().toStdString());
+                if (height->text().trimmed().isEmpty())
+                    throw std::invalid_argument("Enter a measured room height.");
+                if (elevation->text().trimmed().isEmpty())
+                    throw std::invalid_argument("Enter a base elevation.");
                 RoomDimensionEdit edit{
                     .height_metres = parse_or_original(
                         height, initial_height, original_room.height),
@@ -17767,7 +17799,7 @@ public:
                          [&update_preview](int) { update_preview(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
-            if (!modalContextUnchanged(context)) {
+            if (!sourceEditAuthorityUnchanged(authority)) {
                 update_preview();
                 return;
             }
@@ -17786,6 +17818,8 @@ public:
                 }
                 auto command = room_dimension_update_command(source, found->first, edit, context.revision);
                 (void)Document::preview_command(source, Command{command});
+                if (!sourceEditAuthorityUnchanged(authority))
+                    throw std::invalid_argument(lastError().toStdString());
                 if (command.entity_changes.size() != 1 ||
                     command.entity_changes.front().kind != EntityChangeKind::upsert ||
                     command.entity_changes.front().entity != found->second)
@@ -31782,20 +31816,24 @@ private:
                     return false;
                 }
             } else if (entity->type == "room") {
-                RoomVolume room;
+                if (key_is_height && properties.contains("height"))
+                    properties["height"] = quantity.metres;
+                if (key_is_elevation && properties.contains("elevation"))
+                    properties["elevation"] = quantity.metres;
                 std::string room_error;
                 const Entity candidate{entity->id, entity->type, properties,
                                        entity->required, entity->extensions};
-                if (!read_document_room(candidate, room, room_error)) {
+                bool admitted = false;
+                if (has_document_room_volume_fields(candidate)) {
+                    RoomVolume room;
+                    admitted = read_document_room(candidate, room, room_error);
+                } else {
+                    DocumentRoomFootprint footprint;
+                    admitted = read_document_room_footprint(candidate, footprint, room_error);
+                }
+                if (!admitted) {
                     setError(QStringLiteral("Room preview rejected: %1")
                                  .arg(QString::fromStdString(room_error)));
-                    return false;
-                }
-                try {
-                    (void)make_room_volume(room);
-                } catch (const std::exception& error) {
-                    setError(QStringLiteral("Room preview rejected: %1")
-                                 .arg(QString::fromUtf8(error.what())));
                     return false;
                 }
             }
@@ -36331,7 +36369,8 @@ private:
                 continue;
             }
             std::optional<Entity> resolved_entity;
-            if (entity.type == "wall" || entity.type == "slab" || entity.type == "room") {
+            if (entity.type == "wall" || entity.type == "slab" ||
+                (entity.type == "room" && has_document_room_volume_fields(entity))) {
                 try {
                     resolved_entity = resolve_vertical_placement(snapshot, entity);
                 } catch (const std::exception& error) {
@@ -36346,6 +36385,7 @@ private:
             }
             const auto& geometry_entity = resolved_entity ? *resolved_entity : entity;
             Boundary segments;
+            std::vector<Boundary> room_holes;
             if (entity.type == "wall") {
                 const auto baseline = read_required_segment(geometry_entity.properties, "baseline");
                 if (!baseline.has_value()) {
@@ -36447,21 +36487,25 @@ private:
                     continue;
                 }
             } else if (entity.type == "room") {
-                RoomVolume room;
                 std::string room_error;
-                if (!read_document_room(geometry_entity, room, room_error)) {
+                if (has_document_room_volume_fields(geometry_entity)) {
+                    RoomVolume room;
+                    if (read_document_room(geometry_entity, room, room_error)) {
+                        segments = std::move(room.boundary);
+                        room_holes = std::move(room.holes);
+                    }
+                } else {
+                    DocumentRoomFootprint footprint;
+                    if (read_document_room_footprint(geometry_entity, footprint, room_error)) {
+                        segments = std::move(footprint.boundary);
+                        room_holes = std::move(footprint.holes);
+                    }
+                }
+                if (segments.empty()) {
                     append_geometry_error(QStringLiteral("Room %1: %2")
                                               .arg(id_from(id), QString::fromStdString(room_error)));
                     continue;
                 }
-                try {
-                    (void)make_room_volume(room);
-                } catch (const std::exception& error) {
-                    append_geometry_error(QStringLiteral("Room %1: %2")
-                                              .arg(id_from(id), QString::fromUtf8(error.what())));
-                    continue;
-                }
-                segments = room.boundary;
             } else {
                 if (is_physical_wall_room(entity)) {
                     const auto room = physical_rooms.find(id);
@@ -36502,13 +36546,7 @@ private:
                                        id_from(id) == options.selected_id};
             if (is_physical_wall_room(entity))
                 canvas_entity.holes = physical_rooms.at(id).holes;
-            if (entity.type == "room") {
-                RoomVolume room;
-                std::string room_error;
-                if (read_document_room(geometry_entity, room, room_error)) {
-                    canvas_entity.holes = room.holes;
-                }
-            }
+            if (entity.type == "room") canvas_entity.holes = std::move(room_holes);
             if (is_closed_boundary_entity(entity.type)) {
                 const auto presentation = effective_plan_area_presentation(
                     geometry_entity, appraisal_area_projection);
@@ -38253,6 +38291,9 @@ private:
                         continue;
                     }
                     if (entity.type == "room") {
+                        // A retained 2D room has no measured solid to project.
+                        // Horizontal plans retain its analytical footprint below.
+                        if (!has_document_room_volume_fields(entity)) continue;
                         const auto resolved = resolve_vertical_placement(snapshot, entity);
                         RoomVolume room;
                         std::string room_error;
@@ -38281,10 +38322,13 @@ private:
                     const auto model = snapshot.entities().find(entity.id.toStdString());
                     const bool boundary = model != snapshot.entities().end() &&
                         is_closed_boundary_entity(model->second.type);
+                    const bool plan_room = model != snapshot.entities().end() &&
+                        model->second.type == "room" &&
+                        !has_document_room_volume_fields(model->second);
                     const bool linework = model != snapshot.entities().end() && model->second.type=="measurement_linework";
                     const bool dimension = entity.type==QStringLiteral("dimension_line");
                     const bool symbol = entity.type==QStringLiteral("symbol");
-                    if ((!boundary && !linework && !dimension && !symbol) ||
+                    if ((!boundary && !plan_room && !linework && !dimension && !symbol) ||
                         architectural_hidden_ids.contains(entity.id.toStdString()) ||
                         (restricted && !referenced.contains(entity.id.toStdString()))) continue;
                     auto retained = entity;
@@ -38300,7 +38344,7 @@ private:
                             for (auto& point : retained.snap_points) point=project_plan_point(point,frame);
                         }
                     }
-                    if ((boundary || linework) && view_context.crop) {
+                    if ((boundary || plan_room || linework) && view_context.crop) {
                         const Bounds2 bounds{{view_context.crop->min_horizontal_m,view_context.crop->min_vertical_m},
                                              {view_context.crop->max_horizontal_m,view_context.crop->max_vertical_m}};
                         clip_plan_entity(retained, bounds);
@@ -41045,13 +41089,24 @@ private:
         }
         {
             QSignalBlocker blocker(m_height_edit);
-            m_height_edit->setText(format_length(
-                read_number(entity->properties, "height_m", 0.0), m_metric_units));
+            if (room) {
+                const auto value = read_finite_number(entity->properties, "height_m", "height");
+                m_height_edit->setText(value && *value > default_geometry_tolerance_metres
+                    ? format_length(*value, m_metric_units) : QString{});
+            } else {
+                m_height_edit->setText(format_length(
+                    read_number(entity->properties, "height_m", 0.0), m_metric_units));
+            }
         }
         {
             QSignalBlocker blocker(m_elevation_edit);
-            m_elevation_edit->setText(format_length(
-                read_number(entity->properties, "elevation_m", 0.0), m_metric_units));
+            if (room) {
+                const auto value = read_finite_number(entity->properties, "elevation_m", "elevation");
+                m_elevation_edit->setText(value ? format_length(*value, m_metric_units) : QString{});
+            } else {
+                m_elevation_edit->setText(format_length(
+                    read_number(entity->properties, "elevation_m", 0.0), m_metric_units));
+            }
             m_elevation_edit->setModified(false);
         }
         {

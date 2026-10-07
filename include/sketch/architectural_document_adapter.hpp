@@ -25,7 +25,9 @@ enum class ArchitecturalJoinKind { wall, roof };
 
 // Width follows boundary segment 0; depth follows segment 1. Supply both
 // dimensions to resize a rectangular, hole-free footprint, or neither to
-// change only height/elevation on any valid room. All lengths are metres.
+// change only height/elevation on any valid room. Supplying measured height
+// and elevation can promote a retained plan-only room to a volume; no missing
+// measurement is inferred from its footprint. All lengths are metres.
 struct RoomDimensionEdit {
     std::optional<double> width_metres;
     std::optional<double> depth_metres;
@@ -58,10 +60,12 @@ struct RoomDimensionEdit {
 
 // Admit changed physical wall/opening, slab and room descriptors against the
 // complete detached candidate. Hosted siblings and affected fused joins
-// participate even when hidden. Historical plan-only rooms remain plan-only.
+// participate even when hidden. Changed plan-only room footprints receive
+// analytical admission without manufacturing missing volume fields.
 // Metadata-only edits and incomplete legacy transport descriptors do not force
 // solid generation. Explicit required IDs must have valid physical geometry,
-// including when their entered dimension is unchanged.
+// including a full room volume when a room ID is explicitly required and when
+// its entered dimension is unchanged.
 void validate_architectural_geometry_changes(
     const DocumentSnapshot& source, const DocumentSnapshot& candidate,
     const std::vector<std::string>& required_ids = {});
