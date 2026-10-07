@@ -881,12 +881,20 @@ private:
     std::vector<CanvasLabel> m_floor_ghost_labels;
     double m_floor_ghost_opacity{0.25};
     Vec2 m_floor_ghost_offset{};
+    struct LabelPaintLayout {
+        QFont font;
+        QRectF bounds;
+        QRectF ink_bounds;
+    };
     struct LabelPlacementCache {
         QByteArray key;
         // A small device/layout key can reuse owned unchanged source labels.
         // Active previews continue using the complete content signature below.
         QByteArray retained_key;
         std::vector<CanvasLabel> labels;
+        // Owned immutable derivatives, indexed exactly like labels. Replaced
+        // with the placement key and cleared by the same setter invalidation.
+        std::vector<LabelPaintLayout> paint_layouts;
     };
     // Keep interactive picking warm while a separate output device is used.
     mutable std::array<LabelPlacementCache, 4> m_label_placement_cache;

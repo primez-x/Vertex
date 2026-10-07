@@ -3303,6 +3303,9 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         return cache.labels;
     }
 
+    // A label replacement must never inherit paint layouts from the previous
+    // key, including the invalid-scale/DPI early publication below.
+    cache.paint_layouts.clear();
     if (!(scale > 0) || !std::isfinite(scale) || !(dpi > 0) || !std::isfinite(dpi)) {
         cache.key = std::move(key);
         cache.retained_key = std::move(retained_key);
@@ -3313,6 +3316,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         return QPointF((p.x - layout_origin.x) * scale, -(p.y - layout_origin.y) * scale);
     };
     std::vector<QRectF> footprints(labels.size());
+    std::vector<LabelPaintLayout> paint_layouts(labels.size());
     std::vector<QRectF> obstacles;
     std::vector<std::size_t> automatic_labels;
     const auto finite_rect = [](const QRectF& bounds) {
@@ -3341,6 +3345,19 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
             ? font() : base_font;
         if (output) { label_font.setFeature("calt", 0); label_font.setFeature("case", 0); }
         const auto layout = label_layout(label, label_font, device, scale, dpi);
+        auto ink_bounds = layout.bounds;
+        if (!output) {
+            const auto text_bounds = label.text_alignment == QStringLiteral("left") ||
+                                     label.text_alignment == QStringLiteral("right")
+                ? layout.bounds.adjusted(5.0, 3.0, -5.0, -3.0) : layout.bounds;
+            // Rectangle text metrics include multiline spacing and font
+            // bearings under the exact drawText alignment policy. Keep these
+            // solely for culling; authored layout/placement bounds are unchanged.
+            const auto text_ink = QFontMetricsF(layout.font, device).boundingRect(
+                text_bounds, label_text_alignment(label), label.text);
+            ink_bounds = finite_rect(text_ink) ? ink_bounds.united(text_ink) : text_ink;
+        }
+        paint_layouts[i] = {layout.font,layout.bounds,ink_bounds};
         footprints[i] = label_transform(label, {}).mapRect(layout.bounds);
         const auto bounds = footprints[i].translated(model_screen(label.position));
         if (!finite_rect(bounds)) continue;
@@ -3454,6 +3471,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     cache.key = std::move(key);
     cache.retained_key = std::move(retained_key);
     cache.labels = std::move(labels);
+    cache.paint_layouts = std::move(paint_layouts);
     return cache.labels;
 }
 
@@ -6786,28 +6804,72 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         // differ from device DPI. Model scale remains independent of this.
         dpi = *paper_pixels_per_mm * 25.4;
     }
-    for (const auto& label : positionedLabels(legacy_font, metrics_device, scale, dpi, output,
-                                            content_only, content_only ? view_center : Vec2{},
-                                            floor_ghost)) {
+    const auto& labels = positionedLabels(legacy_font, metrics_device, scale, dpi, output,
+                                         content_only, content_only ? view_center : Vec2{},
+                                         floor_ghost);
+    const auto& paint_layouts = m_label_placement_cache[
+        floor_ghost ? 3 : content_only ? 2 : output ? 1 : 0].paint_layouts;
+    const bool cached_layouts = paint_layouts.size() == labels.size();
+    const auto dpr = devicePixelRatioF();
+    // Only the widget's ordinary screen paint has a viewport in these logical
+    // coordinates. Output, content recorders and transformed callers keep all
+    // original painting. combinedTransform also checks window/viewport mapping.
+    const bool cull_screen = !output && !content_only && painter.device() == this &&
+        painter.worldTransform().isIdentity() && painter.combinedTransform().isIdentity() &&
+        finite_rect(viewport) && std::isfinite(dpr) && dpr > 0.0;
+    const double cull_padding = cull_screen ? 3.0*std::max(1.0,1.0/dpr) : 0.0;
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        const auto& label = labels[i];
         if (!drawable_label(label)) continue;
-        const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
-        auto base_font = paper ? font() : legacy_font;
-        if (output) {
-            // Inter's contextual punctuation alternates map to private-use
-            // cmap entries in Qt's PDF subsets. Keep copied plan text faithful
-            // to the authored characters, as in the sheet text renderer.
-            base_font.setFeature("calt", 0);
-            base_font.setFeature("case", 0);
+        std::optional<LabelPaintLayout> fallback;
+        const LabelPaintLayout* layout;
+        if (cached_layouts) {
+            layout = &paint_layouts[i];
+        } else {
+            // Invalid-scale/DPI publications have no derived paint layouts.
+            // Retain the original per-label font/features/layout path.
+            const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
+            auto base_font = paper ? font() : legacy_font;
+            if (output) {
+                // Keep contextual PDF alternates from changing copied text.
+                base_font.setFeature("calt", 0);
+                base_font.setFeature("case", 0);
+            }
+            const auto uncached = label_layout(label, base_font, metrics_device, scale, dpi);
+            fallback.emplace(LabelPaintLayout{uncached.font,uncached.bounds,uncached.bounds});
+            layout = &*fallback;
         }
-        const auto layout = label_layout(label, base_font,
-                                          metrics_device, scale, dpi);
-        painter.setFont(layout.font);
-        const auto& bounds = layout.bounds;
+        const auto& bounds = layout->bounds;
         const auto center = to_screen(label.position);
         if (annotation_footprints) {
             annotation_footprints->push_back(
                 label_transform(label, center).mapRect(bounds).adjusted(-2.0, -2.0, 2.0, 2.0));
         }
+        if (cull_screen && cached_layouts && finite_rect(bounds) &&
+            bounds.width() >= 2.0 && bounds.height() >= 2.0 &&
+            finite_rect(layout->ink_bounds) && std::isfinite(center.x()) && std::isfinite(center.y()) &&
+            std::isfinite(label.rotation_radians*180.0/pi)) {
+            auto ink = label_transform(label, center).mapRect(layout->ink_bounds);
+            bool safe = finite_rect(ink);
+            if (label.leader_start) {
+                const auto start = to_screen(*label.leader_start);
+                safe = safe && std::isfinite(start.x()) && std::isfinite(start.y());
+                if (safe) {
+                    // The leader edge lies on the label bounds. Their union
+                    // with the start encloses the whole cosmetic line, even
+                    // when the text is offscreen but the leader crosses it.
+                    ink = QRectF(QPointF(std::min(ink.left(),start.x()),std::min(ink.top(),start.y())),
+                                 QPointF(std::max(ink.right(),start.x()),std::max(ink.bottom(),start.y())));
+                }
+            }
+            const auto padded = ink.adjusted(-cull_padding,-cull_padding,cull_padding,cull_padding);
+            // Padding covers the selection border, cosmetic leader stroke and
+            // antialias fringe in logical or device pixels, including low DPR.
+            if (safe && finite_rect(padded) &&
+                (padded.right() < viewport.left() || padded.left() > viewport.right() ||
+                 padded.bottom() < viewport.top() || padded.top() > viewport.bottom())) continue;
+        }
+        painter.setFont(layout->font);
         if (label.leader_start) {
             const auto start = to_screen(*label.leader_start);
             const auto transform = label_transform(label, center);

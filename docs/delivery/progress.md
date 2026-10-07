@@ -219,6 +219,16 @@ preparation and connected-stair confirmation to the complete source/context
 authority before publication. This is a source correction; recovered-project
 runtime behavior and history remain unobserved, and no build or test was run.
 
+Label painting now retains owned fonts, layout bounds and conservative ink
+bounds alongside the existing positioned-label cache. Unchanged navigation
+reuses those values instead of measuring every label again. Ordinary widget
+painting skips labels outside the viewport only after preserving annotation
+footprints, rotated text/background bounds and leader crossings. Output,
+content recordings, transformed callers and unsafe layouts retain their full
+painting path. Independent source review approved the cache lifetime, font
+policy and culling envelope. This source batch has not been compiled, rendered
+or measured; the installed candidate remains unchanged.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and
