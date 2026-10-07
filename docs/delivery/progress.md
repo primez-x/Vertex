@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site mixed movement and wall endpoint magnets
+
+Site selection drags now capture typed annotation ownership, references and
+source frames once, prepare the complete mixed command in the worker, and
+publish its admitted candidate once. Model IDs that happen to share annotation
+child spellings remain model IDs. Zero movement retains all presentation
+aliases and reference metadata without adding history; failed release consumes
+the ticket. Existing cross-building frame refusal remains explicit.
+
+Wall endpoint drags now use practical physical-length increments rather than
+rounding XY to the canvas grid. Curves use their actual arc length. Visible
+other-object endpoints and centerlines take precedence over rounding; the
+selected wall's own spans cannot attract its grip. A full unclipped baseline
+retains the fixed opposite endpoint in rotated, reflected and cropped plans,
+without adding hidden snap targets. Shift and Snap off allow fine placement.
+The live badge shows length during admission and identifies exact contacts.
+Independent source review accepted the integrated changes. They remain
+uncompiled and unexercised; no build, test, probe,
+native job, launch, package or installation ran. Manual checks remain Not tested.
+
 ### October 7 ordinary mixed selection preparation
 
 Ordinary Measurement and horizontal Architectural drags now prepare complete

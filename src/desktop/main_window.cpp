@@ -5028,6 +5028,7 @@ void retain_plan_endpoint_handles(CanvasEntity& entity,
     const std::array<std::pair<Vec3, QString>, 2>& endpoints, Revision revision,
     bool interactive, const ArchitecturalViewContext* view = nullptr) {
     entity.vertex_handles.clear();
+    entity.endpoint_baseline.reset();
     if (!interactive || !entity.selected || (view && !horizontal_plan_frame(view->frame))) return;
     for (const auto& [endpoint, role] : endpoints) {
         if (view && std::isfinite(view->depth.far_depth_m)) {
@@ -5061,6 +5062,7 @@ void retain_building_endpoint_handles(CanvasEntity& entity, const BuildingObject
             {beam->end, QStringLiteral("beam:end")}}}, revision, interactive, view);
     } else if (const auto* rail = std::get_if<Railing>(&object)) {
         entity.vertex_handles.clear();
+        entity.endpoint_baseline.reset();
         // Hosted railings inherit their endpoints from the stair or landing;
         // displaying independent grips would offer an edit the host owns.
         if (rail->host || rail->landing_host) return;
@@ -5088,6 +5090,7 @@ DocumentRoomFootprint architectural_footprint(const Entity& source) {
 void retain_footprint_vertex_handles(CanvasEntity& entity, const Entity& source, Revision revision,
     bool interactive, const ArchitecturalViewContext* view = nullptr) {
     entity.vertex_handles.clear();
+    entity.endpoint_baseline.reset();
     if (!interactive || !entity.selected || (view && !horizontal_plan_frame(view->frame)) ||
         source.extensions.contains("physical_wall_room") ||
         source.properties.contains("wall_measurement_source")) return;
@@ -5127,6 +5130,7 @@ void retain_footprint_vertex_handles(CanvasEntity& entity, const Entity& source,
 
 void retain_roof_plan_corner_handles(CanvasEntity& entity, Revision revision, bool interactive) {
     entity.vertex_handles.clear();
+    entity.endpoint_baseline.reset();
     if (!interactive || !entity.selected || !entity.resize_frame || entity.segments.empty()) return;
     const auto& frame=*entity.resize_frame;
     if (!std::isfinite(frame.center.x) || !std::isfinite(frame.center.y) ||
@@ -5189,6 +5193,11 @@ class MainWindow::Impl {
         std::vector<Bounds2> component_bounds;
         std::map<std::pair<QString,QString>,Bounds2> component_presentations;
         QFont label_font;
+        // Populated only for selection moves. Render aliases carry typed
+        // ownership and must never be inferred from persisted model IDs.
+        std::map<QString,SiteAnnotationTarget> move_annotation_targets;
+        std::vector<CanvasReference> move_references;
+        std::optional<SitePresentationPlacement> move_frame;
     };
 
     struct SiteTransformPreviewCapture {
@@ -20375,10 +20384,12 @@ public:
     }
 
     static SelectionTranslationParts prepareDetachedSelectionTranslation(const DocumentSnapshot& source,
-        const QStringList& ids,Vec2 delta,Vec2 model_delta,bool model_plan_labels) {
+        const QStringList& ids,Vec2 delta,Vec2 model_delta,bool model_plan_labels,
+        bool infer_annotation_targets=true) {
         auto model_ids=ids;
         std::vector<EntityChange> presentation_changes;
-        const auto annotation_owners=annotation_selection_owners(source,ids);
+        const auto annotation_owners=infer_annotation_targets
+            ? annotation_selection_owners(source,ids) : std::map<std::string,std::string,std::less<>>{};
 
         auto embedded_source = source;
         std::map<std::string, Entity, std::less<>> changed_catalogs;
@@ -20396,6 +20407,7 @@ public:
 
         for (const auto& [owner_id, annotation_owner] : source.entities()) {
             if (annotation_owner.type != kAnnotationEntityType) continue;
+            if (annotation_owners.empty()) continue;
             auto state = decode_annotation_entity(annotation_owner);
             auto candidate = annotation_owner;
             std::size_t moved = 0;
@@ -21109,15 +21121,24 @@ public:
                 const auto before=decode_annotation_entity(source.entities().at(id));
                 const auto after=decode_annotation_entity(entity);
                 const auto record_delta=[&](const auto& original,const auto& proposed,bool model_plan) {
+                    auto render_id=proposed.id;
+                    if (site_input && site_input->move_frame) {
+                        const auto alias=std::find_if(site_input->move_annotation_targets.begin(),
+                            site_input->move_annotation_targets.end(),[&](const auto& value) {
+                                return value.second.owner_entity_id==id && value.second.child_id==proposed.id;
+                            });
+                        if (alias==site_input->move_annotation_targets.end()) return;
+                        render_id=alias->first.toStdString();
+                    }
                     auto start=original.placement.position,end=proposed.placement.position;
                     if (start.x!=end.x || start.y!=end.y)
-                        annotation_source_deltas.emplace(proposed.id,Vec2{end.x-start.x,end.y-start.y});
+                        annotation_source_deltas.emplace(render_id,Vec2{end.x-start.x,end.y-start.y});
                     if (model_plan && view_context) {
                         start=project_plan_point(start,view_context->frame);
                         end=project_plan_point(end,view_context->frame);
                     }
                     if (start.x != end.x || start.y != end.y)
-                        annotation_deltas.emplace(proposed.id,Vec2{end.x-start.x,end.y-start.y});
+                        annotation_deltas.emplace(render_id,Vec2{end.x-start.x,end.y-start.y});
                 };
                 for (const auto& label : after.labels)
                     if (const auto old=std::find_if(before.labels.begin(),before.labels.end(),[&](const auto& value){return value.id==label.id;});old!=before.labels.end())
@@ -21243,15 +21264,18 @@ public:
             for (const auto& item : eligible) projection_sources.emplace(presentation_identity(item), item);
             for (const auto& item : retained) {
                 projection_sources.insert_or_assign(presentation_identity(item), item);
-                captured_ids.insert(item.id);
+                if (!site_input || !site_input->move_frame || !site_input->move_annotation_targets.contains(item.id))
+                    captured_ids.insert(item.id);
                 captured_presentations.insert(presentation_identity(item));
             }
             std::map<PresentationIdentity,Bounds2> candidate_component_bounds;
             for (const auto& [item_id, item] : projection_sources) {
                 (void)item_id;
-                const auto found=candidate.find(item.id.toStdString());
+                const bool typed_annotation=site_input && site_input->move_frame &&
+                    site_input->move_annotation_targets.contains(item.id);
+                const auto found=typed_annotation ? candidate.end() : candidate.find(item.id.toStdString());
                 if (found==candidate.end()) {
-                    if (const auto original=embeddedAssemblyChild(source,item.id.toStdString())) {
+                    if (const auto original=typed_annotation ? std::nullopt : embeddedAssemblyChild(source,item.id.toStdString())) {
                         const auto original_model=AssemblyModel::from_json(source.entities().at(
                             original->assembly_catalog_id).properties.at("model"));
                         if (!original_model.expand(original->instance.id).profiles.empty()) {
@@ -21364,6 +21388,7 @@ public:
                     shift_path(proposed.segments);
                     shift_path(proposed.snap_segments);
                     shift_path(proposed.hit_segments);
+                    if (typed_annotation) shift_path(proposed.drawing_alignment_segments);
                     if(proposed.stroke_segments) shift_path(*proposed.stroke_segments);
                     for(auto& hole:proposed.holes) shift_path(hole);
                     for(auto& point:proposed.snap_points) shift(point);
@@ -21531,6 +21556,13 @@ public:
                         proposed.segments = project_building_plan(object, candidate);
                     }
                 } else if (const auto wall=changed_walls.find(entity.id);wall!=changed_walls.end()) {
+                    proposed.endpoint_baseline.reset();
+                    if (item.endpoint_baseline && source.is_editable() &&
+                        (!view_context || horizontal_plan_frame(view_context->frame))) {
+                        proposed.endpoint_baseline=wall->second.baseline;
+                        if (view_context) proposed.endpoint_baseline=project_plan_path(
+                            {*proposed.endpoint_baseline},view_context->frame).front();
+                    }
                     for (auto& handle : proposed.vertex_handles) {
                         if (handle.id == QStringLiteral("wall:start")) handle.position = wall->second.baseline.start;
                         else if (handle.id == QStringLiteral("wall:end")) handle.position = wall->second.baseline.end;
@@ -21634,6 +21666,7 @@ public:
                         world_paths=false;
                     }
                 } else continue;
+                if (entity.type!="wall") proposed.endpoint_baseline.reset();
                 if (view_context && world_paths) {
                     proposed.segments = project_plan_path(std::move(proposed.segments), view_context->frame);
                     if (proposed.stroke_segments)
@@ -21823,9 +21856,11 @@ public:
                 result.labels.push_back(std::move(hidden));
             };
             for (const auto& label : candidate_labels) {
-                const auto found=candidate.find(label.id.toStdString());
+                const bool typed_annotation=site_input && site_input->move_frame &&
+                    site_input->move_annotation_targets.contains(label.id);
+                const auto found=typed_annotation ? candidate.end() : candidate.find(label.id.toStdString());
                 if (found==candidate.end()) {
-                    const auto original=source.entities().find(label.id.toStdString());
+                    const auto original=typed_annotation ? source.entities().end() : source.entities().find(label.id.toStdString());
                     if (original!=source.entities().end() && original->second.type=="measurement_linework") {
                         withhold_label(label);
                         continue;
@@ -22199,21 +22234,51 @@ public:
                             } else result->reset();
                         }
                     } else if (site_wall_move && prepared_move) {
-                        Command command=site_wall_move->local_delta.x==0.0 && site_wall_move->local_delta.y==0.0
+                        if (!site_input || !site_input->move_frame)
+                            throw std::invalid_argument("The Site move has no captured selection frame.");
+                        const bool no_op=site_wall_move->canvas_delta.x==0.0 && site_wall_move->canvas_delta.y==0.0;
+                        Command command=no_op
                             ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
-                            : augmentAuthoredCommand(makeSelectionGeometryTranslationCommand(*source,
-                                site_wall_move->ids,site_wall_move->local_delta,{},site_wall_move->local_delta),*source);
+                            : augmentAuthoredCommand(prepareDetachedSiteTranslationCommand(*source,
+                                site_wall_move->ids,site_wall_move->local_delta,
+                                site_input->move_annotation_targets),*source);
                         if (!cancellation.is_cancelled()) {
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
-                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,
+                            if (no_op) {
+                                VertexPreviewProjection unchanged;
+                                unchanged.entities=*retained;unchanged.labels=*labels;
+                                *result=std::move(unchanged);
+                            } else *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
                                 view_context,label_font,site_input.get());
                             if (*result && !cancellation.is_cancelled()) {
+                                retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,site_wall_move->ids);
+                                for (const auto& reference:site_input->move_references) {
+                                    if (!site_wall_move->ids.contains(reference.id) ||
+                                        site_input->move_annotation_targets.contains(reference.id)) continue;
+                                    const auto& owner=candidate.entities().at(reference.id.toStdString());
+                                    if (owner.type!="reference_asset")
+                                        throw std::invalid_argument("The selected reference changed ownership.");
+                                    auto proposed=reference;
+                                    if (no_op) {
+                                        (**result).references.push_back(site_presented_canvas_reference(
+                                            proposed,site_input->frames.at(reference.id)));
+                                        continue;
+                                    }
+                                    const auto position=read_point(owner.properties.at("position_m"));
+                                    if (!position) throw std::invalid_argument("The admitted reference placement is invalid.");
+                                    proposed.position=*position;
+                                    proposed.scale=read_number(owner.properties,"scale",1.0);
+                                    proposed.rotation_degrees=read_number(owner.properties,"rotation_degrees",0.0);
+                                    (**result).references.push_back(site_presented_canvas_reference(
+                                        proposed,site_input->frames.at(reference.id)));
+                                }
                                 auto& entities=(**result).entities;
                                 // A drag back to its origin remains an exact
                                 // no-op, not a missing-geometry rejection.
                                 for (const auto& original:*retained) {
                                     if (!site_wall_move->ids.contains(original.id)) continue;
+                                    if (site_input->move_annotation_targets.contains(original.id)) continue;
                                     const auto before=source->entities().find(original.id.toStdString());
                                     const auto after=candidate.entities().find(original.id.toStdString());
                                     if (before==source->entities().end() || after==candidate.entities().end() ||
@@ -22223,10 +22288,13 @@ public:
                                     })) entities.push_back(original);
                                 }
                                 for (auto& proposed:entities) {
+                                    if (site_input->move_annotation_targets.contains(proposed.id)) continue;
+                                    if (no_op) continue;
                                     const auto owner=candidate.entities().find(proposed.id.toStdString());
                                     if (owner==candidate.entities().end()) continue;
                                     if (owner->second.type=="wall") {
                                         if (const auto baseline=read_required_segment(owner->second.properties,"baseline")) {
+                                            if (proposed.endpoint_baseline) proposed.endpoint_baseline=*baseline;
                                             proposed.snap_points={baseline->start,baseline->end};
                                             proposed.snap_segments={*baseline};
                                             proposed.drawing_alignment_segments={*baseline};
@@ -22372,6 +22440,8 @@ public:
                         // frame after projection. Rebind genuine roof corners
                         // to that final frame before Site presentation applies.
                         for (auto& item : (**result).entities) {
+                            if (site_input && site_input->move_frame &&
+                                site_input->move_annotation_targets.contains(item.id)) continue;
                             const auto owner=source->entities().find(item.id.toStdString());
                             if (owner!=source->entities().end() && owner->second.type=="roof" &&
                                 !geometric_assembly_for_child(*source,owner->first))
@@ -22464,13 +22534,18 @@ public:
     }
 
     std::shared_ptr<const SiteEndpointPreviewInput> captureSitePlanPreviewInput(
-        PlanCanvas* canvas,const QStringList& ids) {
+        PlanCanvas* canvas,const QStringList& ids,bool selection_move=false) {
         if (!canvas) throw std::invalid_argument("The Site preview canvas is unavailable.");
         (void)siteEditFrame(ids);
         auto input=std::make_shared<SiteEndpointPreviewInput>();
         input->geometry=m_site_edit_local_geometry; input->labels=m_site_edit_local_labels;
         input->frames=m_site_edit_frames; input->appraisal_area_ids=m_plan_appraisal_area_ids;
         input->label_font=canvas->font();
+        if (selection_move) {
+            input->move_annotation_targets=m_site_edit_annotation_targets;
+            input->move_references=m_site_edit_local_references;
+            input->move_frame=siteEditFrame(ids);
+        }
         for (const auto& label:input->labels) if (label.avoid_components)
             input->label_footprints.emplace(plan_label_instance_key(label),
                 plan_area_label_footprint(label,input->label_font,canvas));
@@ -23300,18 +23375,17 @@ public:
 
     bool commitSiteWallMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
         const auto capture=m_wall_move_site_capture;
-        if (!siteWallMoveCaptureCurrent(capture) || canvas!=m_wall_move_canvas || ids!=m_wall_move_ids ||
-            !m_site_wall_move_preview || m_site_wall_move_preview->capture!=capture ||
-            m_site_wall_move_preview->intent.ids!=ids ||
-            m_site_wall_move_preview->edit_source!=m_model_move_edit_source ||
-            m_site_wall_move_preview->serial==std::numeric_limits<std::uint64_t>::max() ||
-            canvas->entitiesMovePreviewSerial()!=m_site_wall_move_preview->serial+1 ||
-            delta.x!=m_site_wall_move_preview->intent.canvas_delta.x ||
-            delta.y!=m_site_wall_move_preview->intent.canvas_delta.y)
-            throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
-        const auto prepared=m_site_wall_move_preview->prepared;
-        const auto edit_source=m_site_wall_move_preview->edit_source;
+        const auto preview=std::move(m_site_wall_move_preview);
         m_site_wall_move_preview.reset();
+        if (!siteWallMoveCaptureCurrent(capture) || canvas!=m_wall_move_canvas || ids!=m_wall_move_ids ||
+            !preview || preview->capture!=capture || preview->intent.ids!=ids ||
+            preview->edit_source!=m_model_move_edit_source ||
+            preview->serial==std::numeric_limits<std::uint64_t>::max() ||
+            canvas->entitiesMovePreviewSerial()!=preview->serial+1 ||
+            delta.x!=preview->intent.canvas_delta.x || delta.y!=preview->intent.canvas_delta.y)
+            throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
+        const auto prepared=preview->prepared;
+        const auto edit_source=preview->edit_source;
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
         publishPreparedCanvasEdit(prepared,edit_source);
         clearError(); refresh(); return true;
@@ -23355,7 +23429,8 @@ public:
             m_site_wall_move_preview.reset();
             if (!siteWallMoveCaptureCurrent(capture) || canvas!=m_wall_move_canvas || ids!=m_wall_move_ids ||
                 !std::isfinite(delta.x) || !std::isfinite(delta.y)) return std::vector<CanvasEntity>{};
-            const auto local=site_source_plan_delta(delta,siteEditFrame(ids));
+            if (!capture->input->move_frame) return std::vector<CanvasEntity>{};
+            const auto local=site_source_plan_delta(delta,*capture->input->move_frame);
             if (!canvas->markEntitiesMovePreviewPending(serial)) return std::vector<CanvasEntity>{};
             const auto input=capture->input;
             const auto geometry=std::shared_ptr<const std::vector<CanvasEntity>>(input,&input->geometry);
@@ -23378,30 +23453,7 @@ public:
             } else startVertexPreviewJob(std::move(request));
             return std::nullopt;
         }
-        if (siteCanvas(canvas) && !m_site_preview_dispatching) {
-            if (!sitePreviewContextCurrent() || !canvas->markEntitiesMovePreviewPending(serial)) return std::nullopt;
-            const auto generation=m_site_edit_generation;
-            queueSitePreview([this,target=QPointer<PlanCanvas>(canvas),ids,delta,serial,generation] {
-                if (!target || generation!=m_site_edit_generation) return;
-                auto result=previewWallMoveFromCanvas(target,ids,delta,serial);
-                (void)target->completeEntitiesMovePreview(serial,std::move(result),m_site_preview_labels,m_site_preview_references);
-            });
-            return std::nullopt;
-        }
-        if (siteCanvas(canvas)) {
-            m_site_preview_references.clear();
-            try {
-                const auto command=siteTranslationCommand(ids,delta);
-                const auto candidate=Document::preview_command(*m_site_edit_source,command);
-                const auto local=site_source_plan_delta(delta,siteEditFrame(ids));
-                auto proposed=sitePreviewGeometry(candidate,ids,SiteEditTransform{{local.x,local.y,0.0},0.0,1.0});
-                if(canvas->markEntitiesMovePreviewPending(serial)) {
-                    (void)canvas->completeEntitiesMovePreview(serial,proposed,m_site_preview_labels,m_site_preview_references);
-                    return std::nullopt;
-                }
-                return proposed;
-            } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return std::nullopt; }
-        }
+        if (siteCanvas(canvas)) return std::vector<CanvasEntity>{};
         if (!canvas || ids.isEmpty() || !m_document->is_editable() || m_boundary_session ||
             m_pending_wall_start || !m_pending_symbol_id.isEmpty()) return std::nullopt;
         if (m_wall_move_source && std::all_of(ids.begin(), ids.end(), [&](const auto& id) {
@@ -40118,19 +40170,8 @@ private:
                         canvas,canvas->viewCenter(),canvas->viewScale(),canvas->size(),canvas->devicePixelRatioF(),
                         canvas->navigationGeneration(),canvas->hasFocus()});
                 }
-                if (siteCanvas(canvas) && !m_wall_move_ids.isEmpty() &&
-                    std::all_of(m_wall_move_ids.begin(),m_wall_move_ids.end(),[&](const auto& id) {
-                        const auto found=m_wall_move_source->entities().find(id.toStdString());
-                        return !m_site_edit_annotation_targets.contains(id) && found!=m_wall_move_source->entities().end() &&
-                            (can_transform_architectural_entity_type(found->second.type) ||
-                             is_closed_boundary_entity(found->second.type) || found->second.type=="measurement_linework" ||
-                             (found->second.type=="opening" && m_wall_move_ids.contains(id_from(
-                                 read_string(found->second.properties,"wall_id").value_or(""))))) &&
-                            !geometric_assembly_for_child(*m_wall_move_source,id.toStdString());
-                    })) {
-                    (void)annotation_selection_owners(*m_wall_move_source,m_wall_move_ids);
-                    (void)siteEditFrame(m_wall_move_ids);
-                    auto input=captureSitePlanPreviewInput(canvas,m_wall_move_ids);
+                if (siteCanvas(canvas) && !m_wall_move_ids.isEmpty()) {
+                    auto input=captureSitePlanPreviewInput(canvas,m_wall_move_ids,true);
                     m_model_move_edit_source=captureCanvasEditSource();
                     m_wall_move_site_capture=std::make_shared<SiteTransformPreviewCapture>(SiteTransformPreviewCapture{
                         std::move(input),m_site_edit_generation,canvas->viewCenter(),canvas->viewScale(),canvas->size(),
@@ -40149,9 +40190,7 @@ private:
                 if (m_plan_move_capture) return commitPlanMoveFromCanvas(canvas,ids,delta);
                 if (siteCanvas(canvas)) {
                     if (m_wall_move_site_capture) return commitSiteWallMoveFromCanvas(canvas,ids,delta);
-                    const auto command=siteTranslationCommand(ids,delta);
-                    (void)Document::preview_command(*m_site_edit_source,command);
-                    requireSiteEditCurrent();applyDocumentCommand(command);clearError();refresh();return true;
+                    throw std::invalid_argument("The Site move has no admitted preview. Start the drag again.");
                 }
                 return moveSelectionBy(ids, delta, canvas);
             } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return false; }
@@ -41529,6 +41568,7 @@ private:
                 canvas_entity.dark_stroke_color = QColor(143, 198, 245);
                 if (canvas_entity.selected && options.interactive && snapshot.is_editable())
                     if (const auto baseline = read_required_segment(entity.properties, "baseline")) {
+                        canvas_entity.endpoint_baseline=*baseline;
                         canvas_entity.vertex_handles.push_back({QStringLiteral("wall:start"), baseline->start, snapshot.revision()});
                         canvas_entity.vertex_handles.push_back({QStringLiteral("wall:end"), baseline->end, snapshot.revision()});
                     }
@@ -42486,6 +42526,7 @@ private:
             }
             if(const auto owner=candidate.entities().find(item.id.toStdString());owner!=candidate.entities().end() && owner->second.type=="wall") {
                 if(const auto baseline=read_required_segment(owner->second.properties,"baseline")) {
+                    if (proposed.endpoint_baseline) proposed.endpoint_baseline=*baseline;
                     proposed.snap_points={baseline->start,baseline->end};proposed.snap_segments={*baseline};
                     proposed.drawing_alignment_segments={*baseline};
                 }
@@ -42518,21 +42559,23 @@ private:
         return result;
     }
 
-    Command siteTranslationCommand(const QStringList& ids,Vec2 delta) {
-        const auto local=site_source_plan_delta(delta,siteEditFrame(ids));
-        const auto& source=*m_site_edit_source;
+    static Command prepareDetachedSiteTranslationCommand(const DocumentSnapshot& source,
+        const QStringList& ids,Vec2 local,const std::map<QString,SiteAnnotationTarget>& targets) {
         QStringList models;
         std::map<std::string,Entity> annotation_changes;
         for (const auto& id : ids) {
-            const auto typed=m_site_edit_annotation_targets.find(id);
-            if (typed==m_site_edit_annotation_targets.end()) {models.push_back(id);continue;}
+            const auto typed=targets.find(id);
+            if (typed==targets.end()) {models.push_back(id);continue;}
             const auto& target=typed->second;
             auto [it,inserted]=annotation_changes.try_emplace(target.owner_entity_id,source.entities().at(target.owner_entity_id));
             auto& placement=annotation_child_record(it->second,target.child_id).at("placement");
             placement["x"]=placement.at("x").get<double>()+local.x;
             placement["y"]=placement.at("y").get<double>()+local.y;
         }
-        auto parts=prepareSelectionTranslation(source,models,local,m_architecturalCanvas);
+        // Site has already inverted its displayed source frame. Its remaining
+        // IDs are model/reference/assembly owners, even when an annotation
+        // child happens to have the same persisted spelling.
+        auto parts=prepareDetachedSelectionTranslation(source,models,local,local,false,false);
         for (auto& [owner,entity] : annotation_changes) {(void)owner;validate_annotation_entity(entity);parts.presentation_changes.push_back(EntityChange::upsert(std::move(entity)));}
         if (parts.model_ids.isEmpty()) return ApplyEntityChanges{source.revision(),std::move(parts.presentation_changes),{},"Move Site Plan annotations"};
         return makeSelectionGeometryTranslationCommand(source,std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes),local);
@@ -42755,6 +42798,7 @@ private:
             for (auto item : source.geometry) {
                 const auto state = disposition(item.id); if (prior && state == 0) continue;
                 item.id = renamed(item.id); item.selected = false; item.vertex_handles.clear();
+                item.endpoint_baseline.reset();
                 item.resize_frame.reset(); item.opening_width_controls.reset();
                 if (state) {
                     item.stroke_color = color(state); item.dark_stroke_color = {};
@@ -43004,6 +43048,7 @@ private:
                 retained.snap_segments.clear();
                 retained.drawing_alignment_segments.clear();
                 retained.vertex_handles.clear();
+                retained.endpoint_baseline.reset();
                 if (kind != BuildingViewKind::plan || !horizontal_plan_frame(frame)) return;
                 const auto context = snap_organization->drawing_context(source.id);
                 const bool snap_eligible = context && scene_options.active_context &&
@@ -43012,6 +43057,8 @@ private:
                     context->floor_id == scene_options.active_context->floor_id;
                 const auto baseline = read_required_segment(source.properties, "baseline");
                 if (!baseline) return;
+                if (retained.selected && scene_options.interactive && snapshot.is_editable())
+                    retained.endpoint_baseline=project_plan_path({*baseline},frame).front();
                 const auto support = physical ? horizontal_wall_snap_spans(*physical, view_context.depth)
                                               : VisibleWallSnapSpans{{*baseline}, true, true};
                 auto projected = project_plan_path(support.segments, frame);

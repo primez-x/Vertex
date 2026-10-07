@@ -35,6 +35,7 @@ std::size_t entity_geometry_entries(const CanvasEntity& entity,
     if (entity.stroke_segments) add(entity.stroke_segments->size());
     add(entity.hit_segments.size());
     add(entity.drawing_alignment_segments.size());
+    if (entity.endpoint_baseline) add(1);
     if (entity.opening_width_controls && entity.opening_width_controls->host_baseline) add(1);
     return count;
 }
@@ -108,6 +109,8 @@ CanvasEntity site_presented_canvas_entity(
     result.hit_segments = presented_boundary(source.hit_segments, placement.forward);
     result.drawing_alignment_segments = presented_boundary(
         source.drawing_alignment_segments, placement.forward);
+    if (source.endpoint_baseline)
+        result.endpoint_baseline = presented_segment(*source.endpoint_baseline, placement.forward);
 
     if (source.resize_frame) {
         if (!source.resize_frame->source_rotation_radians &&

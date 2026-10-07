@@ -179,6 +179,10 @@ struct CanvasEntity {
     // Physical model-plan annotations are projected with their source axes.
     // Legacy symbols retain saved view-overlay XY when false.
     bool model_plan{false};
+    // Complete analytical wall baseline for endpoint length editing. Unlike
+    // snap_segments, this is not clipped and never contributes snap targets.
+    // The visible vertex handles still determine which endpoints can be edited.
+    std::optional<Segment> endpoint_baseline;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -771,6 +775,8 @@ private:
     };
     [[nodiscard]] std::optional<VertexHandleHit> vertexHandleAt(
         QPointF point, const QRectF& viewport) const;
+    [[nodiscard]] SnapResult wallEndpointInputPoint(const CanvasEntity& entity,
+        const VertexHandleHit& handle, Vec2 target) const;
     void updateBoundaryVertexPreview(QPointF point);
     bool applyBoundaryVertexPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result,
@@ -856,7 +862,8 @@ private:
     void ensureLocalSnapIndex() const;
     [[nodiscard]] std::optional<std::vector<LocalSnapTarget>> retainedSnapCandidates(
         QPointF point, double radius_pixels,
-        std::optional<Vec2> alignment_anchor = std::nullopt) const;
+        std::optional<Vec2> alignment_anchor = std::nullopt,
+        bool retained_source_targets = false) const;
     void ensureEntityHitIndex() const;
     [[nodiscard]] std::optional<std::vector<std::size_t>> entityHitCandidates(
         QPointF point, double hit_pixels) const;
@@ -1138,6 +1145,7 @@ private:
     bool m_vertex_release_pending{};
     bool m_boundary_vertex_preview_request_in_progress{};
     bool m_boundary_vertex_preview_fine{};
+    SnapKind m_boundary_vertex_snap_kind{SnapKind::none};
     std::uint64_t m_boundary_vertex_preview_serial{};
     std::optional<QPointF> m_boundary_vertex_preview_pointer;
     std::optional<OpeningWidthHandleHit> m_opening_width_handle;

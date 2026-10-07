@@ -3692,6 +3692,7 @@ void PlanCanvas::resetGesture() {
     m_vertex_release_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
     m_boundary_vertex_preview_fine = false;
+    m_boundary_vertex_snap_kind = SnapKind::none;
     m_boundary_vertex_preview_pointer.reset();
     m_opening_width_handle.reset();
     m_opening_width_press_station.reset();
@@ -4786,6 +4787,78 @@ void PlanCanvas::drawOpeningWidthHandles(QPainter& painter, const QRectF& viewpo
     painter.restore();
 }
 
+PlanCanvas::SnapResult PlanCanvas::wallEndpointInputPoint(const CanvasEntity& entity,
+    const VertexHandleHit& handle, Vec2 target) const {
+    SnapResult result{target, SnapKind::none, {}, {}};
+    if (!entity.endpoint_baseline || !std::isfinite(target.x) || !std::isfinite(target.y) ||
+        (handle.vertex_id != QStringLiteral("wall:start") &&
+         handle.vertex_id != QStringLiteral("wall:end"))) return result;
+
+    // Exact visible contacts precede dimensional rounding. This avoids leaving
+    // a tiny gap at a real corner merely to obtain a round displayed length.
+    if (m_wall_snap_enabled) {
+        constexpr double radius = 12.0;
+        const auto screen = toScreen(target, rect());
+        const auto local = retainedSnapCandidates(screen, radius, std::nullopt, true);
+        double nearest = std::numeric_limits<double>::infinity();
+        const auto consider = [&](Vec2 point, SnapKind kind) {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+            const auto separation = QLineF(screen, toScreen(point, rect())).length();
+            if (separation <= radius && separation < nearest) {
+                nearest = separation;
+                result = {point, kind, point, {}};
+            }
+        };
+        if (local) {
+            for (const auto& candidate : *local) {
+                const auto& owner = m_entities[candidate.entity_index];
+                if (!candidate.segment && owner.id != entity.id)
+                    consider(owner.snap_points[candidate.target_index], SnapKind::endpoint);
+            }
+        } else {
+            for (const auto& owner : m_entities) if (owner.id != entity.id)
+                for (const auto point : owner.snap_points) consider(point, SnapKind::endpoint);
+        }
+        if (result.kind == SnapKind::endpoint) return result;
+        const auto consider_baseline = [&](const CanvasEntity& owner, const Segment& baseline) {
+            if (owner.id == entity.id) return;
+            try {
+                const auto length = segment_length(baseline);
+                const auto station = std::clamp(project_host_station(baseline, target, length*.5), 0.0, length);
+                consider(point_at_host_station(baseline, station),
+                    owner.type == QStringLiteral("wall") ? SnapKind::on_wall : SnapKind::on_boundary);
+            } catch (const std::exception&) { /* Invalid spans cannot attract a grip. */ }
+        };
+        if (local) {
+            for (const auto& candidate : *local) if (candidate.segment) {
+                const auto& owner = m_entities[candidate.entity_index];
+                consider_baseline(owner, owner.snap_segments[candidate.target_index]);
+            }
+        } else {
+            for (const auto& owner : m_entities)
+                for (const auto& baseline : owner.snap_segments) consider_baseline(owner, baseline);
+        }
+        if (result.kind != SnapKind::none) return result;
+    }
+    try {
+        auto baseline = *entity.endpoint_baseline;
+        const bool moving_start = handle.vertex_id == QStringLiteral("wall:start");
+        const auto anchor = moving_start ? baseline.end : baseline.start;
+        if (moving_start) baseline.start = target;
+        else baseline.end = target;
+        // Retaining bulge makes arc length proportional to chord length. Scale
+        // around the fixed endpoint using the actual arc, never its chord label.
+        const auto length = segment_length(baseline);
+        if (!std::isfinite(length) || length <= 0.0) return result;
+        const auto factor = quantize_host_station(length, drawingLengthIncrementMetres()) / length;
+        const Vec2 proposed{anchor.x + (target.x-anchor.x)*factor,
+                            anchor.y + (target.y-anchor.y)*factor};
+        if (std::isfinite(proposed.x) && std::isfinite(proposed.y))
+            return {proposed, SnapKind::length, anchor, Segment{anchor, proposed, 0.0}};
+    } catch (const std::exception&) { /* Native admission still owns the raw proposal. */ }
+    return result;
+}
+
 void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
     if (!m_vertex_move_handle) return;
     const auto serial = ++m_boundary_vertex_preview_serial;
@@ -4802,6 +4875,17 @@ void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
         !m_snap_enabled || m_raw_point_input;
     m_vertex_move_preview=original || m_boundary_vertex_preview_fine
         ? target : inputPoint(toScreen(target,rect()));
+    m_boundary_vertex_snap_kind = SnapKind::none;
+    if (!original && !m_boundary_vertex_preview_fine &&
+        (handle.vertex_id == QStringLiteral("wall:start") || handle.vertex_id == QStringLiteral("wall:end"))) {
+        const auto retained=std::find_if(m_entities.begin(),m_entities.end(),
+            [&](const auto& entity){return entity.id==handle.entity_id && entity.selected && entity.endpoint_baseline;});
+        if (retained!=m_entities.end()) {
+            const auto proposal=wallEndpointInputPoint(*retained,handle,target);
+            m_vertex_move_preview=proposal.point;
+            m_boundary_vertex_snap_kind=proposal.kind;
+        }
+    }
     if (!original && !m_boundary_vertex_preview_fine &&
         handle.vertex_id.startsWith(QStringLiteral("roof:corner:"))) {
         const auto retained=std::find_if(m_entities.begin(),m_entities.end(),
@@ -5025,6 +5109,21 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
                  display_cursor_length(m_vertex_move_preview->y,m_metric_units));
         if (pending) text += QStringLiteral("  ·  Checking");
         else if (invalid) text += QStringLiteral("  ·  Invalid");
+        if (m_boundary_vertex_snap_kind == SnapKind::endpoint) text += QStringLiteral("  ·  Endpoint");
+        else if (m_boundary_vertex_snap_kind == SnapKind::on_wall) text += QStringLiteral("  ·  Wall centerline");
+        else if (m_boundary_vertex_snap_kind == SnapKind::on_boundary) text += QStringLiteral("  ·  Boundary");
+        if (pending || invalid) {
+            const auto retained=std::find_if(m_entities.begin(),m_entities.end(),
+                [&](const auto& entity){return entity.id==m_vertex_move_handle->entity_id && entity.endpoint_baseline;});
+            if (retained!=m_entities.end()) try {
+                auto baseline=*retained->endpoint_baseline;
+                if (m_vertex_move_handle->vertex_id == QStringLiteral("wall:start")) baseline.start=*m_vertex_move_preview;
+                else if (m_vertex_move_handle->vertex_id == QStringLiteral("wall:end")) baseline.end=*m_vertex_move_preview;
+                const auto length=segment_length(baseline);
+                if (std::isfinite(length))
+                    text += QStringLiteral("\nLength %1").arg(display_cursor_length(length,m_metric_units));
+            } catch (const std::exception&) { /* An invalid span has no physical readout. */ }
+        }
         else if (m_boundary_vertex_preview_valid && m_boundary_vertex_metrics_preview) {
             const auto& totals = *m_boundary_vertex_metrics_preview;
             if (totals.length_metres) {
@@ -6398,11 +6497,12 @@ void PlanCanvas::ensureLocalSnapIndex() const {
 }
 
 std::optional<std::vector<PlanCanvas::LocalSnapTarget>> PlanCanvas::retainedSnapCandidates(
-    QPointF point, double radius_pixels, std::optional<Vec2> alignment_anchor) const {
+    QPointF point, double radius_pixels, std::optional<Vec2> alignment_anchor,
+    bool retained_source_targets) const {
     // Previews/pending releases keep the original traversal and input authority.
     constexpr double safe_extent = 1e12;
     const auto viewport = QRectF(rect());
-    if (hasInteractivePresentation() || !std::isfinite(m_scale) ||
+    if ((!retained_source_targets && hasInteractivePresentation()) || !std::isfinite(m_scale) ||
         m_scale < minimum_scale || m_scale > maximum_scale ||
         !std::isfinite(m_view_center.x) || !std::isfinite(m_view_center.y) ||
         std::abs(m_view_center.x) > safe_extent || std::abs(m_view_center.y) > safe_extent ||
