@@ -500,6 +500,30 @@
   the original source bytes. <strong>Assistance</strong> can suggest tracing,
   dimensions, labels, or commands; suggestions are marked unverified and require an
   explicit acceptance before they enter project history.</p>
+  <p>In Site Plan, suggestions retain the reference's building, floor and layer.
+  The preview and accepted outline use the building's current placement and
+  rotation. If you change the drawing context while reviewing suggestions,
+  request them again before accepting.</p>
+
+  <h2>Device measurements</h2>
+  <p>Select one wall, door, window, slab or room, then choose
+  <strong>Import DISTO reading</strong> from Tools. On the <strong>Keyboard</strong>
+  tab, enter the device name and choose the dimension to change, the device's
+  output units and its decimal separator. Put the cursor in the reading field
+  and send one reading from a keyboard-capable device paired in Windows.
+  You can also type a reading. Press Enter or choose <strong>Apply</strong>.</p>
+  <p>The reading must be one positive decimal number, optionally followed by
+  the selected unit. For example, use <strong>12.5</strong> with decimal feet,
+  or <strong>3810 mm</strong> with millimetres. Feet and inches are separate
+  decimal choices; mixed feet-and-inches text is not a device reading.
+  The unit must match the device's output. Vertex does not discover the
+  device's unit setting.</p>
+  <p>The dimension and its reading are one Undo. A previous reading is retained
+  unless you choose <strong>Replace existing measurement</strong>. Geometry that
+  conflicts with locked dimensions or makes a door or window too large for its
+  wall is rejected without changing the drawing. Use the <strong>Adapter file</strong>
+  tab for an existing structured measurement file. Keyboard capture and adapter
+  files do not establish compatibility with every DISTO model.</p>
 
   <h2>CAD interchange</h2>
   <p>Choose <strong>Import DXF</strong> from Tools. Before importing, review each

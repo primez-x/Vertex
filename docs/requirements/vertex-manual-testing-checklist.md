@@ -1434,7 +1434,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U245 — Receive a DISTO measurement, if the device is available**
-  - Expected: The value enters the explicitly chosen field with correct units.
+  - Steps: Select a wall, door or window. Open Import DISTO reading from Tools, choose Keyboard, enter the device name, choose its output units and decimal separator, then choose the dimension to change. Send a reading from a keyboard-capable device, or type a reading to try the controls without a device. Apply it, then Undo and Redo. For a second reading on the same dimension, choose Replace existing measurement explicitly.
+  - Expected: The chosen dimension changes in the correct units. Undo restores the dimension and its previous reading together; Redo restores both. A conflicting wall length, an opening too large for its wall, an incompatible unit or an invalid reading shows an error and leaves the drawing unchanged. A previous reading is retained unless replacement is chosen. Record device reception separately from manually typed input.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1498,7 +1499,8 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U255 — Accept a suggested trace**
   - Steps: Accept the topology-preserving suggestion from U254, inspect the resulting area calculation, then use Undo and Redo.
-  - Expected: The outer contour and its interior void become editable boundaries in one history step. The outer boundary lists the void as a deduction, its net area excludes the void, one Undo removes both, and one Redo restores both. Other unaccepted suggestions remain previews.
+  - Also try: Place and rotate a building in Site Plan, trace a reference assigned to its floor and layer, and compare the suggestion with the accepted outline. Before accepting another suggestion, change the active layer; request fresh suggestions if the application reports that the drawing context changed.
+  - Expected: The outer contour and its interior void become editable boundaries in one history step. The outer boundary lists the void as a deduction, its net area excludes the void, one Undo removes both, and one Redo restores both. The accepted outline remains aligned with its reference in Site Plan and belongs to the reference's original floor and layer. Other unaccepted suggestions remain previews; changing the drawing context cannot silently place one on a different layer.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

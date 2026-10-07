@@ -26,6 +26,10 @@ struct DistoMeasurementRecord {
 void validate_disto_measurement(const DistoMeasurementRecord &record);
 [[nodiscard]] std::string disto_measurement_json(const DistoMeasurementRecord &record);
 [[nodiscard]] DistoMeasurementRecord parse_disto_measurement_json(std::string_view payload);
+// Caller declares unit, device identity, target, reading ID and UTC timestamp.
+// Parses one positive decimal reading; never discovers a device or converts units.
+[[nodiscard]] DistoMeasurementRecord parse_disto_keyboard_measurement(
+    std::string_view input, DistoMeasurementRecord declared_context, char decimal_separator);
 // Strong failure guarantee: existing or differently selected fields are unchanged.
 void assign_disto_measurement(std::string_view selected_field,
                              std::optional<DistoMeasurementRecord> &destination,

@@ -113,6 +113,7 @@
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QComboBox>
+#include <QDateTime>
 #include <QCloseEvent>
 #include <QCheckBox>
 #include <QClipboard>
@@ -14782,8 +14783,9 @@ public:
             }
             const auto snapshot = authoringSnapshot();
             const auto source_digest = document_snapshot_digest(snapshot);
-            const auto source_context = captureModalContext();
+            const auto source_context = captureSourceEditAuthority(snapshot);
             const auto source_workspace = m_workspace;
+            const bool source_site_plan = siteCanvas(m_architecturalCanvas);
             auto raster = decodeAssistanceReference(reference_id);
             const auto reference = snapshot.entities().find(reference_id.trimmed().toStdString());
             const auto calibration = [&]() -> double {
@@ -14863,16 +14865,12 @@ public:
                 raster.text_resources = recognized.resources;
                 raster.text_producer = recognized.producer;
             }
-            if (!m_assistance_session.enabled() || !modalContextUnchanged(source_context) ||
+            if (!m_assistance_session.enabled() || !sourceEditAuthorityCurrent(source_context) ||
+                source_site_plan != siteCanvas(m_architecturalCanvas) ||
                 m_workspace != source_workspace || document_snapshot_digest(authoringSnapshot()) != source_digest)
                 throw std::invalid_argument("The project or drawing context changed during assistance. Generate suggestions again.");
             const auto retain_source = [&](std::vector<AssistanceProposal> proposals) {
-                for (auto& proposal : proposals) {
-                    proposal.preview.arguments["source_document_digest"] = source_digest;
-                    proposal.preview.arguments["source_workspace"] = static_cast<int>(source_workspace);
-                    validate_assistance_proposal(proposal);
-                }
-                return proposals;
+                return stampAssistanceProposals(std::move(proposals), snapshot);
             };
             switch (kind) {
             case AssistanceKind::tracing:
@@ -14902,12 +14900,73 @@ public:
     }
 
     [[nodiscard]] std::vector<AssistanceProposal> stampAssistanceProposals(
-        std::vector<AssistanceProposal> proposals, const DocumentSnapshot& source) const {
+        std::vector<AssistanceProposal> proposals, const DocumentSnapshot& source) {
         const auto digest = document_snapshot_digest(source);
+        const auto organization = organize_project(source);
+        const bool site_plan = siteCanvas(m_architecturalCanvas);
+        m_assistance_sources.clear();
         for (auto& proposal : proposals) {
             proposal.preview.arguments["source_document_digest"] = digest;
             proposal.preview.arguments["source_workspace"] = static_cast<int>(m_workspace);
+            const auto& command = proposal.preview.command_type;
+            std::optional<DrawingContext> context;
+            SitePresentationPlacement destination;
+            if (command != "set_workspace") {
+                const bool reference_geometry = proposal.kind == AssistanceKind::tracing ||
+                    proposal.kind == AssistanceKind::edge_tracing ||
+                    proposal.kind == AssistanceKind::dimension_extraction;
+                const auto owner = reference_geometry || command == "add_label"
+                    ? proposal.source.reference_id : m_active_layer_id.toStdString();
+                context = organization.drawing_context(owner);
+                if (!context || !context->complete())
+                    throw std::invalid_argument("The assistance source needs a complete drawing layer. Assign it to the intended floor and generate suggestions again.");
+                if (proposal.kind == AssistanceKind::dimension_extraction) {
+                    const auto target_id = proposal.preview.arguments.at(
+                        command == "add_wall_dimension_suggestion" ? "target_wall_id" : "target_boundary_id").get<std::string>();
+                    const auto target_context = organization.drawing_context(target_id);
+                    if (!target_context || !target_context->complete() ||
+                        target_context->property_id != context->property_id ||
+                        target_context->building_id != context->building_id ||
+                        target_context->floor_id != context->floor_id)
+                        throw std::invalid_argument("The reference and dimension target must belong to the same property, building and floor. Choose matching owners and generate suggestions again.");
+                    context = target_context;
+                    if (site_plan) destination = resolve_site_presentation(source, target_id);
+                } else if (site_plan) {
+                    if (command == "add_label") destination = siteAnnotationCreationFrame(source, *context);
+                    else {
+                        // Resolve precisely the policy of the boundary we will create,
+                        // rather than assuming that its reference has the same frame.
+                        Entity probe{new_id("assistance-frame"), "measurement_boundary"};
+                        probe.properties = {{"property_id", context->property_id},
+                            {"building_id", context->building_id}, {"floor_id", context->floor_id},
+                            {"layer_id", context->layer_id}};
+                        auto entities = source.entities();
+                        entities.emplace(probe.id, probe);
+                        destination = resolve_site_presentation(entities, probe.id);
+                    }
+                    if (reference_geometry || command == "add_label") {
+                        const auto origin = resolve_site_presentation(source, owner);
+                        const auto source_to_destination = compose_site_transforms(destination.inverse, origin.forward);
+                        const auto convert = [&](json& value) {
+                            const auto point = read_point(value);
+                            if (!point) throw std::invalid_argument("The assistance geometry position is invalid.");
+                            const auto local = site_transform_point({point->x, point->y, 0.0}, source_to_destination);
+                            value = json::array({local.x, local.y});
+                        };
+                        if (command == "add_label") convert(proposal.preview.arguments.at("position"));
+                        else {
+                            for (auto& point : proposal.preview.arguments.at("points")) convert(point);
+                            if (proposal.preview.arguments.contains("holes"))
+                                for (auto& hole : proposal.preview.arguments.at("holes"))
+                                    for (auto& point : hole) convert(point);
+                        }
+                    }
+                }
+            }
             validate_assistance_proposal(proposal);
+            m_assistance_sources.emplace(proposal.id, AssistanceSourceBinding{
+                captureSourceEditAuthority(source), site_plan, context, destination,
+                encode_assistance_proposal(proposal)});
         }
         return proposals;
     }
@@ -14922,6 +14981,12 @@ public:
             !arguments.at("source_workspace").is_number_integer() ||
             arguments.at("source_workspace") != static_cast<int>(m_workspace))
             throw std::invalid_argument("The project or workspace changed, or the suggestion source is missing. Generate suggestions again.");
+        const auto captured = m_assistance_sources.find(proposal.id);
+        if (captured == m_assistance_sources.end() ||
+            captured->second.proposal != encode_assistance_proposal(proposal) ||
+            captured->second.site_plan != siteCanvas(m_architecturalCanvas) ||
+            !sourceEditAuthorityCurrent(captured->second.authority))
+            throw std::invalid_argument("The suggestion or its drawing layer, view or source context changed. Generate suggestions again.");
     }
 
     [[nodiscard]] std::vector<AssistanceProposal> suggestLabelAssistance() {
@@ -14942,6 +15007,8 @@ public:
                     !entity.properties.contains("name") || !entity.properties.at("name").is_string()) {
                     continue;
                 }
+                const auto context = scene.organization.drawing_context(id);
+                if (!context || !context->complete()) continue;
                 std::optional<Vec2> position;
                 for (const auto* key : {"position_m", "base_position_m", "start_m"}) {
                     if (entity.properties.contains(key)) {
@@ -15023,16 +15090,19 @@ public:
         if (source.entities().contains(id)) {
             throw std::invalid_argument("Assisted label ID already exists.");
         }
-        const auto context=requireDrawingContext();
+        const auto& binding = m_assistance_sources.at(proposal.id);
+        const auto context = binding.drawing_context;
         if (!context) throw std::invalid_argument("Choose a layer for the assisted label.");
         const auto annotation=annotationCarrierForLayer(source,context->layer_id);
-        if (annotation == source.entities().end()) throw std::invalid_argument("Annotation state is missing.");
+        if (!binding.site_plan && annotation == source.entities().end())
+            throw std::invalid_argument("Annotation state is missing.");
+        const auto carrier = binding.site_plan ? siteAnnotationCarrier(source, *context) : annotation->second;
         const auto templates = default_label_templates();
         const auto template_id = args.at("template_id").get<std::string>();
         const auto definition = std::find_if(templates.begin(), templates.end(),
             [&](const auto& candidate) { return candidate.id == template_id; });
         if (definition == templates.end()) throw std::invalid_argument("Assisted label template is unknown.");
-        auto state = decode_annotation_entity(annotation->second);
+        auto state = decode_annotation_entity(carrier);
         auto label = instantiate_label(*definition, id);
         label.content = args.at("content").get<std::string>();
         label.placement.position = *position;
@@ -15040,7 +15110,7 @@ public:
         label.model_plan = true;
         AnnotationState addition;addition.labels.push_back(std::move(label));
         const auto encoded_addition=encode_annotation_state(addition,desktop_symbol_catalog());
-        auto updated=annotation->second;
+        auto updated=carrier;
         if (encoded_addition.at("version").get<int>()>=3)
             upgrade_annotation_transform_version(updated,state);
         auto& raw_version=updated.properties.at("state").at("version");
@@ -15071,8 +15141,8 @@ public:
         if (source.entities().contains(id)) {
             throw std::invalid_argument("Assisted boundary ID already exists.");
         }
-        const auto context = requireDrawingContext();
-        if (!context) return false;
+        const auto context = m_assistance_sources.at(proposal.id).drawing_context;
+        if (!context) throw std::invalid_argument("The assisted boundary has no captured drawing layer.");
         const auto holes_value = args.value("holes", json::array());
         const auto hole_ids_value = args.value("hole_ids", json::array());
         if (!holes_value.is_array() || !hole_ids_value.is_array() ||
@@ -15149,6 +15219,17 @@ public:
         return true;
     }
 
+    void assignAssistanceDimensionFrame(Entity& dimension, const AssistanceProposal& proposal) const {
+        const auto& binding = m_assistance_sources.at(proposal.id);
+        if (!binding.site_plan) return;
+        // Dimension witnesses are projected from their target's LOCAL geometry.
+        // Their own explicit frame must carry that same placement exactly once.
+        const auto mode = binding.destination_frame.source_frame.mode;
+        dimension.properties["presentation_frame"] = {{"version", 1},
+            {"mode", mode == SiteFrameMode::building ? "building" :
+                mode == SiteFrameMode::site ? "site" : "world"}};
+    }
+
     [[nodiscard]] bool applyAssistedDimension(const AssistanceProposal& proposal) {
         const auto& args = proposal.preview.arguments;
         const auto target_value = args.value("target_boundary_id", json{});
@@ -15197,6 +15278,7 @@ public:
         for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) {
             if (target.properties.contains(key)) dimension.properties[key] = target.properties.at(key);
         }
+        assignAssistanceDimensionFrame(dimension, proposal);
         std::vector<EntityChange> changes;
         if (target.properties != original_target.properties || target.extensions != original_target.extensions) {
             changes.push_back(EntityChange::upsert(std::move(target)));
@@ -15249,6 +15331,7 @@ public:
             {"recognized_length_metres", observed.metres}};
         for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"})
             if (target.properties.contains(key)) dimension.properties[key] = target.properties.at(key);
+        assignAssistanceDimensionFrame(dimension, proposal);
         const ApplyEntityChanges command{source.revision(), {EntityChange::upsert(std::move(dimension))}, {},
                                          "Accept assisted wall dimension"};
         (void)Document::preview_command(source, command);
@@ -24197,25 +24280,102 @@ public:
         }
     }
 
-    bool importDistoMeasurement(const QString& payload) {
+    void validateMeasurementGeometry(const DocumentSnapshot& source,
+                                     const DocumentSnapshot& candidate,
+                                     const std::string& measured_id) {
+        const auto& entities = candidate.entities();
+        const auto measured = entities.find(measured_id);
+        if (measured == entities.end())
+            throw std::invalid_argument("The measured object is missing from its completed geometry.");
+
+        std::set<std::string, std::less<>> host_ids;
+        const auto include_host = [&](const Entity& entity) {
+            if (entity.type == "wall") host_ids.insert(entity.id);
+            else if (entity.type == "opening") {
+                std::string host_id, error;
+                if (!read_document_wall_id(entity, host_id, error))
+                    throw std::invalid_argument(error);
+                host_ids.insert(std::move(host_id));
+            }
+        };
+        include_host(measured->second);
+        // A connected length solve can also move another wall or opening.
+        // Validate their completed hosts, including siblings on hidden layers.
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "wall" && entity.type != "opening") continue;
+            const auto before = source.entities().find(id);
+            if (before == source.entities().end() || before->second.properties != entity.properties) {
+                include_host(entity);
+                if (before != source.entities().end()) include_host(before->second);
+            }
+        }
+        for (const auto& [id, entity] : source.entities())
+            if ((entity.type == "wall" || entity.type == "opening") && !entities.contains(id))
+                include_host(entity);
+
+        std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_host;
+        if (!host_ids.empty())
+            for (const auto& [id, entity] : entities) {
+                (void)id;
+                if (entity.type != "opening") continue;
+                const auto host_id = read_string(entity.properties, "wall_id");
+                if (host_id && host_ids.contains(*host_id)) openings_by_host[*host_id].push_back(&entity);
+            }
+        for (const auto& host_id : host_ids) {
+            const auto host = entities.find(host_id);
+            if (host == entities.end() || host->second.type != "wall")
+                throw std::invalid_argument("The completed opening has no valid host wall: " + host_id);
+            const auto& openings = openings_by_host[host_id];
+            Wall wall;
+            std::string error;
+            if (!read_document_wall(resolve_vertical_placement(candidate, host->second), openings, wall, error))
+                throw std::invalid_argument(error);
+            (void)make_wall(wall);
+            for (const auto* opening : openings) {
+                if (!opening->properties.contains("opening_assembly")) continue;
+                const auto hosted = std::find_if(wall.openings.begin(), wall.openings.end(),
+                    [&](const auto& item) { return item.id == opening->id; });
+                if (hosted == wall.openings.end())
+                    throw std::invalid_argument("The completed opening lost its wall host.");
+                const auto assembly = parse_opening_assembly(opening->properties.at("opening_assembly"));
+                std::optional<DoorOperation> operation;
+                if (assembly.kind == OpeningAssemblyKind::door && opening->properties.contains("door_operation"))
+                    operation = decode_door_operation(opening->properties.at("door_operation"));
+                (void)make_opening_assembly(wall, *hosted, assembly, operation);
+            }
+        }
+        if (measured->second.type == "slab") {
+            const auto slab = resolve_vertical_placement(candidate, measured->second);
+            if (!previewSlab(slab, slab.properties))
+                throw std::invalid_argument(lastError().toStdString());
+        } else if (measured->second.type == "room") {
+            RoomVolume room;
+            std::string error;
+            if (!read_document_room(resolve_vertical_placement(candidate, measured->second), room, error))
+                throw std::invalid_argument(error);
+            (void)make_room_volume(room);
+        }
+    }
+
+    bool importDistoMeasurement(const QString& payload, bool replace_existing = false) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
         }
         try {
             const auto record = parse_disto_measurement_json(payload.toUtf8().toStdString());
-            const auto selected = selectedEntity();
-            if (!selected.has_value()) {
-                throw std::invalid_argument("Select the entity that owns the DISTO field first.");
-            }
-            const auto target = QString::fromStdString(record.target_field);
+            const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
+            const auto selected = source.entities().find(m_selected_id.toStdString());
+            if (m_selected_ids.size() != 1 || selected == source.entities().end())
+                throw std::invalid_argument("Select one object that owns the measurement field first.");
             const auto expression = QString::number(record.value, 'g', 17) +
                                     QStringLiteral(" ") + QString::fromStdString(record.unit);
             const auto target_is = [&](const char* value) {
                 return record.target_field == value;
             };
             const auto type_is = [&](const char* value) {
-                return selected->type == value;
+                return selected->second.type == value;
             };
             const auto target_supported =
                 (target_is("wall.length") && type_is("wall")) ||
@@ -24233,58 +24393,55 @@ public:
                     "DISTO target '" + record.target_field +
                     "' is not compatible with the selected entity.");
             }
-            const auto ensure_available = [&](const Entity& entity) {
-                const auto prior = entity.extensions.find("disto_measurements");
-                if (prior == entity.extensions.end()) return;
-                if (!prior->is_object() || prior->value("version", 0) != 1 ||
-                    !prior->contains("fields") || !prior->at("fields").is_object()) {
-                    throw std::invalid_argument(
-                        "The selected entity has malformed DISTO provenance metadata.");
-                }
-                if (prior->at("fields").contains(record.target_field)) {
-                    throw std::invalid_argument(
-                        "The selected field already has a DISTO reading; clear it before importing another.");
-                }
-            };
-            ensure_available(*selected);
+            const auto quantity = parse_quantity(expression.toStdString(), Unit::metre);
+            if (!std::isfinite(quantity.metres) || quantity.metres <= 1e-7)
+                throw std::invalid_argument("The reading must be greater than zero within the supported measurement range.");
 
-            bool edited = false;
-            if (target_is("wall.length") || target_is("opening.width")) {
-                edited = editSelectedLength(expression);
-            } else if (target_is("wall.height") || target_is("opening.height") ||
-                       target_is("room.height")) {
-                edited = editSelectedHeight(expression);
-            } else if (target_is("wall.thickness") || target_is("slab.thickness")) {
-                edited = editSelectedThickness(expression);
+            Command command;
+            if (target_is("wall.length")) {
+                const auto baseline = read_required_segment(selected->second.properties, "baseline");
+                if (!baseline) throw std::invalid_argument("The wall has no valid measurement axis.");
+                if (segment_length(*baseline) == quantity.metres) {
+                    // An unchanged measured length still has a new device observation.
+                    command = ApplyEntityChanges{source.revision(),
+                        {EntityChange::upsert(selected->second)}, {}, "Apply measurement"};
+                } else {
+                    ConstraintDialog dialog(source, m_selected_id, m_metric_units, owner);
+                    dialog.setLengthExpression(expression);
+                    if (!dialog.previewEdit() || !dialog.submit())
+                        throw std::invalid_argument(dialog.lastError().isEmpty()
+                            ? "The wall reading conflicts with its connected geometry."
+                            : dialog.lastError().toStdString());
+                    const auto preview = dialog.acceptedPreview();
+                    if (!preview) throw std::invalid_argument("The wall measurement has no accepted geometry preview.");
+                    command = constraint_authoring_verified_command(source, *preview, nullptr);
+                }
             } else {
-                edited = editSelectedElevation(expression);
+                auto properties = selected->second.properties;
+                const auto key = target_is("opening.width") ? "width_m"
+                    : target_is("wall.height") || target_is("opening.height") || target_is("room.height")
+                        ? "height_m"
+                    : target_is("wall.thickness") || target_is("slab.thickness")
+                        ? "thickness_m" : "elevation_m";
+                properties[key] = quantity.metres;
+                std::map<std::string, std::string> encoded;
+                for (const auto& [name, value] : properties.items()) encoded.emplace(name, value.dump());
+                const auto transaction = ArchitecturalTransaction::create(new_id("measurement-tx"),
+                    std::to_string(source.revision()), {selected->first},
+                    {ArchitecturalOperation{ArchitecturalAction::property_edit, selected->first,
+                        {}, {}, std::move(encoded), std::nullopt}}, "Apply measurement");
+                command = augmentAuthoredCommand(architectural_transaction_command(
+                    source, transaction, source.revision()), source);
             }
-            if (!edited) return false;
 
-            const auto current = selectedEntity();
-            if (!current.has_value() || current->id != selected->id) {
-                throw std::invalid_argument(
-                    "The selected entity changed while applying the DISTO reading.");
-            }
-            ensure_available(*current);
-            auto updated = *current;
-            auto provenance = updated.extensions.find("disto_measurements");
-            if (provenance == updated.extensions.end()) {
-                updated.extensions["disto_measurements"] =
-                    json{{"version", 1}, {"fields", json::object()}};
-                provenance = updated.extensions.find("disto_measurements");
-            }
-            provenance->at("fields")[record.target_field] =
-                json::parse(disto_measurement_json(record));
-
-            const auto source = authoringSnapshot();
-            const ApplyEntityChanges command{
-                source.revision(),
-                {EntityChange::upsert(std::move(updated))},
-                {},
-                "Import DISTO measurement"};
-            (void)Document::preview_command(source, command);
-            applyDocumentCommand(command);
+            const auto geometry = Document::preview_command(source, command);
+            validateMeasurementGeometry(source, geometry, selected->first);
+            // Geometry and observation are validated and published together. A
+            // stale source or invalid reading cannot leave a half-applied edit.
+            command = complete_disto_measurement_command(source, command,
+                selected->first, record, replace_existing);
+            if (!sourceEditAuthorityUnchanged(authority)) return false;
+            applyAuthoredCommand(command);
             clearError();
             refresh();
             return true;
@@ -30351,41 +30508,156 @@ public:
     }
 
     void showDistoImport() {
+        const auto source = authoringSnapshot();
+        const auto authority = captureSourceEditAuthority(source);
+        const auto selected = source.entities().find(m_selected_id.toStdString());
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("distoImportDialog"));
-        dialog.setWindowTitle(QStringLiteral("Import DISTO reading"));
+        dialog.setWindowTitle(QStringLiteral("Measurement input"));
         dialog.setModal(true);
-        dialog.resize(640, 460);
+        dialog.resize(600, 420);
         auto* layout = new QVBoxLayout(&dialog);
-        auto* description = new QLabel(
-            QStringLiteral("Paste a version 1.0 local DISTO adapter envelope, or load one from a file. "
-                           "The selected entity and explicit target field control where the reading is applied."),
-            &dialog);
-        description->setWordWrap(true);
-        layout->addWidget(description);
         auto* selection = new QLabel(&dialog);
         selection->setObjectName(QStringLiteral("distoSelection"));
-        selection->setText(m_selected_id.isEmpty()
-                               ? QStringLiteral("No entity selected")
-                               : QStringLiteral("Selected entity: %1").arg(m_selected_id));
+        selection->setTextFormat(Qt::PlainText);
+        selection->setText(selected == source.entities().end() || m_selected_ids.size() != 1
+            ? QStringLiteral("Select one wall, opening, slab or room before entering a measurement.")
+            : QStringLiteral("%1").arg(QString::fromStdString(
+                selected->second.properties.value("name", selected->first))));
         selection->setWordWrap(true);
         layout->addWidget(selection);
-        auto* payload = new QPlainTextEdit(&dialog);
+        auto* tabs = new QTabWidget(&dialog);
+        tabs->setObjectName(QStringLiteral("distoInputTabs"));
+        auto* keyboard = new QWidget(tabs);
+        auto* keyboard_layout = new QVBoxLayout(keyboard);
+        auto* guidance = new QLabel(QStringLiteral(
+            "Pair a keyboard-capable measuring device in Windows, select the unit used on the device, "
+            "then send its reading to the Measurement field."), keyboard);
+        guidance->setWordWrap(true);
+        keyboard_layout->addWidget(guidance);
+        auto* form = new QFormLayout;
+        auto* device = new QLineEdit(keyboard);
+        device->setObjectName(QStringLiteral("distoDeviceName"));
+        device->setMaxLength(128);
+        device->setPlaceholderText(QStringLiteral("Device name or model"));
+        form->addRow(QStringLiteral("Device"), device);
+        auto* target = new QComboBox(keyboard);
+        target->setObjectName(QStringLiteral("distoTargetField"));
+        if (selected != source.entities().end() && m_selected_ids.size() == 1) {
+            const auto& type = selected->second.type;
+            if (type == "wall") {
+                target->addItem(QStringLiteral("Length"), QStringLiteral("wall.length"));
+                target->addItem(QStringLiteral("Height"), QStringLiteral("wall.height"));
+                target->addItem(QStringLiteral("Thickness"), QStringLiteral("wall.thickness"));
+                target->addItem(QStringLiteral("Base elevation"), QStringLiteral("wall.elevation"));
+            } else if (type == "opening") {
+                target->addItem(QStringLiteral("Width"), QStringLiteral("opening.width"));
+                target->addItem(QStringLiteral("Height"), QStringLiteral("opening.height"));
+            } else if (type == "slab") {
+                target->addItem(QStringLiteral("Thickness"), QStringLiteral("slab.thickness"));
+                target->addItem(QStringLiteral("Base elevation"), QStringLiteral("slab.elevation"));
+            } else if (type == "room") {
+                target->addItem(QStringLiteral("Height"), QStringLiteral("room.height"));
+                target->addItem(QStringLiteral("Base elevation"), QStringLiteral("room.elevation"));
+            }
+        }
+        form->addRow(QStringLiteral("Field"), target);
+        auto* current_reading = new QLabel(keyboard);
+        current_reading->setObjectName(QStringLiteral("distoCurrentMeasurement"));
+        current_reading->setTextFormat(Qt::PlainText);
+        current_reading->setWordWrap(true);
+        form->addRow(current_reading);
+        const auto update_current_reading = [&] {
+            current_reading->clear();
+            if (selected == source.entities().end() || target->count() == 0) return;
+            const auto field = target->currentData().toString().toStdString();
+            std::optional<double> current;
+            if (field == "wall.length") {
+                if (const auto baseline = read_required_segment(selected->second.properties, "baseline")) {
+                    try { current = segment_length(*baseline); }
+                    catch (const std::exception&) { /* The Apply path reports invalid geometry. */ }
+                }
+            } else {
+                const auto key = field == "opening.width" ? "width_m"
+                    : field.ends_with(".height") ? "height_m"
+                    : field.ends_with(".thickness") ? "thickness_m" : "elevation_m";
+                current = read_finite_number(selected->second.properties, key);
+            }
+            auto description = current
+                ? QStringLiteral("Current %1: %2").arg(target->currentText().toLower(),
+                    format_length(*current, m_metric_units))
+                : QStringLiteral("Current dimension is unavailable.");
+            const auto prior = selected->second.extensions.find("disto_measurements");
+            if (prior != selected->second.extensions.end()) {
+                try {
+                    if (prior->at("fields").contains(field)) {
+                        const auto record = parse_disto_measurement_json(prior->at("fields").at(field).dump());
+                        description += QStringLiteral("\nRecorded: %1 %2 · %3 · %4").arg(
+                            QString::number(record.value, 'g', 12), QString::fromStdString(record.unit),
+                            QString::fromStdString(record.model), QString::fromStdString(record.captured_at));
+                    }
+                } catch (const std::exception&) {
+                    description += QStringLiteral("\nThe saved reading is malformed; it cannot be replaced here.");
+                }
+            }
+            current_reading->setText(description);
+        };
+        QObject::connect(target, &QComboBox::currentIndexChanged, &dialog,
+            [&](int) { update_current_reading(); });
+        update_current_reading();
+        auto* units = new QComboBox(keyboard);
+        units->setObjectName(QStringLiteral("distoSourceUnit"));
+        units->setPlaceholderText(QStringLiteral("Select the device unit"));
+        for (const auto& [label, value] : std::array<std::pair<const char*, const char*>, 5>{
+                {{"Metres", "m"}, {"Centimetres", "cm"}, {"Millimetres", "mm"},
+                 {"Feet (decimal)", "ft"}, {"Inches (decimal)", "in"}}})
+            units->addItem(QString::fromLatin1(label), QString::fromLatin1(value));
+        units->setCurrentIndex(-1);
+        form->addRow(QStringLiteral("Device unit"), units);
+        auto* decimal = new QComboBox(keyboard);
+        decimal->setObjectName(QStringLiteral("distoDecimalSeparator"));
+        decimal->addItem(QStringLiteral("Dot (12.34)"), QStringLiteral("."));
+        decimal->addItem(QStringLiteral("Comma (12,34)"), QStringLiteral(","));
+        form->addRow(QStringLiteral("Decimal"), decimal);
+        auto* reading = new QLineEdit(keyboard);
+        reading->setObjectName(QStringLiteral("distoKeyboardReading"));
+        reading->setMaxLength(256);
+        reading->setAccessibleName(QStringLiteral("Measurement from device"));
+        reading->setPlaceholderText(QStringLiteral("Send or enter one measurement"));
+        form->addRow(QStringLiteral("Measurement"), reading);
+        keyboard_layout->addLayout(form);
+        keyboard_layout->addStretch(1);
+        tabs->addTab(keyboard, QStringLiteral("Keyboard"));
+        auto* adapter = new QWidget(tabs);
+        auto* adapter_layout = new QVBoxLayout(adapter);
+        auto* description = new QLabel(QStringLiteral(
+            "Load a reading from a device adapter, or paste its measurement record."), adapter);
+        description->setWordWrap(true);
+        adapter_layout->addWidget(description);
+        auto* payload = new QPlainTextEdit(adapter);
         payload->setObjectName(QStringLiteral("distoPayload"));
         payload->setAccessibleName(QStringLiteral("DISTO measurement JSON"));
         payload->setPlaceholderText(QStringLiteral(
             "{\"protocol_version\":{\"major\":1,\"minor\":0},...}"));
         payload->setTabChangesFocus(true);
-        layout->addWidget(payload, 1);
+        adapter_layout->addWidget(payload, 1);
         auto* file_row = new QHBoxLayout;
-        auto* load = new QPushButton(QStringLiteral("Load JSON file…"), &dialog);
+        auto* load = new QPushButton(QStringLiteral("Load reading file…"), adapter);
         load->setObjectName(QStringLiteral("loadDistoJson"));
         file_row->addWidget(load);
         file_row->addStretch(1);
-        layout->addLayout(file_row);
+        adapter_layout->addLayout(file_row);
+        tabs->addTab(adapter, QStringLiteral("Adapter file"));
+        layout->addWidget(tabs, 1);
+        auto* replace = new QCheckBox(QStringLiteral("Replace existing measurement"), &dialog);
+        replace->setObjectName(QStringLiteral("distoReplaceExisting"));
+        replace->setVisible(selected != source.entities().end() &&
+            selected->second.extensions.contains("disto_measurements"));
+        layout->addWidget(replace);
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("distoImportStatus"));
+        status->setTextFormat(Qt::PlainText);
         status->setWordWrap(true);
         layout->addWidget(status);
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
@@ -30393,6 +30665,19 @@ public:
         buttons->button(QDialogButtonBox::Apply)->setText(QStringLiteral("Apply reading"));
         buttons->button(QDialogButtonBox::Apply)->setObjectName(QStringLiteral("applyDistoReading"));
         layout->addWidget(buttons);
+        const auto update_apply = [&] {
+            const bool owner_ready = selected != source.entities().end() && m_selected_ids.size() == 1;
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(owner_ready &&
+                (tabs->currentIndex() == 1 ? !payload->toPlainText().trimmed().isEmpty()
+                    : target->count() > 0 && units->currentIndex() >= 0 &&
+                      !device->text().trimmed().isEmpty() && !reading->text().trimmed().isEmpty()));
+        };
+        QObject::connect(device, &QLineEdit::textChanged, &dialog, [&](const QString&) { update_apply(); });
+        QObject::connect(reading, &QLineEdit::textChanged, &dialog, [&](const QString&) { update_apply(); });
+        QObject::connect(units, &QComboBox::currentIndexChanged, &dialog, [&](int) { update_apply(); });
+        QObject::connect(tabs, &QTabWidget::currentChanged, &dialog, [&](int) { update_apply(); });
+        QObject::connect(payload, &QPlainTextEdit::textChanged, &dialog, update_apply);
+        update_apply();
         QObject::connect(load, &QPushButton::clicked, &dialog, [&] {
             const auto path = QFileDialog::getOpenFileName(
                 &dialog, QStringLiteral("Load DISTO reading"), {},
@@ -30404,15 +30689,36 @@ public:
                 return;
             }
             payload->setPlainText(QString::fromUtf8(file.readAll()));
-            status->setText(QStringLiteral("Loaded locally. Review the target field before applying."));
+            status->setText(QStringLiteral("Loaded. Review the target field before applying."));
         });
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
-            if (importDistoMeasurement(payload->toPlainText())) {
-                dialog.accept();
-            } else {
-                status->setText(lastError());
+            try {
+                if (!sourceEditAuthorityUnchanged(authority)) {
+                    status->setText(lastError());
+                    return;
+                }
+                auto record = payload->toPlainText();
+                if (tabs->currentIndex() == 0) {
+                    DistoMeasurementRecord context{{1, 0}, new_id("measurement"),
+                        target->currentData().toString().toStdString(), 0.0,
+                        units->currentData().toString().toStdString(),
+                        QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss'Z'")).toStdString(),
+                        device->text().trimmed().toStdString(), "not-reported", {},
+                        "Entered through the keyboard measurement dialog."};
+                    const auto observation = parse_disto_keyboard_measurement(reading->text().toStdString(),
+                        std::move(context), decimal->currentData().toString().at(0).toLatin1());
+                    record = QString::fromStdString(disto_measurement_json(observation));
+                }
+                if (importDistoMeasurement(record, replace->isChecked())) dialog.accept();
+                else status->setText(lastError());
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
             }
+        });
+        QObject::connect(reading, &QLineEdit::returnPressed, &dialog, [&] {
+            if (buttons->button(QDialogButtonBox::Apply)->isEnabled())
+                buttons->button(QDialogButtonBox::Apply)->click();
         });
         dialog.exec();
     }
@@ -30591,6 +30897,7 @@ public:
                 const auto preview_source = authoringSnapshot();
                 const auto& arguments = proposal.preview.arguments;
                 requireCurrentAssistanceSource(proposal, preview_source);
+                const auto& binding = m_assistance_sources.at(proposal.id);
                 const bool uses_reference = proposal.kind == AssistanceKind::tracing ||
                     proposal.kind == AssistanceKind::edge_tracing || proposal.kind == AssistanceKind::dimension_extraction;
                 if ((proposal.kind == AssistanceKind::tracing || proposal.kind == AssistanceKind::edge_tracing) &&
@@ -30603,11 +30910,16 @@ public:
                         [&](const auto& image) { return image.id.toStdString() == proposal.source.reference_id; });
                     if (reference == scene.references.end())
                         throw std::invalid_argument("The reference preview is unavailable.");
-                    review_canvas->setReferences({*reference});
+                    review_canvas->setReferences({binding.site_plan
+                        ? site_presented_canvas_reference(*reference,
+                            resolve_site_presentation(preview_source, proposal.source.reference_id))
+                        : *reference});
                     std::vector<CanvasEntity> contours;
                     const auto append_contour = [&](const json& points, const QString& id) {
                         CanvasEntity contour{id, QStringLiteral("boundary"), assistanceBoundary(points)};
                         contour.stroke_color = QColor("#1671f5");
+                        if (binding.site_plan)
+                            contour = site_presented_canvas_entity(contour, binding.destination_frame);
                         contours.push_back(std::move(contour));
                     };
                     append_contour(arguments.at("points"), id_from(proposal.id));
@@ -30683,6 +30995,8 @@ public:
                         QString::fromStdString(arguments.at("content").get<std::string>())};
                     label.color = QColor("#111111");
                     label.paper_height_mm = 3.0;
+                    if (binding.site_plan)
+                        label = site_presented_canvas_label(label, binding.destination_frame);
                     review_canvas->setLabels({label});
                     QString context;
                     if (arguments.contains("anchor_entity_id")) {
@@ -30697,6 +31011,11 @@ public:
                         std::erase_if(scene.all_geometry, [&](const auto& geometry) {
                             return geometry.id.toStdString() != anchor_id;
                         });
+                        if (binding.site_plan) {
+                            const auto frame = resolve_site_presentation(preview_source, anchor_id);
+                            for (auto& geometry : scene.all_geometry)
+                                geometry = site_presented_canvas_entity(geometry, frame);
+                        }
                         review_canvas->setEntities(std::move(scene.all_geometry));
                     }
                     review_canvas->fitView();
@@ -30710,6 +31029,8 @@ public:
                     const auto boundary = assistanceBoundary(arguments.at("points"));
                     CanvasEntity geometry{id_from(proposal.id), QStringLiteral("boundary"), boundary};
                     geometry.stroke_color = QColor("#1671f5");
+                    if (binding.site_plan)
+                        geometry = site_presented_canvas_entity(geometry, binding.destination_frame);
                     review_canvas->setEntities({geometry}); review_canvas->fitView();
                     review_details->setText(QStringLiteral("Draw rectangle: %1 × %2\nClassification: %3\nSource: %4 (%5%)")
                         .arg(format_length(arguments.at("width_metres").get<double>(), m_metric_units),
@@ -30727,6 +31048,17 @@ public:
                         QString::fromStdString(proposal.source.original_text.empty()
                             ? proposal.source.reference_id : proposal.source.original_text))
                         .arg(proposal.source.confidence * 100.0, 0, 'f', 0));
+                }
+                if (binding.drawing_context) {
+                    const auto& context = *binding.drawing_context;
+                    const auto owner_name = [&](const std::string& id) {
+                        const auto& entity = preview_source.entities().at(id);
+                        return QString::fromStdString(entity.properties.value("name", id));
+                    };
+                    review_details->setText(review_details->text() +
+                        QStringLiteral("\nDestination: %1 · %2 · %3")
+                            .arg(owner_name(context.building_id), owner_name(context.floor_id),
+                                 owner_name(context.layer_id)));
                 }
             } catch (const std::exception& error) {
                 review_details->setText(QString::fromUtf8(error.what())); accept->setEnabled(false);
@@ -30841,15 +31173,25 @@ public:
             }
             const auto before = authoringSnapshot();
             const auto workspace = m_workspace;
+            const auto context = captureSourceEditAuthority(before);
+            const bool site_plan = siteCanvas(m_architecturalCanvas);
             if (acceptAssistanceProposal(proposals[static_cast<std::size_t>(index)])) {
                 proposals.erase(proposals.begin() + index);
                 const auto after = authoringSnapshot();
                 if (m_workspace == workspace && after.document_id() == before.document_id() &&
+                    m_document == context.context.document && m_active_layer_id == context.context.layer_id &&
+                    m_metric_units == context.context.metric_units && m_view_filter == context.visibility &&
+                    m_architectural_view_kind == context.view_kind && m_active_named_view == context.named_view &&
+                    m_active_named_view_owner == context.named_view_owner &&
+                    site_plan == siteCanvas(m_architecturalCanvas) &&
                     after.revision() == before.revision() + 1) {
                     const auto digest = document_snapshot_digest(after);
                     for (auto& proposal : proposals) {
                         proposal.preview.arguments["source_document_digest"] = digest;
                         proposal.preview.arguments["source_workspace"] = static_cast<int>(m_workspace);
+                        auto& binding = m_assistance_sources.at(proposal.id);
+                        binding.authority = captureSourceEditAuthority(after);
+                        binding.proposal = encode_assistance_proposal(proposal);
                     }
                 } else proposals.clear();
                 repopulate();
@@ -37663,12 +38005,13 @@ private:
             }
             return translated.Shape();
         };
-        // A source edit can affect other entities (hosted openings, levels,
-        // assemblies). Compare the complete entity state rather than a revision:
-        // undo and opening another document can reuse revision numbers.
-        if (m_view_projection_sources != snapshot.entities()) {
+        // Hosted openings, levels and assemblies depend on the complete source.
+        // Retain its immutable owner rather than copying every entity on edits;
+        // revision numbers alone are insufficient after undo or document replacement.
+        if (!m_view_projection_source ||
+            !m_view_projection_source->shares_authoring_source_with(snapshot)) {
             m_view_projection_cache.clear();
-            m_view_projection_sources = snapshot.entities();
+            m_view_projection_source = snapshot;
         }
         const auto build_architectural_geometry = [&](BuildingViewKind kind,
                                                        const ArchitecturalViewContext& view_context) {
@@ -43255,6 +43598,16 @@ private:
         bool recovery_authority;
     };
 
+    // Desktop acceptance authority is transient, separate from portable proposal
+    // provenance. Exact envelopes cannot inherit authority from an ID alone.
+    struct AssistanceSourceBinding {
+        SourceEditAuthority authority;
+        bool site_plan;
+        std::optional<DrawingContext> drawing_context;
+        SitePresentationPlacement destination_frame;
+        json proposal;
+    };
+
     SourceEditAuthority captureSourceEditAuthority(const DocumentSnapshot& source) const {
         return {captureModalContext(), m_workspace, m_selected_ids, m_view_filter,
                 m_architectural_view_kind, m_active_named_view, m_active_named_view_owner,
@@ -45399,7 +45752,7 @@ private:
     std::vector<CanvasReferenceGrid> m_sheet_plan_grids;
     std::map<std::string, PresentationOverride, std::less<>> m_object_appearance_defaults;
     std::map<std::string, std::pair<std::string, CanvasSelectionFrame>> m_plan_transform_frame_cache;
-    std::map<std::string, Entity, std::less<>> m_view_projection_sources;
+    std::optional<DocumentSnapshot> m_view_projection_source;
     std::map<std::pair<std::string, std::string>, std::optional<Boundary>> m_view_projection_cache;
 
     std::array<std::vector<CanvasEntity>, 3> m_architectural_view_entities;
@@ -45438,6 +45791,7 @@ private:
     std::optional<QString> m_redefine_boundary_id;
     bool m_restored_boundary_navigation{};
     AssistanceSession m_assistance_session;
+    std::map<std::string, AssistanceSourceBinding, std::less<>> m_assistance_sources;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     AreaClassPalette* m_area_class_palette{};
     std::optional<QString> m_armed_area_class;

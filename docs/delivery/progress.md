@@ -68,6 +68,49 @@ runtime paths. This confirms compilation; runtime behavior and performance of
 the new batch remain unobserved. The installed desktop shortcut still targets
 the previous candidate and no package or installer was regenerated.
 
+The integrated source above is backed up on GitHub at
+`6f5d7def1dbb832a40190a53efa81eca126189cf` on
+`codex/vertex-delivery-reset`. The pushed remote ref was verified against that
+exact commit. This records source preservation, not an installed release.
+
+### October 7 pointer, assistance and measurement implementation
+
+The next source batch retains an immutable architectural-view source instead
+of copying its complete entity map. Separate retained spatial indexes enumerate
+pointer-hit geometry and nearby actual snap endpoints/segments. Source-order
+ties, endpoint priority, analytical curve projection and the later unbounded
+alignment searches remain intact. Every entity replacement invalidates the
+indexes; unsafe inputs and active transforms retain the full traversal path.
+Runtime speed has not been measured for this batch.
+
+Assistance now captures the destination property/building/floor/layer and the
+complete drawing context at generation. Site Plan previews and accepted traces,
+linked dimensions and labels convert through the reference and destination
+frames once. A changed context refuses acceptance instead of assigning geometry
+to a newly active layer. Remaining suggestions are restamped after a legitimate
+acceptance without reconverting their coordinates.
+
+Measurement input now has Keyboard and Adapter file tabs, explicit device units
+and decimal separator, a compatible field selector, the current dimension and
+any previous reading. Positive decimal keyboard input retains operator-declared
+provenance and reports understandable errors. It does not discover a device or
+certify physical device compatibility.
+
+Geometry and a measurement record now compose into one command. Source review
+identified two defects in the initial composition: an overlapping raw wall
+supplement was refused, and hosted opening dimensions skipped physical preview.
+The revised code adds narrow typed observation completion after the original
+geometry proof, and validates completed affected walls with all sibling openings
+and their assemblies before publication. Slab and room solid checks are also
+retained. Native format 59 and extraction 57 preserve the typed attachment across
+history and refuse downgrade; existing project floors remain unchanged.
+
+Independent source review approved the corrected batch, including observation
+replay, ordinary-command composition, retained-history floors, nested asset
+hydration and the local snap index. No new application build, test-suite run,
+installed cutover or runtime observation has been made. The manual user checklist
+and bundled help describe the new entry and Site tracing workflows.
+
 ### Current implementation checkpoint
 
 The installed checkpoint includes editable appraisal room reporting, conditional
@@ -495,19 +538,21 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Finish review of the integrated Site coordinate/authority batch, preserve it
-   with a scoped commit and verify the remote ref. The assembly, roof-material
-   and unit-reporting checkpoint is already committed as
-   `02f0ca51390811f9fdc1875fccdbca4bbf497bf8` with its remote ref verified.
-2. Compose the current runtime, exact notices, application source and dependency
-   source kit together. Preserve the active candidate and every rollback.
-3. Promote one coherent checked human-test package and retry the actual
-   restricted architectural export route. Bind applicable evidence into the
-   registry; continue the remaining locally actionable integrated checks.
-4. Run the finite current-source large-project diagnostics, resolve observed
-   performance gaps, and continue D01 acquisition, D02 qualification and the remaining production
-   gates. Candidate integrity and developer-machine checks do not substitute
-   for clean offline installation, hardware or human acceptance.
+1. Continue production implementation, starting with pointer picking/snapping,
+   Site Plan assistance coordinates and practical device measurement entry.
+   Resolve source-review defects before committing each coherent batch, then
+   push and verify the remote ref. The Site, recovery and responsiveness source
+   checkpoint is already preserved at `6f5d7def1dbb832a40190a53efa81eca126189cf`.
+2. Deliver the next coherent human-test candidate from the existing Release tree
+   when the implementation batch is ready. Preserve the active candidate and
+   every rollback. Do not restart test suites or produce a package at every turn.
+3. Continue the remaining concrete code gaps and D01/D02 acquisition. Compose
+   the exact runtime, notices, application source and dependency source kit for
+   that candidate. The latest instruction prioritizes coding and user testing
+   over further suite runs.
+4. Keep final production qualification open. Restricted export, physical output,
+   performance, clean offline installation, hardware and human acceptance still
+   require evidence; source implementation does not certify those outcomes.
 
 ## Current continuation batch
 

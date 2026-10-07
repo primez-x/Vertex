@@ -550,6 +550,14 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     m_published_geometry_index_entries.clear();
     m_published_geometry_index_nodes.clear();
     m_published_geometry_index_fallback.clear();
+    m_entity_hit_index_ready = false;
+    m_entity_hit_index_entries.clear();
+    m_entity_hit_index_nodes.clear();
+    m_entity_hit_index_fallback.clear();
+    m_local_snap_index_ready = false;
+    m_local_snap_index_entries.clear();
+    m_local_snap_index_nodes.clear();
+    m_local_snap_index_fallback.clear();
     invalidateRetainedPresentation();
     ++m_sketch_content_revision;
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
@@ -4951,31 +4959,49 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
         }
     };
 
-    for (const auto& entity : m_entities) {
-        for (const auto point : entity.snap_points)
+    const auto local_targets = localSnapCandidates(screen_point, snap_radius_pixels);
+    if (local_targets) {
+        for (const auto& target : *local_targets) {
+            if (target.segment) continue;
+            const auto point = m_entities[target.entity_index].snap_points[target.target_index];
             consider(endpoint, point, SnapKind::endpoint, point);
+        }
+    } else {
+        for (const auto& entity : m_entities) {
+            for (const auto point : entity.snap_points)
+                consider(endpoint, point, SnapKind::endpoint, point);
+        }
     }
     // A nearby true endpoint takes precedence over every projection. This
     // prevents an apparently aligned point from replacing a connected corner
     // with a nearby point that leaves a small gap.
     if (std::isfinite(endpoint.distance)) return endpoint.result;
 
-    for (const auto& entity : m_entities) {
-        for (const auto& baseline : entity.snap_segments) {
-            try {
-                const auto length = segment_length(baseline);
-                const auto station = std::clamp(
-                    project_host_station(baseline, raw, length * 0.5), 0.0, length);
-                const auto candidate = point_at_host_station(baseline, station);
+    const auto consider_baseline = [&](const CanvasEntity& entity, const Segment& baseline) {
+        try {
+            const auto length = segment_length(baseline);
+            const auto station = std::clamp(
+                project_host_station(baseline, raw, length * 0.5), 0.0, length);
+            const auto candidate = point_at_host_station(baseline, station);
             consider(on_wall, candidate,
                      entity.type == QStringLiteral("wall") ? SnapKind::on_wall
                                                            : SnapKind::on_boundary,
                      candidate,
                      Segment{candidate, candidate, 0.0});
-            } catch (const std::exception&) {
-                // An ambiguous or malformed baseline is not a snap target.
-            }
+        } catch (const std::exception&) {
+            // An ambiguous or malformed baseline is not a snap target.
         }
+    };
+    if (local_targets) {
+        for (const auto& target : *local_targets) {
+            if (!target.segment) continue;
+            const auto& entity = m_entities[target.entity_index];
+            consider_baseline(entity, entity.snap_segments[target.target_index]);
+        }
+    } else {
+        for (const auto& entity : m_entities)
+            for (const auto& baseline : entity.snap_segments)
+                consider_baseline(entity, baseline);
     }
     if (std::isfinite(on_wall.distance)) return on_wall.result;
 
@@ -5154,13 +5180,425 @@ bool PlanCanvas::matchesSelectionFilter(const QString& id) const {
     return false;
 }
 
+void PlanCanvas::ensureLocalSnapIndex() const {
+    if (m_local_snap_index_ready) return;
+    auto& entries = m_local_snap_index_entries;
+    auto& nodes = m_local_snap_index_nodes;
+    auto& fallback = m_local_snap_index_fallback;
+    entries.clear();
+    nodes.clear();
+    fallback.clear();
+    constexpr double safe_extent = 1e12;
+    const auto safe_point = [safe_extent](Vec2 point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) &&
+            std::abs(point.x) <= safe_extent && std::abs(point.y) <= safe_extent;
+    };
+    const auto add = [&](LocalSnapTarget target, Vec2 minimum, Vec2 maximum,
+                         double arithmetic_extent) {
+        if (!safe_point(minimum) || !safe_point(maximum) ||
+            !std::isfinite(arithmetic_extent) || arithmetic_extent > safe_extent) {
+            fallback.push_back(target);
+            return;
+        }
+        const auto rounding = 256.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, arithmetic_extent, std::abs(minimum.x), std::abs(minimum.y),
+                      std::abs(maximum.x), std::abs(maximum.y)});
+        const QRectF bounds(QPointF(minimum.x - rounding, minimum.y - rounding),
+                            QPointF(maximum.x + rounding, maximum.y + rounding));
+        if (!finite_rect(bounds) || !std::isfinite(bounds.width()) ||
+            !std::isfinite(bounds.height())) fallback.push_back(target);
+        else entries.push_back({bounds, target});
+    };
+    for (std::size_t entity_index = 0; entity_index < m_entities.size(); ++entity_index) {
+        const auto& entity = m_entities[entity_index];
+        for (std::size_t index = 0; index < entity.snap_points.size(); ++index) {
+            const auto point = entity.snap_points[index];
+            add({entity_index, index, false}, point, point, 0.0);
+        }
+        for (std::size_t index = 0; index < entity.snap_segments.size(); ++index) {
+            const LocalSnapTarget target{entity_index, index, true};
+            const auto& segment = entity.snap_segments[index];
+            if (!safe_point(segment.start) || !safe_point(segment.end) ||
+                !std::isfinite(segment.sweep_radians) ||
+                std::abs(segment.sweep_radians) >= 2.0 * pi) {
+                fallback.push_back(target);
+                continue;
+            }
+            try {
+                // Validate actual analytical snap geometry, never paint/pick bounds.
+                const auto bounds = segment_bounds(segment);
+                if (segment.sweep_radians == 0.0) {
+                    add(target, bounds.minimum, bounds.maximum,
+                        std::hypot(segment.end.x - segment.start.x,
+                                   segment.end.y - segment.start.y));
+                    continue;
+                }
+                // Match host_geometry's start-relative rotation. Its entire
+                // support circle encloses every clamped station, including
+                // major/clockwise arcs and tiny sweeps without sample gaps.
+                const Vec2 chord{segment.end.x - segment.start.x,
+                                 segment.end.y - segment.start.y};
+                const auto chord_length = std::hypot(chord.x, chord.y);
+                const auto tangent = std::tan(segment.sweep_radians * 0.5);
+                if (!std::isfinite(chord_length) || chord_length <= 0.0 ||
+                    !std::isfinite(tangent) || tangent == 0.0) {
+                    fallback.push_back(target);
+                    continue;
+                }
+                const auto center_distance = (chord_length * 0.5) / tangent;
+                const Vec2 left{-chord.y / chord_length, chord.x / chord_length};
+                const Vec2 radial{-chord.x * 0.5 - left.x * center_distance,
+                                  -chord.y * 0.5 - left.y * center_distance};
+                const auto radius = std::hypot(radial.x, radial.y);
+                const Vec2 center{segment.start.x - radial.x, segment.start.y - radial.y};
+                if (!safe_point(radial) || !safe_point(center) ||
+                    !std::isfinite(center_distance) || std::abs(center_distance) > safe_extent ||
+                    !std::isfinite(radius) || radius > safe_extent) {
+                    fallback.push_back(target);
+                    continue;
+                }
+                // Include authored endpoints explicitly: the station helper
+                // returns them exactly rather than evaluating the rotation.
+                add(target,
+                    {std::min(bounds.minimum.x, center.x - radius),
+                     std::min(bounds.minimum.y, center.y - radius)},
+                    {std::max(bounds.maximum.x, center.x + radius),
+                     std::max(bounds.maximum.y, center.y + radius)}, radius);
+            } catch (const std::exception&) {
+                // Keep malformed/numerically unresolved targets on the original path.
+                fallback.push_back(target);
+            }
+        }
+    }
+    nodes.reserve(entries.size());
+    const auto build = [&](auto&& self, std::size_t first, std::size_t count) -> std::size_t {
+        LocalSnapIndexNode node;
+        auto left_edge = entries[first].bounds.left();
+        auto top_edge = entries[first].bounds.top();
+        auto right_edge = entries[first].bounds.right();
+        auto bottom_edge = entries[first].bounds.bottom();
+        for (std::size_t offset = 1; offset < count; ++offset) {
+            const auto& bounds = entries[first + offset].bounds;
+            left_edge = std::min(left_edge, bounds.left());
+            top_edge = std::min(top_edge, bounds.top());
+            right_edge = std::max(right_edge, bounds.right());
+            bottom_edge = std::max(bottom_edge, bounds.bottom());
+        }
+        const auto rounding = 4.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(left_edge), std::abs(top_edge),
+                      std::abs(right_edge), std::abs(bottom_edge)});
+        node.bounds = QRectF(QPointF(left_edge - rounding, top_edge - rounding),
+                             QPointF(right_edge + rounding, bottom_edge + rounding));
+        const auto node_index = nodes.size();
+        nodes.push_back(node);
+        if (count <= 8) {
+            nodes[node_index].first = first;
+            nodes[node_index].count = count;
+        } else {
+            const bool split_x = node.bounds.width() >= node.bounds.height();
+            const auto middle = first + count / 2;
+            std::nth_element(entries.begin() + first, entries.begin() + middle,
+                entries.begin() + first + count, [split_x](const auto& left, const auto& right) {
+                    return split_x
+                        ? std::midpoint(left.bounds.left(), left.bounds.right()) <
+                          std::midpoint(right.bounds.left(), right.bounds.right())
+                        : std::midpoint(left.bounds.top(), left.bounds.bottom()) <
+                          std::midpoint(right.bounds.top(), right.bounds.bottom());
+                });
+            const auto left = self(self, first, middle - first);
+            const auto right = self(self, middle, first + count - middle);
+            nodes[node_index].left = left;
+            nodes[node_index].right = right;
+        }
+        return node_index;
+    };
+    if (!entries.empty()) build(build, 0, entries.size());
+    m_local_snap_index_ready = true;
+}
+
+std::optional<std::vector<PlanCanvas::LocalSnapTarget>> PlanCanvas::localSnapCandidates(
+    QPointF point, double radius_pixels) const {
+    // Previews/pending releases keep the original traversal and input authority.
+    constexpr double safe_extent = 1e12;
+    const auto viewport = QRectF(rect());
+    if (hasInteractivePresentation() || !std::isfinite(m_scale) ||
+        m_scale < minimum_scale || m_scale > maximum_scale ||
+        !std::isfinite(m_view_center.x) || !std::isfinite(m_view_center.y) ||
+        std::abs(m_view_center.x) > safe_extent || std::abs(m_view_center.y) > safe_extent ||
+        !std::isfinite(point.x()) || !std::isfinite(point.y()) ||
+        std::abs(point.x()) > safe_extent || std::abs(point.y()) > safe_extent ||
+        !finite_rect(viewport) || !std::isfinite(radius_pixels) || radius_pixels < 0.0)
+        return std::nullopt;
+    const auto model = toModel(point, viewport);
+    if (!std::isfinite(model.x) || !std::isfinite(model.y) ||
+        std::abs(model.x) > safe_extent || std::abs(model.y) > safe_extent) return std::nullopt;
+    ensureLocalSnapIndex();
+    auto result = m_local_snap_index_fallback;
+    const auto overlaps = [](const QRectF& left, const QRectF& right) {
+        // Inclusive scalar comparisons retain zero-width points/lines.
+        return !(left.right() < right.left() || left.left() > right.right() ||
+                 left.bottom() < right.top() || left.top() > right.bottom());
+    };
+    std::vector<std::size_t> pending;
+    if (!m_local_snap_index_nodes.empty()) pending.push_back(0);
+    while (!pending.empty()) {
+        const auto node_index = pending.back();
+        pending.pop_back();
+        const auto& node = m_local_snap_index_nodes[node_index];
+        // Bound inverse mapping and the unchanged screen-space distance test.
+        const auto rounding = 64.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(model.x), std::abs(model.y),
+                std::abs(m_view_center.x), std::abs(m_view_center.y),
+                std::abs(node.bounds.left()), std::abs(node.bounds.right()),
+                std::abs(node.bounds.top()), std::abs(node.bounds.bottom()),
+                (std::abs(point.x()) + std::abs(viewport.center().x())) / m_scale,
+                (std::abs(point.y()) + std::abs(viewport.center().y())) / m_scale});
+        const auto padding = radius_pixels / m_scale + rounding;
+        const QRectF query(QPointF(model.x - padding, model.y - padding),
+                           QPointF(model.x + padding, model.y + padding));
+        if (!std::isfinite(padding) || !finite_rect(query) ||
+            !std::isfinite(query.width()) || !std::isfinite(query.height()) ||
+            !finite_rect(node.bounds)) return std::nullopt;
+        if (!overlaps(node.bounds, query)) continue;
+        if (node.count) {
+            for (std::size_t offset = 0; offset < node.count; ++offset) {
+                const auto& entry = m_local_snap_index_entries[node.first + offset];
+                if (overlaps(entry.bounds, query)) result.push_back(entry.target);
+            }
+        } else {
+            pending.push_back(node.right);
+            pending.push_back(node.left);
+        }
+    }
+    // Each phase keeps entity/within-entity order for strict-distance ties.
+    std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
+        if (left.entity_index != right.entity_index) return left.entity_index < right.entity_index;
+        if (left.segment != right.segment) return left.segment < right.segment;
+        return left.target_index < right.target_index;
+    });
+    return result;
+}
+
+void PlanCanvas::ensureEntityHitIndex() const {
+    if (m_entity_hit_index_ready) return;
+    auto& entries = m_entity_hit_index_entries;
+    auto& nodes = m_entity_hit_index_nodes;
+    auto& fallback = m_entity_hit_index_fallback;
+    entries.clear();
+    nodes.clear();
+    fallback.clear();
+    entries.reserve(m_entities.size());
+    // Keep extreme inputs on the original path. This also bounds the squared
+    // distances and affine arithmetic used by the unchanged narrow test.
+    constexpr double safe_extent = 1e12;
+    const auto safe_point = [safe_extent](Vec2 point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) &&
+            std::abs(point.x) <= safe_extent && std::abs(point.y) <= safe_extent;
+    };
+    for (std::size_t index = 0; index < m_entities.size(); ++index) {
+        const auto& entity = m_entities[index];
+        bool has_bounds = false;
+        double left_edge{}, top_edge{}, right_edge{}, bottom_edge{};
+        bool safe = true;
+        const auto include = [&](Vec2 point) {
+            if (!safe_point(point)) { safe = false; return; }
+            if (!has_bounds) {
+                left_edge = right_edge = point.x;
+                top_edge = bottom_edge = point.y;
+                has_bounds = true;
+            } else {
+                // Keep scalar extrema until the final rectangle, avoiding
+                // repeated origin/extent conversion and retaining line bounds.
+                left_edge = std::min(left_edge, point.x);
+                top_edge = std::min(top_edge, point.y);
+                right_edge = std::max(right_edge, point.x);
+                bottom_edge = std::max(bottom_edge, point.y);
+            }
+        };
+        const auto include_boundary = [&](const Boundary& boundary) {
+            for (const auto& segment : boundary) {
+                if (!safe_point(segment.start) || !safe_point(segment.end) ||
+                    !std::isfinite(segment.sweep_radians) ||
+                    std::abs(segment.sweep_radians) > 2.0 * pi) {
+                    safe = false;
+                    return;
+                }
+                include(segment.start);
+                if (segment.sweep_radians == 0.0) include(segment.end);
+                else {
+                    const auto arc = arc_info(segment);
+                    if (!arc || !safe_point(arc->center) || arc->radius > safe_extent) {
+                        safe = false;
+                        return;
+                    }
+                    // The pick path uses these same forty straight chords,
+                    // including their endpoints, rather than the paint arc.
+                    constexpr int samples = 40;
+                    for (int sample = 1; sample <= samples; ++sample)
+                        include(arc_point(segment, *arc, static_cast<double>(sample) / samples));
+                }
+            }
+        };
+        include_boundary(entity.segments);
+        for (const auto& hole : entity.holes) include_boundary(hole);
+        include_boundary(entity.hit_segments);
+        const bool area = entity.type == QStringLiteral("boundary") ||
+            entity.type == QStringLiteral("measurement_boundary") ||
+            entity.type == QStringLiteral("room_boundary");
+        if (safe && (entity.filled || entity.type == QStringLiteral("wall") || area)) {
+            if (const auto fill = closed_entity_path(entity)) {
+                // Closed analytical curves may extend beyond the sampled pick
+                // chords. Control bounds enclose filled AND outline interiors.
+                const auto controls = fill->controlPointRect();
+                if (!finite_rect(controls)) safe = false;
+                else {
+                    include({controls.left(), controls.top()});
+                    include({controls.right(), controls.bottom()});
+                }
+            }
+        }
+        if (!safe || !has_bounds) { fallback.push_back(index); continue; }
+        const auto rounding = 32.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(left_edge), std::abs(right_edge),
+                      std::abs(top_edge), std::abs(bottom_edge)});
+        HitIndexEntry entry;
+        entry.entity_index = index;
+        entry.bounds = QRectF(QPointF(left_edge - rounding, top_edge - rounding),
+                             QPointF(right_edge + rounding, bottom_edge + rounding));
+        // Match hitTest, independent of paint's stroke precedence. Invalid
+        // paper widths contribute zero there and therefore need no expansion.
+        if (entity.paper_stroke_width_on_screen &&
+            std::isfinite(entity.output_stroke_width_mm) && entity.output_stroke_width_mm > 0.0)
+            entry.paper_mm = entity.output_stroke_width_mm;
+        if (!finite_rect(entry.bounds) || !std::isfinite(entry.bounds.width()) ||
+            !std::isfinite(entry.bounds.height())) { fallback.push_back(index); continue; }
+        entries.push_back(entry);
+    }
+    nodes.reserve(entries.size());
+    const auto build = [&](auto&& self, std::size_t first, std::size_t count) -> std::size_t {
+        HitIndexNode node;
+        auto left_edge = entries[first].bounds.left();
+        auto top_edge = entries[first].bounds.top();
+        auto right_edge = entries[first].bounds.right();
+        auto bottom_edge = entries[first].bounds.bottom();
+        for (std::size_t offset = 0; offset < count; ++offset) {
+            const auto& entry = entries[first + offset];
+            left_edge = std::min(left_edge, entry.bounds.left());
+            top_edge = std::min(top_edge, entry.bounds.top());
+            right_edge = std::max(right_edge, entry.bounds.right());
+            bottom_edge = std::max(bottom_edge, entry.bounds.bottom());
+            node.paper_mm = std::max(node.paper_mm, entry.paper_mm);
+        }
+        const auto rounding = 4.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(left_edge), std::abs(top_edge),
+                      std::abs(right_edge), std::abs(bottom_edge)});
+        node.bounds = QRectF(QPointF(left_edge - rounding, top_edge - rounding),
+                             QPointF(right_edge + rounding, bottom_edge + rounding));
+        const auto node_index = nodes.size();
+        nodes.push_back(node);
+        if (count <= 8) {
+            nodes[node_index].first = first;
+            nodes[node_index].count = count;
+        } else {
+            const bool split_x = node.bounds.width() >= node.bounds.height();
+            const auto middle = first + count / 2;
+            std::nth_element(entries.begin() + first, entries.begin() + middle,
+                entries.begin() + first + count, [split_x](const auto& left, const auto& right) {
+                    const auto center = [split_x](const auto& entry) {
+                        return split_x ? std::midpoint(entry.bounds.left(), entry.bounds.right())
+                                       : std::midpoint(entry.bounds.top(), entry.bounds.bottom());
+                    };
+                    const auto left_center = center(left), right_center = center(right);
+                    return left_center == right_center ? left.entity_index < right.entity_index
+                                                       : left_center < right_center;
+                });
+            const auto left = self(self, first, middle - first);
+            const auto right = self(self, middle, first + count - middle);
+            nodes[node_index].left = left;
+            nodes[node_index].right = right;
+        }
+        return node_index;
+    };
+    if (!entries.empty()) build(build, 0, entries.size());
+    m_entity_hit_index_ready = true;
+}
+
+std::optional<std::vector<std::size_t>> PlanCanvas::entityHitCandidates(
+    QPointF point, double hit_pixels) const {
+    // Preview transforms are intentionally outside the retained input proof.
+    // Full traversal preserves the original drag/rejection/release behavior.
+    constexpr double safe_extent = 1e12;
+    const auto viewport = QRectF(rect());
+    const auto pixels_per_mm = logicalDpiX() / 25.4;
+    if (hasInteractivePresentation() || !std::isfinite(m_scale) ||
+        m_scale < minimum_scale || m_scale > maximum_scale ||
+        !std::isfinite(m_view_center.x) || !std::isfinite(m_view_center.y) ||
+        std::abs(m_view_center.x) > safe_extent || std::abs(m_view_center.y) > safe_extent ||
+        !std::isfinite(point.x()) || !std::isfinite(point.y()) ||
+        std::abs(point.x()) > safe_extent || std::abs(point.y()) > safe_extent ||
+        !finite_rect(viewport) || !std::isfinite(hit_pixels) || hit_pixels < 0.0 ||
+        !std::isfinite(pixels_per_mm) || pixels_per_mm <= 0.0) return std::nullopt;
+    const auto model = toModel(point, viewport);
+    if (!std::isfinite(model.x) || !std::isfinite(model.y) ||
+        std::abs(model.x) > safe_extent || std::abs(model.y) > safe_extent) return std::nullopt;
+    ensureEntityHitIndex();
+    auto result = m_entity_hit_index_fallback;
+    const auto overlaps = [](const QRectF& left, const QRectF& right) {
+        return !(left.right() < right.left() || left.left() > right.right() ||
+                 left.bottom() < right.top() || left.top() > right.bottom());
+    };
+    std::vector<std::size_t> pending;
+    if (!m_entity_hit_index_nodes.empty()) pending.push_back(0);
+    while (!pending.empty()) {
+        const auto node_index = pending.back();
+        pending.pop_back();
+        const auto& node = m_entity_hit_index_nodes[node_index];
+        const auto paper_width = node.paper_mm > 0.0
+            ? std::max(0.1, node.paper_mm * pixels_per_mm) : 0.0;
+        // Nine-pixel strokes also enclose the symbol's four-pixel expanded
+        // bounding rectangle. Paper half-width is subtracted by the narrow test.
+        const auto radius = (std::max(hit_pixels, 4.0) + paper_width * 0.5) / m_scale;
+        // Cover both toScreen's subtraction and the fill QTransform's affine
+        // translation, plus inverse mapping and closest-point arithmetic.
+        const auto rounding = 64.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(model.x), std::abs(model.y),
+                std::abs(m_view_center.x), std::abs(m_view_center.y),
+                std::abs(node.bounds.left()), std::abs(node.bounds.right()),
+                std::abs(node.bounds.top()), std::abs(node.bounds.bottom()),
+                (std::abs(point.x()) + std::abs(viewport.center().x())) / m_scale,
+                (std::abs(point.y()) + std::abs(viewport.center().y())) / m_scale});
+        const auto padding = radius + rounding;
+        const QRectF query(QPointF(model.x - padding, model.y - padding),
+                           QPointF(model.x + padding, model.y + padding));
+        if (!std::isfinite(padding) || !finite_rect(query) ||
+            !std::isfinite(query.width()) || !std::isfinite(query.height()) ||
+            !finite_rect(node.bounds)) return std::nullopt;
+        if (!overlaps(node.bounds, query)) continue;
+        if (node.count) {
+            for (std::size_t offset = 0; offset < node.count; ++offset) {
+                const auto& entry = m_entity_hit_index_entries[node.first + offset];
+                if (overlaps(entry.bounds, query)) result.push_back(entry.entity_index);
+            }
+        } else {
+            pending.push_back(node.right);
+            pending.push_back(node.left);
+        }
+    }
+    // Strict stroke ties and last interior/symbol wins depend on source order.
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
 QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
     constexpr double hit_pixels = 9.0;
     QString result;
     QString interior_area;
     const auto model_point = toModel(point, rect());
     auto best = std::numeric_limits<double>::max();
-    for (const auto& entity : m_entities) {
+    const auto candidates = entityHitCandidates(point, hit_pixels);
+    const auto candidate_count = candidates ? candidates->size() : m_entities.size();
+    for (std::size_t index = 0; index < candidate_count; ++index) {
+        const auto& entity = m_entities[candidates ? (*candidates)[index] : index];
         if (filtered && !matchesSelectionType(entity.type)) continue;
         const auto painted_half_width = entity.paper_stroke_width_on_screen
             ? paper_stroke_pixels(entity, logicalDpiX()/25.4)*0.5 : 0.0;

@@ -4,6 +4,7 @@
 #include "sketch/stair_identity_history.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/quantity.hpp"
+#include "sketch/field_adapter_contract.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -215,6 +216,14 @@ struct JointTranslationIntent {
     std::optional<Vec2> presentation_offset;
 };
 
+// One observation of an existing owner's supported field. This carries no
+// entity payload and cannot authorize geometry or other metadata changes.
+struct DistoMeasurementAttachment {
+    std::string owner_id;
+    DistoMeasurementRecord record;
+    bool replace_existing{};
+};
+
 // Geometry is replayed before the relation changes are validated.
 // The original entity_changes lane contains only constraints. Version six's
 // physical lane admits existing-wall changes under ordinary provenance rules;
@@ -295,6 +304,10 @@ struct ApplyBoundaryConstraintChanges {
     // this semantic intent; ordinary entity payloads cannot lend authority.
     nlohmann::json room_review_intent=nullptr;
     bool room_review_completion{};
+    // Envelope nineteen replays the complete preceding dialect before attaching
+    // exactly this observation. The source owner and completed field must agree.
+    std::optional<DistoMeasurementAttachment> disto_measurement;
+    bool disto_measurement_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
@@ -468,5 +481,13 @@ private:
     BoundaryIdentityHistory boundary_identity_history_;
     StairIdentityHistory stair_identity_history_;
 };
+
+// Prepares geometry and its observation against the same immutable source.
+// Ordinary commands keep ordinary admission; typed commands retain every proof
+// in envelope nineteen. This does not publish or bypass live-source checks.
+[[nodiscard]] Command complete_disto_measurement_command(
+    const DocumentSnapshot& source, const Command& geometry_command,
+    std::string_view owner_id, const DistoMeasurementRecord& record,
+    bool replace_existing = false);
 
 }  // namespace sketch

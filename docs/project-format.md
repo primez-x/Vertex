@@ -1,4 +1,38 @@
-# Vertex project formats v1 through v58
+# Vertex project formats v1 through v59
+
+## Atomic geometry and device observations (v59)
+
+Native format 59 and JSON/assets extraction version 57 retain command-envelope
+19: a typed geometry edit followed by one `disto_measurement` attachment in the
+same history event. The outer envelope contains `expected_revision`, `message`,
+`disto_measurement_completion: true`, `disto_measurement` and `proof`. The
+attachment has exactly `owner_id`, `record` and Boolean `replace_existing`;
+`proof` is the original typed command envelope without an attachment. Nested
+attachments are refused. Existing geometry dialects keep their admission rules.
+
+Replay first reconstructs the complete original geometry, then attaches the
+record to the same existing owner. The record's field must match the owner type
+and its value, converted from the declared unit, must agree with the completed
+dimension. Wall lengths use the physical straight or curved axis with only
+floating-point representation allowance; scalar fields use the exact converted
+value. Display rounding and solver tolerance do not qualify a different reading.
+The attachment cannot alter geometry, properties, identities, receipts, assets
+or unrelated extensions. Replacing an existing record requires
+`replace_existing: true` and a valid prior record for that field.
+
+The observation remains in the existing version-one `disto_measurements`
+extension, indexed by its target field. It records the reading, declared unit,
+device identity, timestamp, transport and provenance. A later ordinary geometry
+edit may leave this historical observation unchanged; an old reading is not a
+claim about the current dimension. Keyboard provenance retains the received text
+and explicit unit/decimal declarations without claiming device discovery or
+physical qualification.
+
+The reader floor includes every retained command, including an undone edit or a
+deleted owner. Relabeling an archive below v59 cannot make envelope 19 readable
+by an older reader. Ordinary entity commands can retain measurement metadata
+through their existing admission path and do not acquire typed geometry
+authority from that metadata. Older projects keep their existing format floors.
 
 ## Site presentation frames, terrain datum bindings and framed annotations (v58)
 
@@ -1683,7 +1717,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `57`, according to the
+`format_version` are equal and range from `1` through `59`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 

@@ -762,6 +762,17 @@ private:
     };
     void ensurePublishedEntityGeometry() const;
     void ensurePublishedGeometryIndex() const;
+    struct LocalSnapTarget {
+        std::size_t entity_index{};
+        std::size_t target_index{};
+        bool segment{};
+    };
+    void ensureLocalSnapIndex() const;
+    [[nodiscard]] std::optional<std::vector<LocalSnapTarget>> localSnapCandidates(
+        QPointF point, double radius_pixels) const;
+    void ensureEntityHitIndex() const;
+    [[nodiscard]] std::optional<std::vector<std::size_t>> entityHitCandidates(
+        QPointF point, double hit_pixels) const;
     [[nodiscard]] std::optional<std::vector<std::size_t>> visiblePublishedEntityIndices(
         const QTransform& model_to_device, const QTransform& canvas_to_device,
         const QRectF& device_viewport) const;
@@ -828,6 +839,42 @@ private:
     mutable std::vector<GeometryIndexEntry> m_published_geometry_index_entries;
     mutable std::vector<GeometryIndexNode> m_published_geometry_index_nodes;
     mutable std::vector<std::size_t> m_published_geometry_index_fallback;
+    struct LocalSnapIndexEntry {
+        QRectF bounds; // Actual endpoint or complete baseline support, never paint bounds.
+        LocalSnapTarget target;
+    };
+    struct LocalSnapIndexNode {
+        QRectF bounds;
+        std::size_t first{};
+        std::size_t count{}; // Nonzero only for leaves.
+        std::size_t left{};
+        std::size_t right{};
+    };
+    // Model-space target identity survives view/selection changes; every owned
+    // setEntities replacement invalidates it, even identical IDs/revisions/count.
+    mutable bool m_local_snap_index_ready{};
+    mutable std::vector<LocalSnapIndexEntry> m_local_snap_index_entries;
+    mutable std::vector<LocalSnapIndexNode> m_local_snap_index_nodes;
+    mutable std::vector<LocalSnapTarget> m_local_snap_index_fallback;
+    struct HitIndexEntry {
+        QRectF bounds; // Exact pick strokes/symbol footprint and interior controls.
+        std::size_t entity_index{};
+        double paper_mm{};
+    };
+    struct HitIndexNode {
+        QRectF bounds;
+        double paper_mm{};
+        std::size_t first{};
+        std::size_t count{}; // Nonzero only for leaves.
+        std::size_t left{};
+        std::size_t right{};
+    };
+    // Picking has its own envelope: paint bounds omit interaction-only spans.
+    // Only owned setEntities replacement changes this retained input identity.
+    mutable bool m_entity_hit_index_ready{};
+    mutable std::vector<HitIndexEntry> m_entity_hit_index_entries;
+    mutable std::vector<HitIndexNode> m_entity_hit_index_nodes;
+    mutable std::vector<std::size_t> m_entity_hit_index_fallback;
     std::vector<CanvasLabel> m_labels;
     std::vector<CanvasEntity> m_floor_ghost_entities;
     std::vector<CanvasLabel> m_floor_ghost_labels;

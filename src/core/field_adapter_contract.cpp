@@ -1,6 +1,7 @@
 #include "sketch/field_adapter_contract.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <set>
@@ -101,6 +102,53 @@ DistoMeasurementRecord parse_disto_measurement_json(std::string_view payload) {
     validate_disto_measurement(r);
     return r;
   } catch (const Json::exception &) { throw std::invalid_argument("malformed DISTO measurement JSON"); }
+}
+DistoMeasurementRecord parse_disto_keyboard_measurement(
+    std::string_view input, DistoMeasurementRecord context, char decimal_separator) {
+  if (input.empty() || input.size() > 256)
+    throw std::invalid_argument("Enter one measurement of at most 256 characters.");
+  if (decimal_separator != '.' && decimal_separator != ',')
+    throw std::invalid_argument("Choose dot or comma as the device's decimal separator.");
+  const auto raw_input = input;
+  const auto whitespace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+  while (!input.empty() && whitespace(input.front())) input.remove_prefix(1);
+  while (!input.empty() && whitespace(input.back())) input.remove_suffix(1);
+  if (input.empty()) throw std::invalid_argument("Enter or send a measurement first.");
+  const auto digit = [](char c) { return c >= '0' && c <= '9'; };
+  std::size_t end = 0;
+  while (end < input.size() && digit(input[end])) ++end;
+  if (end == 0)
+    throw std::invalid_argument("Use one positive decimal number in the selected device unit.");
+  if (end < input.size() && input[end] == decimal_separator) {
+    const auto fraction = ++end;
+    while (end < input.size() && digit(input[end])) ++end;
+    if (end == fraction)
+      throw std::invalid_argument("Enter digits after the decimal separator.");
+  }
+  std::string number(input.substr(0, end));
+  auto suffix = input.substr(end);
+  while (!suffix.empty() && suffix.front() == ' ') suffix.remove_prefix(1);
+  if (!suffix.empty() && suffix != context.unit)
+    throw std::invalid_argument("The reading must use the selected decimal separator and device unit, without grouping or mixed feet and inches.");
+  if (decimal_separator == ',') std::replace(number.begin(), number.end(), ',', '.');
+  double value{};
+  const auto parsed = std::from_chars(number.data(), number.data() + number.size(),
+                                     value, std::chars_format::fixed);
+  if (parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() ||
+      !std::isfinite(value) || value <= 0)
+    throw std::invalid_argument("The measurement must be greater than zero and within the supported numeric range.");
+  context.value = value;
+  context.transport = "windows-keyboard";
+  // JSON escaping retains terminal Enter/Tab bytes without control characters in
+  // the contract's provenance string. Identity is declared, not discovered.
+  context.provenance = Json{{"acquisition", "operator-declared Windows keyboard input"},
+    {"raw_input", std::string(raw_input)}, {"declared_unit", context.unit},
+    {"decimal_separator", std::string(1, decimal_separator)},
+    {"operator_declared_model", context.model}, {"operator_declared_firmware", context.firmware},
+    {"operator_provenance", context.provenance},
+    {"device_discovery", false}, {"physical_observation_verified", false}}.dump();
+  validate_disto_measurement(context);
+  return context;
 }
 void assign_disto_measurement(std::string_view selected, std::optional<DistoMeasurementRecord> &destination,
                              const DistoMeasurementRecord &r) {

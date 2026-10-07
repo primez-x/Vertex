@@ -1,5 +1,18 @@
 # Portable project extraction
 
+Exchange version 57 identifies retained command-envelope-19 device measurement
+completion and requires native reader 59. It preserves the original nested
+geometry proof and the same-owner observation attachment across current,
+undone, deleted and abandoned history. The record does not substitute for
+geometry authority. Compact asset references in the nested proof are hydrated
+from the exact retained revision assets before extraction; missing or mismatched
+assets refuse publication. Earlier projects retain their existing extraction
+floor.
+
+Exchange version 56 identifies the explicit Site presentation-frame contracts
+requiring native reader 58. It retains property origins, building placements,
+terrain datum bindings and framed annotations without rewriting local geometry.
+
 Exchange version 43 identifies retained annotation state version 8 and requires
 native reader 45. It preserves independent area-name/calculation presentation
 roles and text alignment across active, undone and deleted records. Calculated

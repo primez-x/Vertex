@@ -150,7 +150,9 @@ public:
     // presentation frames and framed annotation entities require v58 across
     // current, deleted, undone and abandoned revisions, including future
     // opaque marker forms.
-    static constexpr std::uint32_t format_version = 58;
+    // Atomic DISTO attachments retain envelope-nineteen geometry and observation
+    // proofs across current, deleted and undone history and require v59.
+    static constexpr std::uint32_t format_version = 59;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -1637,6 +1637,108 @@ static bool has_supplemental_source_completion(const ApplyBoundaryConstraintChan
         !command.supplemental_asset_changes.empty();
 }
 
+static bool has_disto_measurement_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.disto_measurement_completion || command.disto_measurement.has_value();
+}
+
+static ApplyBoundaryConstraintChanges without_disto_measurement(ApplyBoundaryConstraintChanges command) {
+    command.disto_measurement.reset();
+    command.disto_measurement_completion = false;
+    return command;
+}
+
+static void restore_disto_measurements(const Entity& source, Entity& completed) {
+    const auto prior = source.extensions.find("disto_measurements");
+    if (prior == source.extensions.end()) completed.extensions.erase("disto_measurements");
+    else completed.extensions["disto_measurements"] = *prior;
+}
+
+static void attach_disto_measurement(
+    const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& completed,
+    const DistoMeasurementAttachment& attachment) {
+    const auto encoded = nlohmann::json::parse(disto_measurement_json(attachment.record));
+    if (!is_valid_identifier(attachment.owner_id))
+        throw std::invalid_argument("DISTO observation owner ID is invalid");
+    const auto prior_owner = source.find(attachment.owner_id);
+    const auto owner = completed.find(attachment.owner_id);
+    if (prior_owner == source.end() || owner == completed.end() ||
+        prior_owner->second.type != owner->second.type)
+        throw std::invalid_argument("DISTO observation requires the same existing completed owner");
+    auto& entity = owner->second;
+    const auto& record = attachment.record;
+    const auto target = record.target_field;
+    const auto compatible = [&](std::string_view type, std::string_view field) {
+        return entity.type == type && target == field;
+    };
+    const bool wall_length = compatible("wall", "wall.length");
+    const char* property = nullptr;
+    if (compatible("opening", "opening.width")) property = "width_m";
+    else if (compatible("wall", "wall.height") || compatible("opening", "opening.height") ||
+             compatible("room", "room.height")) property = "height_m";
+    else if (compatible("wall", "wall.thickness") || compatible("slab", "slab.thickness")) property = "thickness_m";
+    else if (compatible("wall", "wall.elevation") || compatible("slab", "slab.elevation") ||
+             compatible("room", "room.elevation")) property = "elevation_m";
+    if (!wall_length && !property)
+        throw std::invalid_argument("DISTO observation field is incompatible with its owner");
+
+    std::array<char, 128> number{};
+    const auto converted = std::to_chars(number.data(), number.data() + number.size(), record.value,
+        std::chars_format::general, std::numeric_limits<double>::max_digits10);
+    if (converted.ec != std::errc{})
+        throw std::invalid_argument("DISTO observation value cannot be represented");
+    const auto quantity = parse_quantity(std::string(number.data(), converted.ptr) + " " + record.unit, Unit::metre);
+    if (!std::isfinite(quantity.metres) || quantity.metres <= 1e-7)
+        throw std::invalid_argument("DISTO observation is below the supported measurement range");
+    double actual{};
+    double representation_tolerance{};
+    if (wall_length) {
+        const auto& axis = entity.properties.at("baseline");
+        const auto& start = axis.at("start");
+        const auto& end = axis.at("end");
+        if (!start.is_array() || start.size() != 2 || !end.is_array() || end.size() != 2 ||
+            !start[0].is_number() || !start[1].is_number() || !end[0].is_number() || !end[1].is_number())
+            throw std::invalid_argument("DISTO wall observation requires a valid completed axis");
+        const Segment baseline{{start[0].get<double>(), start[1].get<double>()},
+            {end[0].get<double>(), end[1].get<double>()}, axis.value("sweep_radians", 0.0)};
+        actual = segment_length(baseline);
+        // Account only for endpoint subtraction and curved-axis double arithmetic.
+        // A solver tolerance or display precision cannot qualify a different value.
+        const double chord = std::hypot(baseline.end.x - baseline.start.x, baseline.end.y - baseline.start.y);
+        const double curve_factor = chord > 0.0 ? std::max(1.0, actual / chord) : 1.0;
+        representation_tolerance = 16.0 * std::numeric_limits<double>::epsilon() * curve_factor *
+            std::max({1.0, std::abs(quantity.metres), std::abs(baseline.start.x), std::abs(baseline.start.y),
+                std::abs(baseline.end.x), std::abs(baseline.end.y)});
+    } else {
+        if (!entity.properties.contains(property) || !entity.properties.at(property).is_number())
+            throw std::invalid_argument("DISTO observation requires a numeric completed field");
+        actual = entity.properties.at(property).get<double>();
+    }
+    if (!std::isfinite(actual) || (wall_length &&
+        (!std::isfinite(representation_tolerance) || representation_tolerance >= std::min(actual, quantity.metres))) || (wall_length
+        ? std::abs(actual - quantity.metres) > representation_tolerance
+        : actual != quantity.metres))
+        throw std::invalid_argument("DISTO observation differs from the completed geometry field");
+
+    const auto prior = prior_owner->second.extensions.find("disto_measurements");
+    const auto next = entity.extensions.find("disto_measurements");
+    if ((prior == prior_owner->second.extensions.end()) != (next == entity.extensions.end()) ||
+        (prior != prior_owner->second.extensions.end() && *prior != *next))
+        throw std::invalid_argument("Geometry proof cannot alter DISTO observations before attachment");
+    if (prior != prior_owner->second.extensions.end()) {
+        if (!prior->is_object() || !prior->contains("version") || !prior->at("version").is_number_integer() ||
+            prior->at("version") != 1 || !prior->contains("fields") || !prior->at("fields").is_object())
+            throw std::invalid_argument("Existing DISTO observation metadata is malformed or unsupported");
+        if (prior->at("fields").contains(target)) {
+            if (parse_disto_measurement_json(prior->at("fields").at(target).dump()).target_field != target)
+                throw std::invalid_argument("Existing DISTO observation field identity is inconsistent");
+            if (!attachment.replace_existing)
+                throw std::invalid_argument("DISTO observation replacement requires explicit authorization");
+        }
+    } else entity.extensions["disto_measurements"] = {{"version", 1}, {"fields", nlohmann::json::object()}};
+    entity.extensions.at("disto_measurements").at("fields")[target] = encoded;
+}
+
 static bool has_rigid_wall_transform(const ApplyBoundaryConstraintChanges& command) {
     return command.rigid_wall_transform_completion || std::any_of(command.wall_edits.begin(),command.wall_edits.end(),
         [](const auto& edit){return edit.version==4;});
@@ -1980,6 +2082,22 @@ std::map<std::string, Entity, std::less<>> replay_retained_wall_split(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_disto_measurement_completion(command)) {
+        if (!command.disto_measurement_completion || !command.disto_measurement)
+            document_error(DocumentErrorCode::constraint_violation, "DISTO completion requires its observation");
+        auto geometry = after;
+        const auto& id = command.disto_measurement->owner_id;
+        if (!before.contains(id) || !geometry.contains(id))
+            document_error(DocumentErrorCode::constraint_violation, "DISTO completion owner is missing");
+        restore_disto_measurements(before.at(id), geometry.at(id));
+        auto expected = geometry;
+        try { attach_disto_measurement(before, expected, *command.disto_measurement); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation, error.what()); }
+        if (expected != after)
+            document_error(DocumentErrorCode::constraint_violation, "DISTO completion differs from its observation");
+        validate_completed_constraint_change(before, geometry, without_disto_measurement(command), retained_replay);
+        return;
+    }
     // Mixed transactions validate both original-source replays and the final
     // merged state in completed_boundary_constraint_entities. The legacy
     // validator must never apply partial authority to the rigid lane.
@@ -2826,6 +2944,15 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_disto_measurement_completion(command)) {
+        try {
+            (void)command_to_json(Command{command});
+            auto result = completed_boundary_constraint_entities(history, source, without_disto_measurement(command), retained_replay);
+            attach_disto_measurement(source, result, *command.disto_measurement);
+            return result;
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    }
     if (has_room_review_completion(command)) {
         try {
             validate_room_review_mode(command, true);
@@ -3484,6 +3611,25 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_disto_measurement_completion(typed)) {
+                try {
+                    if (!typed.disto_measurement_completion || !typed.disto_measurement ||
+                        !is_valid_identifier(typed.disto_measurement->owner_id))
+                        throw std::invalid_argument("DISTO completion requires one identified observation");
+                    const auto& observation = *typed.disto_measurement;
+                    auto encoded = nlohmann::json{{"version", 19}, {"kind", "apply_boundary_constraint_changes"},
+                        {"expected_revision", typed.expected_revision}, {"message", typed.message},
+                        {"disto_measurement_completion", true},
+                        {"disto_measurement", {{"owner_id", observation.owner_id},
+                            {"record", nlohmann::json::parse(disto_measurement_json(observation.record))},
+                            {"replace_existing", observation.replace_existing}}},
+                        {"proof", command_to_json(Command{without_disto_measurement(typed)})}};
+                    if (encoded.dump().size() > 1024 * 1024)
+                        throw std::invalid_argument("DISTO completion exceeds the persisted proof budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+            }
             if (has_room_review_completion(typed)) {
                 try {
                     validate_room_review_mode(typed,false);
@@ -3761,7 +3907,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -3817,6 +3963,37 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 19) {
+                command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+                    "disto_measurement_completion", "disto_measurement", "proof"},
+                    DocumentErrorCode::invalid_entity, "serialized DISTO completion");
+                if (value.dump().size() > 1024 * 1024 || !value.at("disto_measurement_completion").is_boolean() ||
+                    !value.at("disto_measurement_completion").get<bool>())
+                    throw std::invalid_argument("DISTO completion mode or proof budget is invalid");
+                const auto& proof = value.at("proof");
+                if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
+                    proof.at("version").get<std::int64_t>() < 1 || proof.at("version").get<std::int64_t>() > 18)
+                    throw std::invalid_argument("DISTO completion requires a preceding command dialect");
+                const auto decoded = command_from_json(proof, asset_resolver);
+                const auto* original = std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+                if (!original || has_disto_measurement_completion(*original) ||
+                    command_revision(value.at("expected_revision"), "DISTO completion revision") != original->expected_revision ||
+                    !value.at("message").is_string() || value.at("message") != proof.at("message"))
+                    throw std::invalid_argument("DISTO completion does not retain its original command identity");
+                const auto& attachment = value.at("disto_measurement");
+                command_exact_fields(attachment, {"owner_id", "record", "replace_existing"},
+                    DocumentErrorCode::invalid_entity, "serialized DISTO observation");
+                if (!attachment.at("replace_existing").is_boolean())
+                    throw std::invalid_argument("DISTO replacement choice must be boolean");
+                auto result = *original;
+                result.disto_measurement = DistoMeasurementAttachment{
+                    command_string(attachment.at("owner_id"), "DISTO observation owner"),
+                    parse_disto_measurement_json(attachment.at("record").dump()),
+                    attachment.at("replace_existing").get<bool>()};
+                result.disto_measurement_completion = true;
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version")==18) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","room_review_completion","room_review_intent"},
                     DocumentErrorCode::invalid_entity,"serialized physical-room review");
@@ -4386,6 +4563,37 @@ DocumentSnapshot Document::preview_command(const DocumentSnapshot& source, const
     return candidate.snapshot();
 }
 
+Command complete_disto_measurement_command(
+    const DocumentSnapshot& source, const Command& geometry_command,
+    std::string_view owner_id, const DistoMeasurementRecord& record, bool replace_existing) {
+    const auto* ordinary = std::get_if<ApplyEntityChanges>(&geometry_command);
+    const auto* constrained = std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
+    if ((!ordinary && !constrained) || (constrained && has_disto_measurement_completion(*constrained)))
+        document_error(DocumentErrorCode::invalid_entity, "DISTO attachment requires one original geometry command");
+    const DistoMeasurementAttachment attachment{std::string(owner_id), record, replace_existing};
+    const auto geometry = Document::preview_command(source, geometry_command);
+    auto completed = geometry.entities();
+    try { attach_disto_measurement(source.entities(), completed, attachment); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    Command result = geometry_command;
+    if (auto* changes = std::get_if<ApplyEntityChanges>(&result)) {
+        const auto existing = std::find_if(changes->entity_changes.begin(), changes->entity_changes.end(), [&](const auto& change) {
+            return (change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id) == owner_id;
+        });
+        auto updated = EntityChange::upsert(completed.at(attachment.owner_id));
+        if (existing == changes->entity_changes.end()) changes->entity_changes.push_back(std::move(updated));
+        else *existing = std::move(updated);
+    } else {
+        auto& changes = std::get<ApplyBoundaryConstraintChanges>(result);
+        changes.disto_measurement = attachment;
+        changes.disto_measurement_completion = true;
+    }
+    const auto verified = Document::preview_command(source, result);
+    if (verified.entities() != completed || verified.assets() != geometry.assets())
+        document_error(DocumentErrorCode::invalid_entity, "DISTO attachment changed unrelated completed state");
+    return result;
+}
+
 Revision Document::apply(const Command& command) {
     if (!editable_) {
         document_error(DocumentErrorCode::read_only, read_only_reason_);
@@ -4767,7 +4975,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // rules must not reject restoration of a shorter derivation prefix.
         if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || has_exterior_source_completion(*record.boundary_constraint_changes) ||
             has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes) ||
-            has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes)))
+            has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes) ||
+            has_disto_measurement_completion(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
