@@ -37,7 +37,10 @@ The shared beam/railing grip projection withholds actual hidden endpoints rather
 than creating crop/depth intersection grips. Length metrics and final publication
 use the admitted source-bound preview command, including Site inversion. Beam
 previews now also regenerate when resolved level-relative geometry changes while
-their serialized coordinates stay unchanged. Independent source review accepted
+their serialized coordinates stay unchanged. Endpoint previews rebuild existing
+physical selection axes so stretching or turning a beam/railing keeps its rotated
+frame aligned in ordinary, saved and Site plans. Valid vertical beams retain their
+geometry without inventing a plan-axis direction. Independent source review accepted
 the command, projections and captured release path. These are source changes; no native
 builds, tests, probes, packages or installations ran. The installed candidate is
 unchanged and the new behavior is not runtime-qualified.

@@ -21186,9 +21186,20 @@ public:
                                                     {crop.max_horizontal_m, crop.max_vertical_m}});
                     }
                 }
-                if (edited_endpoint_object)
+                if (edited_endpoint_object) {
                     retain_building_endpoint_handles(proposed, *edited_endpoint_object, source.revision(),
                         source.is_editable() && !proposed.segments.empty(), view_context ? &*view_context : nullptr);
+                    if (item.resize_frame && !proposed.segments.empty() && !hosted_stair_railing(entity)) {
+                        const auto* beam = std::get_if<Beam>(&*edited_endpoint_object);
+                        // Rebuild the authored axes after a stretch or turn,
+                        // including the captured saved-plan frame. A valid
+                        // vertical beam has no plan-axis rotation to retain.
+                        if (!beam || std::hypot(beam->end.x - beam->start.x,
+                            beam->end.y - beam->start.y) > default_geometry_tolerance_metres)
+                            proposed.resize_frame = physicalPlanResizeFrame(entity,
+                                view_context ? &view_context->frame : nullptr);
+                    }
+                }
                 if (edited_footprint)
                     retain_footprint_vertex_handles(proposed, entity, source.revision(),
                         source.is_editable(), view_context ? &*view_context : nullptr);
