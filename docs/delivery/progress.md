@@ -209,6 +209,16 @@ explicit volume promotion, and inspector fallbacks displaying unknown dimensions
 as zero. All three were corrected before source integration approval. That
 approval covers source behavior and does not establish runtime resolution.
 
+Level editing now applies its captured graph and connected-stair changes through
+the same workspace-aware command boundary as other edits. The previous UI route
+prepared from the recovered workspace but attempted to apply against the older
+base Document, so it refused a level edit after recovered changes. An immutable
+level candidate now exposes its atomic command only to the exact editable source;
+ordinary core Document callers retain that authority check. The UI also binds
+preparation and connected-stair confirmation to the complete source/context
+authority before publication. This is a source correction; recovered-project
+runtime behavior and history remain unobserved, and no build or test was run.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

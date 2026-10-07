@@ -12026,6 +12026,7 @@ public:
                 throw std::invalid_argument("This document is read-only.");
             }
             const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
             const auto record = decode_vertical_levels(source);
             if (!record) throw std::invalid_argument("The vertical level graph is unavailable.");
             const auto candidate = prepare_vertical_level_edit(
@@ -12050,7 +12051,9 @@ public:
                 }
             }
             (void)message;
-            measureDocumentEdit([&] { (void)apply_vertical_level_edit(*m_document, candidate); });
+            if (!sourceEditAuthorityUnchanged(authority)) return false;
+            const auto& command = candidate.command_for_source(authoringSnapshot());
+            applyDocumentCommand(Command{command});
             clearError();
             refresh();
             return true;

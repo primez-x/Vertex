@@ -136,13 +136,20 @@ VerticalLevelEditCandidate prepare_vertical_level_edit(const DocumentSnapshot& s
     }
 }
 
-VerticalLevelEditReceipt apply_vertical_level_edit(Document& document,
-    const VerticalLevelEditCandidate& candidate) {
-    if (document.revision() != candidate.command_.expected_revision ||
-        document_snapshot_digest(document.snapshot()) != candidate.source_digest_)
+const ApplyEntityChanges& VerticalLevelEditCandidate::command_for_source(
+    const DocumentSnapshot& source) const {
+    if (source.revision() != command_.expected_revision ||
+        document_snapshot_digest(source) != source_digest_)
         throw DocumentError(DocumentErrorCode::stale_revision,
             "Level edit preview no longer matches the current document; prepare it again");
-    const auto revision = document.apply(candidate.command_);
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
+    return command_;
+}
+
+VerticalLevelEditReceipt apply_vertical_level_edit(Document& document,
+    const VerticalLevelEditCandidate& candidate) {
+    const auto revision = document.apply(candidate.command_for_source(document.snapshot()));
     return {revision, candidate.affected_stairs_};
 }
 } // namespace sketch

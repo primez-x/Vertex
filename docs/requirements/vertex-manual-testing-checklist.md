@@ -1098,7 +1098,9 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U183 — Create and edit building levels**
+  - Steps: Create two floor levels and a stair connected between them. Change the upper level and review the proposed stair rise before applying. Undo, Redo, then save and reopen. Repeat the level edit after recovering an autosaved project.
   - Expected: Objects associated with levels move as expected.
+  - History check: The level and its connected stair change together in one Undo step in both the ordinary and recovered project. Cancel leaves both unchanged. If the project changes during the review, reopen the level editor before applying.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

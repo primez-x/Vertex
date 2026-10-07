@@ -24,6 +24,10 @@ public:
     [[nodiscard]] const std::vector<ConnectedStairRiseChange>& affected_stairs() const noexcept {
         return affected_stairs_;
     }
+    // Publish through the caller's document/workspace command boundary only
+    // after binding the captured atomic edit to the exact current source.
+    [[nodiscard]] const ApplyEntityChanges& command_for_source(
+        const DocumentSnapshot& source) const;
 private:
     friend VerticalLevelEditCandidate prepare_vertical_level_edit(
         const DocumentSnapshot&, const std::string&, const VerticalLevelGraph&);
