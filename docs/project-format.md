@@ -1,4 +1,55 @@
-# Vertex project formats v1 through v63
+# Vertex project formats v1 through v64
+
+## Source-reconstructed physical wall merges (v64)
+
+Native format 64 and JSON/assets extraction version 62 protect exclusive command
+envelope 20, whose `wall_merge` is the strict object
+`{"version":1,"first_wall_id":"…","second_wall_id":"…"}`. The first wall
+survives; the second is retired. Replay reconstructs the combined directed
+straight span or same-circle arc from captured source walls. Ordinary entity
+payloads cannot supply this authority. The independent DISTO envelope 19 keeps
+its existing inner dialects; a merge cannot borrow an observation lane.
+
+The survivor retains `extensions.wall_merge_archive` with exactly `version: 1`
+and `sources`, an ordered pair of full original wall records. Each record has
+exactly `id`, `type`, `properties`, `required` and `extensions`. These identities
+describe historical input, not live hosts. The archive remains unchanged during
+ordinary edits, splits and copies; a later merge archives its complete originals.
+Archive size and nesting are bounded. Future archive versions preserve their
+bytes while withholding edit authority.
+
+Hosted opening stations move into the surviving wall's directed frame. Current
+exterior owners derive their replacement outlines from the merged physical
+source, retain surviving edge and corner identities, and append a strict
+`wall_merge` geometry-derivation operation. Its value has `version: 1`, the
+retired `vertex_id`, exact replacement `segments`, ordered `wall_source_ids` and
+the retired physical `removed_wall_id`.
+The derivation proves the analytical seam removal; it cannot invent measurement
+receipts. Unsupported or conflicting retained references cannot disappear
+silently. Undo and redo retain the complete before/after state, and retired
+identities remain reserved. Commands, archives and derivation markers own the
+reader floor in every retained revision, including undone or deleted geometry.
+
+Initially current authored clear rooms continue through the same physical merge.
+Their source inventories include every wall in the captured plane, so an
+unchanged remote room can also require a descriptor update. Source intervals,
+the complete analytical region and its holes, and surviving child correspondence
+must all agree. Stale, inactive and future rooms remain unchanged. No centroid,
+bounding box or scalar area match can establish room identity.
+
+The retained `physical_room_wall_merge` geometry-derivation value has exactly
+seven fields: `version: 1`, `first_wall_id`, `second_wall_id`, `source_descriptor`,
+`descriptor`, `seam_vertex_ids` and `segments`. Both descriptors are complete
+version-1 physical-room envelopes. Replay proves the directed inventory change,
+unchanged region and any removed seams. Consecutive operations chain complete
+descriptors, and the last reviewed descriptor must match the final room marker.
+A subsequent room repair must name that preceding descriptor's digest. This
+operation also requires native format 64 / extraction version 62, independently
+of a surviving physical wall archive or command.
+
+Every admitted merge archive reserves its retired second wall identity, including
+nested prior merges and abandoned branches. Ordinary object insertion cannot
+reuse it; exact history navigation can restore the original retained state.
 
 ## Per-flight stair dimensions (v63)
 

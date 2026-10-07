@@ -23,6 +23,7 @@
 #include "sketch/boundary_transform.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/wall_split.hpp"
+#include "sketch/wall_merge.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/measurement_linework.hpp"
@@ -854,6 +855,13 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                         throw std::invalid_argument("Wall split archive requires a positive version: "+id);
                     if(archive.at("version")==1)validate_wall_split_archive(entity);
                 }
+                if(entity.extensions.contains("wall_merge_archive")) {
+                    const auto& archive=entity.extensions.at("wall_merge_archive");
+                    if(!archive.is_object() || !archive.contains("version") || !archive.at("version").is_number_integer() ||
+                        archive.at("version").get<std::int64_t>()<=0)
+                        throw std::invalid_argument("Wall merge archive requires a positive version: "+id);
+                    if(archive.at("version")==1)validate_wall_merge_archive(entity);
+                }
             }
             catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
         }
@@ -1362,6 +1370,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         if(entity.type=="wall" && entity.extensions.contains("wall_split_archive") &&
             entity.extensions.at("wall_split_archive").at("version")!=1)
             unsupported_boundary="Unsupported wall split archive: "+id;
+    for(const auto& [id,entity]:entities)
+        if(entity.type=="wall" && entity.extensions.contains("wall_merge_archive") &&
+            entity.extensions.at("wall_merge_archive").at("version")!=1)
+            unsupported_boundary="Unsupported wall merge archive: "+id;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "measurement_boundary" || !entity.extensions.contains("survey_source")) continue;
         const auto admission = inspect_survey_source(entity.extensions.at("survey_source"));
@@ -1613,6 +1625,9 @@ void validate_physical_room_source_transition(
     // The dedicated batch replay reconstructs the complete result from its
     // semantic decisions, including all retained owners, before publication.
     if (reviewed_batch && reviewed_batch->room_review_completion && !reviewed_batch->room_review_intent.is_null()) return;
+    // The exclusive merge replay likewise reconstructs every affected room
+    // from both original physical walls. Generic payloads cannot enter it.
+    if (reviewed_batch && reviewed_batch->wall_merge) return;
     if (reviewed_edit && reviewed_edit->physical_wall_room_repair) {
         const auto descriptor=validate_physical_wall_room_repair(before,*reviewed_edit);
         const auto replacement=after.find(reviewed_edit->boundary_id);
@@ -1844,6 +1859,26 @@ static bool has_room_review_completion(const ApplyBoundaryConstraintChanges& com
     return command.room_review_completion || !command.room_review_intent.is_null();
 }
 
+static void validate_wall_merge_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.wall_merge) return;
+    if (!is_valid_identifier(command.wall_merge->first_wall_id) ||
+        !is_valid_identifier(command.wall_merge->second_wall_id) ||
+        command.wall_merge->first_wall_id == command.wall_merge->second_wall_id)
+        throw std::invalid_argument("Wall merge requires two distinct valid wall identities");
+    if (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
+        !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
+        !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
+        !command.measured_stroke_edits.empty() || !command.dimension_placement_moves.empty() ||
+        command.exterior_source_completion || command.supplemental_source_completion ||
+        command.supplemental_asset_reference_completion || command.rigid_wall_transform_completion ||
+        command.measured_source_completion || command.dimension_placement_completion ||
+        command.rigid_group_completion || command.rigid_group_transform || command.wall_split ||
+        command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
+        has_joint_translation_completion(command) || has_room_review_completion(command) ||
+        has_disto_measurement_completion(command))
+        throw std::invalid_argument("Wall merge intent cannot borrow another command lane");
+}
+
 static void validate_room_review_mode(const ApplyBoundaryConstraintChanges& command, bool admission) {
     if (!has_room_review_completion(command)) return;
     if (!command.room_review_completion || (admission && command.room_review_intent.is_null()))
@@ -1855,7 +1890,7 @@ static void validate_room_review_mode(const ApplyBoundaryConstraintChanges& comm
         command.exterior_source_completion || command.supplemental_source_completion ||
         command.supplemental_asset_reference_completion || command.rigid_wall_transform_completion ||
         command.measured_source_completion || command.dimension_placement_completion ||
-        command.rigid_group_completion || command.rigid_group_transform || command.wall_split ||
+        command.rigid_group_completion || command.rigid_group_transform || command.wall_split || command.wall_merge ||
         command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
         has_joint_translation_completion(command))
         throw std::invalid_argument("Room review cannot borrow another command's edit authority");
@@ -1865,7 +1900,7 @@ static void validate_joint_translation_mode(const ApplyBoundaryConstraintChanges
     if (!has_joint_translation_completion(command)) return;
     if (!command.joint_translation_completion)
         throw std::invalid_argument("Joint translation requires its explicit completion mode");
-    if (command.rigid_group_completion || command.rigid_group_transform || command.wall_split ||
+    if (command.rigid_group_completion || command.rigid_group_transform || command.wall_split || command.wall_merge ||
         command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
         throw std::invalid_argument("Joint translation cannot borrow an independent edit authority");
     if (admission && !command.joint_translation)
@@ -1876,7 +1911,7 @@ static void validate_rigid_group_intent(const ApplyBoundaryConstraintChanges& co
     if (!has_rigid_group_completion(command)) return;
     if (!command.rigid_group_completion)
         throw std::invalid_argument("Rigid group lane requires its explicit completion mode");
-    if (command.wall_split || command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
+    if (command.wall_split || command.wall_merge || command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
         throw std::invalid_argument("Rigid group composition cannot borrow split, corner, resize or arc authority");
     if (command.rigid_group_transform && command.rigid_group_transform->expected_revision != command.expected_revision)
         throw std::invalid_argument("Rigid group child must use the parent's expected revision");
@@ -1897,7 +1932,7 @@ static void validate_dimension_placement_intent(const ApplyBoundaryConstraintCha
     if (!has_dimension_placement_completion(command)) return;
     if (!command.dimension_placement_completion)
         throw std::invalid_argument("Dimension placement lane requires its explicit completion mode");
-    if (command.wall_split || command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
+    if (command.wall_split || command.wall_merge || command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
         throw std::invalid_argument("Dimension placement cannot borrow split, corner, resize or arc intent authority");
     if (admission && (command.dimension_placement_moves.empty() || command.wall_edits.empty()))
         throw std::invalid_argument("Dimension placement completion requires explicit moves and a typed wall proof");
@@ -2087,9 +2122,33 @@ std::map<std::string, Entity, std::less<>> replay_retained_wall_split(
     return expected;
 }
 
+static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
+    const std::map<std::string, Entity, std::less<>>& source, const WallMergeIntent& intent) {
+    // Opaque future relationships cannot provide merge authority. Reconstruct
+    // understood source independently and then restore their exact identities
+    // and bytes before comparing the complete retained event.
+    auto known = source;
+    std::map<std::string, Entity, std::less<>> opaque;
+    for (const auto& [id, entity] : source) {
+        if (entity.type == "room_relationships" &&
+            room_relationship_model_version(entity.properties.at("model")) > 2) {
+            opaque.emplace(id, entity);
+            known.erase(id);
+        }
+    }
+    auto expected = replayed_wall_merge_entities(known, intent);
+    for (auto& [id, entity] : opaque) {
+        if (!expected.emplace(id, std::move(entity)).second)
+            throw std::invalid_argument("Retained wall merge collides with an opaque relationship entity");
+    }
+    return expected;
+}
+
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    try { validate_wall_merge_mode(command); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation, error.what()); }
     if (has_disto_measurement_completion(command)) {
         if (!command.disto_measurement_completion || !command.disto_measurement)
             document_error(DocumentErrorCode::constraint_violation, "DISTO completion requires its observation");
@@ -2112,6 +2171,14 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
     if (has_rigid_group_completion(command) || has_joint_translation_completion(command) || has_room_review_completion(command)) return;
     try { validate_exterior_resize_related_edits(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+    if(command.wall_merge) {
+        const auto expected = retained_replay ? replay_retained_wall_merge(before, *command.wall_merge) :
+            replayed_wall_merge_entities(before, *command.wall_merge);
+        if(expected!=after)document_error(DocumentErrorCode::constraint_violation,"Wall merge differs from complete source reconstruction");
+        const auto normalized=wall_merge_validation_source(before,expected,*command.wall_merge);
+        validate_constraint_change(normalized,after,true,true,false);
+        return;
+    }
     if(command.wall_split) {
         const auto expected = retained_replay ? replay_retained_wall_split(before, *command.wall_split) :
             replayed_wall_split_entities(before, *command.wall_split);
@@ -2257,8 +2324,14 @@ static void validate_room_review_lifetime(const nlohmann::json& encoded,
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    try { validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); }
+    try { validate_wall_merge_mode(command); validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    if(command.wall_merge) {
+        (void)command_to_json(Command{command});
+        try{return retained_replay ? replay_retained_wall_merge(source, *command.wall_merge) :
+            replayed_wall_merge_entities(source,*command.wall_merge);}
+        catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
+    }
     if(command.wall_split) {
         (void)command_to_json(Command{command});
         try{return retained_replay ? replay_retained_wall_split(source, *command.wall_split) :
@@ -2520,7 +2593,9 @@ Command complete_exterior_wall_measurement_command(const DocumentSnapshot& sourc
     const auto* ordinary = std::get_if<ApplyEntityChanges>(&command);
     const auto* constrained = std::get_if<ApplyBoundaryConstraintChanges>(&command);
     if (!ordinary && !constrained) return command;
-    if (constrained && has_exterior_source_completion(*constrained)) {
+    if (constrained && (constrained->wall_merge || has_exterior_source_completion(*constrained))) {
+        // Exclusive merge replay already completes its measured source owners.
+        // It cannot acquire an ordinary exterior-completion payload afterwards.
         (void)Document::preview_command(source, command);
         return command;
     }
@@ -2952,6 +3027,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    try { validate_wall_merge_mode(command); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     if (has_disto_measurement_completion(command)) {
         try {
             (void)command_to_json(Command{command});
@@ -3619,6 +3696,15 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            try { validate_wall_merge_mode(typed); }
+            catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+            if (typed.wall_merge) {
+                if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
+                    document_error(DocumentErrorCode::invalid_entity,"Serialized wall merge message is invalid");
+                return nlohmann::json{{"version",20},{"kind","apply_boundary_constraint_changes"},
+                    {"expected_revision",typed.expected_revision},{"message",typed.message},
+                    {"wall_merge",encode_wall_merge(*typed.wall_merge)}};
+            }
             if (has_disto_measurement_completion(typed)) {
                 try {
                     if (!typed.disto_measurement_completion || !typed.disto_measurement ||
@@ -3915,7 +4001,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -3971,6 +4057,17 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 20) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","wall_merge"},
+                    DocumentErrorCode::invalid_entity,"serialized wall merge command");
+                if(!value.at("message").is_string())document_error(DocumentErrorCode::invalid_entity,"Wall merge message must be a string");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Wall merge revision");
+                result.message=value.at("message").get<std::string>();
+                result.wall_merge=decode_wall_merge(value.at("wall_merge"));
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 19) {
                 command_exact_fields(value, {"version", "kind", "expected_revision", "message",
                     "disto_measurement_completion", "disto_measurement", "proof"},
@@ -4580,7 +4677,8 @@ Command complete_disto_measurement_command(
     std::string_view owner_id, const DistoMeasurementRecord& record, bool replace_existing) {
     const auto* ordinary = std::get_if<ApplyEntityChanges>(&geometry_command);
     const auto* constrained = std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
-    if ((!ordinary && !constrained) || (constrained && has_disto_measurement_completion(*constrained)))
+    if ((!ordinary && !constrained) || (constrained &&
+        (constrained->wall_merge || has_disto_measurement_completion(*constrained))))
         document_error(DocumentErrorCode::invalid_entity, "DISTO attachment requires one original geometry command");
     const DistoMeasurementAttachment attachment{std::string(owner_id), record, replace_existing};
     const auto geometry = Document::preview_command(source, geometry_command);
@@ -4721,7 +4819,9 @@ Revision Document::apply(const Command& command) {
                 try {
                     validate_boundary_identity_transition(
                         boundary_identity_history_, typed_command.wall_split ?
-                            wall_split_validation_source(current.entities,next.entities,*typed_command.wall_split) : current.entities, next.entities);
+                            wall_split_validation_source(current.entities,next.entities,*typed_command.wall_split) :
+                            typed_command.wall_merge ? wall_merge_validation_source(current.entities,next.entities,*typed_command.wall_merge) :
+                            current.entities, next.entities);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
@@ -4985,7 +5085,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // Undo/redo restores an exact retained state and its provenance. The
         // source-state and stack checks below validate navigation; mutation
         // rules must not reject restoration of a shorter derivation prefix.
-        if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || has_exterior_source_completion(*record.boundary_constraint_changes) ||
+        if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || record.boundary_constraint_changes->wall_merge || has_exterior_source_completion(*record.boundary_constraint_changes) ||
             has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes) ||
             has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes) ||
             has_disto_measurement_completion(*record.boundary_constraint_changes)))
@@ -5173,7 +5273,9 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, proof, true);
                     expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
-                        wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) : previous.entities, record.entities);
+                        wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) :
+                        proof.wall_merge ? wall_merge_validation_source(previous.entities,expected.entities,*proof.wall_merge) :
+                        previous.entities, record.entities);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_history, error.what());
                 }

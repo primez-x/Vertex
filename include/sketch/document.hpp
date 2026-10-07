@@ -201,6 +201,13 @@ struct WallSplitIntent {
     std::vector<WallSplitMeasuredOwnerIds> measured_owners;
 };
 
+// One source-reconstructed directed physical union. The first wall survives;
+// the second and its retired analytical identities stay reserved in history.
+struct WallMergeIntent {
+    std::string first_wall_id;
+    std::string second_wall_id;
+};
+
 // One translation across selected rigid owners and selected physical walls.
 // All selected points are exact targets in one connected constraint solve;
 // existing fixed anchors never move merely because their owner is selected.
@@ -310,6 +317,8 @@ struct ApplyBoundaryConstraintChanges {
     // exactly this observation. The source owner and completed field must agree.
     std::optional<DistoMeasurementAttachment> disto_measurement;
     bool disto_measurement_completion{};
+    // Envelope twenty admits only this source-reconstructed merge intent.
+    std::optional<WallMergeIntent> wall_merge;
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

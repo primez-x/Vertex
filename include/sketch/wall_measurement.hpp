@@ -9,6 +9,12 @@
 
 namespace sketch {
 
+// Source-reconstructed inverse of a physical split. No new child identities or
+// measurement receipts are created; unsupported pinned dependencies refuse.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> complete_wall_merge_measurement_sources(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& physical, const WallMergeIntent& intent);
+
 // Dedicated split correspondence preserves every outer vertex, surviving edge
 // and placed dimension identity while deriving the analytical seam from sources.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> complete_wall_split_measurement_sources(

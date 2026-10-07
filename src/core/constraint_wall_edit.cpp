@@ -644,6 +644,12 @@ void validate_constraint_wall_geometry_transition(const std::map<std::string,Ent
     for (const auto& [id,source] : before) {
         const auto found=after.find(id);
         if (source.type!="wall" || found==after.end() || found->second.type!="wall") continue;
+        if(source.extensions.contains("wall_merge_archive") &&
+            (!found->second.extensions.contains("wall_merge_archive") ||
+                source.extensions.at("wall_merge_archive")!=found->second.extensions.at("wall_merge_archive")))
+            invalid("Wall edit cannot discard or rewrite its merged source archive: "+id);
+        if(!source.extensions.contains("wall_merge_archive") && found->second.extensions.contains("wall_merge_archive"))
+            invalid("Wall merge archive requires a typed source reconstruction: "+id);
         if(source.extensions.contains("wall_split_archive") &&
             (!found->second.extensions.contains("wall_split_archive") ||
                 source.extensions.at("wall_split_archive")!=found->second.extensions.at("wall_split_archive")))

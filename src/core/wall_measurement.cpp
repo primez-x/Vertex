@@ -1,10 +1,14 @@
 #include "sketch/wall_measurement.hpp"
 
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/document_wall.hpp"
+#include "sketch/wall_merge.hpp"
+#include "sketch/wall_semantics.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/model_phases.hpp"
@@ -16,6 +20,7 @@
 #include <map>
 #include <limits>
 #include <numbers>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -2219,6 +2224,279 @@ std::map<std::string,Entity,std::less<>> complete_wall_split_measurement_sources
         if(!wall_measurement_source_current(result,result.at(id)))reject("Wall split measured owner remains stale: "+id);
     }
     if(consumed.size()!=intent.measured_owners.size())reject("Wall split measured identity mapping includes an unaffected or stale owner");
+    return result;
+}
+
+std::map<std::string,Entity,std::less<>> complete_wall_merge_measurement_sources(
+    const std::map<std::string,Entity,std::less<>>& original,
+    const std::map<std::string,Entity,std::less<>>& physical,const WallMergeIntent& intent) {
+    if(const auto diagnostic=validate_boundary_integrity(original))reject(*diagnostic);
+    auto result=physical;
+    const auto close=[](Vec2 a,Vec2 b){return std::hypot(a.x-b.x,a.y-b.y)<=default_geometry_tolerance_metres;};
+    const auto support_point=[](const Segment& segment,double fraction) {
+        if(segment.sweep_radians==0)return Vec2{std::lerp(segment.start.x,segment.end.x,fraction),
+            std::lerp(segment.start.y,segment.end.y,fraction)};
+        const auto dx=segment.end.x-segment.start.x,dy=segment.end.y-segment.start.y,chord=std::hypot(dx,dy);
+        const auto angle=segment.sweep_radians*fraction,half_sine=std::sin(angle/2);
+        const auto center_offset=std::abs(segment.sweep_radians)==std::numbers::pi?0.0:chord/(2*std::tan(segment.sweep_radians/2));
+        const auto along=chord*half_sine*half_sine+center_offset*std::sin(angle);
+        const auto normal=-chord*std::sin(angle)/2+center_offset*(2*half_sine*half_sine);
+        return Vec2{std::fma(dx/chord,along,std::fma(-dy/chord,normal,segment.start.x)),
+            std::fma(dy/chord,along,std::fma(dx/chord,normal,segment.start.y))};
+    };
+    const auto same=[&](const Segment& a,const Segment& b) {
+        if((a.sweep_radians==0)!=(b.sweep_radians==0) ||
+            (a.sweep_radians!=0 && std::signbit(a.sweep_radians)!=std::signbit(b.sweep_radians)) ||
+            !close(a.start,b.start) || !close(a.end,b.end) ||
+            std::max(segment_length(a),segment_length(b))*std::abs(a.sweep_radians-b.sweep_radians)>default_geometry_tolerance_metres)
+            return false;
+        for(const auto fraction:{0.25,0.5,0.75})if(!close(support_point(a,fraction),support_point(b,fraction)))return false;
+        return true;
+    };
+    const auto flipped=[](Segment edge){std::swap(edge.start,edge.end);edge.sweep_radians=-edge.sweep_radians;return edge;};
+    const auto dimension_position=[&](const Segment& segment,double side) {
+        const auto dx=segment.end.x-segment.start.x,dy=segment.end.y-segment.start.y;
+        const auto midpoint=support_point(segment,0.5);
+        const auto tangent=std::atan2(dy,dx);
+        const auto offset=std::max(0.25,segment_length(segment)*0.1);
+        return Vec2{midpoint.x-std::sin(tangent)*offset*side,midpoint.y+std::cos(tangent)*offset*side};
+    };
+    for(const auto& [id,owner]:original) {
+        if(!owner.properties.contains("wall_measurement_source"))continue;
+        auto ids=exterior_wall_measurement_source_ids(owner);
+        const bool has_first=std::find(ids.begin(),ids.end(),intent.first_wall_id)!=ids.end();
+        const bool has_second=std::find(ids.begin(),ids.end(),intent.second_wall_id)!=ids.end();
+        if(!has_first&&!has_second)continue;
+        if(!has_first || !has_second)reject("Wall merge measured owner must contain both source walls: "+id);
+        if(owner.type!="measurement_boundary" || inspect_boundary_entity_version(owner).format!=BoundaryEntityFormat::identified_v1 ||
+            !wall_measurement_source_current(original,owner))reject("Wall merge requires a current identified measured source: "+id);
+        if(!result.contains(id) || result.at(id)!=owner)reject("Wall merge overlaps a separately edited measured owner: "+id);
+        const auto identified=decode_identified_boundary_entity(owner);
+        const auto old=owner.properties.at("wall_measurement_source").at("version")==2
+            ? materialize_exterior_wall_measurement(owner) : derive_exterior_wall_measurement(original,ids);
+        if(old.ordered_wall_ids.size()!=identified.segments.size())reject("Wall merge measured source has incomplete lineage: "+id);
+        std::vector<std::string> lineage;std::vector<bool> reversed;
+        for(const auto& edge:identified.segments) {
+            std::optional<std::size_t> match;bool reverse=false;
+            for(std::size_t i=0;i<old.boundary.size();++i) {
+                if(!same(edge.segment,old.boundary[i]) && !same(edge.segment,flipped(old.boundary[i])))continue;
+                if(match)reject("Wall merge measured edge lineage is ambiguous: "+id);
+                match=i;reverse=!same(edge.segment,old.boundary[i]);
+            }
+            if(!match)reject("Wall merge lost an analytical source edge: "+id);
+            lineage.push_back(old.ordered_wall_ids.at(*match));reversed.push_back(reverse);
+        }
+        const auto ai=std::find(lineage.begin(),lineage.end(),intent.first_wall_id),bi=std::find(lineage.begin(),lineage.end(),intent.second_wall_id);
+        if(ai==lineage.end() || bi==lineage.end())reject("Wall merge sources lack exterior edge correspondence: "+id);
+        const auto a=static_cast<std::size_t>(ai-lineage.begin()),b=static_cast<std::size_t>(bi-lineage.begin()),count=lineage.size();
+        const auto incoming=(a+1)%count==b?a:b,outgoing=(a+1)%count==b?b:a;
+        if((incoming+1)%count!=outgoing || reversed[a]!=reversed[b])reject("Wall merge measured sources are not directed neighbors: "+id);
+        const auto& retained=identified.segments[incoming];const auto& retired=identified.segments[outgoing];
+        if(retained.end_vertex_id!=retired.start_vertex_id)reject("Wall merge measured seam identity is inconsistent: "+id);
+        const auto seam=retained.end_vertex_id;
+        // Unknown live edge metadata can collapse only when both pieces agree.
+        const auto edge_metadata=[](Json edge){for(const auto* key:{"segment_id","start_vertex_id","end_vertex_id","start","end","sweep_radians"})edge.erase(key);return edge;};
+        if(edge_metadata(owner.properties.at("segments").at(incoming))!=edge_metadata(owner.properties.at("segments").at(outgoing)))
+            reject("Wall merge measured edge metadata conflicts: "+id);
+        ids.erase(std::remove(ids.begin(),ids.end(),intent.second_wall_id),ids.end());std::sort(ids.begin(),ids.end());
+        const auto replacement=derive_replacement_exterior_wall_measurement(result,owner,ids);
+        if(replacement.boundary.size()+1!=count || replacement.ordered_wall_ids.size()!=replacement.boundary.size())
+            reject("Wall merge changed unrelated exterior topology: "+id);
+        std::map<std::string,std::size_t,std::less<>> next;
+        for(std::size_t i=0;i<replacement.ordered_wall_ids.size();++i)
+            if(!next.emplace(replacement.ordered_wall_ids[i],i).second)reject("Wall merge exterior has ambiguous physical lineage: "+id);
+        auto merged=remove_boundary_vertex(identified,seam);
+        for(auto& edge:merged.segments) {
+            const auto prior=std::find_if(identified.segments.begin(),identified.segments.end(),[&](const auto& value){return value.segment_id==edge.segment_id;});
+            const auto index=static_cast<std::size_t>(prior-identified.segments.begin());
+            auto geometry=replacement.boundary.at(next.at(index==incoming?intent.first_wall_id:lineage.at(index)));
+            if(replacement_edge_reversed(reversed.at(index),old.boundary,replacement.boundary))geometry=flipped(geometry);
+            if(!same(edge.segment,geometry))
+                reject("Wall merge exterior does not preserve original outer corners and sweep: "+id);
+            edge.segment=geometry;
+        }
+        auto metadata=owner;
+        if(!metadata.extensions.contains("boundary_geometry_derivation")) {
+            if(metadata.properties.contains("boundary_authoring")) {
+                metadata.extensions["boundary_geometry_derivation"]={{"version",1},
+                    {"source_boundary_authoring",metadata.properties.at("boundary_authoring")},{"operations",Json::array()}};
+                metadata.properties.erase("boundary_authoring");
+            } else metadata.extensions["boundary_geometry_derivation"]={{"version",2},
+                {"source_boundary",{{"boundary_model_version",1},{"segments",owner.properties.at("segments")}}},{"operations",Json::array()}};
+        }
+        const auto pure=encode_identified_boundary_entity(merged).properties.at("segments");
+        metadata.extensions["boundary_geometry_derivation"]["operations"].push_back({{"kind","wall_merge"},
+            {"value",{{"version",1},{"vertex_id",seam},{"segments",pure},{"wall_source_ids",ids},{"removed_wall_id",intent.second_wall_id}}}});
+        metadata.properties["wall_measurement_source"]=replacement.source;
+        auto encoded=encode_identified_boundary_entity(merged,&metadata);
+        if(encoded.properties.contains("boundary")) {
+            auto geometry=Json::array();for(const auto& edge:merged.segments)geometry.push_back(segment_record(edge.segment));
+            encoded.properties["boundary"]=std::move(geometry);
+        }
+        result.at(id)=std::move(encoded);
+        std::set<std::string> erased_dimensions;
+        std::map<std::string,std::string,std::less<>> automatic;
+        const auto dimension_metadata=[](const Entity& entity) {
+            auto properties=entity.properties;properties.erase("text_position");
+            for(const auto* key:{"entity_id","segment_id","segment_ids"})properties.at("target").erase(key);
+            return Json{{"type",entity.type},{"required",entity.required},{"properties",properties},{"extensions",entity.extensions}};
+        };
+        for(const auto& [dimension_id,entity]:original)if(can_recognize_boundary_dimension_entity_type(entity.type)) {
+            const auto decoded=decode_boundary_dimension_entity(entity);if(!decoded.supported())continue;
+            const auto& dimension=*decoded.dimension;
+            if(dimension.boundary_id==id && dimension.kind==BoundaryDimensionKind::segment_length &&
+                dimension.placement==BoundaryDimensionPlacement::automatic && dimension.segment_chain_ids.empty()) {
+                if(!automatic.emplace(dimension.segment_id,dimension_id).second)
+                    reject("Wall merge has duplicate automatic edge dimensions: "+id);
+            }
+        }
+        const auto retained_dimension=automatic.find(retained.segment_id),retired_dimension=automatic.find(retired.segment_id);
+        if(retired_dimension!=automatic.end() && retained_dimension!=automatic.end()) {
+            if(dimension_metadata(original.at(retained_dimension->second))!=dimension_metadata(original.at(retired_dimension->second)))
+                reject("Wall merge automatic dimension styles or metadata conflict: "+id);
+            erased_dimensions.insert(retired_dimension->second);
+        }
+        const auto collapse_chain=[&](std::vector<std::string> chain,const std::string& dependent) {
+            const auto first=std::find(chain.begin(),chain.end(),retained.segment_id),second=std::find(chain.begin(),chain.end(),retired.segment_id);
+            if(first==chain.end() && second==chain.end())return chain;
+            if(first==chain.end() || second==chain.end() || std::next(first)!=second)
+                reject("Wall merge cannot preserve individual measured length target: "+dependent);
+            chain.erase(second);return chain;
+        };
+        for(auto& [dependent,entity]:result) {
+            if(entity.type=="constraint") {
+                const auto decoded=decode_constraint_entity(entity);if(!decoded.supported())continue;
+                if(!std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
+                    [&](const auto& binding){return binding.owner_id==id;}))continue;
+                auto relation=*decoded.constraint;auto raw=entity.properties.at("bindings");
+                std::vector<WallEndpointBinding> bindings;Json persisted=Json::array();
+                const auto on_pair=[&](const WallEndpointBinding& binding){return binding.owner_id==id &&
+                    (binding.segment_id==retained.segment_id || binding.segment_id==retired.segment_id);};
+                for(std::size_t i=0;i<relation.bindings.size();) {
+                    auto binding=relation.bindings[i];
+                    if(relation.relation==ConstraintRelationKind::tangent && on_pair(binding)) {
+                        if(i%2!=0 || i+1>=relation.bindings.size() || relation.bindings[i+1].owner_id!=id ||
+                            relation.bindings[i+1].segment_id!=binding.segment_id || relation.bindings[i+1].role==binding.role ||
+                            binding.vertex_id==seam)reject("Wall merge cannot preserve a measured seam tangent contact: "+dependent);
+                        const auto& target=*std::find_if(merged.segments.begin(),merged.segments.end(),
+                            [&](const auto& edge){return edge.segment_id==retained.segment_id;});
+                        for(std::size_t j=0;j<2;++j) {
+                            auto part=relation.bindings[i+j];auto part_json=raw.at(i+j);
+                            part.segment_id=retained.segment_id;
+                            part.vertex_id=part.role==WallEndpointRole::start?target.start_vertex_id:target.end_vertex_id;
+                            part_json["segment_id"]=part.segment_id;part_json["vertex_id"]=part.vertex_id;
+                            bindings.push_back(part);persisted.push_back(part_json);
+                        }
+                        i+=2;continue;
+                    }
+                    if(relation.relation==ConstraintRelationKind::fixed_arc_length && on_pair(binding)) {
+                        if(i+3>=relation.bindings.size())reject("Wall merge cannot preserve individual measured arc lock: "+dependent);
+                        const auto c=relation.bindings[i+1],d=relation.bindings[i+2],e=relation.bindings[i+3];
+                        const bool forward=binding.segment_id==retained.segment_id && binding.role==WallEndpointRole::start;
+                        const bool reverse=binding.segment_id==retired.segment_id && binding.role==WallEndpointRole::end;
+                        if((!forward&&!reverse) || c.owner_id!=id || d.owner_id!=id || e.owner_id!=id ||
+                            c.segment_id!=binding.segment_id || c.role==binding.role || d.role!=binding.role ||
+                            d.segment_id!=(forward?retired.segment_id:retained.segment_id) || e.segment_id!=d.segment_id || e.role==d.role)
+                            reject("Wall merge requires a complete directed measured arc chain: "+dependent);
+                        // Split duplicates endpoint metadata. Collapse only that
+                        // exact duplication, preserving both authored outer records.
+                        const auto without_endpoint=[](Json value){value.erase("segment_id");value.erase("vertex_id");return value;};
+                        if(without_endpoint(raw.at(i))!=without_endpoint(raw.at(i+2)) ||
+                            without_endpoint(raw.at(i+1))!=without_endpoint(raw.at(i+3)))
+                            reject("Wall merge measured arc seam binding metadata conflicts: "+dependent);
+                        auto start=binding,end=e;start.segment_id=end.segment_id=retained.segment_id;
+                        auto sj=raw.at(i),ej=raw.at(i+3);sj["segment_id"]=ej["segment_id"]=retained.segment_id;
+                        bindings.push_back(start);bindings.push_back(end);persisted.push_back(sj);persisted.push_back(ej);i+=4;continue;
+                    }
+                    if(binding.owner_id==id && binding.vertex_id==seam)
+                        reject("Wall merge is blocked by a pinned measured seam constraint: "+dependent);
+                    auto persisted_binding=raw.at(i);
+                    if(binding.owner_id==id && binding.segment_id==retired.segment_id) {
+                        binding.segment_id=retained.segment_id;persisted_binding["segment_id"]=retained.segment_id;
+                    }
+                    if(on_pair(binding)) {
+                        const auto& target=*std::find_if(merged.segments.begin(),merged.segments.end(),[&](const auto& edge){return edge.segment_id==retained.segment_id;});
+                        binding.role=binding.vertex_id==target.start_vertex_id?WallEndpointRole::start:WallEndpointRole::end;
+                        persisted_binding["role"]=binding.role==WallEndpointRole::start?"start":"end";
+                    }
+                    bindings.push_back(binding);persisted.push_back(persisted_binding);++i;
+                }
+                relation.bindings=std::move(bindings);
+                auto updated=encode_constraint_entity(relation,&entity);updated.properties["bindings"]=std::move(persisted);entity=std::move(updated);
+            }
+            if(!can_recognize_boundary_dimension_entity_type(entity.type) || erased_dimensions.contains(dependent))continue;
+            const auto decoded=decode_boundary_dimension_entity(entity);if(!decoded.supported())continue;
+            auto dimension=*decoded.dimension;if(dimension.boundary_id!=id || dimension.kind==BoundaryDimensionKind::area)continue;
+            if(dimension.kind==BoundaryDimensionKind::angle) {
+                if(dimension.vertex_id==seam)reject("Wall merge is blocked by a measured seam angle dimension: "+dependent);
+                if(dimension.segment_id==retired.segment_id)dimension.segment_id=retained.segment_id;
+                if(dimension.secondary_segment_id==retired.segment_id)dimension.secondary_segment_id=retained.segment_id;
+            } else if(!dimension.segment_chain_ids.empty()) {
+                auto chain=collapse_chain(dimension.segment_chain_ids,dependent);dimension.segment_id=chain.front();
+                dimension.segment_chain_ids=chain.size()==1?std::vector<std::string>{}:std::move(chain);
+            } else if(dimension.segment_id==retained.segment_id || dimension.segment_id==retired.segment_id) {
+                if(dimension.placement!=BoundaryDimensionPlacement::automatic)
+                    reject("Wall merge cannot reinterpret an individual manual edge dimension: "+dependent);
+                dimension.segment_id=retained.segment_id;
+            }
+            if(dimension.placement==BoundaryDimensionPlacement::automatic && dimension.kind==BoundaryDimensionKind::segment_length) {
+                const auto side=dimension.automatic_placement_version.value_or(1)==1?1.0:(signed_area(boundary_geometry(merged))>0?-1.0:1.0);
+                dimension.text_position=dimension_position(dimension.resolve(result).segment,side);
+            }
+            entity=encode_boundary_dimension_entity(dimension,&entity);
+        }
+        for(const auto& erased:erased_dimensions)result.erase(erased);
+        // Do not reinterpret opaque dependent child references. Historical
+        // construction/derivation records and the boundary's old child payload
+        // are receipts; all other canonical reference locations are checked.
+        const auto check_refs=[&](const auto& self,const Json& value,const std::string& dependent,const std::string& path)->void {
+            static const std::set<std::string,std::less<>> keys={"segment_id","segment_ids","second_segment_id","vertex_id","vertex_ids",
+                "start_vertex_id","end_vertex_id","entity_id","entity_ids","object_id","object_ids","target_id","target_ids",
+                "wall_id","wall_ids","host_id","host_ids","source_id","source_ids","source_entity_id","source_entity_ids",
+                "parent_id","parent_ids","owner_id","host_entity_id","host_entity_ids","wall_members",
+                "wall_join_id","wall_join_ids","join_id","join_ids","constraint_id","constraint_ids","seam_constraint_id",
+                "dimension_id","dimension_ids","refs","references"};
+            const auto mentions=[&](const auto& recurse,const Json& child,const std::string& target)->bool {
+                if(child.is_string())return child==target;
+                if(child.is_array())for(const auto& item:child)if(recurse(recurse,item,target))return true;
+                return false;
+            };
+            if(value.is_object())for(const auto& [key,child]:value.items()) {
+                if(keys.contains(key)) {
+                    const bool segment_reference=key=="segment_id" || key=="segment_ids" || key=="second_segment_id";
+                    const bool vertex_reference=key=="vertex_id" || key=="vertex_ids" || key=="start_vertex_id" || key=="end_vertex_id";
+                    const bool generic_reference=key=="refs" || key=="references";
+                    bool retired_reference=((segment_reference||generic_reference)&&mentions(mentions,child,retired.segment_id)) ||
+                        ((vertex_reference||generic_reference)&&mentions(mentions,child,seam));
+                    if(!segment_reference&&!vertex_reference)for(const auto& erased:erased_dimensions)
+                        retired_reference=retired_reference||mentions(mentions,child,erased);
+                    if(retired_reference)reject("Wall merge has unsupported retired-child reference in "+dependent+" at "+path+"/"+key);
+                }
+                self(self,child,dependent,path+"/"+key);
+            } else if(value.is_array())for(std::size_t i=0;i<value.size();++i)self(self,value[i],dependent,path+"/"+std::to_string(i));
+        };
+        for(const auto& [dependent,entity]:result) {
+            auto unchecked=entity;
+            if(entity.type=="wall" &&
+                (entity.extensions.contains("wall_merge_archive") || entity.extensions.contains("wall_split_archive"))) {
+                Wall wall;std::string error;
+                if(!read_document_wall(entity,{},wall,error))reject("Wall merge historical wall is invalid: "+dependent+": "+error);
+                validate_wall_semantics(wall);validate_wall_split_archive(entity);validate_wall_merge_archive(entity);
+                unchecked.extensions.erase("wall_merge_archive");unchecked.extensions.erase("wall_split_archive");
+            }
+            if(can_recognize_boundary_entity_type(entity.type) &&
+                inspect_boundary_entity_version(entity).format==BoundaryEntityFormat::identified_v1 &&
+                (entity.extensions.contains("boundary_geometry_derivation") || entity.properties.contains("boundary_authoring"))) {
+                // Only strict owner/operation replay admits historical child
+                // inventories; same-named opaque fields remain live references.
+                if(const auto diagnostic=validate_boundary_integrity({{dependent,entity}}))reject(*diagnostic);
+                unchecked.extensions.erase("boundary_geometry_derivation");unchecked.properties.erase("boundary_authoring");
+            }
+            check_refs(check_refs,unchecked.properties,dependent,"/properties");check_refs(check_refs,unchecked.extensions,dependent,"/extensions");
+        }
+        if(!wall_measurement_source_current(result,result.at(id)))reject("Wall merge measured owner remains stale: "+id);
+    }
+    if(const auto diagnostic=validate_boundary_integrity(result))reject(*diagnostic);
     return result;
 }
 

@@ -586,6 +586,22 @@ void classify_correspondence(PhysicalWallRoomCorrespondenceReport& report) {
 }
 } // namespace
 
+bool physical_wall_room_regions_equal(const Boundary& first,const std::vector<Boundary>& first_holes,
+    const Boundary& second,const std::vector<Boundary>& second_holes) {
+    try {
+        CorrespondenceBudget budget;budget.geometry(first,first_holes);budget.geometry(second,second_holes);
+        if(first.empty() || second.empty())invalid("region equality requires nonempty analytical outlines");
+        const auto origin=first.front().start;
+        const auto a=correspondence_region(first,first_holes,origin);
+        const auto b=correspondence_region(second,second_holes,origin);
+        const auto ab=correspondence_boolean<BRepAlgoAPI_Cut>(*a.shape,*b.shape);
+        const auto ba=correspondence_boolean<BRepAlgoAPI_Cut>(*b.shape,*a.shape);
+        // No tolerance allowance converts a positive sliver into continuation.
+        // The authoritative caller also proves physical source lineage.
+        return surface_area(ab)==0 && surface_area(ba)==0;
+    } catch(const Standard_Failure& e) { invalid(std::string("analytical region equality failed: ")+e.what()); }
+}
+
 PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
     const Entity& room,const DrawingContext& context) {
     try {

@@ -159,7 +159,8 @@ public:
     // Curved sloped walls, explicit retained top planes and straight rigid
     // wall proofs require v62 across every retained revision and receipt.
     // Per-flight stair dimensions require v63, including retained history.
-    static constexpr std::uint32_t format_version = 63;
+    // Source-reconstructed wall merges and retained merge archives require v64.
+    static constexpr std::uint32_t format_version = 64;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

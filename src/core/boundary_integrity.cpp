@@ -1,5 +1,9 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/physical_wall_room_data.hpp"
+#include "sketch/wall_merge.hpp"
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+#include "sketch/physical_wall_room_merge.hpp"
+#endif
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -312,6 +316,101 @@ IdentifiedBoundary replay_geometry_derivation(const Entity& entity) {
         if (kind == "geometry_edit") {
             result = apply_geometry_edit(
                 result, decode_boundary_geometry_edit(operation.at("value")));
+        } else if (kind == "physical_room_wall_merge") {
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            result = replay_physical_room_wall_merge(entity, result, operation.at("value"));
+#else
+            throw std::invalid_argument("Physical room wall merging requires the architectural geometry engine");
+#endif
+        } else if (kind == "wall_merge") {
+            const auto& value=operation.at("value");
+            if(!value.is_object() || value.size()!=5 || !value.contains("version") ||
+                !value.at("version").is_number_integer() || value.at("version")!=1 ||
+                !value.contains("vertex_id") || !value.at("vertex_id").is_string() ||
+                !value.contains("segments") || !value.at("segments").is_array() ||
+                !value.contains("wall_source_ids") || !value.at("wall_source_ids").is_array() ||
+                !value.contains("removed_wall_id") || !value.at("removed_wall_id").is_string())
+                throw std::invalid_argument("Wall merge boundary derivation has unsupported fields");
+            const auto vertex=value.at("vertex_id").get<std::string>();
+            const auto outgoing=std::find_if(result.segments.begin(),result.segments.end(),
+                [&](const auto& edge){return edge.start_vertex_id==vertex;});
+            if(outgoing==result.segments.end())throw std::invalid_argument("Wall merge boundary seam is unavailable");
+            const auto index=static_cast<std::size_t>(outgoing-result.segments.begin());
+            const auto& incoming=result.segments[(index+result.segments.size()-1)%result.segments.size()];
+            const auto expected=remove_boundary_vertex(result,vertex);
+            const auto merged=std::find_if(expected.segments.begin(),expected.segments.end(),
+                [&](const auto& edge){return edge.segment_id==incoming.segment_id;});
+            if((incoming.segment.sweep_radians==0)!=(outgoing->segment.sweep_radians==0) ||
+                std::abs(segment_length(merged->segment)-segment_length(incoming.segment)-segment_length(outgoing->segment))>
+                    default_geometry_tolerance_metres ||
+                std::abs(merged->segment.sweep_radians-incoming.segment.sweep_radians-outgoing->segment.sweep_radians)>1e-9)
+                throw std::invalid_argument("Wall merge boundary derivation does not preserve its analytical span");
+            if(incoming.segment.sweep_radians==0) {
+                const auto& support=merged->segment;
+                const auto dx=support.end.x-support.start.x,dy=support.end.y-support.start.y,length=std::hypot(dx,dy);
+                const auto deviation=std::abs((incoming.segment.end.x-support.start.x)*(dy/length)-
+                    (incoming.segment.end.y-support.start.y)*(dx/length));
+                if(!std::isfinite(deviation) || deviation>default_geometry_tolerance_metres)
+                    throw std::invalid_argument("Wall merge boundary seam leaves its straight support line");
+            }
+            static const std::set<std::string> fields={"segment_id","start_vertex_id","end_vertex_id","start","end","sweep_radians"};
+            for(const auto& edge:value.at("segments")) {
+                if(!edge.is_object())throw std::invalid_argument("Wall merge boundary segment must be an object");
+                std::set<std::string> actual;
+                for(const auto& [key,ignored]:edge.items()){(void)ignored;actual.insert(key);}
+                if(actual!=fields)throw std::invalid_argument("Wall merge boundary segment contains unsupported fields");
+            }
+            const auto replacement=decode_identified_boundary_entity(Entity{entity.id,entity.type,
+                {{"boundary_model_version",1},{"segments",value.at("segments")}},false,nlohmann::json::object()});
+            if(replacement.segments.size()!=expected.segments.size())
+                throw std::invalid_argument("Wall merge boundary derivation changed unrelated topology");
+            for(std::size_t i=0;i<replacement.segments.size();++i) {
+                const auto& a=expected.segments[i];const auto& b=replacement.segments[i];
+                const auto bounds=segment_bounds(b.segment);
+                const auto support_point=[](const Segment& segment,double fraction) {
+                    if(segment.sweep_radians==0)return Vec2{std::lerp(segment.start.x,segment.end.x,fraction),
+                        std::lerp(segment.start.y,segment.end.y,fraction)};
+                    const auto dx=segment.end.x-segment.start.x,dy=segment.end.y-segment.start.y,chord=std::hypot(dx,dy);
+                    const auto angle=segment.sweep_radians*fraction,half_sine=std::sin(angle/2);
+                    const auto center_offset=std::abs(segment.sweep_radians)==std::numbers::pi?0.0:chord/(2*std::tan(segment.sweep_radians/2));
+                    const auto along=chord*half_sine*half_sine+center_offset*std::sin(angle);
+                    const auto normal=-chord*std::sin(angle)/2+center_offset*(2*half_sine*half_sine);
+                    return Vec2{std::fma(dx/chord,along,std::fma(-dy/chord,normal,segment.start.x)),
+                        std::fma(dy/chord,along,std::fma(dx/chord,normal,segment.start.y))};
+                };
+                bool same_support=true;
+                for(const auto fraction:{0.25,0.5,0.75}) {
+                    const auto first=support_point(a.segment,fraction),second=support_point(b.segment,fraction);
+                    const auto displacement=std::hypot(first.x-second.x,first.y-second.y);
+                    same_support=same_support&&std::isfinite(displacement)&&displacement<=default_geometry_tolerance_metres;
+                }
+                if(a.segment_id!=b.segment_id || a.start_vertex_id!=b.start_vertex_id || a.end_vertex_id!=b.end_vertex_id ||
+                    std::hypot(a.segment.start.x-b.segment.start.x,a.segment.start.y-b.segment.start.y)>default_geometry_tolerance_metres ||
+                    std::hypot(a.segment.end.x-b.segment.end.x,a.segment.end.y-b.segment.end.y)>default_geometry_tolerance_metres ||
+                    (a.segment.sweep_radians==0)!=(b.segment.sweep_radians==0) ||
+                    (a.segment.sweep_radians!=0 && std::signbit(a.segment.sweep_radians)!=std::signbit(b.segment.sweep_radians)) ||
+                    std::max(segment_length(a.segment),segment_length(b.segment))*
+                        std::abs(a.segment.sweep_radians-b.segment.sweep_radians)>default_geometry_tolerance_metres || !same_support ||
+                    !std::isfinite(bounds.minimum.x) || !std::isfinite(bounds.minimum.y) ||
+                    !std::isfinite(bounds.maximum.x) || !std::isfinite(bounds.maximum.y) ||
+                    std::max({std::abs(bounds.minimum.x),std::abs(bounds.minimum.y),std::abs(bounds.maximum.x),std::abs(bounds.maximum.y)})>1e6)
+                    throw std::invalid_argument("Wall merge boundary derivation lost surviving correspondence or changed geometry");
+            }
+            // Reuse the strict source-list/identifier contract; geometry is
+            // already proved above and cannot be supplied as edit authority.
+            BoundaryGeometryEdit proof;proof.boundary_id=proof.target_id=entity.id;
+            proof.kind=BoundaryGeometryEditKind::redefine_boundary;proof.replacement_segments=value.at("segments");
+            proof.replacement_wall_source_ids=value.at("wall_source_ids").get<std::vector<std::string>>();
+            validate_boundary_geometry_edit(proof);
+            const auto removed_id=value.at("removed_wall_id").get<std::string>();
+            if(removed_id.empty() || removed_id.size()>128 || !std::all_of(removed_id.begin(),removed_id.end(),[](unsigned char c) {
+                return (c>='a'&&c<='z') || (c>='A'&&c<='Z') || (c>='0'&&c<='9') || c=='-' || c=='_' || c=='.' || c==':';
+            }))throw std::invalid_argument("Wall merge boundary retired source identity is invalid");
+            if(proof.replacement_wall_source_ids.empty() ||
+                std::find(proof.replacement_wall_source_ids.begin(),proof.replacement_wall_source_ids.end(),
+                    removed_id)!=proof.replacement_wall_source_ids.end())
+                throw std::invalid_argument("Wall merge boundary source still includes its retired wall");
+            result=replacement;
         } else if (kind == "vertex_batch") {
             if (!operation.at("value").is_array())
                 throw std::invalid_argument("Boundary vertex batch must be an array");
@@ -333,6 +432,24 @@ IdentifiedBoundary replay_geometry_derivation(const Entity& entity) {
 void record_boundary_identities(BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& entities) {
     for (const auto& [id, entity] : entities) {
+        if (entity.type == "wall" && entity.extensions.contains("wall_merge_archive")) {
+            const auto& archive = entity.extensions.at("wall_merge_archive");
+            if (archive.is_object() && archive.contains("version") && archive.at("version") == 1) {
+                validate_wall_merge_archive(entity);
+                std::vector<const nlohmann::json*> pending{&archive};
+                while (!pending.empty()) {
+                    const auto* retained = pending.back();
+                    pending.pop_back();
+                    const auto& sources = retained->at("sources");
+                    history[sources.at(1).at("id").get<std::string>()].wall_merge_reserved = true;
+                    for (const auto& source : sources) {
+                        const auto& extensions = source.at("extensions");
+                        if (extensions.contains("wall_merge_archive"))
+                            pending.push_back(&extensions.at("wall_merge_archive"));
+                    }
+                }
+            }
+        }
         const bool boundary = can_recognize_boundary_entity_type(entity.type);
         if (entity.type != "dimension" && !boundary) continue;
         auto [entry, inserted] = history.try_emplace(id);
@@ -402,6 +519,8 @@ void validate_boundary_identity_transition(const BoundaryIdentityHistory& histor
         const auto invalid = [&](const char* reason) {
             throw std::invalid_argument("Boundary identity " + id + ": " + reason);
         };
+        if (reserved->second.wall_merge_reserved && previous == before.end())
+            invalid("merged wall ID requires exact undo/redo; use a fresh identity for a new object");
         if (!reserved->second.protected_identity) {
             const bool becoming_protected = entity.type == "dimension" ||
                 (can_recognize_boundary_entity_type(entity.type) &&
@@ -1262,13 +1381,51 @@ std::optional<std::string> validate_boundary_integrity(
                 std::vector<std::string> reviewed_sources;
                 std::optional<nlohmann::json> reviewed_linework;
                 std::optional<PhysicalWallRoomRepairIntent> reviewed_room;
+                std::optional<nlohmann::json> reviewed_room_descriptor;
                 for (const auto& operation : entity.extensions.at("boundary_geometry_derivation").at("operations")) {
+                    if (operation.at("kind") == "physical_room_wall_merge") {
+                        const auto& value = operation.at("value");
+                        const auto& captured = value.at("source_descriptor");
+                        if (reviewed_room_descriptor && *reviewed_room_descriptor != captured)
+                            throw std::invalid_argument("Boundary " + id + ": physical room merge source breaks its retained descriptor chain");
+                        if (reviewed_room && (captured.at("selected_wall_id") != reviewed_room->selected_wall_id ||
+                            captured.at("source_lineage") != reviewed_room->reviewed_source_lineage))
+                            throw std::invalid_argument("Boundary " + id + ": physical room merge source differs from its preceding repair");
+                        reviewed_room_descriptor = value.at("descriptor");
+                        reviewed_room.reset();
+                        continue;
+                    }
+                    if(operation.at("kind")=="wall_merge") {
+                        auto merged_sources=operation.at("value").at("wall_source_ids").get<std::vector<std::string>>();
+                        if(!reviewed_sources.empty()) {
+                            const auto retired=operation.at("value").at("removed_wall_id").get<std::string>();
+                            const auto member=std::find(reviewed_sources.begin(),reviewed_sources.end(),retired);
+                            if(member==reviewed_sources.end())throw std::invalid_argument("Wall merge boundary proof did not retire a recorded source");
+                            reviewed_sources.erase(member);
+                            std::sort(reviewed_sources.begin(),reviewed_sources.end());std::sort(merged_sources.begin(),merged_sources.end());
+                            if(reviewed_sources!=merged_sources)throw std::invalid_argument("Wall merge boundary proof changed unrelated physical sources");
+                        }
+                        reviewed_sources=std::move(merged_sources);
+                        continue;
+                    }
                     if (operation.at("kind") != "geometry_edit") continue;
                     const auto edit = decode_boundary_geometry_edit(operation.at("value"));
                     if (!edit.replacement_wall_source_ids.empty()) reviewed_sources = edit.replacement_wall_source_ids;
                     if (edit.replacement_linework_sources) reviewed_linework = edit.replacement_linework_sources;
-                    if (edit.physical_wall_room_repair) reviewed_room=edit.physical_wall_room_repair;
+                    if (edit.physical_wall_room_repair) {
+                        if (reviewed_room_descriptor) {
+                            auto captured = entity;
+                            captured.extensions["physical_wall_room"] = *reviewed_room_descriptor;
+                            if (physical_wall_room_descriptor_digest(captured) != edit.physical_wall_room_repair->expected_descriptor_digest)
+                                throw std::invalid_argument("Boundary " + id + ": physical room repair source differs from its preceding merge");
+                        }
+                        reviewed_room = edit.physical_wall_room_repair;
+                        reviewed_room_descriptor.reset();
+                    }
                 }
+                if (reviewed_room_descriptor && (!is_physical_wall_room(entity) ||
+                    entity.extensions.at("physical_wall_room") != *reviewed_room_descriptor))
+                    throw std::invalid_argument("Boundary " + id + ": physical room source differs from its retained merge descriptor");
                 if (reviewed_room) {
                     const auto descriptor=decode_physical_wall_room_descriptor(entity);
                     if (descriptor.selected_wall_id!=reviewed_room->selected_wall_id ||

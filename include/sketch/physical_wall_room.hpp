@@ -30,6 +30,12 @@ struct PhysicalWallRoomLineageCheck {
 // Detection is cached within this call; no caller-owned document is modified.
 [[nodiscard]] std::map<std::string,PhysicalWallRoomCheck,std::less<>>
 physical_wall_room_checks(const DocumentSnapshot& source);
+// Uses the same bounded analytical line/circle region representation as room
+// correspondence. Both directed differences must have zero represented area;
+// numerically uncertain or invalid comparisons refuse. Includes inline holes.
+[[nodiscard]] bool physical_wall_room_regions_equal(
+    const Boundary& first, const std::vector<Boundary>& first_holes,
+    const Boundary& second, const std::vector<Boundary>& second_holes);
 
 enum class PhysicalWallRoomCorrespondenceKind {
     unique_continuation, split, merge, new_space, retired, ambiguous

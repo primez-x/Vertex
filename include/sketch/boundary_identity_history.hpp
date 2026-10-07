@@ -13,6 +13,9 @@ struct BoundaryIdentityLifetime {
     bool legacy_reused_or_retyped{};
     std::set<std::string, std::less<>> segments;
     std::set<std::string, std::less<>> vertices;
+    // A merged-away physical wall remains reserved across retained branches.
+    // Navigation may restore it; an ordinary insertion cannot reuse its ID.
+    bool wall_merge_reserved{};
 };
 using BoundaryIdentityHistory =
     std::map<std::string, BoundaryIdentityLifetime, std::less<>>;

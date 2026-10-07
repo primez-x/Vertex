@@ -1,4 +1,5 @@
 #include "sketch/wall_split.hpp"
+#include "sketch/wall_merge.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
@@ -185,7 +186,7 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
         const auto gradient=wall_top_gradient(wall);
         const auto inherited=wall_top_plane_json(gradient);
         const auto set_top=[&](Entity& piece,const Segment& axis,double height) {
-            const auto chord=axis.end-axis.start;
+            const Vec2 chord{axis.end.x-axis.start.x,axis.end.y-axis.start.y};
             const auto rise=gradient.x*chord.x+gradient.y*chord.y;
             if (!std::isfinite(height) || !std::isfinite(rise))
                 reject("Split wall top height exceeds the supported range");
@@ -284,6 +285,12 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
             // These identities identify historical source receipts. They are
             // independently validated, rather than current model references.
             unhandled.extensions.erase("wall_split_archive");
+        }
+        if(entity.type=="wall" && entity.extensions.contains("wall_merge_archive")) {
+            validate_wall_merge_archive(entity);
+            // Full originals are historical construction evidence, not live
+            // hosts. Both split children retain that evidence unchanged.
+            unhandled.extensions.erase("wall_merge_archive");
         }
         unknown_refs(unhandled.properties,intent,id,"/properties");unknown_refs(unhandled.extensions,intent,id,"/extensions");
     }

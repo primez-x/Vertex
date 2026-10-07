@@ -5,7 +5,49 @@ latest instruction; it does not restore per-turn builds or packages.
 The binding execution plan is [plan.md](plan.md). No production acceptance is
 claimed by this record.
 
+The latest steering is source implementation first: do not resume builds,
+tests, probes, native jobs, package generation or installations. Keep the
+installed candidate unchanged and implement the remaining behavior in the
+permanent checkout. Source inspection, scoped commits and remote backup remain
+part of delivery. This steering overrides the plan's build-after-batch cadence;
+changed source does not acquire runtime acceptance without later qualification.
+
 ## Current delivery state
+
+### October 7 physical wall merge implementation
+
+A dedicated source-reconstructed merge joins compatible directed straight walls
+and same-circle arcs, retains the absolute top plane and rehosts openings at
+their original combined-wall station. Both full original walls remain as bounded
+historical construction evidence. The exclusive command cannot borrow an
+ordinary entity payload or another edit lane. Native format 64 and extraction
+62 protect the command, archives and derived measured-source history.
+
+The desktop exposes Merge walls in Tools, command search and wall context menus.
+One wall chooses its adjacent connection; two selected walls choose their pair.
+Remove point on a current physical exterior resolves its actual adjacent source
+walls and uses the same preview. Apply uses the captured candidate; Cancel and
+changed context cannot mutate it. The preview identifies the surviving wall,
+rehosted openings, updated dimensions and retired junctions. Exterior selection
+remains on the exterior after its source walls merge.
+
+Measured source completion retains surviving analytical child identities and
+dimensions while proving the removed seam and source list. Original receipts
+remain archived; no new measured input is invented. Split-after-merge recognizes
+the archive as historical evidence instead of a live reference. Ordinary edits
+cannot discard or rewrite that evidence. Initially current clear rooms keep
+their analytical region, holes, facts and stable children while their complete
+source descriptors update, including unchanged rooms elsewhere in the plane.
+Unbound walls with no eligible rooms still merge; inactive and stale room
+evidence remains unchanged. Nested archives reserve merged-away wall identities
+across retained branches, while exact undo and redo remain available.
+
+Independent source review identified and corrected ordinary direction-constrained
+split/merge pairs, outer junction handling, dangling canonical references,
+snapshot replacement during the preview and copy/clone provenance remapping.
+Historical metadata exemptions require a typed owner and validated envelope.
+This is source implementation, without compilation, native runtime or human
+acceptance. No builds, tests, probes, packages or installations ran for this batch.
 
 ### October 7 per-flight stair implementation
 

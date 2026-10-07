@@ -81,6 +81,7 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/wall_split.hpp"
+#include "sketch/wall_merge.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_resource_catalog.hpp"
 #include "sketch/project_ownership.hpp"
@@ -218,6 +219,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <iomanip>
 #include <iterator>
 #include <limits>
@@ -455,6 +457,159 @@ const std::string& stair_railing_host_id(const Railing& rail) {
     throw std::invalid_argument("The railing has no supported stair host.");
 }
 
+void require_merge_copy_fields(const json& value, std::initializer_list<const char*> fields) {
+    if (!value.is_object() || value.size() != fields.size())
+        throw std::invalid_argument("Wall merge copy evidence has unsupported fields.");
+    for (const auto* field : fields)
+        if (!value.contains(field))
+            throw std::invalid_argument("Wall merge copy evidence is missing a required field.");
+}
+
+template <typename Identity>
+void visit_merge_copy_segments(json& segments, const Identity& identity) {
+    if (!segments.is_array()) throw std::invalid_argument("Wall merge copy segments must be an array.");
+    for (auto& edge : segments)
+        require_merge_copy_fields(edge,{"segment_id","start_vertex_id","end_vertex_id","start","end","sweep_radians"});
+    (void)decode_identified_boundary_entity(Entity{"merge-copy-validation","boundary",
+        {{"boundary_model_version",1},{"segments",segments}},false,json::object()});
+    for (auto& edge : segments) {
+        identity(edge.at("segment_id"),"segment");
+        identity(edge.at("start_vertex_id"),"vertex");
+        identity(edge.at("end_vertex_id"),"vertex");
+    }
+}
+
+// Only the captured v1 vocabulary owns references. Baseline feature names,
+// alternative-local identities, geometry and unknown user metadata are opaque.
+template <typename Identity>
+void visit_merge_copy_room_lineage(json& lineage, const Identity& identity) {
+    require_merge_copy_fields(lineage,{"version","basis","context","physical_sources","semantic_phases","outer","holes","component_index"});
+    if (!lineage.at("version").is_number_integer() || lineage.at("version")!=1 ||
+        lineage.at("basis")!="physical_wall_clear" || !lineage.at("physical_sources").is_array() ||
+        !lineage.at("semantic_phases").is_array() || !lineage.at("holes").is_array())
+        throw std::invalid_argument("Wall merge copy room lineage is unsupported.");
+    const auto context=[&](json& record,bool level) {
+        if (level) require_merge_copy_fields(record,{"property_id","building_id","floor_id","layer_id","level_id"});
+        else require_merge_copy_fields(record,{"property_id","building_id","floor_id","layer_id"});
+        for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
+            if (!record.at(key).is_null()) identity(record.at(key),"context");
+        if (level && !record.at("level_id").is_null() && record.at("level_id")!="")
+            identity(record.at("level_id"),"context");
+    };
+    context(lineage.at("context"),true);
+    for (auto& source : lineage.at("physical_sources")) {
+        require_merge_copy_fields(source,{"owner_id","segment_id","baseline","thickness_m","source_elevation_m","effective_elevation_m","source_context","vertical_placement"});
+        if (source.at("segment_id")!="baseline")
+            throw std::invalid_argument("Wall merge copy room source feature is unsupported.");
+        identity(source.at("owner_id"),"wall-source");
+        context(source.at("source_context"),false);
+    }
+    const auto order_by=[](json& records,const char* key) {
+        std::sort(records.begin(),records.end(),[&](const auto& a,const auto& b) {
+            return a.at(key).template get<std::string>()<b.at(key).template get<std::string>();
+        });
+    };
+    // These inventories are emitted in document identity order. Fresh IDs can
+    // change that order without changing captured geometry or phase facts.
+    order_by(lineage.at("physical_sources"),"owner_id");
+    for (auto& phase : lineage.at("semantic_phases")) {
+        require_merge_copy_fields(phase,{"id","active_alternative","owners"});
+        if (!phase.at("owners").is_array()) throw std::invalid_argument("Wall merge copy phase owners are invalid.");
+        identity(phase.at("id"),"phase-model");
+        for (auto& owner : phase.at("owners")) {
+            require_merge_copy_fields(owner,{"owner_id","active_state"});
+            identity(owner.at("owner_id"),"wall-source");
+        }
+        order_by(phase.at("owners"),"owner_id");
+    }
+    order_by(lineage.at("semantic_phases"),"id");
+    const auto face=[&](json& record) {
+        require_merge_copy_fields(record,{"baseline_face_index","edges"});
+        if (!record.at("edges").is_array()) throw std::invalid_argument("Wall merge copy lineage edges are invalid.");
+        for (auto& edge : record.at("edges")) {
+            require_merge_copy_fields(edge,{"edge_index","source_uses"});
+            if (!edge.at("source_uses").is_array()) throw std::invalid_argument("Wall merge copy lineage uses are invalid.");
+            for (auto& use : edge.at("source_uses")) {
+                require_merge_copy_fields(use,{"owner_id","segment_id","parameter_start","parameter_end","reversed"});
+                if (use.at("segment_id")!="baseline") throw std::invalid_argument("Wall merge copy lineage feature is unsupported.");
+                identity(use.at("owner_id"),"wall-source");
+            }
+        }
+    };
+    face(lineage.at("outer"));
+    for (auto& hole : lineage.at("holes")) face(hole);
+}
+
+template <typename Identity>
+void visit_merge_copy_room_descriptor(json& value, const Identity& identity) {
+    (void)decode_physical_wall_room_descriptor(Entity{"merge-copy-validation","room_boundary",
+        json::object(),false,{{"physical_wall_room",value}}});
+    identity(value.at("selected_wall_id"),"wall-source");
+    visit_merge_copy_room_lineage(value.at("source_lineage"),identity);
+}
+
+template <typename Identity>
+void visit_merge_copy_operation(std::string_view kind, json& value, const Identity& identity) {
+    if (kind=="wall_merge") {
+        require_merge_copy_fields(value,{"version","vertex_id","segments","wall_source_ids","removed_wall_id"});
+        if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
+            !value.at("wall_source_ids").is_array())
+            throw std::invalid_argument("Wall merge copy operation is unsupported.");
+        identity(value.at("vertex_id"),"vertex");
+        identity(value.at("removed_wall_id"),"retired-wall");
+        for (auto& id : value.at("wall_source_ids")) identity(id,"wall-source");
+    } else if (kind=="physical_room_wall_merge") {
+        require_merge_copy_fields(value,{"version","first_wall_id","second_wall_id","source_descriptor","descriptor","seam_vertex_ids","segments"});
+        if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
+            !value.at("seam_vertex_ids").is_array() || value.at("seam_vertex_ids").size()>2)
+            throw std::invalid_argument("Physical room wall merge copy operation is unsupported.");
+        (void)encode_wall_merge({value.at("first_wall_id").get<std::string>(),value.at("second_wall_id").get<std::string>()});
+        identity(value.at("first_wall_id"),"wall-source");
+        identity(value.at("second_wall_id"),"retired-wall");
+        for (auto& id : value.at("seam_vertex_ids")) identity(id,"vertex");
+        visit_merge_copy_room_descriptor(value.at("source_descriptor"),identity);
+        visit_merge_copy_room_descriptor(value.at("descriptor"),identity);
+    } else throw std::invalid_argument("Boundary merge copy operation kind is unsupported.");
+    visit_merge_copy_segments(value.at("segments"),identity);
+}
+
+// Geometry remapping runs first. This shared sequential pass keeps repair
+// lineage aligned with the already remapped complete merge descriptors.
+void remap_copy_room_repair_history(json& operations,
+    const std::map<std::string,std::string,std::less<>>& identities) {
+    std::optional<Entity> preceding_room;
+    const auto identity=[&](json& value,std::string_view) {
+        const auto id=value.get<std::string>();
+        if (id.empty()) throw std::invalid_argument("Physical room repair copy identity is empty.");
+        if (const auto found=identities.find(id);found!=identities.end()) value=found->second;
+    };
+    for (auto& operation : operations) {
+        if (operation.at("kind")=="physical_room_wall_merge") {
+            const auto& value=operation.at("value");
+            preceding_room=Entity{"merge-copy-validation","room_boundary",
+                {{"boundary_model_version",1},{"segments",value.at("segments")}},false,
+                {{"physical_wall_room",value.at("descriptor")}}};
+        } else if (operation.at("kind")=="geometry_edit") {
+            auto edit=decode_boundary_geometry_edit(operation.at("value"));
+            if (!edit.physical_wall_room_repair) continue;
+            auto& repair=*edit.physical_wall_room_repair;
+            json selected=repair.selected_wall_id;
+            identity(selected,"wall-source");
+            repair.selected_wall_id=selected.get<std::string>();
+            visit_merge_copy_room_lineage(repair.reviewed_source_lineage,identity);
+            if (preceding_room) {
+                preceding_room->id=edit.boundary_id;
+                repair.expected_descriptor_digest=physical_wall_room_descriptor_digest(*preceding_room);
+            }
+            // A legacy repair captures lineage but omits destination holes.
+            // Preserve its first digest and stop full-descriptor continuation;
+            // only a later complete merge descriptor can establish it again.
+            preceding_room.reset();
+            operation["value"]=encode_boundary_geometry_edit(edit);
+        }
+    }
+}
+
 void remap_entity_references(Entity& entity,
                             const std::map<std::string, std::string, std::less<>>& remap) {
     const auto reference = [&](json& object, const char* key) {
@@ -641,11 +796,26 @@ void remap_entity_references(Entity& entity,
                         auto transform = decode_boundary_transform(operation.at("value"));
                         remapped_id(transform.boundary_id);
                         operation["value"] = encode_boundary_transform(transform);
+                    } else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge") {
+                        visit_merge_copy_operation(operation.at("kind").get<std::string>(),operation.at("value"),
+                            [&](json& id,std::string_view) {
+                                auto value=id.get<std::string>();
+                                if (value.empty()) throw std::invalid_argument("Wall merge copy identity is empty.");
+                                remapped_id(value);id=value;
+                            });
                     } else throw std::invalid_argument("Boundary geometry derivation operation kind is unsupported");
                 }
+                remap_copy_room_repair_history(derivation.at("operations"),remap);
             }
         }
     }
+    if (is_physical_wall_room(entity))
+        visit_merge_copy_room_descriptor(entity.extensions.at("physical_wall_room"),
+            [&](json& id,std::string_view) {
+                const auto value=id.get<std::string>();
+                if (value.empty()) throw std::invalid_argument("Physical room copy identity is empty.");
+                if (const auto found=remap.find(value);found!=remap.end()) id=found->second;
+            });
     if (entity.type == "dimension" && properties.contains("target")) {
         reference(properties.at("target"), "entity_id");
         reference(properties.at("target"), "segment_id");
@@ -7806,6 +7976,15 @@ public:
                             const auto edit = decode_boundary_geometry_edit(item);
                             identities.try_emplace(edit.target_id, new_id("vertex"));
                         }
+                    } else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge") {
+                        auto retained=operation.at("value");
+                        visit_merge_copy_operation(operation.at("kind").get<std::string>(),retained,
+                            [&](json& value,std::string_view role) {
+                                const auto id=value.get<std::string>();
+                                if (id.empty()) throw std::invalid_argument("Wall merge historical copy identity is empty.");
+                                if (role=="segment" || role=="vertex" || role=="retired-wall")
+                                    identities.try_emplace(id,new_id(role=="retired-wall" ? "wall" : role));
+                            });
                     }
                 }
                 json remapped_origin;
@@ -7902,11 +8081,22 @@ public:
                         transform.boundary_id = clone_id;
                         operations.push_back({{"kind", "transform"},
                             {"value", encode_boundary_transform(transform)}});
+                    } else if (kind == "wall_merge" || kind == "physical_room_wall_merge") {
+                        auto retained=operation.at("value");
+                        visit_merge_copy_operation(kind,retained,[&](json& value,std::string_view role) {
+                            const auto id=value.get<std::string>();
+                            const auto mapped=identities.find(id);
+                            if (mapped!=identities.end()) value=mapped->second;
+                            else if (role=="segment" || role=="vertex" || role=="retired-wall")
+                                throw std::invalid_argument("Wall merge historical copy identity is unavailable.");
+                        });
+                        operations.push_back({{"kind",kind},{"value",std::move(retained)}});
                     } else {
                         throw std::invalid_argument(
                             "Boundary geometry derivation operation kind is unsupported");
                     }
                 }
+                remap_copy_room_repair_history(operations,identities);
                 if (requested_transform.rotation_radians != 0.0 || requested_transform.flip_horizontal || requested_transform.flip_vertical ||
                     requested_transform.offset.x != 0.0 || requested_transform.offset.y != 0.0) {
                     operations.push_back({{"kind", "transform"},
@@ -10570,9 +10760,201 @@ public:
         update();dialog.exec();
     }
 
+    bool showWallMerge(const QString& requested_vertex = {}) {
+        try {
+            if (!m_document->is_editable() || m_boundary_session || m_pending_wall_start || m_linework_drawing)
+                throw std::invalid_argument("Finish drawing before merging walls.");
+            const auto source=authoringSnapshot();
+            const auto source_digest=fullSnapshotDigest(source);
+            const auto context=captureModalContext();
+            const auto workspace=m_workspace;
+            const auto selection=m_selected_ids;
+            const auto selected=selectedEntity();
+            if (!selected || selection.empty() || selection.size()>2)
+                throw std::invalid_argument("Select a wall, two adjacent walls, or their exterior measurement first.");
+            QDialog dialog(owner);styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("wallMergeDialog"));
+            dialog.setWindowTitle(QStringLiteral("Merge walls"));dialog.resize(620,560);
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* choices=new QComboBox(&dialog);choices->setObjectName(QStringLiteral("wallMergePair"));
+            choices->setAccessibleName(QStringLiteral("Wall connection to merge"));
+            auto* form=new QFormLayout;
+            form->addRow(QStringLiteral("Connection"),choices);layout->addLayout(form);
+            const auto same_point=[](Vec2 a,Vec2 b) {
+                return std::hypot(a.x-b.x,a.y-b.y)<=default_geometry_tolerance_metres;
+            };
+            const auto directed_pair=[&](const std::string& left,const std::string& right) {
+                const auto a=read_required_segment(source.entities().at(left).properties,"baseline");
+                const auto b=read_required_segment(source.entities().at(right).properties,"baseline");
+                if (!a || !b) throw std::invalid_argument("A selected wall has no analytical baseline.");
+                if (same_point(a->end,b->start)) return QStringList{id_from(left),id_from(right)};
+                if (same_point(b->end,a->start)) return QStringList{id_from(right),id_from(left)};
+                // Keep the connection selectable so its exact engine refusal
+                // appears in the preview rather than hiding every other pair.
+                return QStringList{id_from(left),id_from(right)};
+            };
+            int requested_index=-1;
+            const auto add_pair=[&](const QString& text,const std::string& left,const std::string& right,
+                                    const QString& vertex=QString{}) {
+                const auto pair=directed_pair(left,right);
+                choices->addItem(text,pair);
+                if (!requested_vertex.isEmpty() && vertex==requested_vertex) requested_index=choices->count()-1;
+            };
+            if (selection.size()==2) {
+                for (const auto& id : selection) {
+                    const auto found=source.entities().find(id.toStdString());
+                    if (found==source.entities().end() || found->second.type!="wall")
+                        throw std::invalid_argument("Both selected objects must be physical walls.");
+                }
+                const auto& a=source.entities().at(selection.at(0).toStdString());
+                const auto& b=source.entities().at(selection.at(1).toStdString());
+                add_pair(QStringLiteral("%1 + %2").arg(id_from(read_string(a.properties,"name").value_or(a.id)),
+                    id_from(read_string(b.properties,"name").value_or(b.id))),a.id,b.id);
+            } else if (selected->type=="wall") {
+                const auto wall=read_required_segment(selected->properties,"baseline");
+                if (!wall) throw std::invalid_argument("The selected wall has no analytical baseline.");
+                for (const auto& [id,entity] : source.entities()) {
+                    if (id==selected->id || entity.type!="wall") continue;
+                    const auto neighbor=read_required_segment(entity.properties,"baseline");
+                    if (!neighbor || (!same_point(wall->end,neighbor->start) && !same_point(neighbor->end,wall->start))) continue;
+                    add_pair(QStringLiteral("With %1").arg(id_from(read_string(entity.properties,"name").value_or(id))),selected->id,id);
+                }
+            } else if (selected->type=="measurement_boundary" && selected->properties.contains("wall_measurement_source")) {
+                if (!wall_measurement_source_current(source,*selected))
+                    throw std::invalid_argument("Refresh or repair this measurement's source walls before removing a point.");
+                const auto boundary=decode_identified_boundary_entity(*selected);
+                const auto derived=derive_replacement_exterior_wall_measurement(source.entities(),*selected,
+                    exterior_wall_measurement_source_ids(*selected));
+                const auto edge_wall=[&](const IdentifiedSegment& edge) {
+                    std::optional<std::string> result;
+                    for (std::size_t i=0;i<derived.boundary.size();++i) {
+                        const auto& segment=derived.boundary[i];
+                        const bool forward=same_point(edge.segment.start,segment.start) && same_point(edge.segment.end,segment.end) &&
+                            std::abs(edge.segment.sweep_radians-segment.sweep_radians)<=1e-12;
+                        const bool reverse=same_point(edge.segment.start,segment.end) && same_point(edge.segment.end,segment.start) &&
+                            std::abs(edge.segment.sweep_radians+segment.sweep_radians)<=1e-12;
+                        if (!forward && !reverse) continue;
+                        if (result) throw std::invalid_argument("The measured edge has ambiguous physical-wall correspondence.");
+                        result=derived.ordered_wall_ids.at(i);
+                    }
+                    if (!result) throw std::invalid_argument("The measured edge needs source review before merging walls.");
+                    return *result;
+                };
+                for (std::size_t i=0;i<boundary.segments.size();++i) {
+                    const auto& outgoing=boundary.segments[i];
+                    const auto& incoming=boundary.segments[(i+boundary.segments.size()-1)%boundary.segments.size()];
+                    add_pair(QStringLiteral("Point %1 · X %2 · Y %3").arg(i+1)
+                        .arg(format_length(outgoing.segment.start.x,context.metric_units),
+                             format_length(outgoing.segment.start.y,context.metric_units)),
+                        edge_wall(incoming),edge_wall(outgoing),id_from(outgoing.start_vertex_id));
+                }
+            } else throw std::invalid_argument("Select a physical wall or an exterior measurement derived from walls.");
+            if (choices->count()==0) throw std::invalid_argument("This wall has no directed adjacent wall to merge.");
+            if (!requested_vertex.isEmpty()) {
+                if (requested_index<0) throw std::invalid_argument("The selected point has no current physical-wall connection.");
+                choices->setCurrentIndex(requested_index);
+            }
+            auto* preview=new PlanCanvas(&dialog);new BoundaryPreviewFit(preview);
+            preview->setObjectName(QStringLiteral("wallMergePreview"));
+            preview->setGridEnabled(false);preview->setOverviewMapEnabled(false);
+            preview->setSelectionTransformEnabled(false,false);preview->setSelectionAxisResizeEnabled(false);
+            preview->setMinimumHeight(280);layout->addWidget(preview,1);
+            auto* summary=new QLabel(&dialog);summary->setWordWrap(true);summary->setTextFormat(Qt::PlainText);
+            summary->setObjectName(QStringLiteral("wallMergeSummary"));layout->addWidget(summary);
+            auto* status=new QLabel(&dialog);status->setWordWrap(true);status->setTextFormat(Qt::PlainText);
+            status->setObjectName(QStringLiteral("wallMergeStatus"));layout->addWidget(status);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
+            layout->addWidget(buttons);
+            std::optional<Command> candidate;
+            std::optional<DocumentSnapshot> proposed;
+            std::string survivor;
+            bool applied=false;
+            PlanSceneCaches before_caches,after_caches;
+            SnapshotPlanSceneOptions options;options.metric_units=context.metric_units;
+            options.label_font=preview->font();options.label_device=preview;
+            const auto unchanged=[&] {
+                if (!modalContextUnchanged(context) || m_workspace!=workspace || m_selected_ids!=selection ||
+                    !m_document->is_editable() || m_boundary_session || m_pending_wall_start || m_linework_drawing)
+                    return false;
+                try { return source_digest==fullSnapshotDigest(authoringSnapshot()); }
+                catch (const std::exception&) { return false; }
+            };
+            const auto update=[&] {
+                candidate.reset();proposed.reset();summary->clear();status->clear();
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                preview->setEntities({});preview->setLabels({});
+                try {
+                    if (!unchanged()) throw std::invalid_argument("The project or editing context changed. Reopen Merge walls.");
+                    const auto pair=choices->currentData().toStringList();
+                    if (pair.size()!=2) throw std::invalid_argument("Choose one wall connection.");
+                    const WallMergeIntent intent{pair.at(0).toStdString(),pair.at(1).toStdString()};
+                    auto command=make_wall_merge_command(source,intent);
+                    auto result=Document::preview_command(source,command);
+                    const auto before=projectSnapshotPlanScene(source,options,before_caches);
+                    const auto after=projectSnapshotPlanScene(result,options,after_caches);
+                    std::set<std::string> changed{intent.first_wall_id,intent.second_wall_id};
+                    std::size_t openings=0,dimensions=0,junctions=0;
+                    for (const auto& [id,entity] : result.entities()) {
+                        const auto previous=source.entities().find(id);
+                        if (previous==source.entities().end() || previous->second!=entity) {
+                            changed.insert(id);
+                            if (entity.type=="opening") ++openings;
+                            if (entity.type=="dimension") ++dimensions;
+                        }
+                    }
+                    for (const auto& [id,entity] : source.entities())
+                        if (entity.type=="wall_join" && !result.entities().contains(id)) ++junctions;
+                    std::vector<CanvasEntity> geometry;
+                    for (auto item : before.all_geometry) if (item.id==pair.at(0) || item.id==pair.at(1)) {
+                        item.id+=QStringLiteral(":original");item.selected=false;item.filled=false;
+                        item.stroke_color=QColor(155,164,177);geometry.push_back(std::move(item));
+                    }
+                    for (auto item : after.all_geometry) if (changed.contains(item.id.toStdString())) {
+                        item.selected=false;geometry.push_back(std::move(item));
+                    }
+                    std::vector<CanvasLabel> labels;
+                    for (const auto& label : after.all_labels)
+                        if (changed.contains(label.id.toStdString()) || label.id.startsWith(pair.at(0)+QStringLiteral(":")))
+                            labels.push_back(label);
+                    preview->setEntities(std::move(geometry));preview->setLabels(std::move(labels));preview->fitView();
+                    const auto baseline=read_required_segment(result.entities().at(intent.first_wall_id).properties,"baseline");
+                    if (!baseline) throw std::invalid_argument("Merged wall geometry is unavailable.");
+                    summary->setText(QStringLiteral("Merged length: %1\n%2 openings rehosted · %3 dimensions updated · %4 junctions retired\nSurviving wall: %5")
+                        .arg(format_length(segment_length(*baseline),context.metric_units)).arg(openings).arg(dimensions)
+                        .arg(junctions)
+                        .arg(id_from(read_string(result.entities().at(intent.first_wall_id).properties,"name").value_or(intent.first_wall_id))));
+                    status->setText(QStringLiteral("Apply removes the shared point and replaces these two walls with one wall. Undo restores both walls and their attachments."));
+                    survivor=intent.first_wall_id;candidate=std::move(command);proposed=std::move(result);
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+                } catch (const Standard_Failure& error) {status->setText(QString::fromUtf8(error.GetMessageString()));}
+                  catch (const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+            };
+            QObject::connect(choices,&QComboBox::currentIndexChanged,&dialog,[&]{update();});
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                try {
+                    if (!candidate || !proposed || !unchanged()) {update();return;}
+                    const auto exact=Document::preview_command(source,*candidate);
+                    if (exact.entities()!=proposed->entities()) throw std::invalid_argument("The merge preview changed. Reopen the tool.");
+                    applyDocumentCommand(*candidate);
+                    m_selected_id=selected->type=="measurement_boundary" ? id_from(selected->id) : id_from(survivor);
+                    m_selected_ids={m_selected_id};
+                    applied=true;clearError();refresh();dialog.accept();
+                } catch (const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+            });
+            QTimer timer(&dialog);timer.setInterval(100);
+            QObject::connect(&timer,&QTimer::timeout,&dialog,[&]{if (candidate && !unchanged()) update();});
+            update();timer.start();dialog.exec();return applied;
+        } catch (const std::exception& error) {setError(QStringLiteral("Merge walls: %1").arg(QString::fromUtf8(error.what())));return false;}
+    }
+
     void showBoundaryVertexRemoval() {
         try {
             const auto selected=selectedEntity();
+            if (selected && (selected->type=="wall" ||
+                (selected->type=="measurement_boundary" && selected->properties.contains("wall_measurement_source")))) {
+                (void)showWallMerge();return;
+            }
             if(!selected || !is_closed_boundary_entity(selected->type) || m_selected_ids.size()!=1)
                 throw std::invalid_argument("Select one identified closed boundary first.");
             const auto source=authoringSnapshot();
@@ -24328,6 +24710,16 @@ public:
                             if (operation.at("kind") == "geometry_edit") add_edit(operation.at("value"));
                             else if (operation.at("kind") == "vertex_batch")
                                 for (const auto& edit : operation.at("value")) add_edit(edit);
+                            else if (operation.at("kind") == "wall_merge" || operation.at("kind") == "physical_room_wall_merge") {
+                                auto retained=operation.at("value");
+                                visit_merge_copy_operation(operation.at("kind").get<std::string>(),retained,
+                                    [&](json& value,std::string_view role) {
+                                        const auto id=value.get<std::string>();
+                                        if (id.empty()) throw std::invalid_argument("Wall merge historical copy identity is empty.");
+                                        if (role=="segment" || role=="vertex" || role=="retired-wall")
+                                            add_identity(id,role=="retired-wall" ? "wall" : role);
+                                    });
+                            }
                         }
                     }
                 }
@@ -25481,6 +25873,8 @@ public:
 
     bool removeSelectedBoundaryVertex(const QString& vertex_id) {
         try {
+            if (const auto selected=selectedEntity();selected && selected->type=="measurement_boundary" &&
+                selected->properties.contains("wall_measurement_source")) return showWallMerge(vertex_id);
             const auto source=authoringSnapshot();
             const auto context=captureModalContext();
             const auto workspace=m_workspace;
@@ -33341,6 +33735,7 @@ public:
             {QStringLiteral("Upgrade boundary identities"), [this] { (void)upgradeSelectedBoundaryIdentities(); }},
             {QStringLiteral("Insert point"), [this] { showBoundaryVertexInsertion(); }},
             {QStringLiteral("Remove point"), [this] { showBoundaryVertexRemoval(); }},
+            {QStringLiteral("Merge walls"), [this] { (void)showWallMerge(); }},
             {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
             {QStringLiteral("Align side to original start X (X)"), [this] { (void)proposeDrawingAlignment(true); }},
             {QStringLiteral("Align side to original start Y (Y)"), [this] { (void)proposeDrawingAlignment(false); }},
@@ -35085,6 +35480,10 @@ private:
         auto* remove_point_action=new QAction(QStringLiteral("Remove point…"),owner);
         remove_point_action->setObjectName(QStringLiteral("removeBoundaryVertex"));
         QObject::connect(remove_point_action,&QAction::triggered,owner,[this]{showBoundaryVertexRemoval();});
+        auto* merge_walls_action=new QAction(QStringLiteral("Merge walls…"),owner);
+        merge_walls_action->setObjectName(QStringLiteral("mergePhysicalWalls"));
+        merge_walls_action->setToolTip(QStringLiteral("Replace adjacent compatible walls with one analytical wall, retaining openings and exterior measurements"));
+        QObject::connect(merge_walls_action,&QAction::triggered,owner,[this]{(void)showWallMerge();});
         m_upgrade_boundary_identities_action = new QAction(QStringLiteral("Upgrade boundary identities"), owner);
         m_upgrade_boundary_identities_action->setObjectName(QStringLiteral("upgradeBoundaryIdentities"));
         m_upgrade_boundary_identities_action->setToolTip(QStringLiteral(
@@ -35120,6 +35519,7 @@ private:
         more_menu->addAction(m_upgrade_boundary_identities_action);
         more_menu->addAction(m_insert_vertex_action);
         more_menu->addAction(remove_point_action);
+        more_menu->addAction(merge_walls_action);
         more_menu->addAction(jump_vertex_action);
         more_menu->addAction(lift_pen_action);
         more_menu->addAction(align_x_action);
@@ -36320,6 +36720,11 @@ private:
                             auto* dimensions = menu.addAction(QStringLiteral("Edit room dimensions…"));
                             QObject::connect(dimensions, &QAction::triggered, owner,
                                              guarded([this] { editRoomVolumeFromDialog(); }));
+                        }
+                        if (const auto selected=selectedEntity();selected && selected->type=="wall" && m_selected_ids.size()<=2) {
+                            auto* merge=menu.addAction(QStringLiteral("Merge walls…"));
+                            merge->setEnabled(m_document->is_editable());
+                            QObject::connect(merge,&QAction::triggered,owner,guarded([this]{(void)showWallMerge();}));
                         }
                         auto* transform = menu.addAction(QStringLiteral("Transform…"));
                         transform->setEnabled(single && m_document->is_editable());
@@ -37912,6 +38317,8 @@ private:
                         QObject::connect(geometry,&QAction::triggered,owner,[this]{showBoundaryGeometryEditor();});
                     }
                     if (selected && (selected->type == "wall" || selected->type == "wall_join")) {
+                        if (selected->type=="wall" && m_selected_ids.size()<=2)
+                            menu.addAction(owner->findChild<QAction*>(QStringLiteral("mergePhysicalWalls")));
                         if (m_selected_ids.size() > 1) menu.addAction(owner->findChild<QAction*>(QStringLiteral("joinWalls")));
                         menu.addAction(owner->findChild<QAction*>(QStringLiteral("unjoinWalls")));
                     }
