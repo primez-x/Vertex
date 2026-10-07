@@ -328,6 +328,17 @@ content/hash fallback. Independent integrated source review approved the final
 corrections. This batch has not been compiled, exercised, measured, packaged or
 installed; the existing candidate remains unchanged.
 
+Appraisal report preview, report PDF export and standalone schedules now read
+the same authoritative source as Details and the canvas, including recovery.
+Report refresh captures its source, units and totals together; PDF publication
+refuses a replaced source. Schedule dialogs retain their source and context,
+reject stale rows, and prevent read-only double-click editing. Editable values
+produce one augmented command, with completed physical-host, sibling-opening,
+assembly and affected-join validation before publication. Independent source
+review approved the candidate except for the read-only input gate, which root
+corrected and reviewed. No application build or test was run; runtime and
+numeric results remain unobserved and the installed candidate is unchanged.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

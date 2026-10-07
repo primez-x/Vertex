@@ -21,6 +21,7 @@
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/workspace_regeneration_queue.hpp"
 #include "sketch/roof_join_semantics.hpp"
+#include <Standard_Failure.hxx>
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include "sketch/architectural_schedule.hpp"
@@ -4739,7 +4740,7 @@ public:
 
     bool exportAppraisalReportPdf(const QString& path,const QString& property_id,std::optional<Revision> expected_revision) {
         try {
-            const auto source=m_document->snapshot();
+            const auto source=authoringSnapshot();
             if(expected_revision && source.revision()!=*expected_revision)
                 throw std::invalid_argument("The project changed after this report was opened. Refresh the report before exporting.");
             if(m_boundary_session || m_pending_wall_start || m_linework_drawing)
@@ -4756,7 +4757,8 @@ public:
             if(protected_source(m_file_path) || protected_source(m_autosave_path))
                 throw std::invalid_argument("Choose an output path separate from the project and its recovery copy.");
             const auto reports=appraisalReportsForSnapshot(source);
-            const auto wanted=property_id.isEmpty() ? (propertyEntity() ? id_from(propertyEntity()->id) : QString{}) : property_id;
+            const auto wanted=property_id.isEmpty()
+                ? (reports.empty() ? QString{} : id_from(reports.front().property_id)) : property_id;
             const auto report=std::find_if(reports.begin(),reports.end(),[&](const auto& value){return value.property_id==wanted.toStdString();});
             if(report==reports.end()) throw std::invalid_argument("Choose a property available in the current project.");
             QString error;
@@ -4770,23 +4772,32 @@ public:
     void showAppraisalReport() {
         try {
             auto source_document=m_document;
-            auto source=source_document->snapshot();
+            auto source=authoringSnapshot();
             auto report_units=m_metric_units;
-            auto source_digest=document_snapshot_digest(source);
+            auto source_digest=fullSnapshotDigest(source);
             AppraisalReportDialog dialog(source,appraisalReportsForSnapshot(source),report_units,owner);
             styleDialog(dialog);
             const auto unchanged=[&](Revision revision) {
-                if(m_document!=source_document || m_document->revision()!=revision || m_metric_units!=report_units ||
-                    document_snapshot_digest(m_document->snapshot())!=source_digest) {
-                    dialog.showError(QStringLiteral("The project or report settings changed. Refresh the report to continue."));return false;
+                try {
+                    const auto current=authoringSnapshot();
+                    if(m_document!=source_document || source.revision()!=revision || current.revision()!=revision ||
+                        m_metric_units!=report_units || fullSnapshotDigest(current)!=source_digest) {
+                        dialog.showError(QStringLiteral("The project or report settings changed. Refresh the report to continue."));return false;
+                    }
+                    return true;
+                } catch(const std::exception& error) {
+                    dialog.showError(QString::fromUtf8(error.what()));return false;
                 }
-                return true;
             };
             dialog.setRefreshRequested([&]{
                 try {
-                    source_document=m_document;source=source_document->snapshot();report_units=m_metric_units;
-                    source_digest=document_snapshot_digest(source);
-                    dialog.setReports(source,appraisalReportsForSnapshot(source),report_units);
+                    auto next_source=authoringSnapshot();
+                    const auto next_units=m_metric_units;
+                    auto next_reports=appraisalReportsForSnapshot(next_source);
+                    auto next_digest=fullSnapshotDigest(next_source);
+                    dialog.setReports(next_source,std::move(next_reports),next_units);
+                    source_document=m_document;source=std::move(next_source);report_units=next_units;
+                    source_digest=std::move(next_digest);
                 } catch(const std::exception& error){dialog.showError(QString::fromUtf8(error.what()));}
             });
             dialog.setExportRequested([&](const QString& property,Revision revision){
@@ -4808,7 +4819,7 @@ public:
         }
     }
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const {
-        return scheduleSnapshot(m_document->snapshot());
+        return scheduleSnapshot(authoringSnapshot());
     }
 
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot(
@@ -7545,6 +7556,7 @@ public:
         }
         try {
             const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
             const auto projection = build_document_schedules(source);
             const auto row = std::find_if(projection.snapshot.rows.begin(),
                                           projection.snapshot.rows.end(),
@@ -7560,12 +7572,19 @@ public:
             if (!parsed) throw std::invalid_argument("Schedule value is not valid for this cell");
             const auto edit = make_schedule_edit(projection.snapshot, row->object_id,
                                                  cell->first, *parsed);
-            const auto command = make_document_schedule_edit(source, edit);
-            (void)Document::preview_command(source, command);
-            applyDocumentCommand(command);
+            const auto command = augmentAuthoredCommand(Command{make_document_schedule_edit(source, edit)}, source);
+            const auto candidate = Document::preview_command(source, command);
+            validate_architectural_geometry_changes(source, candidate);
+            if (!sourceEditAuthorityUnchanged(authority)) return false;
+            applyAuthoredCommand(command);
             clearError();
             refresh();
             return true;
+        } catch (const Standard_Failure& error) {
+            const auto* message=error.GetMessageString();
+            setError(QStringLiteral("Schedule geometry: %1").arg(QString::fromUtf8(
+                message && *message ? message : "The native geometry could not be admitted.")));
+            return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Schedule edit: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -27957,127 +27976,150 @@ public:
     }
 
     void showSchedules() {
-        const auto projection = scheduleSnapshot();
-        QDialog dialog(owner);
-        styleDialog(dialog);
-        dialog.setObjectName(QStringLiteral("scheduleDialog"));
-        dialog.setWindowTitle(QStringLiteral("Schedules"));
-        dialog.setModal(true);
-        dialog.resize(780, 480);
-        auto* layout = new QVBoxLayout(&dialog);
-        auto* heading = new QLabel(
-            QStringLiteral("Document revision %1  •  edit source cells; calculated cells expose their sources")
-                .arg(projection.snapshot.revision), &dialog);
-        heading->setWordWrap(true);
-        layout->addWidget(heading);
-        auto* table = new QTableWidget(&dialog);
-        table->setObjectName(QStringLiteral("scheduleTable"));
-        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        table->setSelectionBehavior(QAbstractItemView::SelectItems);
-        table->setAlternatingRowColors(true);
-        std::set<std::string> column_names{"kind", "mark"};
-        for (const auto& row : projection.snapshot.rows)
-            for (const auto& [name, unused] : row.cells) {
-                (void)unused;
-                column_names.insert(name);
-            }
-        std::vector<std::string> columns(column_names.begin(), column_names.end());
-        table->setColumnCount(static_cast<int>(columns.size()));
-        QStringList headers;
-        for (const auto& column : columns) headers.push_back(QString::fromStdString(column));
-        table->setHorizontalHeaderLabels(headers);
-        table->setRowCount(static_cast<int>(projection.snapshot.rows.size()));
-        for (int row_index = 0; row_index < table->rowCount(); ++row_index) {
-            const auto& row = projection.snapshot.rows[static_cast<std::size_t>(row_index)];
-            for (int column_index = 0; column_index < table->columnCount(); ++column_index) {
-                const auto& column = columns[static_cast<std::size_t>(column_index)];
-                QString text;
-                QString tooltip;
-                if (column == "kind") {
-                    text = schedule_kind_text(row.kind);
-                } else if (column == "mark") {
-                    text = QString::fromStdString(row.mark);
-                } else if (const auto cell = row.cells.find(column); cell != row.cells.end()) {
-                    const auto* quantity = std::get_if<ScheduleQuantity>(&cell->second.value);
-                    text = row.kind == ScheduleRowKind::appraisal && quantity &&
-                           quantity->unit == ScheduleUnit::square_metre
-                        ? appraisal_schedule_area_text(row, m_metric_units)
-                        : schedule_value_text(cell->second.value);
-                    if (!cell->second.editable) {
-                        tooltip = QStringLiteral("Calculated: %1")
-                                      .arg(QString::fromStdString(cell->second.explanation));
-                        for (const auto& source : cell->second.sources) {
-                            tooltip += QStringLiteral("\n%1.%2")
-                                           .arg(QString::fromStdString(source.object_id),
-                                                QString::fromStdString(source.property));
+        try {
+            const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
+            const auto projection = scheduleSnapshot(source);
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("scheduleDialog"));
+            dialog.setWindowTitle(QStringLiteral("Schedules"));
+            dialog.setModal(true);
+            dialog.resize(780, 480);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* heading = new QLabel(
+                QStringLiteral("Document revision %1  •  edit source cells; calculated cells expose their sources")
+                    .arg(projection.snapshot.revision), &dialog);
+            heading->setWordWrap(true);
+            layout->addWidget(heading);
+            auto* table = new QTableWidget(&dialog);
+            table->setObjectName(QStringLiteral("scheduleTable"));
+            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            table->setSelectionBehavior(QAbstractItemView::SelectItems);
+            table->setAlternatingRowColors(true);
+            std::set<std::string> column_names{"kind", "mark"};
+            for (const auto& row : projection.snapshot.rows)
+                for (const auto& [name, unused] : row.cells) {
+                    (void)unused;
+                    column_names.insert(name);
+                }
+            std::vector<std::string> columns(column_names.begin(), column_names.end());
+            table->setColumnCount(static_cast<int>(columns.size()));
+            QStringList headers;
+            for (const auto& column : columns) headers.push_back(QString::fromStdString(column));
+            table->setHorizontalHeaderLabels(headers);
+            table->setRowCount(static_cast<int>(projection.snapshot.rows.size()));
+            for (int row_index = 0; row_index < table->rowCount(); ++row_index) {
+                const auto& row = projection.snapshot.rows[static_cast<std::size_t>(row_index)];
+                for (int column_index = 0; column_index < table->columnCount(); ++column_index) {
+                    const auto& column = columns[static_cast<std::size_t>(column_index)];
+                    QString text;
+                    QString tooltip;
+                    if (column == "kind") {
+                        text = schedule_kind_text(row.kind);
+                    } else if (column == "mark") {
+                        text = QString::fromStdString(row.mark);
+                    } else if (const auto cell = row.cells.find(column); cell != row.cells.end()) {
+                        const auto* quantity = std::get_if<ScheduleQuantity>(&cell->second.value);
+                        text = row.kind == ScheduleRowKind::appraisal && quantity &&
+                               quantity->unit == ScheduleUnit::square_metre
+                            ? appraisal_schedule_area_text(row, m_metric_units)
+                            : schedule_value_text(cell->second.value);
+                        if (!cell->second.editable) {
+                            tooltip = QStringLiteral("Calculated: %1")
+                                          .arg(QString::fromStdString(cell->second.explanation));
+                            for (const auto& source : cell->second.sources) {
+                                tooltip += QStringLiteral("\n%1.%2")
+                                               .arg(QString::fromStdString(source.object_id),
+                                                    QString::fromStdString(source.property));
+                            }
                         }
                     }
+                    auto* item = new QTableWidgetItem(text);
+                    if (!tooltip.isEmpty()) item->setToolTip(tooltip);
+                    table->setItem(row_index, column_index, item);
                 }
-                auto* item = new QTableWidgetItem(text);
-                if (!tooltip.isEmpty()) item->setToolTip(tooltip);
-                table->setItem(row_index, column_index, item);
             }
-        }
-        table->resizeColumnsToContents();
-        table->horizontalHeader()->setStretchLastSection(true);
-        layout->addWidget(table, 1);
-        auto* edit_button = new QPushButton(QStringLiteral("Edit selected source cell"), &dialog);
-        edit_button->setEnabled(false);
-        layout->addWidget(edit_button);
-        const auto update_edit_button = [&, edit_button] {
-            const auto row_index = table->currentRow();
-            const auto column_index = table->currentColumn();
-            bool editable = row_index >= 0 && row_index < static_cast<int>(projection.snapshot.rows.size()) &&
-                            column_index >= 0 && column_index < static_cast<int>(columns.size());
-            if (editable) {
+            table->resizeColumnsToContents();
+            table->horizontalHeader()->setStretchLastSection(true);
+            layout->addWidget(table, 1);
+            auto* edit_button = new QPushButton(QStringLiteral("Edit selected source cell"), &dialog);
+            edit_button->setEnabled(false);
+            layout->addWidget(edit_button);
+            const auto source_current = [&] {
+                try {
+                    if (sourceEditAuthorityCurrent(authority, false)) return true;
+                    heading->setText(QStringLiteral("The project or schedule settings changed. Close and reopen Schedules before editing."));
+                } catch (const std::exception& error) {
+                    heading->setText(QStringLiteral("Schedules are unavailable: %1").arg(QString::fromUtf8(error.what())));
+                }
+                edit_button->setEnabled(false);
+                return false;
+            };
+            const auto update_edit_button = [&, edit_button] {
+                const auto row_index = table->currentRow();
+                const auto column_index = table->currentColumn();
+                bool editable = row_index >= 0 && row_index < static_cast<int>(projection.snapshot.rows.size()) &&
+                                column_index >= 0 && column_index < static_cast<int>(columns.size());
+                if (editable) {
+                    const auto& row = projection.snapshot.rows[static_cast<std::size_t>(row_index)];
+                    const auto cell = row.cells.find(columns[static_cast<std::size_t>(column_index)]);
+                    editable = cell != row.cells.end() && cell->second.editable;
+                }
+                edit_button->setEnabled(editable && m_document->is_editable() && source_current());
+            };
+            QObject::connect(table, &QTableWidget::itemSelectionChanged, &dialog,
+                             update_edit_button);
+            const auto edit_selected_cell = [&, edit_button] {
+                const auto row_index = table->currentRow();
+                const auto column_index = table->currentColumn();
+                if (row_index < 0 || column_index < 0 ||
+                    row_index >= static_cast<int>(projection.snapshot.rows.size()) ||
+                    column_index >= static_cast<int>(columns.size())) return;
                 const auto& row = projection.snapshot.rows[static_cast<std::size_t>(row_index)];
-                const auto cell = row.cells.find(columns[static_cast<std::size_t>(column_index)]);
-                editable = cell != row.cells.end() && cell->second.editable;
+                const auto& column = columns[static_cast<std::size_t>(column_index)];
+                const auto cell = row.cells.find(column);
+                if (cell == row.cells.end() || !cell->second.editable) return;
+                if (!source.is_editable() || !m_document->is_editable()) {
+                    heading->setText(QStringLiteral("This project is read-only. Schedule values cannot be edited."));
+                    edit_button->setEnabled(false);
+                    return;
+                }
+                if (!source_current()) return;
+                bool accepted = false;
+                const auto current = schedule_value_text(cell->second.value);
+                const auto value = QInputDialog::getText(
+                    &dialog, QStringLiteral("Edit schedule cell"),
+                    QStringLiteral("%1.%2 (source value):").arg(QString::fromStdString(row.object_id),
+                                                                   QString::fromStdString(column)),
+                    QLineEdit::Normal, current, &accepted);
+                if (!accepted || !source.is_editable() || !m_document->is_editable() || !source_current()) return;
+                if (editScheduleCell(QString::fromStdString(row.object_id),
+                                     QString::fromStdString(column), value)) {
+                    dialog.accept();
+                } else {
+                    heading->setText(lastError());
+                    update_edit_button();
+                }
+            };
+            QObject::connect(edit_button, &QPushButton::clicked, &dialog, edit_selected_cell);
+            QObject::connect(table, &QTableWidget::cellDoubleClicked, &dialog,
+                             [edit_selected_cell](int, int) { edit_selected_cell(); });
+            update_edit_button();
+            if (!projection.diagnostics.empty()) {
+                auto* diagnostics = new QLabel(&dialog);
+                diagnostics->setWordWrap(true);
+                QString text = QStringLiteral("Diagnostics:");
+                for (const auto& message : projection.diagnostics)
+                    text += QStringLiteral("\n• %1").arg(QString::fromStdString(message));
+                diagnostics->setText(text);
+                diagnostics->setStyleSheet(QStringLiteral("color:#8b1a1a;"));
+                layout->addWidget(diagnostics);
             }
-            edit_button->setEnabled(editable);
-        };
-        QObject::connect(table, &QTableWidget::itemSelectionChanged, &dialog,
-                         update_edit_button);
-        const auto edit_selected_cell = [&, edit_button] {
-            const auto row_index = table->currentRow();
-            const auto column_index = table->currentColumn();
-            if (row_index < 0 || column_index < 0 ||
-                row_index >= static_cast<int>(projection.snapshot.rows.size()) ||
-                column_index >= static_cast<int>(columns.size())) return;
-            const auto& row = projection.snapshot.rows[static_cast<std::size_t>(row_index)];
-            const auto& column = columns[static_cast<std::size_t>(column_index)];
-            const auto cell = row.cells.find(column);
-            if (cell == row.cells.end() || !cell->second.editable) return;
-            bool accepted = false;
-            const auto current = schedule_value_text(cell->second.value);
-            const auto value = QInputDialog::getText(
-                &dialog, QStringLiteral("Edit schedule cell"),
-                QStringLiteral("%1.%2 (source value):").arg(QString::fromStdString(row.object_id),
-                                                               QString::fromStdString(column)),
-                QLineEdit::Normal, current, &accepted);
-            if (!accepted) return;
-            if (editScheduleCell(QString::fromStdString(row.object_id),
-                                 QString::fromStdString(column), value)) {
-                dialog.accept();
-            } else {
-                update_edit_button();
-            }
-        };
-        QObject::connect(edit_button, &QPushButton::clicked, &dialog, edit_selected_cell);
-        QObject::connect(table, &QTableWidget::cellDoubleClicked, &dialog,
-                         [edit_selected_cell](int, int) { edit_selected_cell(); });
-        update_edit_button();
-        if (!projection.diagnostics.empty()) {
-            auto* diagnostics = new QLabel(&dialog);
-            diagnostics->setWordWrap(true);
-            QString text = QStringLiteral("Diagnostics:");
-            for (const auto& message : projection.diagnostics)
-                text += QStringLiteral("\n• %1").arg(QString::fromStdString(message));
-            diagnostics->setText(text);
-            diagnostics->setStyleSheet(QStringLiteral("color:#8b1a1a;"));
-            layout->addWidget(diagnostics);
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Schedules: %1").arg(QString::fromUtf8(error.what())));
         }
-        dialog.exec();
     }
 
     void showSheetSettings() {

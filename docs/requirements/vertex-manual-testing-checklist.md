@@ -1241,7 +1241,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U208 — Change an editable schedule value**
-  - Expected: The corresponding model object changes.
+  - Steps: Place a door and window in a wall. Open Schedules, select an editable width or height, and change it. Check the plan and 3D, then Undo and Redo. Try a width that crosses the wall end or overlaps the other opening. Leave Schedules open while changing the source in another view, then try editing the old row. Repeat with a read-only project by double-clicking an editable-value cell.
+  - Expected: A valid edit changes the hosted object and wall cut together in one Undo step. Invalid or stale edits leave the model unchanged and explain the problem. A read-only project does not open a value-edit dialog. Recovered-project rows use the dimensions visible on the canvas.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1251,7 +1252,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U210 — Change a model object and revisit its schedule**
-  - Expected: The row updates without stale dimensions or quantities.
+  - Steps: Change a wall or opening, reopen Schedules, and compare its dimensions and material quantities with the canvas. Save, close and reopen; repeat after recovering unsaved changes. Open Appraisal report and use Refresh, then export its PDF and compare it with Details.
+  - Expected: Schedules and reports use the current or recovered model. The report preview, PDF and Details agree for the same source and units; stale rows cannot overwrite newer geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
