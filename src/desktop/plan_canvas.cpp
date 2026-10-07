@@ -2521,6 +2521,11 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
         for (auto& proposed : m_move_references_preview)
             proposed.selected = selected_references.contains(proposed.id);
     }
+    const auto retained_labels=retained_label_presentation_selection(m_labels);
+    for (auto& proposed:m_move_labels_preview) {
+        const auto selected=retained_labels.constFind({proposed.id,proposed.callout_role});
+        proposed.selected=selected!=retained_labels.cend() && selected.value();
+    }
     QSet<QString> admitted_ids;
     for (const auto& entity : m_move_entities_preview) admitted_ids.insert(entity.id);
     for (const auto& label : m_move_labels_preview) admitted_ids.insert(label.id);
@@ -2540,11 +2545,10 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     // Preserve the retained root's selection without rescanning the entire
     // drawing for every dependent body in a compound move proposal.
     if (!m_move_entities_preview.empty()) {
-        QHash<QString, bool> retained_selection;
-        for (const auto& retained : m_entities) retained_selection.insert(retained.id, retained.selected);
+        const auto retained_selection=retained_entity_presentation_selection(m_entities);
         for (auto& proposed : m_move_entities_preview)
-            if (const auto selected = retained_selection.constFind(proposed.id); selected != retained_selection.cend())
-                proposed.selected = selected.value();
+            if (const auto selected=retained_selection.constFind({proposed.id,proposed.presentation_key});
+                selected!=retained_selection.cend()) proposed.selected=selected.value();
     }
     if (m_move_preview_valid)
         rebuildEntityPresentationIndex(m_move_entities_preview_index, m_move_entities_preview);
@@ -3456,7 +3460,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
              (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position ||
               m_opening_width_preview_fine != modifiers.testFlag(Qt::ShiftModifier))) ||
             (m_left_gesture == LeftGesture::vertex_move &&
-             (!m_boundary_vertex_preview_pointer || *m_boundary_vertex_preview_pointer != position))) {
+             (!m_boundary_vertex_preview_pointer || *m_boundary_vertex_preview_pointer != position ||
+              m_boundary_vertex_preview_fine != (modifiers.testFlag(Qt::ShiftModifier) ||
+                  !m_snap_enabled || m_raw_point_input)))) {
             const QPointer<PlanCanvas> guard(this);
             pointerMove(position, modifiers);
             if (!guard) return;
@@ -3685,6 +3691,7 @@ void PlanCanvas::resetGesture() {
     m_boundary_vertex_preview_pending = false;
     m_vertex_release_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
+    m_boundary_vertex_preview_fine = false;
     m_boundary_vertex_preview_pointer.reset();
     m_opening_width_handle.reset();
     m_opening_width_press_station.reset();
@@ -4788,8 +4795,44 @@ void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
     const auto target = m_vertex_move_press_pointer
         ? handle.source_position + (pointer - *m_vertex_move_press_pointer) : pointer;
     // The hit area is deliberately larger than the painted grip. Keep that
-    // press offset during motion, then apply the normal model/grid snapping.
-    m_vertex_move_preview = inputPoint(toScreen(target, rect()));
+    // press offset during motion. Shift permits fine vertex placement, and
+    // returning to the exact source grip preserves a true no-op.
+    const bool original=target.x==handle.source_position.x && target.y==handle.source_position.y;
+    m_boundary_vertex_preview_fine=m_placement_modifiers.testFlag(Qt::ShiftModifier) ||
+        !m_snap_enabled || m_raw_point_input;
+    m_vertex_move_preview=original || m_boundary_vertex_preview_fine
+        ? target : inputPoint(toScreen(target,rect()));
+    if (!original && !m_boundary_vertex_preview_fine &&
+        handle.vertex_id.startsWith(QStringLiteral("roof:corner:"))) {
+        const auto retained=std::find_if(m_entities.begin(),m_entities.end(),
+            [&](const auto& entity){return entity.id==handle.entity_id && entity.selected && entity.resize_frame;});
+        bool valid{};
+        const auto index=handle.vertex_id.mid(12).toUInt(&valid);
+        if (retained!=m_entities.end() && valid && index<4) {
+            const auto& frame=*retained->resize_frame;
+            const auto c=std::cos(frame.rotation_radians),s=std::sin(frame.rotation_radians);
+            const double x_sign=index==1 || index==2 ? 1.0 : -1.0;
+            const double y_sign=(index>=2 ? 1.0 : -1.0)*frame.source_rotation_direction;
+            const Vec2 anchor{frame.center.x-c*x_sign*frame.width_metres*.5+s*y_sign*frame.depth_metres*.5,
+                frame.center.y-s*x_sign*frame.width_metres*.5-c*y_sign*frame.depth_metres*.5};
+            const auto dx=target.x-anchor.x,dy=target.y-anchor.y;
+            const auto width=(c*dx+s*dy)*x_sign,depth=(-s*dx+c*dy)*y_sign;
+            // Roof dimensions follow their authored axes, including reflected
+            // plans, rather than the arbitrary world grid. Crossed edges stay
+            // invalid proposals; native admission owns their rejection.
+            m_vertex_move_preview=target;
+            if (std::isfinite(width) && std::isfinite(depth) && width>0 && depth>0) {
+                try {
+                    const auto step=drawingLengthIncrementMetres();
+                    const auto w=quantize_host_station(width,step)*x_sign;
+                    const auto d=quantize_host_station(depth,step)*y_sign;
+                    const Vec2 snapped_corner{anchor.x+c*w-s*d,anchor.y+s*w+c*d};
+                    if (std::isfinite(snapped_corner.x) && std::isfinite(snapped_corner.y))
+                        m_vertex_move_preview=snapped_corner;
+                } catch (const std::exception&) { /* The original target remains subject to admission. */ }
+            }
+        }
+    }
     m_boundary_vertex_preview_valid = false;
     m_boundary_vertex_preview_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
@@ -4993,6 +5036,17 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
                     : QStringLiteral("%1 ft²").arg(totals.area_square_metres /
                         (metres_per_foot*metres_per_foot),0,'f',2);
                 const bool roof_corner=m_vertex_move_handle->vertex_id.startsWith(QStringLiteral("roof:corner:"));
+                if (roof_corner) {
+                    const auto retained=std::find_if(m_entities.begin(),m_entities.end(),
+                        [&](const auto& entity){return entity.id==m_vertex_move_handle->entity_id;});
+                    if (retained!=m_entities.end()) {
+                        const auto& admitted=interactiveEntity(*retained);
+                        if (admitted.resize_frame)
+                            text+=QStringLiteral("\nW %1  ·  D %2").arg(
+                                display_cursor_length(admitted.resize_frame->width_metres,m_metric_units),
+                                display_cursor_length(admitted.resize_frame->depth_metres,m_metric_units));
+                    }
+                }
                 text += (roof_corner ? QStringLiteral("\nPlan area %1  ·  Perimeter %2")
                                      : QStringLiteral("\nArea %1  ·  Perimeter %2"))
                     .arg(area,display_cursor_length(totals.perimeter_metres,m_metric_units));

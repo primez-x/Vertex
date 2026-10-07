@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 ordinary mixed selection preparation
+
+Ordinary Measurement and horizontal Architectural drags now prepare complete
+mixed selections in the worker, including annotation children, references,
+dimensions and embedded geometric assembly profiles. The detached helper
+retains the existing catalog, annotation, reference and model-root preparation;
+the complete translation/constraint command and authored consequences still
+feed native admission. Candidate profiles retain their canonical presentation
+keys and saved frame/depth/crop. Exact reference overrides preserve calibration,
+and candidate component footprints feed automatic callout placement.
+
+Release consumes the captured-source prepared ticket once, with the existing
+selection, view, viewport, serial and exact-delta fences. A failed release also
+retires it; zero movement adds no history. Canvas completion preserves selected
+label/callout and entity/profile identity. Site mixed annotation aliases,
+nonhorizontal edits and general annotation rotation/resizing retain their
+existing paths; those have not acquired worker publication through this batch.
+
+Roof corner drags now snap width and depth in the roof's own axes and show W/D
+from the admitted footprint alongside Plan area. Shift supplies fine placement;
+release observes a final precision change even at the same pointer location.
+Returning to the original grip preserves its exact coordinates. These source
+changes passed independent source review and remain uncompiled and unexercised.
+No build, test, probe, native job,
+launch, package or installation ran. Manual checks remain Not tested, and the
+installed candidate is unchanged.
+
 ### October 7 hosted placement station magnets
 
 Initial door, window and doorway placement now uses the practical length

@@ -5346,6 +5346,7 @@ class MainWindow::Impl {
         std::vector<CanvasEntity> entities;
         std::vector<CanvasLabel> labels;
         std::optional<CanvasBoundaryPreviewMetrics> metrics;
+        std::vector<CanvasReference> references;
     };
     struct PendingVertexPreview {
         QPointer<PlanCanvas> canvas;
@@ -5387,6 +5388,8 @@ class MainWindow::Impl {
         std::shared_ptr<const std::vector<CanvasEntity>> component_sources;
         std::shared_ptr<const CanvasEditSourceCapture> model_edit_source;
         std::shared_ptr<PreparedCanvasEdit> model_edit_prepared;
+        bool plan_move_model_plan_labels{};
+        std::shared_ptr<const std::vector<CanvasReference>> move_references;
     };
 
 public:
@@ -6944,8 +6947,8 @@ public:
         return transform;
     }
 
-    std::pair<Command, std::string> embeddedAssemblyTransformCommand(const DocumentSnapshot& source,
-        const std::string& child_id, const ArchitecturalTransform& gesture, bool clone) const {
+    static std::pair<Command, std::string> embeddedAssemblyTransformCommand(const DocumentSnapshot& source,
+        const std::string& child_id, const ArchitecturalTransform& gesture, bool clone) {
         validate_document_assembly_instances(source.entities());
         const auto binding = geometric_assembly_for_child(source, child_id);
         if (!binding) throw std::invalid_argument("The embedded geometric assembly is unavailable.");
@@ -7404,14 +7407,18 @@ public:
         return model_ids;
     }
 
-    static bool selectionHasOnlyModelMoveOwners(const DocumentSnapshot& source,const QStringList& ids) {
-        if (ids.isEmpty() || !annotation_selection_owners(source,ids).empty()) return false;
+    static bool selectionHasPlanMoveOwners(const DocumentSnapshot& source,const QStringList& ids) {
+        if (ids.isEmpty()) return false;
+        const auto annotations=annotation_selection_owners(source,ids);
         return std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
+            if (annotations.contains(id.toStdString())) return true;
+            if (geometric_assembly_for_child(source,id.toStdString())) return true;
             const auto found=source.entities().find(id.toStdString());
-            if (found==source.entities().end() || geometric_assembly_for_child(source,found->first)) return false;
+            if (found==source.entities().end()) return false;
             const auto& entity=found->second;
             return can_transform_architectural_entity_type(entity.type) ||
                 is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework" ||
+                entity.type=="reference_asset" || can_recognize_boundary_dimension_entity_type(entity.type) ||
                 (entity.type=="opening" && ids.contains(id_from(read_string(entity.properties,"wall_id").value_or(""))));
         });
     }
@@ -20356,9 +20363,6 @@ public:
     SelectionTranslationParts prepareSelectionTranslation(const DocumentSnapshot& source,
         const QStringList& ids, Vec2 delta, PlanCanvas* canvas,
         const std::optional<BuildingViewFrame>* captured_frame = nullptr) {
-        auto model_ids = ids;
-        std::vector<EntityChange> presentation_changes;
-        const auto annotation_owners = annotation_selection_owners(source, ids);
         auto model_delta=delta;
         const auto frame = captured_frame ? *captured_frame :
             (selectionNeedsModelPlanFrame(source,ids) ? canvasTransformPlanFrame(source) : std::nullopt);
@@ -20366,6 +20370,15 @@ public:
             const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
             model_delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
         }
+        return prepareDetachedSelectionTranslation(source,ids,delta,model_delta,
+            frame.has_value() && canvas==m_architecturalCanvas);
+    }
+
+    static SelectionTranslationParts prepareDetachedSelectionTranslation(const DocumentSnapshot& source,
+        const QStringList& ids,Vec2 delta,Vec2 model_delta,bool model_plan_labels) {
+        auto model_ids=ids;
+        std::vector<EntityChange> presentation_changes;
+        const auto annotation_owners=annotation_selection_owners(source,ids);
 
         auto embedded_source = source;
         std::map<std::string, Entity, std::less<>> changed_catalogs;
@@ -20389,14 +20402,7 @@ public:
             for (auto& label : state.labels) {
                 if (!annotation_owners.contains(label.id) || annotation_owners.at(label.id) != owner_id) continue;
                 auto label_delta=delta;
-                if(label.model_plan && canvas==m_architecturalCanvas) {
-                    // Reuse the same captured inverse for model-plan annotations.
-                    if(frame) {
-                        const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
-                        label_delta={right.x*delta.x+up.x*delta.y,
-                                     right.y*delta.x+up.y*delta.y};
-                    }
-                }
+                if(label.model_plan && model_plan_labels) label_delta=model_delta;
                 label.placement.position.x += label_delta.x;
                 label.placement.position.y += label_delta.y;
                 if (source.entities().contains(label.id))
@@ -21097,12 +21103,15 @@ public:
         try {
             const auto& candidate = candidate_snapshot.entities();
             std::map<std::string,Vec2,std::less<>> annotation_deltas;
+            std::map<std::string,Vec2,std::less<>> annotation_source_deltas;
             for (const auto& [id,entity] : candidate) {
                 if (entity.type != kAnnotationEntityType || !source.entities().contains(id) || entity == source.entities().at(id)) continue;
                 const auto before=decode_annotation_entity(source.entities().at(id));
                 const auto after=decode_annotation_entity(entity);
                 const auto record_delta=[&](const auto& original,const auto& proposed,bool model_plan) {
                     auto start=original.placement.position,end=proposed.placement.position;
+                    if (start.x!=end.x || start.y!=end.y)
+                        annotation_source_deltas.emplace(proposed.id,Vec2{end.x-start.x,end.y-start.y});
                     if (model_plan && view_context) {
                         start=project_plan_point(start,view_context->frame);
                         end=project_plan_point(end,view_context->frame);
@@ -21245,7 +21254,54 @@ public:
                     if (const auto original=embeddedAssemblyChild(source,item.id.toStdString())) {
                         const auto original_model=AssemblyModel::from_json(source.entities().at(
                             original->assembly_catalog_id).properties.at("model"));
-                        if (!original_model.expand(original->instance.id).profiles.empty()) continue;
+                        if (!original_model.expand(original->instance.id).profiles.empty()) {
+                            const auto binding=geometric_assembly_for_child(candidate_snapshot,item.id.toStdString());
+                            if (!binding) throw std::invalid_argument("The admitted geometric assembly child is unavailable.");
+                            if (candidate.at(binding->assembly_catalog_id)==source.entities().at(original->assembly_catalog_id)) continue;
+                            const auto model=AssemblyModel::from_json(candidate.at(binding->assembly_catalog_id).properties.at("model"));
+                            const auto expansion=model.expand(binding->instance.id);
+                            const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& part) {
+                                return item.presentation_key==QString::fromStdString(json{
+                                    {"part_path",part.part_path},{"type_id",part.type_id},{"profile_id",part.profile.id}}.dump());
+                            });
+                            if (profile==expansion.profiles.end())
+                                throw std::invalid_argument("The admitted assembly profile presentation changed.");
+                            AssemblyExpansion part;part.profiles.push_back(*profile);
+                            const auto canonical=project_assembly_plan(part);
+                            if (component_sources && !canonical.empty())
+                                candidate_component_bounds.emplace(presentation_identity(item),boundary_bounds(canonical));
+                            auto proposed=item;
+                            proposed.segments.clear();proposed.holes.clear();proposed.stroke_segments.reset();
+                            proposed.hit_segments.clear();proposed.snap_segments.clear();proposed.snap_points.clear();
+                            proposed.drawing_alignment_segments.clear();proposed.vertex_handles.clear();proposed.resize_frame.reset();
+                            if (view_context && !analytical_plan_context(BuildingViewKind::plan,*view_context)) {
+                                // Project the exact admitted profile solid through
+                                // the saved frame/depth/crop, retaining its alias key.
+                                proposed.segments=project_architectural_view_shape(make_assembly_geometry(part).shape,
+                                    BuildingViewKind::plan,*view_context).value_or(Boundary{});
+                            } else {
+                                const AssemblyPlacement xy{{},
+                                    {profile->transform.translation_m.x,profile->transform.translation_m.y},
+                                    profile->transform.rotation_radians,profile->transform.scale};
+                                proposed.segments=assembly_placement_boundary(profile->profile.outer,xy);
+                                proposed.hit_segments=canonical;
+                                for (const auto& hole:profile->profile.holes)
+                                    proposed.holes.push_back(assembly_placement_boundary(hole,xy));
+                                if (view_context) {
+                                    proposed.segments=project_plan_path(std::move(proposed.segments),view_context->frame);
+                                    proposed.hit_segments=project_plan_path(std::move(proposed.hit_segments),view_context->frame);
+                                    for (auto& hole:proposed.holes) hole=project_plan_path(std::move(hole),view_context->frame);
+                                    if (view_context->crop) {
+                                        const auto& crop=*view_context->crop;
+                                        clip_plan_entity(proposed,{{crop.min_horizontal_m,crop.min_vertical_m},
+                                            {crop.max_horizontal_m,crop.max_vertical_m}});
+                                    }
+                                }
+                            }
+                            if (captured_presentations.contains(presentation_identity(item)) || !proposed.segments.empty())
+                                result.entities.push_back(std::move(proposed));
+                            continue;
+                        }
                         const auto binding=embeddedAssemblyChild(candidate_snapshot,item.id.toStdString());
                         if (!binding || !binding->instance.placement)
                             throw std::invalid_argument("The admitted assembly child placement is unavailable.");
@@ -21649,7 +21705,32 @@ public:
                         continue;
                     }
                     if (before==source.entities().end()) {
+                        if (const auto moved=annotation_source_deltas.find(component.id.toStdString());
+                            moved!=annotation_source_deltas.end()) {
+                            auto plan=component.segments;
+                            for (auto& edge:plan) for (auto* point:{&edge.start,&edge.end}) {
+                                point->x+=moved->second.x;point->y+=moved->second.y;
+                            }
+                            if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
+                            continue;
+                        }
                         const auto original=embeddedAssemblyChild(source,component.id.toStdString());
+                        if (original && geometric_assembly_for_child(source,component.id.toStdString()) &&
+                            candidate.at(original->assembly_catalog_id)!=source.entities().at(original->assembly_catalog_id)) {
+                            const auto placed=geometric_assembly_for_child(candidate_snapshot,component.id.toStdString());
+                            if (!placed) throw std::invalid_argument("The admitted component assembly is unavailable.");
+                            const auto model=AssemblyModel::from_json(candidate.at(placed->assembly_catalog_id).properties.at("model"));
+                            const auto expansion=model.expand(placed->instance.id);
+                            const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& part) {
+                                return component.presentation_key==QString::fromStdString(json{
+                                    {"part_path",part.part_path},{"type_id",part.type_id},{"profile_id",part.profile.id}}.dump());
+                            });
+                            if (profile==expansion.profiles.end()) throw std::invalid_argument("The admitted component profile changed.");
+                            AssemblyExpansion part;part.profiles.push_back(*profile);
+                            const auto plan=project_assembly_plan(part);
+                            if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
+                            continue;
+                        }
                         if (original && original->instance.placement) {
                             const auto placed=embeddedAssemblyChild(candidate_snapshot,component.id.toStdString());
                             if (!placed || !placed->instance.placement) continue;
@@ -22046,21 +22127,30 @@ public:
         const auto rotation_command=request.physical_rotation_command;
         const auto move_selection_ids=request.move_selection_ids;
         const auto plan_move=request.plan_move;
+        const auto plan_move_model_plan_labels=request.plan_move_model_plan_labels;
+        const auto move_references=request.move_references;
         const auto component_sources=request.component_sources;
         const auto edit_source=request.model_edit_source;
         const auto prepared_move=request.model_edit_prepared;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,component_sources,edit_source,prepared_move]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,plan_move_model_plan_labels,move_references,component_sources,edit_source,prepared_move]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (plan_move && prepared_move) {
                         // Native preparation and complete source consequences
                         // stay in this worker. A zero request bypasses codecs
                         // which otherwise reject an unchanged constraint solve.
-                        Command command=plan_move->local_delta.x==0.0 && plan_move->local_delta.y==0.0
-                            ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
-                            : augmentAuthoredCommand(makeSelectionGeometryTranslationCommand(*source,
-                                plan_move->ids,plan_move->local_delta,{},plan_move->canvas_delta),*source);
+                        Command command=ApplyEntityChanges{source->revision(),{}, {},"Move selection"};
+                        if (plan_move->canvas_delta.x!=0.0 || plan_move->canvas_delta.y!=0.0) {
+                            auto parts=prepareDetachedSelectionTranslation(*source,plan_move->ids,
+                                plan_move->canvas_delta,plan_move->local_delta,plan_move_model_plan_labels);
+                            command=parts.model_ids.isEmpty()
+                                ? Command{ApplyEntityChanges{source->revision(),std::move(parts.presentation_changes),{},
+                                    plan_move->ids.size()==1 ? "Move presentation object" : "Move presentation objects"}}
+                                : makeSelectionGeometryTranslationCommand(*source,std::move(parts.model_ids),
+                                    parts.model_delta,std::move(parts.presentation_changes),plan_move->canvas_delta);
+                            command=augmentAuthoredCommand(std::move(command),*source);
+                        }
                         if (!cancellation.is_cancelled()) {
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
                             *result=computeConstraintGeometryProjection(*source,candidate,*retained,
@@ -22068,6 +22158,21 @@ public:
                                 view_context,label_font,nullptr,component_sources.get());
                             if (*result && !cancellation.is_cancelled()) {
                                 retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,plan_move->ids);
+                                if (move_references) for (const auto& reference:*move_references) {
+                                    if (!plan_move->ids.contains(reference.id)) continue;
+                                    const auto before=source->entities().find(reference.id.toStdString());
+                                    const auto after=candidate.entities().find(reference.id.toStdString());
+                                    if (before==source->entities().end() || after==candidate.entities().end() ||
+                                        before->second.type!="reference_asset" || after->second.type!="reference_asset")
+                                        throw std::invalid_argument("The selected reference changed ownership.");
+                                    const auto start=read_point(before->second.properties.at("position_m"));
+                                    const auto end=read_point(after->second.properties.at("position_m"));
+                                    if (!start || !end) throw std::invalid_argument("The admitted reference placement is invalid.");
+                                    auto proposed=reference;
+                                    proposed.position.x+=end->x-start->x;
+                                    proposed.position.y+=end->y-start->y;
+                                    (**result).references.push_back(std::move(proposed));
+                                }
                                 QSet<QString> selected;
                                 for (const auto& selected_id:plan_move->ids) selected.insert(selected_id);
                                 std::map<std::pair<QString,QString>,const CanvasEntity*> originals;
@@ -22556,15 +22661,16 @@ public:
                     const auto found=m_vertex_preview_source->entities().find(item.id.toStdString());
                     if (found==m_vertex_preview_source->entities().end()) {
                         const auto binding=embeddedAssemblyChild(*m_vertex_preview_source,item.id.toStdString());
-                        if (!binding || !binding->instance.placement ||
+                        if (!binding ||
                             !appearance.visible(item,*m_vertex_preview_source,available,
                                 m_plan_presentation_hidden_ids,m_plan_object_hidden_ids)) continue;
                         const auto model=AssemblyModel::from_json(m_vertex_preview_source->entities().at(
                             binding->assembly_catalog_id).properties.at("model"));
-                        if (!model.expand(binding->instance.id).profiles.empty()) continue;
-                        const auto& host_id=binding->instance.placement->host_entity_id;
-                        if (unavailable.contains(host_id) ||
-                            (restricted && !referenced.contains(host_id) && !referenced.contains(item.id.toStdString()))) continue;
+                        const bool geometric=!model.expand(binding->instance.id).profiles.empty();
+                        if (!geometric && !binding->instance.placement) continue;
+                        const auto& owner_id=geometric ? binding->assembly_catalog_id : binding->instance.placement->host_entity_id;
+                        if (unavailable.contains(owner_id) ||
+                            (restricted && !referenced.contains(owner_id) && !referenced.contains(item.id.toStdString()))) continue;
                         auto canonical=item;
                         canonical.output_stroke_width_mm=item.paper_stroke_width_on_screen
                             ? item.output_stroke_width_mm : context.presentation.projection_line_mm;
@@ -22599,6 +22705,7 @@ public:
             }
             m_vertex_preview_eligible=std::move(eligible);
             m_vertex_preview_labels=std::make_shared<std::vector<CanvasLabel>>(canvas->labels());
+            m_vertex_preview_references=std::make_shared<std::vector<CanvasReference>>(canvas->references());
             m_vertex_preview_appraisal_area_ids=
                 std::make_shared<std::set<std::string, std::less<>>>(m_plan_appraisal_area_ids);
             auto footprints=std::make_shared<std::map<QString,QRectF>>();
@@ -23155,18 +23262,19 @@ public:
 
     bool commitPlanMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
         const auto capture=m_plan_move_capture;
-        if (!planMoveCaptureCurrent(capture) || canvas!=capture->canvas || ids!=m_wall_move_ids ||
-            !m_plan_move_preview || m_plan_move_preview->capture!=capture ||
-            m_plan_move_preview->intent.ids!=ids ||
-            m_plan_move_preview->edit_source!=m_model_move_edit_source ||
-            m_plan_move_preview->serial==std::numeric_limits<std::uint64_t>::max() ||
-            canvas->entitiesMovePreviewSerial()!=m_plan_move_preview->serial+1 ||
-            delta.x!=m_plan_move_preview->intent.canvas_delta.x ||
-            delta.y!=m_plan_move_preview->intent.canvas_delta.y)
-            throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
-        const auto prepared=m_plan_move_preview->prepared;
-        const auto edit_source=m_plan_move_preview->edit_source;
+        // Consume the stored ticket even when the release fails a fence.
+        // A rejected release cannot leave an admitted candidate reusable.
+        const auto preview=std::move(m_plan_move_preview);
         m_plan_move_preview.reset();
+        if (!planMoveCaptureCurrent(capture) || canvas!=capture->canvas || ids!=m_wall_move_ids ||
+            !preview || preview->capture!=capture ||
+            preview->intent.ids!=ids || preview->edit_source!=m_model_move_edit_source ||
+            preview->serial==std::numeric_limits<std::uint64_t>::max() ||
+            canvas->entitiesMovePreviewSerial()!=preview->serial+1 ||
+            delta.x!=preview->intent.canvas_delta.x || delta.y!=preview->intent.canvas_delta.y)
+            throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
+        const auto prepared=preview->prepared;
+        const auto edit_source=preview->edit_source;
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
         publishPreparedCanvasEdit(prepared,edit_source);
         clearError();refresh();return true;
@@ -23229,6 +23337,8 @@ public:
             request.authority=m_wall_move_authority;
             request.label_font=canvas->font();
             request.plan_move=SelectionMoveIntent{ids,local,delta};
+            request.plan_move_model_plan_labels=m_wall_move_frame.has_value() && canvas==m_architecturalCanvas;
+            request.move_references=m_vertex_preview_references;
             request.plan_move_capture=capture;
             request.component_sources=m_vertex_preview_components;
             request.model_edit_source=m_model_move_edit_source;
@@ -23607,7 +23717,7 @@ public:
                 }
             } else if (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move) {
                 if (!request.canvas->completeEntitiesMovePreview(request.serial,
-                    std::move(projection.entities),std::move(projection.labels))) {
+                    std::move(projection.entities),std::move(projection.labels),std::move(projection.references))) {
                     if (request.site_wall_move) m_site_wall_move_preview.reset();
                     if (request.plan_move) m_plan_move_preview.reset();
                 }
@@ -39992,7 +40102,11 @@ private:
                         return;
                     }
                 }
-                if (!siteCanvas(canvas) && selectionHasOnlyModelMoveOwners(*m_wall_move_source,m_wall_move_ids)) {
+                if (!siteCanvas(canvas) &&
+                    (canvas==m_measurementCanvas || (canvas==m_architecturalCanvas &&
+                        m_architectural_view_kind==BuildingViewKind::plan &&
+                        (!m_wall_move_frame || horizontal_plan_frame(*m_wall_move_frame)))) &&
+                    selectionHasPlanMoveOwners(*m_wall_move_source,m_wall_move_ids)) {
                     // Capture the displayed scene once at press. Reusing a
                     // prior gesture's authority would bind the old selection.
                     m_vertex_preview_source.reset();m_vertex_preview_authority.reset();
@@ -42753,6 +42867,7 @@ private:
         m_vertex_preview_label_footprints.reset();
         m_vertex_preview_component_bounds.reset();
         m_vertex_preview_components.reset();
+        m_vertex_preview_references.reset();
         m_vertex_preview_view_context.reset();
         m_vertex_preview_canvas.clear();
         m_vertex_preview_document.reset();
@@ -50773,6 +50888,7 @@ private:
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_eligible;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_components;
+    std::shared_ptr<const std::vector<CanvasReference>> m_vertex_preview_references;
     std::set<std::string, std::less<>> m_plan_semantic_model_ids;
     std::set<std::string, std::less<>> m_plan_presentation_hidden_ids;
     std::set<std::string, std::less<>> m_plan_object_hidden_ids;

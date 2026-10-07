@@ -1137,6 +1137,7 @@ private:
     bool m_boundary_vertex_preview_pending{};
     bool m_vertex_release_pending{};
     bool m_boundary_vertex_preview_request_in_progress{};
+    bool m_boundary_vertex_preview_fine{};
     std::uint64_t m_boundary_vertex_preview_serial{};
     std::optional<QPointF> m_boundary_vertex_preview_pointer;
     std::optional<OpeningWidthHandleHit> m_opening_width_handle;
