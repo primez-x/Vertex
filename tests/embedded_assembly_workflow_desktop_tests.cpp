@@ -260,16 +260,23 @@ void frame_owner_collision(const QString& directory) {
         {},"Frame owner collision fixture"});
     require(window.selectEntity(ordinary),"refresh frame owner collision fixture");
     const auto captured=window.document().snapshot();
-    int collision_entries=0;
+    int profile_entries=0,body_entries=0;
     for(const auto& entry:control<PlanCanvas>(window,"measurementPlanCanvas").entities()) {
         if(entry.id!=QString::fromStdString(child))continue;
-        ++collision_entries;
         require(entry.resize_frame.has_value(),"colliding geometric owner retains frame");
-        close(entry.resize_frame->rotation_radians,0.5,"embedded frame retains priority over persisted same-ID boundary");
-        close(entry.resize_frame->width_metres,4,"embedded frame width uses captured profile");
-        close(entry.resize_frame->depth_metres,3,"embedded frame depth uses captured profile");
+        if(entry.presentation_key.isEmpty()) {
+            ++body_entries;
+            close(entry.resize_frame->rotation_radians,0,"persisted body retains its own frame angle");
+            close(entry.resize_frame->width_metres,17,"persisted body retains its own width");
+            close(entry.resize_frame->depth_metres,9,"persisted body retains its own depth");
+        } else {
+            ++profile_entries;
+            close(entry.resize_frame->rotation_radians,0.5,"embedded frame retains its authored angle");
+            close(entry.resize_frame->width_metres,4,"embedded frame width uses captured profile");
+            close(entry.resize_frame->depth_metres,3,"embedded frame depth uses captured profile");
+        }
     }
-    require(collision_entries>=1,"colliding owner remains present on canvas");
+    require(profile_entries>=1 && body_entries==1,"both colliding presentation owners remain on canvas");
     require(shape(window,ordinary).resize_frame.has_value(),"ordinary measured boundary retains frame");
     close(shape(window,ordinary).resize_frame->width_metres,7,"ordinary frame uses its own geometry");
     require(window.document().snapshot().entities()==captured.entities() && window.document().revision()==captured.revision(),

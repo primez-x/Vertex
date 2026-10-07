@@ -224,16 +224,31 @@ bool valid_reference_previews(const std::vector<CanvasReference>& proposed,
 bool unambiguous_entity_presentations(const std::vector<CanvasEntity>& entities,
                                       const std::vector<CanvasEntity>& retained) {
     QSet<QString> keyed_roots;
-    for (const auto& source : retained)
+    QHash<QString,QSet<QString>> retained_keys;
+    QHash<QString,QSet<QString>> retained_body_types;
+    for (const auto& source : retained) {
+        retained_keys[source.id].insert(source.presentation_key);
         if (!source.presentation_key.isEmpty()) keyed_roots.insert(source.id);
+        else retained_body_types[source.id].insert(source.type);
+    }
+    const auto retained_pair = [&](const QString& id, const QString& key) {
+        const auto found = retained_keys.constFind(id);
+        return found != retained_keys.cend() && found->contains(QString{}) && found->contains(key);
+    };
     QHash<QString,QSet<QString>> seen;
     for (const auto& entity : entities) {
         auto& keys = seen[entity.id];
         if (entity.presentation_key.isEmpty()) {
-            if (keyed_roots.contains(entity.id) ||
-                (!keys.isEmpty() && !keys.contains(QString{}))) return false;
+            // A persisted body can share an ID with an embedded profile.
+            // Preserve that captured pair, but never collapse a keyed root
+            // into an empty-key fallback or invent a mixed presentation alias.
+            if (keyed_roots.contains(entity.id) &&
+                (!retained_pair(entity.id, QString{}) || !retained_body_types.value(entity.id).contains(entity.type))) return false;
+            for (const auto& key : keys)
+                if (!key.isEmpty() && !retained_pair(entity.id, key)) return false;
         } else {
-            if (keys.contains(QString{}) || keys.contains(entity.presentation_key)) return false;
+            if (keys.contains(entity.presentation_key) ||
+                (keys.contains(QString{}) && !retained_pair(entity.id, entity.presentation_key))) return false;
         }
         keys.insert(entity.presentation_key);
     }

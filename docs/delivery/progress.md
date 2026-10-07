@@ -14,6 +14,40 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site geometry transforms and corner feedback
+
+Site measured areas, measured lines and embedded geometric assembly profiles
+now use the captured transform worker and single-use prepared publication.
+The complete selection and assembly commands retain connected geometry,
+constraints, annotations and authored consequences. Local selection frames,
+canonical profile identities and calibrated references follow the admitted
+candidate before the captured Site placement applies once. Site source and
+edit/publication generations join the existing context and exact-intent
+release guards. The previous generic Site preview and release replay are
+removed; dedicated physical object lanes remain in place.
+
+Complete embedded assembly frames now use the catalog expansion and authored
+root orientation in both ordinary and Site scenes. Keyed profiles and separate
+persisted bodies keep their own frames when IDs coincide. Canvas completion
+accepts their exact captured presentation pairs while still refusing unknown
+mixed aliases or an unkeyed replacement for a keyed-only root.
+The existing collision fixture's source assertions now distinguish the
+persisted body's frame from the embedded profiles; it has not been run.
+The older ID-keyed Site placement map still cannot assign separate placements
+to a same-ID body/profile pair. That typed-placement gap remains required work;
+the current transform batch preserves its existing placement policy.
+
+Rejected corner or endpoint proposals now report the actual native or
+constraint conflict through the current request's guarded completion.
+Cancelled or obsolete proposals cannot publish an error, and a valid latest
+proposal clears it. These source changes are uncompiled and unexercised.
+No build, test, probe, native job, launch, package or installation ran.
+Manual checks remain Not tested. Independent source review identified the
+presentation-pair and assembly-frame defects above; both are corrected in
+source, including the host-copy fallback. The corrected source batch was
+accepted for integration; runtime qualification and the separate typed Site
+placement gap remain open.
+
 ### October 7 Site presentation transforms and measured corners
 
 Site Plan symbols, authored text and calibrated references now use the

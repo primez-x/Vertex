@@ -5194,8 +5194,8 @@ class MainWindow::Impl {
         std::vector<Bounds2> component_bounds;
         std::map<std::pair<QString,QString>,Bounds2> component_presentations;
         QFont label_font;
-        // Populated only for selection moves. Render aliases carry typed
-        // ownership and must never be inferred from persisted model IDs.
+        // Populated for selection moves and geometric transforms. Render
+        // aliases carry typed ownership, never inferred from persisted IDs.
         std::map<QString,SiteAnnotationTarget> move_annotation_targets;
         std::vector<CanvasReference> move_references;
         std::optional<SitePresentationPlacement> move_frame;
@@ -5268,6 +5268,8 @@ class MainWindow::Impl {
         bool embedded{};
         bool measured{};
         std::optional<BuildingViewFrame> frame;
+        std::shared_ptr<const SiteEndpointPreviewInput> site_input;
+        std::uint64_t site_generation{},site_publication_generation{};
         std::optional<Vec2> architectural_pivot;
         std::shared_ptr<const std::vector<CanvasEntity>> scene,eligible,components;
         std::shared_ptr<const std::vector<CanvasLabel>> labels;
@@ -20938,7 +20940,9 @@ public:
         std::optional<Command>* admitted_command = nullptr,
         const SiteEndpointPreviewInput* site_input=nullptr,
         const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr) {
-        try {
+        // Called only by the regeneration worker. Preserve native and
+        // constraint rejection details for its guarded completion reporting.
+        {
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
             const auto& owner = source.entities().at(edit.boundary_id);
@@ -20996,8 +21000,7 @@ public:
             if (result && endpoint_object) result->metrics = endpointPreviewMetrics(candidate.at(edit.boundary_id));
             if (result && vertex_command && admitted_command) *admitted_command = std::move(*vertex_command);
             return result;
-        } catch (const Standard_Failure&) { return std::nullopt; }
-          catch (const std::exception&) { return std::nullopt; }
+        }
     }
 
     static std::optional<AssemblyDocumentInstance> embeddedAssemblyChild(
@@ -21153,6 +21156,42 @@ public:
             return boundary;
         }
         throw std::invalid_argument("assembly host is unavailable for analytical plan preview");
+    }
+
+    static CanvasSelectionFrame embeddedAssemblySelectionFrame(const DocumentSnapshot& snapshot,
+        const AssemblyDocumentInstance& child) {
+        const auto angle=embedded_assembly_transform(child.instance).rotation_radians;
+        const auto model=AssemblyModel::from_json(snapshot.entities().at(child.assembly_catalog_id).properties.at("model"));
+        const auto expansion=model.expand(child.instance.id);
+        Boundary segments;
+        // Selection extents need the complete placed profile outlines, not
+        // another native solid generation after the scene was already built.
+        for (const auto& profile:expansion.profiles) {
+            const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
+                profile.transform.rotation_radians,profile.transform.scale};
+            auto outer=assembly_placement_boundary(profile.profile.outer,xy);
+            segments.insert(segments.end(),outer.begin(),outer.end());
+        }
+        if (expansion.profiles.empty() && child.instance.placement) {
+            const auto& placement=*child.instance.placement;
+            const auto& host=snapshot.entities().at(placement.host_entity_id);
+            const auto plans=host.type=="wall" ? document_wall_plan_geometry(snapshot.entities())
+                : std::map<std::string,WallPlanGeometry,std::less<>>{};
+            segments=assembly_placement_boundary(assemblyHostPlan(snapshot,placement.host_entity_id,plans),placement);
+        }
+        if (segments.empty()) throw std::invalid_argument("The assembly has no complete selection geometry.");
+        const auto c=std::cos(angle),s=std::sin(angle);
+        for (auto& segment:segments) {
+            segment.start={c*segment.start.x+s*segment.start.y,-s*segment.start.x+c*segment.start.y};
+            segment.end={c*segment.end.x+s*segment.end.y,-s*segment.end.x+c*segment.end.y};
+        }
+        const auto bounds=boundary_bounds(segments);
+        const auto x=std::midpoint(bounds.minimum.x,bounds.maximum.x);
+        const auto y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
+        CanvasSelectionFrame frame{{c*x-s*y,s*x+c*y},angle,
+            bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+        frame.source_rotation_radians=angle;
+        return frame;
     }
 
     static std::string assemblyHostGeometryKey(const DocumentSnapshot& snapshot, const std::string& host_id) {
@@ -22293,7 +22332,10 @@ public:
 
     static Command ordinaryGeometryTransformCommand(const DocumentSnapshot& source,
         const OrdinaryGeometryTransformCapture& capture,const OrdinaryGeometryTransformIntent& intent) {
-        if (capture.measured && intent.scale!=1.0)
+        const auto owner=source.entities().find(capture.id.toStdString());
+        const bool site_wall=capture.site_input && !capture.embedded &&
+            owner!=source.entities().end() && owner->second.type=="wall";
+        if ((capture.measured || site_wall) && intent.scale!=1.0)
             throw std::invalid_argument("Use source floor plan dimensions to resize closed areas and measured lines.");
         if (intent.scale==1.0 && intent.radians==0.0)
             return ApplyEntityChanges{source.revision(),{}, {},"Transform geometry"};
@@ -22306,7 +22348,7 @@ public:
         Command command;
         if (capture.embedded)
             command=embeddedAssemblyTransformCommand(source,capture.id.toStdString(),gesture,false).first;
-        else if (capture.measured)
+        else if (capture.measured || site_wall)
             command=makeSelectionGeometryTransformCommand(source,{capture.id},planar);
         else {
             const auto& entity=source.entities().at(capture.id.toStdString());
@@ -22343,7 +22385,8 @@ public:
         const auto entities_move_candidate=request.entities_move_candidate;
         const auto rigid_transform=request.rigid_transform;
         const auto endpoint_command=request.plan_endpoint_command;
-        const auto site_input=request.site_transform_capture ? request.site_transform_capture->input
+        const auto site_input=request.ordinary_transform_capture ? request.ordinary_transform_capture->site_input
+            : request.site_transform_capture ? request.site_transform_capture->input
             : request.site_wall_move_capture ? request.site_wall_move_capture->input
             : request.plan_endpoint_capture ? request.plan_endpoint_capture->site_input : nullptr;
         const auto site_wall_move=request.site_wall_move;
@@ -22379,16 +22422,26 @@ public:
                         } else {
                             *result=computeConstraintGeometryProjection(*source,candidate,*retained,*eligible,*labels,
                                 metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,
-                                label_font,nullptr,component_sources.get());
+                                label_font,site_input.get(),component_sources.get());
                             if (*result && !cancellation.is_cancelled()) {
                                 retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,{id});
                                 for (auto& proposed:(**result).entities) {
-                                    if (proposed.id!=id || proposed.segments.empty()) continue;
+                                    if (proposed.segments.empty() || (!site_input && proposed.id!=id)) continue;
+                                    if (site_input && site_input->move_annotation_targets.contains(proposed.id)) continue;
                                     const auto original=std::find_if(retained->begin(),retained->end(),[&](const auto& item) {
                                         return item.id==proposed.id && item.presentation_key==proposed.presentation_key;
                                     });
                                     if (original==retained->end() || !original->resize_frame) continue;
-                                    const auto owner=candidate.entities().find(id.toStdString());
+                                    const auto owner=candidate.entities().find(proposed.id.toStdString());
+                                    const bool embedded_presentation=site_input && proposed.type==QStringLiteral("assembly_instance") &&
+                                        (!proposed.presentation_key.isEmpty() || !source->entities().contains(proposed.id.toStdString())) &&
+                                        embeddedAssemblyChild(*source,proposed.id.toStdString()).has_value();
+                                    if (site_input && !embedded_presentation && owner!=candidate.entities().end() &&
+                                        physicalPlanAxisResizeFamily(owner->second.type)) {
+                                        proposed.resize_frame=physicalPlanResizeFrame(owner->second);
+                                        continue;
+                                    }
+                                    if (proposed.id!=id || (site_input && ordinary_capture->embedded && !embedded_presentation)) continue;
                                     if (!ordinary_capture->embedded && !ordinary_capture->measured && owner!=candidate.entities().end()) {
                                         proposed.resize_frame=physicalPlanResizeFrame(owner->second,
                                             view_context ? &view_context->frame : nullptr);
@@ -22415,8 +22468,27 @@ public:
                                     frame.width_metres*=intent.scale;frame.depth_metres*=intent.scale;
                                     if (frame.source_rotation_radians) *frame.source_rotation_radians=std::remainder(
                                         *frame.source_rotation_radians+intent.source_radians,2.0*std::numbers::pi);
+                                    if (site_input) frame.source_rotation_direction=1.0;
                                     proposed.resize_frame=frame;
                                 }
+                            }
+                        }
+                        if (*result && site_input && !cancellation.is_cancelled()) {
+                            // References retain their captured image and calibration;
+                            // geometry commands may only change their placement.
+                            (**result).references=*ordinary_capture->references;
+                            for (auto& proposed:(**result).references) {
+                                const auto before=source->entities().find(proposed.id.toStdString());
+                                const auto after=candidate.entities().find(proposed.id.toStdString());
+                                if (before==source->entities().end() || after==candidate.entities().end() ||
+                                    before->second==after->second) continue;
+                                if (after->second.type!="reference_asset")
+                                    throw std::invalid_argument("The captured reference changed ownership.");
+                                const auto position=read_point(after->second.properties.at("position_m"));
+                                if (!position) throw std::invalid_argument("The admitted reference placement is invalid.");
+                                proposed.position=*position;
+                                proposed.scale=read_number(after->second.properties,"scale",1.0);
+                                proposed.rotation_degrees=read_number(after->second.properties,"rotation_degrees",0.0);
                             }
                         }
                         if (cancellation.is_cancelled()) result->reset();
@@ -22733,6 +22805,13 @@ public:
                         for (auto& item : projection.labels) {
                             if (cancellation.is_cancelled()) break;
                             item = site_presented_canvas_label(item, site_input->frames.at(item.id));
+                        }
+                        if (ordinary_capture) {
+                            std::erase_if(projection.references,[&](const auto& item) {
+                                return !site_input->frames.contains(item.id);
+                            });
+                            for (auto& reference:projection.references)
+                                reference=site_presented_canvas_reference(reference,site_input->frames.at(reference.id));
                         }
                     }
                 }
@@ -23099,6 +23178,15 @@ public:
                     capture.site_publication_generation!=m_site_publication_generation) return false;
             } catch (...) { return false; }
         }
+        if (m_ordinary_transform_capture && m_ordinary_transform_capture->site_input) {
+            try {
+                requireSiteEditCurrent();
+                const auto& capture=*m_ordinary_transform_capture;
+                if (!siteCanvas(active_canvas) || m_entity_transform_source!=m_site_edit_source ||
+                    capture.site_generation!=m_site_edit_generation ||
+                    capture.site_publication_generation!=m_site_publication_generation) return false;
+            } catch (...) { return false; }
+        }
         if (!m_entity_transform_site_capture) return true;
         try {
             requireSiteEditCurrent();
@@ -23210,7 +23298,8 @@ public:
         if (siteCanvas(canvas)) {
             const auto found=m_entity_transform_source->entities().find(id.toStdString());
             if (found!=m_entity_transform_source->entities().end() && !m_site_edit_annotation_targets.contains(id) &&
-                (physicalPlanAxisResizeFamily(found->second.type) || physicalPlanRotationFamily(found->second.type))) {
+                (physicalPlanAxisResizeFamily(found->second.type) || physicalPlanRotationFamily(found->second.type)) &&
+                !geometric_assembly_for_child(*m_entity_transform_source,id.toStdString())) {
                 requireSiteEditCurrent();
                 auto input=captureSitePlanPreviewInput(canvas,{id});
                 m_entity_transform_site_capture=std::make_shared<SiteTransformPreviewCapture>(SiteTransformPreviewCapture{
@@ -23277,6 +23366,42 @@ public:
                 if (!m_entity_transform_edit_source) m_entity_transform_edit_source=captureCanvasEditSource();
                 m_ordinary_transform_capture=std::move(capture);
             }
+        } else if (!m_presentation_transform_capture) {
+            const auto found=m_entity_transform_source->entities().find(id.toStdString());
+            const bool embedded=geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()).has_value();
+            if (!embedded && found!=m_entity_transform_source->entities().end() &&
+                physicalPlanRotationFamily(found->second.type)) return;
+            const bool measured=!embedded && found!=m_entity_transform_source->entities().end() &&
+                (is_closed_boundary_entity(found->second.type) || found->second.type=="measurement_linework");
+            if (!embedded && !measured && (found==m_entity_transform_source->entities().end() ||
+                !can_transform_architectural_entity_type(found->second.type)))
+                throw std::invalid_argument("This selection does not support direct resize or rotation handles.");
+            auto capture=std::make_shared<OrdinaryGeometryTransformCapture>();
+            capture->id=id;capture->embedded=embedded;capture->measured=measured;
+            capture->site_input=captureSitePlanPreviewInput(canvas,{id},true);
+            capture->site_generation=m_site_edit_generation;
+            capture->site_publication_generation=m_site_publication_generation;
+            const auto input=capture->site_input;
+            capture->scene=std::shared_ptr<const std::vector<CanvasEntity>>(input,&input->geometry);
+            capture->eligible=capture->scene;
+            capture->labels=std::shared_ptr<const std::vector<CanvasLabel>>(input,&input->labels);
+            capture->references=std::shared_ptr<const std::vector<CanvasReference>>(input,&input->move_references);
+            capture->appraisal_area_ids=std::shared_ptr<const std::set<std::string,std::less<>>>(input,&input->appraisal_area_ids);
+            capture->label_footprints=std::shared_ptr<const std::map<QString,QRectF>>(input,&input->label_footprints);
+            capture->component_bounds=std::shared_ptr<const std::vector<Bounds2>>(input,&input->component_bounds);
+            auto components=std::make_shared<std::vector<CanvasEntity>>();
+            // Site capture owns canonical local component presentations; retain
+            // profile identities even when they share a persisted source ID.
+            for (const auto& item:input->geometry)
+                if ((item.type==QStringLiteral("symbol") || item.type==QStringLiteral("assembly_instance")) &&
+                    !item.segments.empty()) components->push_back(item);
+            capture->components=std::move(components);
+            capture->font=canvas->font();capture->dpi_x=canvas->logicalDpiX();capture->dpi_y=canvas->logicalDpiY();
+            if (std::none_of(capture->scene->begin(),capture->scene->end(),
+                [&](const auto& item){return item.id==id && !item.segments.empty();}))
+                throw std::invalid_argument("The selected geometry has no visible captured presentation.");
+            if (!m_entity_transform_edit_source) m_entity_transform_edit_source=captureCanvasEditSource();
+            m_ordinary_transform_capture=std::move(capture);
         }
     }
 
@@ -23549,54 +23674,6 @@ public:
                 !geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()))
                 return previewPhysicalPlanRotationFromCanvas(canvas,id,scale,radians,canvas_pivot,serial);
         }
-        if (siteCanvas(canvas) && !m_site_preview_dispatching) {
-            if (!sitePreviewContextCurrent() || !canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
-            const auto generation=m_site_edit_generation;
-            queueSitePreview([this,target=QPointer<PlanCanvas>(canvas),id,scale,radians,canvas_pivot,serial,generation] {
-                if (!target || generation!=m_site_edit_generation) return;
-                auto result=previewEntityTransformFromCanvas(target,id,scale,radians,canvas_pivot,serial);
-                (void)target->completeEntityTransformPreview(serial,std::move(result),m_site_preview_labels,m_site_preview_references);
-            });
-            return std::nullopt;
-        }
-        if (siteCanvas(canvas)) {
-            m_site_preview_references.clear();
-            m_entity_transform_ready=false;
-            m_entity_transform_command.reset();
-            try {
-                const auto local=site_source_plan_point(canvas_pivot,siteEditFrame({id}));
-                const PlanarTransform transform{local,radians,false,false,{}};
-                const auto command=[&]() -> Command {
-                    const auto c=std::cos(radians),s=std::sin(radians);
-                    const ArchitecturalTransform gesture{local.x-scale*(c*local.x-s*local.y),local.y-scale*(s*local.x+c*local.y),0.0,radians,scale};
-                    if(geometric_assembly_for_child(*m_site_edit_source,id.toStdString()))
-                        return embeddedAssemblyTransformCommand(*m_site_edit_source,id.toStdString(),gesture,false).first;
-                    const auto& entity=m_site_edit_source->entities().at(id.toStdString());
-                    if (physicalPlanRotationFamily(entity.type) && scale!=1.0)
-                        throw std::invalid_argument("Use the object's typed dimensions to resize its physical geometry.");
-                    if (entity.type=="wall" || is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework") {
-                        if (std::abs(scale-1.0)>1e-9) throw std::invalid_argument("Use source floor plan dimensions to resize physical walls and closed areas.");
-                        return makeSelectionGeometryTransformCommand(*m_site_edit_source,{id},transform);
-                    }
-                    ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};
-                    operation.transform=gesture;
-                    const auto transaction=ArchitecturalTransaction::create(new_id("site-transform"),
-                        std::to_string(m_site_edit_source->revision()),{entity.id},{std::move(operation)},"Transform Site Plan object");
-                    return architecturalObjectTransformCommand(*m_site_edit_source,entity,transaction);
-                }();
-                const auto candidate=Document::preview_command(*m_site_edit_source,command);
-                const auto c=std::cos(radians),s=std::sin(radians);
-                auto proposed=sitePreviewGeometry(candidate,{id},SiteEditTransform{
-                    {local.x-scale*(c*local.x-s*local.y),local.y-scale*(s*local.x+c*local.y),0.0},radians,scale});
-                m_entity_transform_command=command; m_entity_transform_ready=true;
-                m_entity_transform_serial=serial; m_entity_transform_scale=scale; m_entity_transform_radians=radians;
-                if(canvas->markEntityTransformPreviewPending(serial)) {
-                    (void)canvas->completeEntityTransformPreview(serial,proposed,m_site_preview_labels,m_site_preview_references);
-                    return std::nullopt;
-                }
-                return proposed;
-            } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return std::vector<CanvasEntity>{}; }
-        }
         m_ordinary_transform_preview.reset();
         m_entity_transform_command.reset();
         m_entity_transform_ready=false;
@@ -23610,11 +23687,16 @@ public:
                 !std::isfinite(scale) || scale<=0.0 || !std::isfinite(radians) ||
                 !std::isfinite(canvas_pivot.x) || !std::isfinite(canvas_pivot.y))
                 throw std::invalid_argument("The captured geometric transform source, selection or view changed. Start again.");
-            if (capture->measured && scale!=1.0)
+            const auto owner=m_entity_transform_source->entities().find(id.toStdString());
+            const bool site_wall=capture->site_input && !capture->embedded &&
+                owner!=m_entity_transform_source->entities().end() && owner->second.type=="wall";
+            if ((capture->measured || site_wall) && scale!=1.0)
                 throw std::invalid_argument("Use source floor plan dimensions to resize closed areas and measured lines.");
             OrdinaryGeometryTransformIntent intent;
             intent.scale=scale;intent.radians=radians;intent.canvas_pivot=canvas_pivot;
-            intent.source_pivot=capture->architectural_pivot.value_or(capture->frame
+            intent.source_pivot=capture->site_input
+                ? site_source_plan_point(canvas_pivot,*capture->site_input->move_frame)
+                : capture->architectural_pivot.value_or(capture->frame
                 ? unproject_plan_point(canvas_pivot,*capture->frame) : canvas_pivot);
             intent.source_radians=capture->frame ? model_plan_rotation_delta(radians,*capture->frame) : radians;
             if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
@@ -24133,9 +24215,11 @@ public:
             const bool request_current=current(request);
             if (!request_current || !completion.succeeded() ||
                 completion.receipt->source_revision != request.source->revision() || !*request.result) {
-                if (request_current && (request.ordinary_transform_capture || request.presentation_capture || request.axis_resize_scales || request.site_wall_move || request.plan_move || request.physical_rotation_command) &&
+                if (request_current && (request.plan_endpoint_capture || request.ordinary_transform_capture || request.presentation_capture || request.axis_resize_scales || request.site_wall_move || request.plan_move || request.physical_rotation_command) &&
                     completion.kind!=RegenerationCompletionKind::cancelled) {
-                    auto message=request.ordinary_transform_capture
+                    auto message=request.plan_endpoint_capture
+                        ? QStringLiteral("The corner or endpoint conflicts with the current geometry or measurement constraints.")
+                        : request.ordinary_transform_capture
                         ? QStringLiteral("The transformed geometry could not be admitted or displayed.")
                         : request.presentation_capture
                         ? QStringLiteral("The transformed presentation could not be admitted or displayed.")
@@ -24150,11 +24234,12 @@ public:
                         const auto* detail=error.GetMessageString();
                         if (detail && *detail) message=QString::fromUtf8(detail);
                     } catch (const std::exception& error) {
-                        message=QString::fromUtf8(error.what());
+                        if (error.what() && *error.what()) message=QString::fromUtf8(error.what());
                     } catch (...) {}
                     if (request.site_wall_move) m_site_wall_move_error=message;
                     if (request.plan_move) m_plan_move_error=message;
-                    setError(QStringLiteral("%1: %2").arg((request.site_wall_move || request.plan_move)
+                    setError(QStringLiteral("%1: %2").arg(request.plan_endpoint_capture
+                        ? QStringLiteral("Geometry") : (request.site_wall_move || request.plan_move)
                         ? QStringLiteral("Move") : request.physical_rotation_command
                         ? QStringLiteral("Rotate") : (request.presentation_capture || request.ordinary_transform_capture)
                         ? QStringLiteral("Transform") : QStringLiteral("Resize"),message));
@@ -24188,6 +24273,7 @@ public:
                 if (!request.plan_endpoint_command || !*request.plan_endpoint_command) { reject(request); continue; }
                 m_plan_endpoint_preview = PlanEndpointPreviewCommand{request.plan_endpoint_capture, request.serial,
                     request.vertex_id, request.position, **request.plan_endpoint_command,request.model_edit_prepared};
+                clearError();
             }
             if (request.entity_transform_preview) {
                 if (request.ordinary_transform_capture) {
@@ -24901,7 +24987,7 @@ public:
                     publishEntityTransformPreparedEdit(rotation_radians==0.0);
                     if (rotation_radians==0.0) { clearError(); return true; }
                 }
-                else applyDocumentCommand(*m_entity_transform_command);
+                else throw std::invalid_argument("The Site geometry has no captured admitted transform preview. Start again.");
                 clearError(); refresh(); return true;
             }
             const auto* gesture_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
@@ -42637,13 +42723,20 @@ private:
         std::erase_if(scene.grids,[&](const auto& item) { return !belongs(item); });
         for (auto& item : scene.geometry) {
             const auto entity = source.entities().find(item.id.toStdString());
-            if (entity != source.entities().end() && entity->second.type == "wall") {
+            const auto embedded=item.type==QStringLiteral("assembly_instance") &&
+                (!item.presentation_key.isEmpty() || entity==source.entities().end())
+                ? embeddedAssemblyChild(source,item.id.toStdString()) : std::nullopt;
+            if (!embedded && entity != source.entities().end() && entity->second.type == "wall") {
                 if (const auto baseline = read_required_segment(entity->second.properties,"baseline")) {
                     item.snap_points = {baseline->start,baseline->end};
                     item.snap_segments = {*baseline};
                 }
             }
-            if (entity!=source.entities().end() && !item.segments.empty() &&
+            if (embedded && !item.segments.empty()) {
+                try { item.resize_frame=embeddedAssemblySelectionFrame(source,*embedded); }
+                catch (const Standard_Failure&) { item.resize_frame.reset(); }
+                catch (const std::exception&) { item.resize_frame.reset(); }
+            } else if (entity!=source.entities().end() && !item.segments.empty() &&
                 physicalPlanAxisResizeFamily(entity->second.type)) {
                 // Joins and view clipping are presentation geometry. Physical
                 // handles use the same full authored dimensions as other plans.
@@ -43982,14 +44075,18 @@ private:
             for (auto& canvas_entity : entities) {
                 if (canvas_entity.svg_symbol || canvas_entity.segments.empty()) continue;
                 const auto found = snapshot.entities().find(canvas_entity.id.toStdString());
-                // Embedded ownership retains priority even if a persisted
-                // entity deliberately collides with this derived child identity.
-                const auto embedded = frame_assembly_child(canvas_entity.id.toStdString());
+                // Keyed embedded profiles and persisted empty-key bodies keep
+                // separate frames even when their root IDs happen to coincide.
+                const auto embedded = canvas_entity.type==QStringLiteral("assembly_instance") &&
+                    (!canvas_entity.presentation_key.isEmpty() || found==snapshot.entities().end())
+                    ? frame_assembly_child(canvas_entity.id.toStdString()) : std::nullopt;
                 if (found == snapshot.entities().end() && !embedded) continue;
                 try {
                     double angle{};
                     if (embedded) {
-                        angle = embedded_assembly_transform(embedded->instance).rotation_radians;
+                        canvas_entity.resize_frame=embeddedAssemblySelectionFrame(snapshot,*embedded);
+                        project_frame(canvas_entity);
+                        continue;
                     } else if (found->second.type == "assembly_instance") {
                         angle = physicalPlanRotationAngle(found->second);
                     } else if (can_transform_architectural_entity_type(found->second.type)) {
@@ -44036,16 +44133,6 @@ private:
                         // child. Its unclipped world geometry owns the frame;
                         // the saved plan inverse must never be applied twice.
                         segments=project_assembly_plan(independent_assemblies.at(found->first));
-                    }
-                    if (embedded) {
-                        segments.clear();
-                        const auto model = AssemblyModel::from_json(snapshot.entities().at(embedded->assembly_catalog_id).properties.at("model"));
-                        for (const auto& profile : model.expand(embedded->instance.id).profiles) {
-                            const AssemblyPlacement xy{{}, {profile.transform.translation_m.x,profile.transform.translation_m.y},
-                                profile.transform.rotation_radians,profile.transform.scale};
-                            auto outer = assembly_placement_boundary(profile.profile.outer, xy);
-                            segments.insert(segments.end(), outer.begin(), outer.end());
-                        }
                     }
                     for (auto& segment : segments) {
                         segment.start = local(segment.start);
