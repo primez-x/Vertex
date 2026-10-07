@@ -1961,9 +1961,11 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         if (m_selection_controls_visible) {
             drawSelectionFrame(painter, viewport, annotation_footprints);
             drawVertexHandles(painter, viewport);
-            drawSelectionDimensions(painter, viewport, annotation_footprints);
+            drawSelectionDimensions(painter, viewport, annotation_footprints, interactive);
             drawOpeningWidthHandles(painter, viewport);
             drawSelectionCaption(painter, viewport, background);
+        } else if (interactive) {
+            drawSelectionDimensions(painter, viewport, annotation_footprints, interactive);
         }
         drawCursorReadout(painter, viewport, background);
     }
@@ -5067,10 +5069,12 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
 }
 
 void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewport,
-    const std::vector<QRectF>& annotation_footprints) const {
+    const std::vector<QRectF>& annotation_footprints, bool placement_preview) const {
     // The vertex readout supplies live coordinates, area, and perimeter. Avoid
     // obscuring it with a second bounding-box readout during the same gesture.
     if (m_left_gesture == LeftGesture::vertex_move && m_left_dragging) return;
+    const auto& preview = m_symbol_drag_active ? m_symbol_drag_preview : m_component_placement_preview;
+    if (!m_selection_controls_visible && !(placement_preview && preview && preview->resize_frame)) return;
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
@@ -5081,7 +5085,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
     const QFontMetricsF metrics(dimension_font, painter.device());
     std::vector<QRectF> occupied_panels;
     const auto draw = [&](CanvasSelectionFrame axes, const QString& id, bool sizes_presented = false,
-                          std::optional<CanvasOpeningWidthControls> opening = std::nullopt) {
+                          std::optional<CanvasOpeningWidthControls> opening = std::nullopt,
+                          bool placing = false) {
         if (!std::isfinite(axes.center.x) || !std::isfinite(axes.center.y) ||
             !std::isfinite(axes.rotation_radians) || !std::isfinite(axes.width_metres) ||
             !std::isfinite(axes.depth_metres) || axes.width_metres < 0 || axes.depth_metres < 0)
@@ -5228,43 +5233,50 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         }
         const bool dark = m_canvas_background.lightnessF() < .45;
         painter.setPen(QPen(invalid_opening ? QColor(220,38,38)
+                           : placing ? (dark ? QColor(147,163,184) : QColor(148,163,184))
                            : dark ? QColor(125,179,255) : QColor(37,99,235),1));
         painter.setBrush(invalid_opening ? QColor(254,226,226,244)
+                         : placing ? (dark ? QColor(20,25,34,238) : QColor(255,255,255,244))
                          : dark ? QColor(27,52,87,238) : QColor(239,246,255,244));
         painter.drawRoundedRect(panel,4,4);
         painter.setPen(invalid_opening ? QColor(185,28,28)
+                       : placing ? (dark ? QColor(223,235,255) : QColor(50,65,84))
                        : dark ? QColor(223,235,255) : QColor(29,78,216));
         painter.drawText(panel,Qt::AlignCenter,text);
     };
-    QSet<QString> measured_entities;
-    for (const auto& entity : m_entities) {
-        // A dimension guide is presentation geometry. Its selection extent is
-        // not another building measurement and must not masquerade as one.
-        if (entity.selected && entity.type != QStringLiteral("dimension_line") &&
-            !measured_entities.contains(entity.id)) {
-            measured_entities.insert(entity.id);
-            const auto axes = !entity.presentation_key.isEmpty() && selectedIds().size()==1
-                ? selectionAxes() : entitySelectionAxes(interactiveEntity(entity));
-            if (axes)
-                draw(*axes,entity.id,false,m_move_preview_valid
-                    ? interactiveEntity(entity).opening_width_controls : entity.opening_width_controls);
+    if (m_selection_controls_visible) {
+        QSet<QString> measured_entities;
+        for (const auto& entity : m_entities) {
+            // A dimension guide is presentation geometry. Its selection extent is
+            // not another building measurement and must not masquerade as one.
+            if (entity.selected && entity.type != QStringLiteral("dimension_line") &&
+                !measured_entities.contains(entity.id)) {
+                measured_entities.insert(entity.id);
+                const auto axes = !entity.presentation_key.isEmpty() && selectedIds().size()==1
+                    ? selectionAxes() : entitySelectionAxes(interactiveEntity(entity));
+                if (axes)
+                    draw(*axes,entity.id,false,m_move_preview_valid
+                        ? interactiveEntity(entity).opening_width_controls : entity.opening_width_controls);
+            }
+        }
+        for (const auto& retained : m_references) {
+            const auto& reference = interactiveReference(retained);
+            if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
+            const auto unit = reference.metres_per_source_unit*reference.scale;
+            if (!std::isfinite(unit) || unit <= 0) continue;
+            const auto position = m_move_preview_delta && &reference == &retained && m_move_preview_valid && m_move_ids.contains(reference.id)
+                ? reference.position + *m_move_preview_delta : reference.position;
+            draw({position, reference.rotation_degrees*pi/180,
+                  reference.image.width()*unit, reference.image.height()*unit},reference.id);
+        }
+        for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
+            if (!label.selected || !drawable_label(label) || label.selection_type==QStringLiteral("dimension")) continue;
+            const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
+            draw(label_selection_frame(label, layout.bounds, m_scale),label.id,true);
         }
     }
-    for (const auto& retained : m_references) {
-        const auto& reference = interactiveReference(retained);
-        if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
-        const auto unit = reference.metres_per_source_unit*reference.scale;
-        if (!std::isfinite(unit) || unit <= 0) continue;
-        const auto position = m_move_preview_delta && &reference == &retained && m_move_preview_valid && m_move_ids.contains(reference.id)
-            ? reference.position + *m_move_preview_delta : reference.position;
-        draw({position, reference.rotation_degrees*pi/180,
-              reference.image.width()*unit, reference.image.height()*unit},reference.id);
-    }
-    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
-        if (!label.selected || !drawable_label(label) || label.selection_type==QStringLiteral("dimension")) continue;
-        const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
-        draw(label_selection_frame(label, layout.bounds, m_scale),label.id,true);
-    }
+    if (placement_preview && preview && preview->resize_frame)
+        draw(*preview->resize_frame,{},true,preview->opening_width_controls,true);
     painter.restore();
 }
 

@@ -14,6 +14,17 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 furniture placement dimensions
+
+Furniture previews now reuse the canvas dimension callout to show their real
+width and depth before click placement or a library drop. The callout follows
+the captured footprint in the current units, stays upright in rotated plans,
+and uses the existing annotation avoidance and light/dark palette. The ghost
+does not gain selection handles, alter document geometry, or enter print,
+export, content snapshots or floor ghosts. Hosted previews without a physical
+selection frame retain their existing drawing. Manual checks remain Not tested;
+no runtime work or new build was performed.
+
 ### October 7 hosted opening edit publication
 
 Door, window and doorway station moves and jamb-width edits now capture their

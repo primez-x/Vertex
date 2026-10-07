@@ -722,13 +722,13 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U112 — Place a symbol by choosing it and clicking the drawing**
   - Steps: Choose furniture from the Library, move the pointer around the plan, then click to place it. Repeat in a shifted or rotated horizontal architectural plan and in a recovered project. Choose another item and press Escape or right-click before placing it.
   - Expected: It lands at the chosen location with its declared nominal footprint when supplied, or a clearly editable default size. The selected caption uses its human name.
-  - Also check: A translucent preview follows the pointer and matches the placed artwork and size. Cancellation adds nothing. Switching the floor, layer, plan or project while an item is pending abandons that placement. An elevation or section explains why new furniture needs a horizontal plan. Printing or exporting while an item is pending includes only already placed items.
+  - Also check: A translucent preview follows the pointer and matches the placed artwork and size. Its width/depth badge uses the current units and stays upright when the plan is rotated. Cancellation adds nothing. Switching the floor, layer, plan or project while an item is pending abandons that placement. An elevation or section explains why new furniture needs a horizontal plan. Printing or exporting while an item is pending includes only already placed items, without the placement badge.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U113 — Drag a symbol from the library onto the drawing**
   - Steps: Drag a sofa from Library onto the plan, move it before dropping, then repeat with a library door or window over a wall. Move the opening away from its host and back. Drag another item out of the canvas and cancel it.
-  - Expected: The actual artwork follows the pointer translucently at its placement size. Furniture uses the same snap position as the drop; a door or window previews its real opening at the intended wall station. An invalid host shows no placement. Leaving or cancelling clears the drag preview and adds nothing. Dropping inserts the intended item once; pending previews are absent from print and export.
+  - Expected: The actual artwork follows the pointer translucently at its placement size. Furniture shows its width/depth and uses the same snap position as the drop; a door or window previews its real opening at the intended wall station. An invalid host shows no placement. Leaving or cancelling clears the drag preview and adds nothing. Dropping inserts the intended item once; pending previews and their badges are absent from print and export.
   - Also try: Repeat in a rotated horizontal plan and Site Plan. Arm a different click-to-place component first, then drag from Library; hovering must not move, replace or place the armed component.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

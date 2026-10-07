@@ -744,7 +744,7 @@ private:
     [[nodiscard]] QPointF selectionRotationPoint(
         const QRectF& viewport, const std::vector<QRectF>& annotation_footprints) const;
     void drawSelectionDimensions(QPainter& painter, const QRectF& viewport,
-        const std::vector<QRectF>& annotation_footprints) const;
+        const std::vector<QRectF>& annotation_footprints, bool placement_preview = false) const;
     [[nodiscard]] SelectionHandle selectionHandleAt(QPointF point,
                                                      const QRectF& viewport) const;
     struct VertexHandleHit {
