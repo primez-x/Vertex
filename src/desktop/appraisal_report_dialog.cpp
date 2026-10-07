@@ -2,6 +2,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/area_arithmetic.hpp"
+#include "plan_canvas.hpp"
 
 #include <QAbstractTextDocumentLayout>
 #include <QComboBox>
@@ -88,8 +89,8 @@ QString signed_area_contribution(double square_metres,const AppraisalDocumentRep
         (metric && !ansi(report) ? QStringLiteral(" m²") : QStringLiteral(" sq ft"));
 }
 QString length(double metres,const AppraisalDocumentReport& report,bool metric) {
-    return QString::number(metric && !ansi(report)?metres:metres/0.3048,'f',ansi(report)?1:report.display_decimal_places)+
-        (metric && !ansi(report)?QStringLiteral(" m"):QStringLiteral(" ft"));
+    if (!ansi(report)) return PlanCanvas::drawingLengthText(metres, metric);
+    return QString::number(metres/0.3048,'f',1)+QStringLiteral(" ft");
 }
 QString boolean(const std::optional<bool>& value) {
     return value?(*value?QStringLiteral("Yes"):QStringLiteral("No")):QStringLiteral("Undeclared");

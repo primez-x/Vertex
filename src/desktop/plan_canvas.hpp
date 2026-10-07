@@ -445,8 +445,8 @@ public:
     // Current screen grid increment, shared by painting and interactive snap.
     [[nodiscard]] double gridSpacingMetres() const noexcept;
     [[nodiscard]] double drawingLengthIncrementMetres() const noexcept;
-    // Transient drawing labels use exact inch fractions when representable.
-    // Arbitrary exact object snaps retain decimal precision instead of rounding.
+    // Read-only length labels share practical inch fractions or metric units.
+    // An approximation marker distinguishes rounded display from exact geometry.
     [[nodiscard]] static QString drawingLengthText(double metres, bool metric);
     // Public scene renderers use committed content, excluding selection,
     // cursor feedback and transient edits even at the current viewport scale.

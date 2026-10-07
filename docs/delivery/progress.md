@@ -14,6 +14,15 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 practical Details and report length labels
+
+Non-ANSI boundary dimensions and perimeters in Details and the appraisal report
+now share the canvas's practical feet/fractional-inch and millimetre/metre
+formatter. Approximation markers distinguish rounded presentation from the exact
+retained measurement. The ANSI policy's one-decimal-foot presentation, area
+calculations, observed facts, arithmetic and numerical exchange fields stay
+unchanged. This source-only presentation correction has not been built or run.
+
 ### October 7 independent railing endpoint authoring
 
 Independent canonical straight railings now have typed endpoint edits and genuine

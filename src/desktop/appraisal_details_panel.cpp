@@ -1,5 +1,6 @@
 #include "sketch/desktop/appraisal_details_panel.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
+#include "plan_canvas.hpp"
 
 #include <QFont>
 #include <QHeaderView>
@@ -136,8 +137,8 @@ struct AppraisalDetailsPanel::Impl {
         return text(display_area(square_metres,profile()).text)+(metric && !ansi()?QStringLiteral(" m²"):QStringLiteral(" sq ft"));
     }
     QString length(double metres) const {
-        return QString::number(metric && !ansi()?metres:metres/0.3048,'f',ansi()?1:report?report->display_decimal_places:2)+
-            (metric && !ansi()?QStringLiteral(" m"):QStringLiteral(" ft"));
+        if (!ansi()) return PlanCanvas::drawingLengthText(metres, metric);
+        return QString::number(metres/0.3048,'f',1)+QStringLiteral(" ft");
     }
     QString ansi_facts(const AppraisalFacts& facts) const {
         if(!facts.ansi)return {};
