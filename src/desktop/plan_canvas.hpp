@@ -1036,15 +1036,17 @@ private:
     std::optional<QRectF> m_transform_frame_start;
     QPointF m_transform_center;
     QPointF m_transform_start;
+    double m_transform_resize_extent{};
     double m_transform_scale_preview{1.0};
     double m_transform_rotation_preview{};
+    std::optional<QPointF> m_transform_preview_pointer;
+    bool m_transform_preview_fine{};
     SelectionHandle m_axis_handle{SelectionHandle::none};
     Vec2 m_axis_anchor{};
     double m_axis_rotation{};
     double m_axis_extent{};
     double m_axis_scale_x_preview{1.0};
     double m_axis_scale_y_preview{1.0};
-    std::optional<QPointF> m_axis_resize_preview_pointer;
     double m_transform_initial_rotation{};
     std::optional<double> m_transform_source_rotation;
     double m_transform_source_rotation_direction{1.0};

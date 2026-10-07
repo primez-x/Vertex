@@ -14,6 +14,36 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site wall-group drag implementation
+
+Site wall-group drags capture the displayed source, local scene and presentation
+frames once. Their complete existing translation command now runs in the preview
+worker, preserving measured exterior promotion, deductions, connected geometry,
+appraisal consequences and saved callout movement. Candidate geometry and labels
+receive Site presentation once. Release commits that exact admitted command and
+delta; it does not construct a replacement command. Source, selection context,
+camera, focus, navigation, Site generation and request serial fence completion.
+Rejected proposals carry their worker diagnostic without rerunning the native
+solve on the UI thread. Raw boundary translation retains its prior metadata and
+dimension behavior through a shared source-only helper.
+
+The lane covers real physical wall selections in one Site source frame; other
+Site move families retain their current lane. Site geometry capture now uses
+the actual published source with revision and editability checks. No builds,
+tests, probes, app launches, packages or installations ran; compilation, runtime
+behavior and responsiveness remain unverified. The installed candidate is
+unchanged.
+
+Side grips now snap their edited physical dimension to the same zoom-relative
+length increments as drawing; corner grips snap the longest captured physical
+dimension while preserving proportions. Shift, Snap off and raw-point input
+allow fine resizing. Zero-motion sizes and scale limits remain unchanged.
+Release consumes a changed final point or fine-input setting while retaining
+the admitted serial when both are unchanged. Rotation returning to its press
+angle remains a no-op. Independent source review accepted the repaired wall
+worker and bounded canvas resizing changes, including exact direct release,
+unchanged-owner presentation and curved-wall selection frame behavior.
+
 ### October 7 Site physical side-handle worker and geometry lookup
 
 Physical side-handle resizing in Site now runs through the existing vertex

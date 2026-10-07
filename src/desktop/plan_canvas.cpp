@@ -67,6 +67,19 @@ constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
 
+double practical_resize_scale(double factor, double extent, double step) noexcept {
+    // Snap a physical dimension, retaining uniform scaling and the captured
+    // size at zero motion and the existing limits. A zero step selects fine input.
+    factor = std::clamp(factor, .05, 20.0);
+    if (factor > .05 && factor < 20.0 && std::abs(factor - 1.0) > 1e-12 &&
+        std::isfinite(extent) && extent > 1e-9 &&
+        std::isfinite(step) && step > 0.0) {
+        const auto snapped = std::round(extent * factor / step) * step / extent;
+        if (std::isfinite(snapped)) factor = snapped;
+    }
+    return std::clamp(factor, .05, 20.0);
+}
+
 struct GridSpacing {
     double minor;
     double major;
@@ -2849,6 +2862,9 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_transform_source_rotation = axes ? axes->source_rotation_radians : std::nullopt;
         m_transform_source_rotation_direction = axes ? axes->source_rotation_direction : 1.0;
         m_transform_start = position;
+        // The longest physical axis supplies one practical dimension for a
+        // corner's uniform resize; independently sized SVG axes keep their ratio.
+        m_transform_resize_extent = axes ? std::max(axes->width_metres, axes->depth_metres) : 0.0;
         m_transform_scale_preview = 1.0;
         m_transform_rotation_preview = 0.0;
         if (handle == SelectionHandle::resize) {
@@ -2991,12 +3007,16 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 : Vec2{-std::sin(m_axis_rotation), std::cos(m_axis_rotation)};
             const auto factor = 1.0 + sign * ((current.x-start.x)*direction.x +
                                               (current.y-start.y)*direction.y) / m_axis_extent;
+            const bool fine = modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled || m_raw_point_input;
             if (std::isfinite(factor)) {
-                if (horizontal) m_axis_scale_x_preview = std::clamp(factor, .05, 20.0);
-                else m_axis_scale_y_preview = std::clamp(factor, .05, 20.0);
+                const auto scale = practical_resize_scale(factor, m_axis_extent,
+                    fine ? 0.0 : drawingLengthIncrementMetres());
+                if (horizontal) m_axis_scale_x_preview = scale;
+                else m_axis_scale_y_preview = scale;
             }
             setCursor(horizontal ? Qt::SizeHorCursor : Qt::SizeVerCursor);
-            m_axis_resize_preview_pointer = position;
+            m_transform_preview_pointer = position;
+            m_transform_preview_fine = fine;
             const QPointer<PlanCanvas> guard(this);
             updateEntityTransformPreview();
             if (!guard) return;
@@ -3010,12 +3030,14 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
         if (m_left_dragging) {
             const auto start = m_transform_start - m_transform_center;
             const auto current = position - m_transform_center;
+            const bool fine = modifiers.testFlag(Qt::ShiftModifier) ||
+                (m_left_gesture == LeftGesture::selection_resize && (!m_snap_enabled || m_raw_point_input));
             if (m_left_gesture == LeftGesture::selection_resize) {
                 const auto initial_distance = std::hypot(start.x(), start.y());
                 const auto current_distance = std::hypot(current.x(), current.y());
                 if (initial_distance > 1e-6 && std::isfinite(current_distance))
-                    m_transform_scale_preview = std::clamp(current_distance / initial_distance,
-                                                           0.05, 20.0);
+                    m_transform_scale_preview = practical_resize_scale(current_distance / initial_distance,
+                        m_transform_resize_extent, fine ? 0.0 : drawingLengthIncrementMetres());
                 setCursor(Qt::SizeFDiagCursor);
             } else {
                 if (std::hypot(current.x(), current.y()) > 1e-6) {
@@ -3025,7 +3047,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                     const auto direction = m_transform_source_rotation
                         ? m_transform_source_rotation_direction : 1.0;
                     auto absolute = initial - delta * direction;
-                    if (!modifiers.testFlag(Qt::ShiftModifier)) {
+                    if (std::abs(delta) > 1e-12 && !fine) {
                         constexpr double step = pi / 4.0;
                         absolute = std::round(absolute / step) * step;
                     }
@@ -3034,6 +3056,8 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 }
                 setCursor(Qt::CrossCursor);
             }
+            m_transform_preview_pointer = position;
+            m_transform_preview_fine = fine;
             const QPointer<PlanCanvas> guard(this);
             updateEntityTransformPreview();
             if (!guard) return;
@@ -3122,13 +3146,16 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         return;
     }
     if (button == Qt::LeftButton) {
-        // Consume the final location even if the platform omitted a move event.
+        // Consume the final location or fine-input change even if the platform
+        // omitted a move event. An unchanged transform keeps its admitted serial.
         if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::canvas_pan ||
             m_left_gesture == LeftGesture::object_move ||
-            (m_left_gesture == LeftGesture::selection_axis_resize &&
-             (!m_axis_resize_preview_pointer || *m_axis_resize_preview_pointer != position)) ||
-            m_left_gesture == LeftGesture::selection_resize ||
-            m_left_gesture == LeftGesture::selection_rotate ||
+            ((m_left_gesture == LeftGesture::selection_axis_resize ||
+              m_left_gesture == LeftGesture::selection_resize ||
+              m_left_gesture == LeftGesture::selection_rotate) &&
+             (!m_transform_preview_pointer || *m_transform_preview_pointer != position ||
+              m_transform_preview_fine != (modifiers.testFlag(Qt::ShiftModifier) ||
+                  (m_left_gesture != LeftGesture::selection_rotate && (!m_snap_enabled || m_raw_point_input))))) ||
             (m_left_gesture == LeftGesture::opening_width_resize &&
              (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position ||
               m_opening_width_preview_fine != modifiers.testFlag(Qt::ShiftModifier))) ||
@@ -3318,8 +3345,11 @@ void PlanCanvas::resetGesture() {
     m_move_preview_request_in_progress = false;
     m_move_release_pending = false;
     m_transform_frame_start.reset();
+    m_transform_resize_extent = 0.0;
     m_transform_scale_preview = 1.0;
     m_transform_rotation_preview = 0.0;
+    m_transform_preview_pointer.reset();
+    m_transform_preview_fine = false;
     m_transform_source_rotation.reset();
     m_transform_source_rotation_direction = 1.0;
     ++m_transform_preview_serial;
@@ -3335,7 +3365,6 @@ void PlanCanvas::resetGesture() {
     m_axis_handle = SelectionHandle::none;
     m_axis_scale_x_preview = 1.0;
     m_axis_scale_y_preview = 1.0;
-    m_axis_resize_preview_pointer.reset();
     m_vertex_move_handle.reset();
     m_vertex_move_press_pointer.reset();
     m_vertex_move_preview.reset();
