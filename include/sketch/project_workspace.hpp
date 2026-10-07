@@ -144,6 +144,24 @@ private:
     std::unique_ptr<State> state_;
 };
 
+// Opaque immutable owner-thread capture for ordinary edit preparation. Copies
+// share detached const values, including the original instance/counter fence,
+// recovery/navigation state and policy. No live workspace reference escapes.
+class WorkspaceEditCapture final {
+public:
+    WorkspaceEditCapture(const WorkspaceEditCapture&) = default;
+    WorkspaceEditCapture& operator=(const WorkspaceEditCapture&) = default;
+    WorkspaceEditCapture(WorkspaceEditCapture&&) noexcept = default;
+    WorkspaceEditCapture& operator=(WorkspaceEditCapture&&) noexcept = default;
+    ~WorkspaceEditCapture();
+
+private:
+    friend class ProjectWorkspace;
+    struct State;
+    explicit WorkspaceEditCapture(std::shared_ptr<const State>) noexcept;
+    std::shared_ptr<const State> state_;
+};
+
 // Document, active-checkpoint and lifecycle navigation authority.
 // Persisted restoration grants no filesystem ownership or save acknowledgement.
 // Confined to its owning application thread: member calls must not overlap.
@@ -202,6 +220,12 @@ public:
     [[nodiscard]] bool can_undo() const noexcept;
     [[nodiscard]] bool can_redo() const noexcept;
     [[nodiscard]] PreparedWorkspaceEdit prepare(const Command& command) const;
+    // Capture on the owner, prepare on a worker using only this detached value,
+    // then transfer the ticket after completion for ordinary owner commit.
+    // A ticket remains bound to the original unchanged workspace instance.
+    [[nodiscard]] WorkspaceEditCapture capture_edit_source() const;
+    [[nodiscard]] static PreparedWorkspaceEdit prepare_captured(
+        const WorkspaceEditCapture& source, const Command& command);
     // Revalidate sealed previews on an isolated fork, then stage one ordinary
     // document edit. Boundary commit does not finish an active session.
     [[nodiscard]] PreparedWorkspaceEdit prepare_constraint_authoring(
@@ -220,7 +244,11 @@ private:
         const nlohmann::json&, std::uint64_t epoch, std::uint64_t edited_generation,
         std::uint64_t checkpoint_generation);
     [[nodiscard]] std::unique_ptr<PreparedWorkspaceEdit::State> prepare_state() const;
+    [[nodiscard]] static std::unique_ptr<PreparedWorkspaceEdit::State> prepare_state(
+        const WorkspaceEditCapture&);
     [[nodiscard]] PreparedWorkspaceEdit prepare_document_edit(const Command&) const;
+    [[nodiscard]] static PreparedWorkspaceEdit prepare_document_edit(
+        std::unique_ptr<PreparedWorkspaceEdit::State>, const Command&);
     [[nodiscard]] PreparedWorkspaceEdit prepare_finish_boundary_impl(const EditBoundaryGeometry*) const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_navigation(bool redo) const;
 

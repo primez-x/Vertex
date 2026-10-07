@@ -5180,7 +5180,7 @@ class MainWindow::Impl {
         std::uint64_t navigation_generation{};
         bool had_focus{};
     };
-    struct SiteWallMoveIntent {
+    struct SelectionMoveIntent {
         QStringList ids;
         Vec2 local_delta;
         Vec2 canvas_delta;
@@ -5188,8 +5188,19 @@ class MainWindow::Impl {
     struct SiteWallMovePreviewCommand {
         std::shared_ptr<const SiteTransformPreviewCapture> capture;
         std::uint64_t serial{};
-        SiteWallMoveIntent intent;
+        SelectionMoveIntent intent;
         Command command;
+    };
+    struct PreparedPlanMove {
+        std::optional<PreparedDocumentEdit> document;
+        std::optional<PreparedWorkspaceEdit> workspace;
+        std::optional<Document> mirror;
+    };
+    struct PlanMovePreviewCommand {
+        std::shared_ptr<const TransformViewportCapture> capture;
+        std::uint64_t serial{};
+        SelectionMoveIntent intent;
+        std::shared_ptr<PreparedPlanMove> prepared;
     };
 
     struct PlanEndpointCapture {
@@ -5270,11 +5281,17 @@ class MainWindow::Impl {
         double axis_resize_model_angle{};
         std::shared_ptr<std::optional<Command>> axis_resize_command;
         std::shared_ptr<const SiteTransformPreviewCapture> site_transform_capture;
-        std::optional<SiteWallMoveIntent> site_wall_move;
+        std::optional<SelectionMoveIntent> site_wall_move;
         std::shared_ptr<const SiteTransformPreviewCapture> site_wall_move_capture;
         std::shared_ptr<std::optional<Command>> site_wall_move_command;
         std::shared_ptr<std::optional<Command>> physical_rotation_command;
         QStringList move_selection_ids;
+        std::optional<SelectionMoveIntent> plan_move;
+        std::shared_ptr<const TransformViewportCapture> plan_move_capture;
+        std::shared_ptr<const std::vector<CanvasEntity>> component_sources;
+        std::optional<WorkspaceEditCapture> plan_move_workspace_source;
+        std::shared_ptr<const DocumentSnapshot> plan_move_mirror_source;
+        std::shared_ptr<PreparedPlanMove> plan_move_prepared;
     };
 
 public:
@@ -7280,6 +7297,18 @@ public:
             return true;
         }),model_ids.end());
         return model_ids;
+    }
+
+    static bool selectionHasOnlyModelMoveOwners(const DocumentSnapshot& source,const QStringList& ids) {
+        if (ids.isEmpty() || !annotation_selection_owners(source,ids).empty()) return false;
+        return std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
+            const auto found=source.entities().find(id.toStdString());
+            if (found==source.entities().end() || geometric_assembly_for_child(source,found->first)) return false;
+            const auto& entity=found->second;
+            return can_transform_architectural_entity_type(entity.type) ||
+                is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework" ||
+                (entity.type=="opening" && ids.contains(id_from(read_string(entity.properties,"wall_id").value_or(""))));
+        });
     }
 
     static Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
@@ -20929,7 +20958,8 @@ public:
         const std::set<std::string, std::less<>>& appraisal_area_ids,
         const std::map<QString,QRectF>& label_footprints, const std::vector<Bounds2>& component_bounds,
         const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font,
-        const SiteEndpointPreviewInput* site_input=nullptr) {
+        const SiteEndpointPreviewInput* site_input=nullptr,
+        const std::vector<CanvasEntity>* component_sources=nullptr) {
         try {
             const auto& candidate = candidate_snapshot.entities();
             std::map<std::string,Vec2,std::less<>> annotation_deltas;
@@ -21073,6 +21103,7 @@ public:
                 captured_ids.insert(item.id);
                 captured_presentations.insert(presentation_identity(item));
             }
+            std::map<PresentationIdentity,Bounds2> candidate_component_bounds;
             for (const auto& [item_id, item] : projection_sources) {
                 (void)item_id;
                 const auto found=candidate.find(item.id.toStdString());
@@ -21091,6 +21122,12 @@ public:
                         if (candidate.at(binding->assembly_catalog_id)==source.entities().at(original->assembly_catalog_id) &&
                             original->instance.placement && assemblyHostGeometryKey(candidate_snapshot,placement.host_entity_id)==
                                 assemblyHostGeometryKey(source,original->instance.placement->host_entity_id)) continue;
+                        if (component_sources) {
+                            const auto canonical=assembly_placement_boundary(
+                                assemblyHostPlan(candidate_snapshot,placement.host_entity_id,candidate_plans),placement);
+                            if (!canonical.empty())
+                                candidate_component_bounds.emplace(presentation_identity(item),boundary_bounds(canonical));
+                        }
                         auto proposed=item;
                         proposed.segments.clear();proposed.holes.clear();proposed.stroke_segments.reset();
                         proposed.hit_segments.clear();proposed.snap_segments.clear();proposed.snap_points.clear();
@@ -21234,6 +21271,9 @@ public:
                         candidate.at(binding.assembly_catalog_id)==source.entities().at(binding.assembly_catalog_id)) continue;
                     AssemblyExpansionBudget budget;
                     const auto expansion = expand_document_assembly_instance(entity, candidate, budget);
+                    auto canonical=project_assembly_plan(expansion);
+                    if (component_sources && !canonical.empty())
+                        candidate_component_bounds.emplace(presentation_identity(item),boundary_bounds(canonical));
                     proposed.stroke_segments.reset();
                     proposed.holes.clear();
                     proposed.resize_frame.reset();
@@ -21246,7 +21286,7 @@ public:
                         proposed.segments = project_architectural_view_shape(make_assembly_geometry(expansion).shape,
                             BuildingViewKind::plan, *view_context).value_or(Boundary{});
                         world_paths = false;
-                    } else proposed.segments = project_assembly_plan(expansion);
+                    } else proposed.segments = std::move(canonical);
                 } else if (entity.type == "roof_join") {
                     const auto join = parse_roof_join(entity.properties, entity.id);
                     if (entity == source.entities().at(entity.id) &&
@@ -21449,7 +21489,51 @@ public:
                 if (!captured_ids.contains(item.id) && proposed.segments.empty() && proposed.holes.empty()) continue;
                 result.entities.push_back(std::move(proposed));
             }
-            PlanLabelBoundsIndex candidate_label_obstacles(component_bounds);
+            auto ordinary_component_bounds=component_bounds;
+            if (component_sources) {
+                ordinary_component_bounds.clear();
+                for (const auto& component:*component_sources) {
+                    if (const auto bounds=candidate_component_bounds.find(presentation_identity(component));
+                        bounds!=candidate_component_bounds.end()) {
+                        ordinary_component_bounds.push_back(bounds->second);
+                        continue;
+                    }
+                    const auto before=source.entities().find(component.id.toStdString());
+                    const auto after=candidate.find(component.id.toStdString());
+                    if (after!=candidate.end() && after->second.type=="assembly_instance" &&
+                        (before==source.entities().end() || before->second!=after->second)) {
+                        // The saved view may exclude this body after cropping,
+                        // but settled label layout uses its full canonical plan.
+                        AssemblyExpansionBudget budget;
+                        const auto plan=project_assembly_plan(expand_document_assembly_instance(after->second,candidate,budget));
+                        if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
+                        continue;
+                    }
+                    if (before==source.entities().end()) {
+                        const auto original=embeddedAssemblyChild(source,component.id.toStdString());
+                        if (original && original->instance.placement) {
+                            const auto placed=embeddedAssemblyChild(candidate_snapshot,component.id.toStdString());
+                            if (!placed || !placed->instance.placement) continue;
+                            const auto& placement=*placed->instance.placement;
+                            if (candidate.at(placed->assembly_catalog_id)!=source.entities().at(original->assembly_catalog_id) ||
+                                assemblyHostGeometryKey(candidate_snapshot,placement.host_entity_id)!=
+                                    assemblyHostGeometryKey(source,original->instance.placement->host_entity_id)) {
+                                const auto plan=assembly_placement_boundary(
+                                    assemblyHostPlan(candidate_snapshot,placement.host_entity_id,candidate_plans),placement);
+                                if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
+                                continue;
+                            }
+                        }
+                    }
+                    // Omitted changed/retired physical components cannot keep
+                    // their captured footprint. Unchanged symbols retain their
+                    // canonical source geometry, independent of a plan crop.
+                    if (before!=source.entities().end() &&
+                        (after==candidate.end() || before->second!=after->second)) continue;
+                    if (!component.segments.empty()) ordinary_component_bounds.push_back(boundary_bounds(component.segments));
+                }
+            }
+            PlanLabelBoundsIndex candidate_label_obstacles(ordinary_component_bounds);
             using SiteLabelLayoutKey=std::tuple<SiteFrameMode,std::string,std::string,std::string,
                 double,double,double,double>;
             const auto layout_key=[](const SitePresentationPlacement& frame) {
@@ -21802,11 +21886,71 @@ public:
         const auto axis_command=request.axis_resize_command;
         const auto rotation_command=request.physical_rotation_command;
         const auto move_selection_ids=request.move_selection_ids;
+        const auto plan_move=request.plan_move;
+        const auto component_sources=request.component_sources;
+        const auto workspace_source=request.plan_move_workspace_source;
+        const auto mirror_source=request.plan_move_mirror_source;
+        const auto prepared_move=request.plan_move_prepared;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,site_wall_command,rotation_command,move_selection_ids]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,site_wall_command,rotation_command,move_selection_ids,plan_move,component_sources,workspace_source,mirror_source,prepared_move]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
-                    if (site_wall_move && site_wall_command) {
+                    if (plan_move && prepared_move) {
+                        // Native preparation and complete source consequences
+                        // stay in this worker. A zero request bypasses codecs
+                        // which otherwise reject an unchanged constraint solve.
+                        Command command=plan_move->local_delta.x==0.0 && plan_move->local_delta.y==0.0
+                            ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
+                            : augmentAuthoredCommand(makeSelectionGeometryTranslationCommand(*source,
+                                plan_move->ids,plan_move->local_delta,{},plan_move->canvas_delta),*source);
+                        if (!cancellation.is_cancelled()) {
+                            const auto candidate=[&] {
+                                if (workspace_source) {
+                                    if (!mirror_source) throw std::invalid_argument("The recovery move has no compatibility source.");
+                                    auto edit=ProjectWorkspace::prepare_captured(*workspace_source,command);
+                                    auto preview=edit.preview();
+                                    auto mirror=Document::fork(preview);
+                                    if (const auto saved=mirror_source->saved_revision_optional()) mirror.mark_saved(*saved);
+                                    prepared_move->workspace.emplace(std::move(edit));
+                                    prepared_move->mirror.emplace(std::move(mirror));
+                                    return preview;
+                                }
+                                auto edit=Document::prepare_edit(*source,command);
+                                auto preview=edit.preview();
+                                prepared_move->document.emplace(std::move(edit));
+                                return preview;
+                            }();
+                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,
+                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
+                                view_context,label_font,nullptr,component_sources.get());
+                            if (*result && !cancellation.is_cancelled()) {
+                                retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,plan_move->ids);
+                                QSet<QString> selected;
+                                for (const auto& selected_id:plan_move->ids) selected.insert(selected_id);
+                                std::map<std::pair<QString,QString>,const CanvasEntity*> originals;
+                                for (const auto& original:*retained)
+                                    if (selected.contains(original.id))
+                                        originals.try_emplace(std::pair{original.id,original.presentation_key},&original);
+                                for (auto& proposed:(**result).entities) {
+                                    if (!selected.contains(proposed.id) || proposed.segments.empty()) continue;
+                                    const auto owner=candidate.entities().find(proposed.id.toStdString());
+                                    const auto original=originals.find({proposed.id,proposed.presentation_key});
+                                    if (owner==candidate.entities().end() || original==originals.end() ||
+                                        !original->second->resize_frame) continue;
+                                    if (physicalPlanAxisResizeFamily(owner->second.type))
+                                        proposed.resize_frame=physicalPlanResizeFrame(owner->second,
+                                            view_context ? &view_context->frame : nullptr);
+                                    else if (physicalPlanRotationFamily(owner->second.type)) {
+                                        auto frame=*original->second->resize_frame;
+                                        frame.center.x+=plan_move->canvas_delta.x;
+                                        frame.center.y+=plan_move->canvas_delta.y;
+                                        frame.source_rotation_radians=physicalPlanRotationAngle(owner->second);
+                                        proposed.resize_frame=frame;
+                                    }
+                                }
+                            } else result->reset();
+                        }
+                    } else if (site_wall_move && site_wall_command) {
                         auto command=augmentAuthoredCommand(makeSelectionGeometryTranslationCommand(*source,
                             site_wall_move->ids,site_wall_move->local_delta,{},site_wall_move->local_delta),*source);
                         if (!cancellation.is_cancelled()) {
@@ -22291,11 +22435,16 @@ public:
                 footprints->emplace(plan_label_instance_key(label),plan_area_label_footprint(label,m_measurementCanvas->font(),m_measurementCanvas));
             m_vertex_preview_label_footprints=std::move(footprints);
             auto obstacles=std::make_shared<std::vector<Bounds2>>();
+            auto components=std::make_shared<std::vector<CanvasEntity>>();
             for (const auto& item : m_measurementCanvas->entities()) {
                 if ((item.type==QStringLiteral("symbol") || item.type==QStringLiteral("assembly_instance")) &&
-                    !item.segments.empty()) obstacles->push_back(boundary_bounds(item.segments));
+                    !item.segments.empty()) {
+                    obstacles->push_back(boundary_bounds(item.segments));
+                    components->push_back(item);
+                }
             }
             m_vertex_preview_component_bounds=std::move(obstacles);
+            m_vertex_preview_components=std::move(components);
         }
     }
 
@@ -22748,6 +22897,57 @@ public:
         }
     }
 
+    bool planMoveCaptureCurrent(
+        const std::shared_ptr<const TransformViewportCapture>& capture) const noexcept {
+        try {
+            if (!capture || capture!=m_plan_move_capture || !capture->canvas ||
+                capture->canvas!=m_wall_move_canvas || siteCanvas(capture->canvas) ||
+                m_wall_move_document!=m_document || !m_wall_move_source || !m_wall_move_authority ||
+                m_wall_move_source!=m_vertex_preview_source || !capture->canvas->isVisible() ||
+                (capture->had_focus && !capture->canvas->hasFocus()) ||
+                !sourceEditAuthorityCurrent(*m_wall_move_authority)) return false;
+            const auto center=capture->canvas->viewCenter();
+            return center.x==capture->center.x && center.y==capture->center.y &&
+                capture->canvas->viewScale()==capture->zoom && capture->canvas->size()==capture->size &&
+                capture->canvas->devicePixelRatioF()==capture->dpr &&
+                capture->canvas->navigationGeneration()==capture->navigation_generation;
+        } catch (...) { return false; }
+    }
+
+    bool commitPlanMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
+        const auto capture=m_plan_move_capture;
+        if (!planMoveCaptureCurrent(capture) || canvas!=capture->canvas || ids!=m_wall_move_ids ||
+            !m_plan_move_preview || m_plan_move_preview->capture!=capture ||
+            m_plan_move_preview->intent.ids!=ids ||
+            m_plan_move_preview->serial==std::numeric_limits<std::uint64_t>::max() ||
+            canvas->entitiesMovePreviewSerial()!=m_plan_move_preview->serial+1 ||
+            delta.x!=m_plan_move_preview->intent.canvas_delta.x ||
+            delta.y!=m_plan_move_preview->intent.canvas_delta.y)
+            throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
+        const auto prepared=m_plan_move_preview->prepared;
+        m_plan_move_preview.reset();
+        if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
+        if (!prepared) throw std::invalid_argument("The move has no admitted edit.");
+        if (m_recovery_ledger.empty()) {
+            if (!prepared->document || prepared->workspace)
+                throw std::invalid_argument("The move's document authority changed.");
+            measureDocumentEdit([&] { (void)m_document->commit_prepared(*prepared->document); });
+        } else {
+            requireWorkspaceDocument();
+            if (!prepared->workspace || !prepared->mirror || !m_plan_move_mirror_source)
+                throw std::invalid_argument("The move's recovery authority changed.");
+            const auto live_mirror=m_document->snapshot();
+            if (!live_mirror.shares_full_snapshot_with(*m_plan_move_mirror_source) &&
+                fullSnapshotDigest(live_mirror)!=fullSnapshotDigest(*m_plan_move_mirror_source))
+                throw std::invalid_argument("The project's save or recovery state changed during the move.");
+            measureDocumentEdit([&] {
+                (void)m_project_workspace->commit(*prepared->workspace);
+                *m_document=std::move(*prepared->mirror);
+            });
+        }
+        clearError();refresh();return true;
+    }
+
     bool siteWallMoveCaptureCurrent(
         const std::shared_ptr<const SiteTransformPreviewCapture>& capture) const noexcept {
         try {
@@ -22785,6 +22985,36 @@ public:
 
     std::optional<std::vector<CanvasEntity>> previewWallMoveFromCanvas(
         PlanCanvas* canvas, const QStringList& ids, Vec2 delta, std::uint64_t serial) {
+        if (m_plan_move_capture) {
+            const auto capture=m_plan_move_capture;
+            m_plan_move_preview.reset();m_plan_move_error.clear();
+            if (!planMoveCaptureCurrent(capture) || canvas!=capture->canvas || ids!=m_wall_move_ids ||
+                !std::isfinite(delta.x) || !std::isfinite(delta.y)) return std::vector<CanvasEntity>{};
+            auto local=delta;
+            if (m_wall_move_frame) {
+                const auto right=plan_view_right(*m_wall_move_frame),up=plan_view_up(*m_wall_move_frame);
+                local={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
+            }
+            if (!canvas->markEntitiesMovePreviewPending(serial)) return std::vector<CanvasEntity>{};
+            PendingVertexPreview request{canvas,serial,m_document,m_wall_move_source,m_vertex_preview_scene,
+                m_vertex_preview_eligible,m_vertex_preview_labels,m_vertex_preview_appraisal_area_ids,
+                m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,{}, {}, {},
+                m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
+            request.authority=m_wall_move_authority;
+            request.label_font=canvas->font();
+            request.plan_move=SelectionMoveIntent{ids,local,delta};
+            request.plan_move_capture=capture;
+            request.component_sources=m_vertex_preview_components;
+            request.plan_move_workspace_source=m_plan_move_workspace_source;
+            request.plan_move_mirror_source=m_plan_move_mirror_source;
+            request.plan_move_prepared=std::make_shared<PreparedPlanMove>();
+            clearError();
+            if (m_running_vertex_preview) {
+                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+                m_pending_vertex_preview=std::move(request);
+            } else startVertexPreviewJob(std::move(request));
+            return std::nullopt;
+        }
         if (siteCanvas(canvas) && m_wall_move_site_capture) {
             const auto capture=m_wall_move_site_capture;
             m_site_wall_move_preview.reset();
@@ -22802,7 +23032,7 @@ public:
                 std::nullopt,std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
             request.authority=m_wall_move_authority;
             request.label_font=input->label_font;
-            request.site_wall_move=SiteWallMoveIntent{ids,local,delta};
+            request.site_wall_move=SelectionMoveIntent{ids,local,delta};
             request.site_wall_move_capture=capture;
             request.site_wall_move_command=std::make_shared<std::optional<Command>>();
             clearError();
@@ -22982,6 +23212,8 @@ public:
     void pollVertexPreview() {
         const auto reject=[&](const PendingVertexPreview& request) {
             if (!request.canvas) return;
+            if (m_plan_move_preview && m_plan_move_preview->capture==request.plan_move_capture &&
+                m_plan_move_preview->serial==request.serial) m_plan_move_preview.reset();
             if (m_site_wall_move_preview && m_site_wall_move_preview->capture==request.site_wall_move_capture &&
                 m_site_wall_move_preview->serial==request.serial) m_site_wall_move_preview.reset();
             if (m_plan_endpoint_preview && m_plan_endpoint_preview->capture == request.plan_endpoint_capture &&
@@ -22989,7 +23221,7 @@ public:
             if (request.entity_transform_preview) {
                 if (request.serial==m_entity_transform_serial) m_entity_transform_ready=false;
                 (void)request.canvas->completeEntityTransformPreview(request.serial,std::nullopt);
-            } else if (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move)
+            } else if (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move)
                 (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
             else (void)request.canvas->completeBoundaryVertexPreview(request.serial,std::nullopt);
         };
@@ -23004,6 +23236,11 @@ public:
                     if (request.source != request.plan_endpoint_capture->source ||
                         request.canvas != request.plan_endpoint_capture->canvas ||
                         request.authority != request.plan_endpoint_capture->authority) return false;
+                } else if (request.plan_move_capture) {
+                    if (!planMoveCaptureCurrent(request.plan_move_capture) ||
+                        request.source!=m_wall_move_source || request.canvas!=m_wall_move_canvas ||
+                        request.authority!=m_wall_move_authority || !request.plan_move ||
+                        request.plan_move->ids!=m_wall_move_ids) return false;
                 } else if (request.site_wall_move_capture) {
                     if (!siteWallMoveCaptureCurrent(request.site_wall_move_capture) ||
                         request.source!=m_wall_move_source || request.canvas!=m_wall_move_canvas ||
@@ -23018,7 +23255,7 @@ public:
                     return request.serial==m_entity_transform_serial &&
                         request.canvas->entityTransformPreviewSerial()==request.serial &&
                         m_entity_transform_canvas==request.canvas && entityTransformContextUnchanged();
-                return (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move
+                return (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move
                     ? request.canvas->entitiesMovePreviewSerial() : request.canvas->boundaryVertexPreviewSerial())==request.serial;
             } catch (...) { return false; }
         };
@@ -23029,11 +23266,11 @@ public:
             const bool request_current=current(request);
             if (!request_current || !completion.succeeded() ||
                 completion.receipt->source_revision != request.source->revision() || !*request.result) {
-                if (request_current && (request.axis_resize_scales || request.site_wall_move || request.physical_rotation_command) &&
+                if (request_current && (request.axis_resize_scales || request.site_wall_move || request.plan_move || request.physical_rotation_command) &&
                     completion.kind!=RegenerationCompletionKind::cancelled) {
                     auto message=request.physical_rotation_command
                         ? QStringLiteral("The rotated object could not be projected in the current view.")
-                        : request.site_wall_move
+                        : (request.site_wall_move || request.plan_move)
                         ? QStringLiteral("The moved objects could not be projected in the current view.")
                         : QStringLiteral("The resized object could not be projected in the current view.");
                     try {
@@ -23045,7 +23282,8 @@ public:
                         message=QString::fromUtf8(error.what());
                     } catch (...) {}
                     if (request.site_wall_move) m_site_wall_move_error=message;
-                    setError(QStringLiteral("%1: %2").arg(request.site_wall_move
+                    if (request.plan_move) m_plan_move_error=message;
+                    setError(QStringLiteral("%1: %2").arg((request.site_wall_move || request.plan_move)
                         ? QStringLiteral("Move") : request.physical_rotation_command
                         ? QStringLiteral("Rotate") : QStringLiteral("Resize"),message));
                 }
@@ -23053,6 +23291,13 @@ public:
                 continue;
             }
             auto& projection=**request.result;
+            if (request.plan_move) {
+                if (!request.plan_move_capture || !request.plan_move_prepared || (!request.plan_move_prepared->document &&
+                        (!request.plan_move_prepared->workspace || !request.plan_move_prepared->mirror)))
+                    { reject(request);continue; }
+                m_plan_move_preview=PlanMovePreviewCommand{request.plan_move_capture,request.serial,
+                    *request.plan_move,request.plan_move_prepared};
+            }
             if (request.site_wall_move) {
                 if (!request.site_wall_move_capture || !request.site_wall_move_command ||
                     !*request.site_wall_move_command) { reject(request); continue; }
@@ -23076,10 +23321,12 @@ public:
                 if (!request.canvas->completeEntityTransformPreview(request.serial,
                     std::move(projection.entities),std::move(projection.labels)))
                     m_entity_transform_ready=false;
-            } else if (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move) {
+            } else if (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move) {
                 if (!request.canvas->completeEntitiesMovePreview(request.serial,
-                    std::move(projection.entities),std::move(projection.labels)) && request.site_wall_move)
-                    m_site_wall_move_preview.reset();
+                    std::move(projection.entities),std::move(projection.labels))) {
+                    if (request.site_wall_move) m_site_wall_move_preview.reset();
+                    if (request.plan_move) m_plan_move_preview.reset();
+                }
             }
             else (void)request.canvas->completeBoundaryVertexPreview(request.serial,
                 std::move(projection.entities),std::move(projection.labels),projection.metrics);
@@ -38927,6 +39174,8 @@ private:
             m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
             clearOpeningWidthCapture();
             m_wall_move_site_capture.reset(); m_site_wall_move_preview.reset(); m_site_wall_move_error.clear();
+            m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
+            m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
             m_wall_move_source.reset();
             m_wall_move_authority.reset();
             try {
@@ -38947,6 +39196,22 @@ private:
                         return;
                     }
                 }
+                if (!siteCanvas(canvas) && selectionHasOnlyModelMoveOwners(*m_wall_move_source,m_wall_move_ids)) {
+                    // Capture the displayed scene once at press. Reusing a
+                    // prior gesture's authority would bind the old selection.
+                    m_vertex_preview_source.reset();m_vertex_preview_authority.reset();
+                    captureConstraintGeometryPreview(canvas,m_wall_move_source->revision());
+                    if (m_vertex_preview_source!=m_wall_move_source)
+                        throw std::invalid_argument("The displayed move source changed during capture.");
+                    if (!m_recovery_ledger.empty()) {
+                        requireWorkspaceDocument();
+                        m_plan_move_workspace_source=m_project_workspace->capture_edit_source();
+                        m_plan_move_mirror_source=std::make_shared<DocumentSnapshot>(m_document->snapshot());
+                    }
+                    m_plan_move_capture=std::make_shared<TransformViewportCapture>(TransformViewportCapture{
+                        canvas,canvas->viewCenter(),canvas->viewScale(),canvas->size(),canvas->devicePixelRatioF(),
+                        canvas->navigationGeneration(),canvas->hasFocus()});
+                }
                 if (siteCanvas(canvas) && !m_wall_move_ids.isEmpty() &&
                     std::all_of(m_wall_move_ids.begin(),m_wall_move_ids.end(),[&](const auto& id) {
                         const auto found=m_wall_move_source->entities().find(id.toStdString());
@@ -38966,12 +39231,15 @@ private:
                 }
             } catch (const std::exception& error) {
                 clearOpeningWidthCapture();clearSitePublication(); m_wall_move_source.reset(); m_wall_move_authority.reset();
+                m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
+                m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
                 setError(QString::fromUtf8(error.what()));
             }
         });
         canvas->setEntitiesMoveRequested([this,canvas](QStringList ids, Vec2 delta) {
             try {
                 if (m_opening_preview_move) return commitOpeningMoveFromCanvas(canvas,ids,delta);
+                if (m_plan_move_capture) return commitPlanMoveFromCanvas(canvas,ids,delta);
                 if (siteCanvas(canvas)) {
                     if (m_wall_move_site_capture) return commitSiteWallMoveFromCanvas(canvas,ids,delta);
                     const auto command=siteTranslationCommand(ids,delta);
@@ -39000,6 +39268,15 @@ private:
                         : QStringLiteral("The project or Site Plan changed during this drag. Try the move again.");
                     m_site_wall_move_preview.reset();
                     setError(QStringLiteral("Move: %1").arg(message)); refresh(); return;
+                }
+                if (m_plan_move_capture) {
+                    const auto message=planMoveCaptureCurrent(m_plan_move_capture)
+                        ? (m_plan_move_error.isEmpty()
+                            ? QStringLiteral("The selected objects could not be previewed. The project was not changed.")
+                            : m_plan_move_error)
+                        : QStringLiteral("The project or view changed during this drag. Try the move again.");
+                    m_plan_move_preview.reset();
+                    setError(QStringLiteral("Move: %1").arg(message));refresh();return;
                 }
                 if (!m_wall_move_source || m_wall_move_document!=m_document || m_wall_move_canvas!=canvas ||
                     !m_wall_move_authority || !sourceEditAuthorityCurrent(*m_wall_move_authority) || ids != m_wall_move_ids)
@@ -39434,6 +39711,8 @@ private:
             m_wall_move_frame.reset();
             m_wall_move_ids.clear();
             m_wall_move_site_capture.reset(); m_site_wall_move_preview.reset(); m_site_wall_move_error.clear();
+            m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
+            m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
             m_entity_transform_site_capture.reset();
             m_entity_transform_context.reset();
             m_entity_transform_source.reset();
@@ -41649,6 +41928,8 @@ private:
         m_wall_move_authority.reset();
         m_wall_move_frame.reset();
         m_wall_move_ids.clear();
+        m_plan_move_capture.reset();m_plan_move_preview.reset();m_plan_move_error.clear();
+        m_plan_move_workspace_source.reset();m_plan_move_mirror_source.reset();
         m_entity_transform_frame.reset();
         m_pending_opening_preview.reset();
         if (m_running_opening_preview)
@@ -41661,6 +41942,7 @@ private:
         m_vertex_preview_appraisal_area_ids.reset();
         m_vertex_preview_label_footprints.reset();
         m_vertex_preview_component_bounds.reset();
+        m_vertex_preview_components.reset();
         m_vertex_preview_view_context.reset();
         m_vertex_preview_canvas.clear();
         m_vertex_preview_document.reset();
@@ -49725,6 +50007,11 @@ private:
     std::shared_ptr<const SiteTransformPreviewCapture> m_wall_move_site_capture;
     std::optional<SiteWallMovePreviewCommand> m_site_wall_move_preview;
     QString m_site_wall_move_error;
+    std::shared_ptr<const TransformViewportCapture> m_plan_move_capture;
+    std::optional<PlanMovePreviewCommand> m_plan_move_preview;
+    QString m_plan_move_error;
+    std::optional<WorkspaceEditCapture> m_plan_move_workspace_source;
+    std::shared_ptr<const DocumentSnapshot> m_plan_move_mirror_source;
     std::optional<BuildingViewFrame> m_entity_transform_frame;
     std::shared_ptr<const SiteTransformPreviewCapture> m_entity_transform_site_capture;
     std::optional<TransformViewportCapture> m_entity_transform_viewport;
@@ -49783,6 +50070,7 @@ private:
     Vec2 m_entity_axis_anchor;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_eligible;
+    std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_components;
     std::set<std::string, std::less<>> m_plan_semantic_model_ids;
     std::set<std::string, std::less<>> m_plan_presentation_hidden_ids;
     std::set<std::string, std::less<>> m_plan_object_hidden_ids;

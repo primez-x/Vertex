@@ -63,6 +63,7 @@
 #include <tuple>
 #include <type_traits>
 #include <unordered_set>
+#include <utility>
 
 namespace sketch {
 namespace {
@@ -4939,6 +4940,56 @@ Document Document::fork_at_revision(const DocumentSnapshot& source, Revision rev
         else ++it;
     }
     return restore(std::move(prefix));
+}
+
+struct PreparedDocumentEdit::State {
+    explicit State(const DocumentSnapshot& captured) : source(captured) {}
+    DocumentSnapshot source;
+    std::string source_digest;
+    std::unique_ptr<Document> candidate;
+    bool consumed = false;
+};
+
+PreparedDocumentEdit::PreparedDocumentEdit(std::unique_ptr<State> state) noexcept
+    : state_(std::move(state)) {}
+PreparedDocumentEdit::PreparedDocumentEdit(PreparedDocumentEdit&&) noexcept = default;
+PreparedDocumentEdit& PreparedDocumentEdit::operator=(PreparedDocumentEdit&&) noexcept = default;
+PreparedDocumentEdit::~PreparedDocumentEdit() = default;
+
+DocumentSnapshot PreparedDocumentEdit::preview() const {
+    if (!state_ || state_->consumed || !state_->candidate)
+        throw std::invalid_argument("document edit is consumed or moved from");
+    return state_->candidate->snapshot();
+}
+
+PreparedDocumentEdit Document::prepare_edit(const DocumentSnapshot& source, const Command& command) {
+    auto state = std::make_unique<PreparedDocumentEdit::State>(source);
+    state->candidate = std::make_unique<Document>(fork(source));
+    state->source_digest = document_snapshot_digest(source);
+    state->candidate->apply(command);
+    return PreparedDocumentEdit(std::move(state));
+}
+
+Revision Document::commit_prepared(PreparedDocumentEdit& edit) {
+    if (!edit.state_ || edit.state_->consumed || !edit.state_->candidate)
+        throw std::invalid_argument("document edit is consumed or moved from");
+    auto& state = *edit.state_;
+    if (!editable_) document_error(DocumentErrorCode::read_only, read_only_reason_);
+    {
+        const auto current = snapshot();
+        // Shared immutable history is a complete proof, including navigation,
+        // typed envelopes and actual asset bytes. Independently retained equal
+        // snapshots require the full digest; ID/head alone never authorize.
+        if (!current.shares_full_snapshot_with(state.source) &&
+            document_snapshot_digest(current) != state.source_digest)
+            document_error(DocumentErrorCode::stale_revision, "prepared document edit source is stale");
+    }
+    const Revision revision = state.candidate->revision();
+    std::swap(*this, *state.candidate);
+    state.consumed = true;
+    // Retain old state in the consumed token. Disposal does not belong in the
+    // publication step and must be serialized with all token access.
+    return revision;
 }
 
 DocumentSnapshot Document::preview_command(const DocumentSnapshot& source, const Command& command) {

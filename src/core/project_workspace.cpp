@@ -99,11 +99,22 @@ void append_document_event(detail::WorkspaceDocumentState& state,
 struct PreparedWorkspaceEdit::State {
     std::string workspace_identity;
     std::uint64_t expected_epoch = 0;
+    std::uint64_t expected_edited_generation = 0;
+    std::uint64_t expected_checkpoint_generation = 0;
+    std::optional<DocumentSnapshot> source_snapshot;
     std::string source_digest;
     std::unique_ptr<detail::WorkspaceDocumentState> candidate;
     bool consumed = false;
     bool advances_edited_generation = true;
 };
+
+struct WorkspaceEditCapture::State {
+    explicit State(ProjectWorkspaceSnapshot captured) : source(std::move(captured)) {}
+    ProjectWorkspaceSnapshot source;
+};
+WorkspaceEditCapture::WorkspaceEditCapture(std::shared_ptr<const State> state) noexcept
+    : state_(std::move(state)) {}
+WorkspaceEditCapture::~WorkspaceEditCapture() = default;
 
 ProjectWorkspaceSnapshot::ProjectWorkspaceSnapshot(
     const DocumentSnapshot& document, const WorkspaceDocumentHistory& history,
@@ -204,6 +215,15 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare(const Command& command) const {
     return prepare_document_edit(command);
 }
 
+WorkspaceEditCapture ProjectWorkspace::capture_edit_source() const {
+    return WorkspaceEditCapture(std::make_shared<const WorkspaceEditCapture::State>(capture()));
+}
+
+PreparedWorkspaceEdit ProjectWorkspace::prepare_captured(
+    const WorkspaceEditCapture& source, const Command& command) {
+    return prepare_document_edit(prepare_state(source), command);
+}
+
 PreparedWorkspaceEdit ProjectWorkspace::prepare_undo() const {
     return prepare_navigation(false);
 }
@@ -215,10 +235,15 @@ bool ProjectWorkspace::can_undo() const noexcept { return !state_->navigation.un
 bool ProjectWorkspace::can_redo() const noexcept { return !state_->navigation.redo_stack.empty(); }
 
 std::unique_ptr<PreparedWorkspaceEdit::State> ProjectWorkspace::prepare_state() const {
+    // Keep existing owner-only preparations to one copy of workspace values.
+    // Captured worker preparation below reads the same sealed state fields.
     const auto source = state_->document->snapshot();
     auto state = std::make_unique<PreparedWorkspaceEdit::State>();
     state->workspace_identity = identity_;
     state->expected_epoch = epoch_;
+    state->expected_edited_generation = edited_generation_;
+    state->expected_checkpoint_generation = checkpoint_generation_;
+    state->source_snapshot = source;
     state->source_digest = document_snapshot_digest(source);
     state->candidate = std::make_unique<detail::WorkspaceDocumentState>();
     state->candidate->document.reset(new Document(Document::fork(source)));
@@ -228,6 +253,29 @@ std::unique_ptr<PreparedWorkspaceEdit::State> ProjectWorkspace::prepare_state() 
     state->candidate->lifecycle = state_->lifecycle;
     state->candidate->retired = state_->retired;
     state->candidate->history_extensions = state_->history_extensions;
+    return state;
+}
+
+std::unique_ptr<PreparedWorkspaceEdit::State> ProjectWorkspace::prepare_state(
+    const WorkspaceEditCapture& capture) {
+    if (!capture.state_) throw std::invalid_argument("workspace edit capture is moved from");
+    const auto& captured = capture.state_->source;
+    const auto& source = captured.document();
+    auto state = std::make_unique<PreparedWorkspaceEdit::State>();
+    state->workspace_identity = captured.identity();
+    state->expected_epoch = captured.epoch();
+    state->expected_edited_generation = captured.edited_generation();
+    state->expected_checkpoint_generation = captured.checkpoint_generation();
+    state->source_snapshot = source;
+    state->source_digest = document_snapshot_digest(source);
+    state->candidate = std::make_unique<detail::WorkspaceDocumentState>();
+    state->candidate->document.reset(new Document(Document::fork(source)));
+    state->candidate->history = captured.document_history();
+    state->candidate->active = captured.active_boundary();
+    state->candidate->navigation = captured.navigation();
+    state->candidate->lifecycle = captured.lifecycle_history();
+    state->candidate->retired = captured.retired_boundaries();
+    state->candidate->history_extensions = captured.history_extensions();
     return state;
 }
 
@@ -288,7 +336,11 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_boundary_checkpoint(
 }
 
 PreparedWorkspaceEdit ProjectWorkspace::prepare_document_edit(const Command& command) const {
-    auto state = prepare_state();
+    return prepare_document_edit(prepare_state(), command);
+}
+
+PreparedWorkspaceEdit ProjectWorkspace::prepare_document_edit(
+    std::unique_ptr<PreparedWorkspaceEdit::State> state, const Command& command) {
     auto& candidate = *state->candidate;
     auto event = next_event(candidate, WorkspaceLifecycleKind::document_edit);
     // Worker and workspace boundaries carry the same immutable, versioned
@@ -588,6 +640,10 @@ Revision ProjectWorkspace::commit(PreparedWorkspaceEdit& edit) {
     if (state.expected_epoch != epoch_) {
         throw std::invalid_argument("workspace edit epoch is stale");
     }
+    if (state.expected_edited_generation != edited_generation_ ||
+        state.expected_checkpoint_generation != checkpoint_generation_) {
+        throw std::invalid_argument("workspace edit content generation is stale");
+    }
     if (epoch_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("workspace epoch is exhausted");
     }
@@ -599,7 +655,8 @@ Revision ProjectWorkspace::commit(PreparedWorkspaceEdit& edit) {
         // Complete all allocating validation and dispose its JSON snapshots
         // before publication. Full history and saved markers are part of CAS.
         const auto current = state_->document->snapshot();
-        if (document_snapshot_digest(current) != state.source_digest) {
+        if ((!state.source_snapshot || !current.shares_full_snapshot_with(*state.source_snapshot)) &&
+            document_snapshot_digest(current) != state.source_digest) {
             throw std::invalid_argument("workspace edit source digest is stale");
         }
     }

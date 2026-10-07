@@ -428,6 +428,27 @@ private:
     std::map<std::string, Revision, std::less<>> named_revisions_;
 };
 
+// A sealed command admitted against one complete captured source. Prepare and
+// inspect on the worker, then transfer after worker completion; access, moves,
+// destruction and owner commit must not overlap. A consumed token retains the
+// retired Document until destruction, so release it promptly after publication.
+class PreparedDocumentEdit final {
+public:
+    PreparedDocumentEdit(PreparedDocumentEdit&&) noexcept;
+    PreparedDocumentEdit& operator=(PreparedDocumentEdit&&) noexcept;
+    PreparedDocumentEdit(const PreparedDocumentEdit&) = delete;
+    PreparedDocumentEdit& operator=(const PreparedDocumentEdit&) = delete;
+    ~PreparedDocumentEdit();
+
+    [[nodiscard]] DocumentSnapshot preview() const;
+
+private:
+    friend class Document;
+    struct State;
+    explicit PreparedDocumentEdit(std::unique_ptr<State>) noexcept;
+    std::unique_ptr<State> state_;
+};
+
 class Document {
 public:
     static Document create();
@@ -468,6 +489,14 @@ public:
     // or source-snapshot check when committing to a live document.
     [[nodiscard]] static DocumentSnapshot preview_command(
         const DocumentSnapshot& source, const Command& command);
+
+    // Owner captures source; a worker validates its full history and performs
+    // ordinary typed admission on a private fork. This grants no raw snapshot
+    // or entity-diff publication authority. Commit checks the exact complete
+    // source, consumes once and swaps the admitted document without replay.
+    [[nodiscard]] static PreparedDocumentEdit prepare_edit(
+        const DocumentSnapshot& source, const Command& command);
+    Revision commit_prepared(PreparedDocumentEdit& edit);
 
     Revision apply(const Command& command);
     Revision undo(Revision expected_revision);

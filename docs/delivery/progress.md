@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 ordinary plan model movement and prepared publication
+
+Ordinary Measurement and horizontal Architectural model drags now capture
+their displayed source, scene, view and viewport at press. Real architectural
+objects, measured areas and strokes, including host walls selected with their
+openings, use the complete translation builder in the preview worker.
+Candidate geometry, physical axes, connected consequences and labels follow
+that source. Canonical component identities keep automatic area-label obstacles
+current when an assembly moves, including in rotated or cropped saved plans.
+
+The document engine now exposes opaque, single-use prepared edits. A worker
+performs existing full history and typed-command admission on a detached fork;
+publication checks the complete live source before swapping the admitted state.
+Recovery uses an immutable captured workspace, its instance/epoch/generation
+fences and a separately prepared compatibility document. Release performs no
+native apply or fork. Saves, names, read-only changes, source replacement and
+stale view/selection/serial/delta prevent publication. Origin-return creates no
+history. Annotation, reference and embedded-child movement retain their lanes.
+
+Independent source review accepted the corrected candidate obstacles and
+prepared publication, including history and recovery safeguards. No builds,
+tests, probes, native jobs, launches, packages or installations ran. Compilation,
+runtime interaction and responsiveness remain unverified; the installed
+candidate is unchanged.
+
 ### October 7 grouped wall and opening movement
 
 Selecting a wall together with its hosted doors or windows now moves the host

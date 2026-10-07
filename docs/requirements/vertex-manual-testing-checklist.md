@@ -404,6 +404,7 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U060 — Move several selected objects together**
   - Steps: Draw and close two measured rooms, then place a sofa and draw a wall. Ctrl-click both rooms, the sofa, and the wall. Drag inside the selected bounds and release. Confirm both rooms and their dimensions move with the sofa and wall. Undo, redo, save, and reopen. Repeat with two joined walls, a text label, and a reference image. For a pair of rooms or walls with a saved coincident-point constraint, select just one owner plus the sofa and try moving it away from the other owner.
   - Expected: The complete group moves together in one undo step. Room areas, entered measurements, dimension placements, wall lengths, door/window positions along their hosts, symbol sizes, image calibration, and relative placement remain correct after reopening. Moving only part of a constrained mixed group reports the conflict and leaves every selected object unchanged. Wall-only connected movement is tested separately in U289.
+  - Also try: Move a placed architectural assembly across an automatic area label, including in a rotated or cropped saved plan. The label position after release should match the preview and clear the assembly's new footprint. Return the group exactly to its starting position; no Undo entry should be added. Change focus or navigate during a pending move; a late preview must not move anything.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
