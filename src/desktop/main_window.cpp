@@ -14174,7 +14174,8 @@ public:
     }
 
     QString createAnnotationLabelFromEntry(const TextLibraryEntry& entry,const QString& content,
-                                          Vec2 position,bool model_plan=false) {
+                                          Vec2 position,bool model_plan=false,
+                                          const DocumentSnapshot* placement_source=nullptr) {
         try {
             if (!m_document->is_editable()) {
                 throw std::invalid_argument("This document is read-only.");
@@ -14182,9 +14183,12 @@ public:
             if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
                 throw std::invalid_argument("Annotation position must be finite.");
             }
-            const auto context = requireDrawingContext();
+            const auto source = placement_source ? *placement_source : authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
+            if (!sourceEditAuthorityCurrent(authority))
+                throw std::invalid_argument("The label source or placement context changed. Start placement again.");
+            const auto context = requireDrawingContext(source);
             if (!context) return {};
-            const auto source = authoringSnapshot();
             auto annotation = annotationCarrierForLayer(source,context->layer_id);
             if (annotation == source.entities().end()) {
                 throw std::invalid_argument("The project has no annotation state entity.");
@@ -14226,6 +14230,8 @@ public:
                 : std::map<QString,SiteAnnotationTarget>{};
             const auto selected=siteCanvas(m_architecturalCanvas)
                 ? siteAnnotationRenderId(targets,{carrier.id,label.id}) : id_from(label.id);
+            if (!sourceEditAuthorityCurrent(authority))
+                throw std::invalid_argument("The label source or placement context changed before creation.");
             applyDocumentCommand(command);
             m_selected_id=selected;
             if(siteCanvas(m_architecturalCanvas))m_site_annotation_targets=std::move(targets);
@@ -29774,30 +29780,25 @@ public:
             if(siteCanvas(m_architecturalCanvas))requireSitePublicationCurrent();
             if (!requireDrawingContext()) return false;
             auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
-            const auto view=boundaryVertexViewContext(canvas,authoringSnapshot());
+            const auto source=captureCanvasGeometrySource(canvas);
+            const auto view=boundaryVertexViewContext(canvas,*source);
             cancelPlanLabelPlacement();
             cancelTextPlacement();
             m_text_placement_context=captureModalContext();
-            const auto workspace=m_workspace;
-            const auto named_view=m_active_named_view;
-            const auto named_owner=m_active_named_view_owner;
-            const auto kind=m_architectural_view_kind;
-            const auto site_source=authoringSnapshot();
-            const auto site_context=organize_project(site_source).drawing_context(m_active_layer_id.toStdString());
-            const auto site_digest=document_snapshot_digest(site_source);
-            const auto site_frame=siteCanvas(canvas) && site_context ? std::optional{siteAnnotationCreationFrame(site_source,*site_context)} : std::nullopt;
-            canvas->setPointPlacementRequested([this,entry,view,workspace,named_view,named_owner,kind,site_digest,site_frame](Vec2 point) {
+            const auto authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
+            const auto site_context=organize_project(*source).drawing_context(m_active_layer_id.toStdString());
+            const auto site_frame=siteCanvas(canvas) && site_context ? std::optional{siteAnnotationCreationFrame(*source,*site_context)} : std::nullopt;
+            canvas->setPointPlacementRequested([this,entry,view,source,authority,site_frame](Vec2 point) {
                 const auto context=m_text_placement_context;
                 cancelTextPlacement();
-                if (!context || !modalContextUnchanged(*context)) return;
-                if (workspace!=m_workspace || named_view!=m_active_named_view || named_owner!=m_active_named_view_owner || kind!=m_architectural_view_kind) {
-                    setError(QStringLiteral("The view changed while placing text. Start placement again.")); return;
+                try {
+                    if (!context || !sourceEditAuthorityUnchanged(*authority)) return;
+                    if (site_frame) point=site_source_plan_point(point,*site_frame);
+                    else if (view) point=unproject_plan_point(point,view->frame);
+                    (void)createAnnotationLabelFromEntry(entry,{},point,true,source.get());
+                } catch (const std::exception& error) {
+                    setError(QStringLiteral("Text placement: %1").arg(QString::fromUtf8(error.what())));
                 }
-                if (site_frame) {
-                    if(document_snapshot_digest(authoringSnapshot())!=site_digest) {setError(QStringLiteral("The Site Plan source changed while placing text. Start again."));return;}
-                    point=site_source_plan_point(point,*site_frame);
-                } else if (view) point=unproject_plan_point(point,view->frame);
-                (void)createAnnotationLabelFromEntry(entry,{},point,true);
             });
             canvas->setFocus();
             clearError();

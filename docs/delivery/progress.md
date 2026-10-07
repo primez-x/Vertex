@@ -371,6 +371,14 @@ approved the combined placement candidate; root reviewed the dialog and error
 containment additions. No build, test, package or installed change was made.
 Compilation, rendering and interaction remain unobserved.
 
+Text-library placement now captures the displayed authoring source and complete
+editing authority once. Its retained frame converts the insertion point; source,
+history, recovery, layer, selection and view changes refuse that pending action.
+Label creation consumes the same captured source and checks it again before its
+single document command. The existing model-plan label and legacy overlay
+conventions remain intact. Root reviewed these source changes; no application
+build or test was started and the installed candidate remains unchanged.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and
