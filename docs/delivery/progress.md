@@ -411,6 +411,30 @@ child frame remains the sole Site conversion. No build, test, package or install
 change was made. Compilation, persistence, visuals, interaction and performance
 remain unobserved.
 
+Idle plan Alt-click now cycles distinct eligible overlapping geometry, furniture,
+labels and reference images through the active selection filter. Ordinary picking
+retains its priority; assembly presentations share their semantic target. Alt-drag
+pans and empty Alt-click does not author. Rapid Alt clicks preserve the second
+cycle through Qt's double-click sequence without replaying an active point
+placement. Read-only selection captures the actual published source. Final
+release consumes a missing intermediate motion event, and a monotonic canvas
+navigation generation prevents camera-away-and-return from reviving a pick.
+
+Door, window and doorway jamb controls now use the captured horizontal plan,
+including shifted, rotated and reflected views. Semantic swings, frames, jambs
+and curved host stations share one projection. Controls require both jambs inside
+the crop and complete opening depth support; partial projections retain their
+property editor. Width admission and projection run against the original source
+in queued work. Release applies that exact augmented and physically admitted
+command once, including a bounded wait for its pending proposal. An invalid or
+obsolete width proposal clears its preview without destroying a still-current
+drag capture, so moving back into valid bounds can recover. Source, selection,
+context, focus, display or navigation changes retire authority. Native errors
+are contained at preview and commit boundaries. Independent source review found
+invalid-proposal retirement and Alt double-click placement guards; root corrected
+those paths. No application build, test, probe, package or installed change was
+made. Compilation, rendering, interaction and performance remain unobserved.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

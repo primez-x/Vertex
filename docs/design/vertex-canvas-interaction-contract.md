@@ -21,6 +21,8 @@ classification and manual dimension placement before the outline is complete.
 | Left drag from unselected object | Pan; click first if the object should move | Pan; click first if the object should move | Select only |
 | Ctrl + left click | Toggle the hit object in the selection | Toggle the hit object in the selection | Toggle the visible object in the shared selection |
 | Ctrl + left drag | Add a directional marquee result to the selection | Add a directional marquee result to the selection | Add a directional marquee result to the shared selection |
+| Alt + left click | Cycle overlapping selectable objects at the pointer | Cycle overlapping selectable objects at the pointer | Pending native overlap-selection integration |
+| Alt + left drag | Pan without selecting or editing an object | Pan without selecting or editing an object | Pending native overlap-selection integration |
 | Left-to-right Ctrl marquee | Add fully enclosed objects | Add fully enclosed objects | Add fully enclosed selectable presentations |
 | Right-to-left Ctrl marquee | Add crossing or enclosed objects | Add crossing or enclosed objects | Add crossing or enclosed selectable presentations |
 | Middle drag | Pan from any hit location without changing geometry or a draft | Pan from any hit location without changing geometry | Pan |
@@ -37,6 +39,15 @@ uses crossing rules. The 3D marquee highlights the visible members of the shared
 selection and retains selected plan-only objects. Escape, capture or focus loss,
 or a changed source, camera or view extent abandons the marquee without applying
 its result.
+
+Alt-click in an idle plan cycles the distinct eligible objects at the pointer,
+including labels, furniture, room interiors and reference images. The ordinary
+pick comes first when the current selection is outside that list. The active
+selection filter applies. An empty Alt-click places no drawing point. Ctrl has
+priority when both modifiers are held. A pending drawing or new placement must
+be finished or cancelled before overlap selection starts. The press retains its
+displayed source and camera generation; navigation away and back cannot revive
+it. Alt-drag follows canvas pan and never moves a selected object.
 
 ## Explicit 3D Move
 
@@ -90,13 +101,15 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
 - Direct endpoint grips for additional architectural object types.
 - Pen barrel-button mapping, pinch zoom, and multi-touch navigation.
-- Overlap cycling for stacked selectable objects.
+- Native 3D overlap cycling for stacked selectable objects.
 - Shared painted-footprint hit testing for every filled and custom-stroke entity type.
 
 ## Acceptance sequences
 
 Hosted doors, windows and bare openings on straight or circular walls have two jamb
-handles in an uncropped conventional plan. Dragging one jamb projects the
+handles in a horizontal plan, including a shifted, rotated or reflected named
+plan. Both jambs must be visible inside the crop and the entire opening must
+survive the view's depth limit. Dragging one jamb projects the
 pointer displacement along the wall and keeps the other jamb fixed. Circular
 hosts use continuous arc stations, including across the angle branch seam;
 grabbing within the handle's hit area does not jump the jamb. Only
@@ -105,11 +118,14 @@ handing and frame dimensions remain unchanged. The live readout shows the
 opening's actual width and height. Circular door-swing geometry and the wall
 cut are regenerated together for interactive preview, rather than stretching
 painted strokes. Invalid placements are shown as rejected proposals. A
-completed drag publishes one source-revision-fenced command after validating
-the host, sibling openings, manufactured assemblies and wall joins. Escape,
-focus loss or a refreshed source cancels the proposal. These handles and
-previews are excluded from printed and exported geometry. Cropped or
-custom-frame presentations retain the existing property editor.
+completed drag publishes the exact captured-source command admitted by its
+queued preview after validating the host, sibling openings, manufactured
+assemblies and wall joins. Pending release waits for that one proposal; it
+cannot substitute a newer source or width. Escape, focus loss, navigation,
+display changes or a refreshed source cancels the proposal, even if the camera
+later returns to its original values. These handles and previews are excluded
+from printed and exported geometry. Partially clipped openings and nonhorizontal
+views retain their property editor without offering misleading jamb grips.
 
 Focused interaction checks cover click selection, object drag with one commit,
 empty-canvas click drawing, plain-drag pan, Space and middle-button pan, Ctrl-click toggle, directional Ctrl marquee, mixed-button

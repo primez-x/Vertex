@@ -198,6 +198,11 @@
   right-click without dragging cancels a pending drawing or new symbol placement;
   already placed walls and symbols remain. With no pending action, it opens the
   relevant context menu.</p>
+  <p>To select underneath another item in a plan, hold <strong>Alt</strong> and
+  click the overlapping items repeatedly. Each click selects the next eligible
+  object at that point, using the current selection filter. Alt-clicking empty
+  space adds no drawing point; Alt-drag pans. Finish or cancel a pending drawing
+  or new placement before selecting underneath it.</p>
   <p>Rotate a selected appraisal area with its rotation handle, or use
   <strong>Transform selection</strong> for a numerical rotation or horizontal or
   vertical flip. Its retained deductions and supporting physical walls and hosted
@@ -510,6 +515,14 @@
   horizontal plan is shifted, rotated or reflected. Changing the floor, layer
   or plan cancels a pending placement. Older saved symbols retain their original
   placement convention.</p>
+  <p>Select a hosted door, window or doorway in a horizontal plan to resize its
+  width using either jamb handle. The opposite jamb stays fixed, and its height
+  and sill stay unchanged. The handles follow shifted, rotated and reflected
+  plan views. Both jambs must be inside the crop and the entire opening must
+  survive the depth limit; use quick properties for a partially clipped opening.
+  The preview regenerates the opening and wall cut together. Escape, navigation
+  or changing the displayed source cancels that drag. A valid completed edit
+  undoes in one step.</p>
   <p>Use building commands to author
   floors, ceilings, foundations, beams, columns, roofs, stairs, railings, assemblies,
   and levels. The same semantic objects drive plan, elevation, section, schedule, sheet,

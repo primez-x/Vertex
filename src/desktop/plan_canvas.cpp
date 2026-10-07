@@ -1122,6 +1122,7 @@ void PlanCanvas::setNavigationChanged(std::function<void(Vec2, double)> callback
 void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_scale) {
     if (m_view_center.x == previous_center.x && m_view_center.y == previous_center.y &&
         m_scale == previous_scale) return;
+    ++m_navigation_generation;
     m_pending_dimension_space_tap.reset();
     const auto callback = m_navigation_changed;
     if (callback) callback(m_view_center, m_scale);
@@ -2125,6 +2126,10 @@ void PlanCanvas::setEntitySelectionClicked(std::function<void(QString, bool)> ca
     m_entity_selection_clicked = std::move(callback);
 }
 
+void PlanCanvas::setOverlapSelectionRequested(std::function<bool(bool, QStringList)> callback) {
+    m_overlap_selection_requested = std::move(callback);
+}
+
 void PlanCanvas::setEntitiesSelected(std::function<void(QStringList, bool)> callback) {
     m_entities_selected = std::move(callback);
 }
@@ -2394,6 +2399,8 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::StyleChange:
     case QEvent::ScreenChangeInternal:
     case QEvent::DevicePixelRatioChange:
+        if (event->type() == QEvent::ScreenChangeInternal ||
+            event->type() == QEvent::DevicePixelRatioChange) ++m_navigation_generation;
         // System metrics can change while serialized QFont values remain equal.
         // Retire every label lane and its selection/bounds derivatives together;
         // an output recording must not reuse metrics from the previous font.
@@ -2634,6 +2641,21 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
     m_left_start = position;
     m_left_dragging = false;
+    if (modifiers.testFlag(Qt::AltModifier) && selectionInteractionEnabled() &&
+        m_overlap_selection_requested) {
+        try {
+            if (!m_overlap_selection_requested(true,{})) { resetGesture(); return; }
+        } catch (...) { resetGesture(); return; }
+        m_overlap_selection = true;
+        m_overlap_view_scale = m_scale;
+        m_overlap_view_size = size();
+        m_overlap_view_dpr = devicePixelRatioF();
+        m_overlap_navigation_generation = m_navigation_generation;
+        m_left_gesture = LeftGesture::canvas_pan;
+        m_pan_start = position;
+        m_pan_view_start = m_view_center;
+        return;
+    }
     if (selectionInteractionEnabled()) {
         if (const auto jamb = openingWidthHandleAt(position, QRectF(rect()))) {
             m_left_gesture = LeftGesture::opening_width_resize;
@@ -2942,7 +2964,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
     }
     if (button == Qt::LeftButton) {
         // Consume the final location even if the platform omitted a move event.
-        if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::object_move ||
+        if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::canvas_pan ||
+            m_left_gesture == LeftGesture::object_move ||
             m_left_gesture == LeftGesture::selection_axis_resize ||
             m_left_gesture == LeftGesture::selection_resize ||
             m_left_gesture == LeftGesture::selection_rotate ||
@@ -2961,6 +2984,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto move_ids = m_move_ids;
         const auto pressed_entity = m_pressed_entity;
         const auto pressed_occupied = m_pressed_occupied;
+        const auto overlap_selection = m_overlap_selection;
+        const bool overlap_view_current = m_overlap_view_scale==m_scale && m_overlap_view_size==size() &&
+            m_overlap_view_dpr==devicePixelRatioF() &&
+            m_overlap_navigation_generation==m_navigation_generation &&
+            m_pan_view_start.x==m_view_center.x && m_pan_view_start.y==m_view_center.y;
         const auto delta = dragDelta(position);
         if (gesture==LeftGesture::object_move && dragging && m_move_preview_pending) {
             // Keep the final exact proposal alive after button release. A
@@ -3029,7 +3057,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 m_entity_selection_clicked(hitTest(position), true);
             }
         } else if (gesture == LeftGesture::canvas_pan && !dragging) {
-            if (selectionInteractionEnabled() && !pressed_entity.isEmpty()) {
+            if (overlap_selection && m_overlap_selection_requested) {
+                QStringList overlapping;
+                if (overlap_view_current) (void)hitTest(position,true,&overlapping);
+                (void)m_overlap_selection_requested(false,std::move(overlapping));
+            } else if (selectionInteractionEnabled() && !pressed_entity.isEmpty()) {
                 if (m_entity_selection_clicked)
                     m_entity_selection_clicked(pressed_entity, false);
                 else if (m_entity_clicked)
@@ -3109,6 +3141,7 @@ void PlanCanvas::resetGesture() {
     m_left_dragging = false;
     m_pressed_entity.clear();
     m_pressed_occupied = false;
+    m_overlap_selection = false;
     m_move_ids.clear();
     m_move_preview_delta.reset();
     ++m_move_preview_serial;
@@ -3171,6 +3204,17 @@ void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
 }
 
 void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
+    // Rapid Alt clicks still cycle once per physical click: Qt replaces the
+    // second press with this event. Its release uses the normal captured pick.
+    // Ctrl retains priority and its existing first-toggle-only double click.
+    if (event->button() == Qt::LeftButton && event->source() == Qt::MouseEventNotSynthesized &&
+        !m_point_placement_requested && event->modifiers().testFlag(Qt::AltModifier) &&
+        !event->modifiers().testFlag(Qt::ControlModifier) && selectionInteractionEnabled() &&
+        m_overlap_selection_requested) {
+        pointerPress(event->position(), event->button(), event->modifiers());
+        event->accept();
+        return;
+    }
     // Qt dispatches press/release/double-click/release. The first click already
     // authored or selected. An idle pointer's unmodified left double-click
     // opens contextual properties for the stable hit target. Active authoring
@@ -4945,6 +4989,7 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void PlanCanvas::resizeEvent(QResizeEvent* event) {
+    if (event->oldSize() != event->size()) ++m_navigation_generation;
     m_pending_dimension_space_tap.reset();
     QWidget::resizeEvent(event);
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
@@ -6044,8 +6089,12 @@ std::optional<std::vector<std::size_t>> PlanCanvas::labelHitCandidates(
     return result;
 }
 
-QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
+QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlapping) const {
     constexpr double hit_pixels = 9.0;
+    if (overlapping) overlapping->clear();
+    const auto add_overlap = [&](const QString& id) {
+        if (overlapping && !id.isEmpty() && !overlapping->contains(id)) overlapping->push_back(id);
+    };
     QString result;
     QString interior_area;
     const auto model_point = toModel(point, rect());
@@ -6055,6 +6104,8 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
     for (std::size_t index = 0; index < candidate_count; ++index) {
         const auto& entity = m_entities[candidates ? (*candidates)[index] : index];
         if (filtered && !matchesSelectionType(entity.type)) continue;
+        auto entity_best = std::numeric_limits<double>::max();
+        bool entity_interior = false;
         const auto painted_half_width = entity.paper_stroke_width_on_screen
             ? paper_stroke_pixels(entity, logicalDpiX()/25.4)*0.5 : 0.0;
         QPainterPath painted_footprint;
@@ -6066,6 +6117,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
                     const auto end = toScreen(segment.end, rect());
                     painted_footprint.lineTo(end);
                     const auto candidate = std::max(0.0, point_segment_distance(point, start, end)-painted_half_width);
+                    if (overlapping) entity_best = std::min(entity_best,candidate);
                     if (candidate < best) {
                         best = candidate;
                         result = entity.id;
@@ -6083,6 +6135,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
                         arc_point(segment, *arc, static_cast<double>(index) / samples), rect());
                     painted_footprint.lineTo(current);
                     const auto candidate = std::max(0.0, point_segment_distance(point, previous, current)-painted_half_width);
+                    if (overlapping) entity_best = std::min(entity_best,candidate);
                     if (candidate < best) {
                         best = candidate;
                         result = entity.id;
@@ -6101,6 +6154,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
                 model_to_screen.scale(m_scale, -m_scale);
                 model_to_screen.translate(-m_view_center.x, -m_view_center.y);
                 if (model_to_screen.map(*fill).contains(point)) {
+                    entity_interior = true;
                     if (entity.type == QStringLiteral("boundary") || entity.type == QStringLiteral("measurement_boundary") ||
                         entity.type == QStringLiteral("room_boundary")) interior_area = entity.id;
                     else { best = 0.0; result = entity.id; }
@@ -6109,8 +6163,10 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
         }
         if (!entity.filled && (entity.type == QStringLiteral("boundary") ||
             entity.type == QStringLiteral("measurement_boundary") || entity.type == QStringLiteral("room_boundary"))) {
-            if (const auto area = closed_entity_path(entity); area && area->contains(QPointF(model_point.x,model_point.y)))
+            if (const auto area = closed_entity_path(entity); area && area->contains(QPointF(model_point.x,model_point.y))) {
                 interior_area = entity.id;
+                entity_interior = true;
+            }
         }
         // Plan components are picked by their complete painted footprint, not
         // only by a thin stroke. This keeps an empty-looking seat cushion or
@@ -6119,7 +6175,9 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
             painted_footprint.boundingRect().adjusted(-4.0, -4.0, 4.0, 4.0).contains(point)) {
             best = 0.0;
             result = entity.id;
+            entity_interior = true;
         }
+        if (entity_best <= hit_pixels || entity_interior) add_overlap(entity.id);
     }
     // Area interiors are selectable even with outline-only styling. Their
     // regions remain behind component footprints and nearby actual strokes.
@@ -6144,6 +6202,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
         const auto dy = std::max({bounds.top() - local.y(), 0.0,
                                   local.y() - bounds.bottom()});
         const auto candidate = std::hypot(dx, dy);
+        if (candidate <= hit_pixels) add_overlap(label.id);
         // Labels paint after geometry; a hit inside their painted rectangle
         // wins a zero-distance tie, including later overlapping labels.
         if (candidate < best || candidate == 0.0) {
@@ -6151,7 +6210,8 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
             result = label.id;
         }
     }
-    if (best <= hit_pixels) return result;
+    if (best <= hit_pixels && !overlapping) return result;
+    if (best > hit_pixels) result.clear();
     const auto model = toModel(point, rect());
     // Underlays sit beneath geometry; pick the topmost visible reference only
     // when no authored geometry or label was hit.
@@ -6169,9 +6229,17 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
         const auto unit = reference.metres_per_source_unit * reference.scale;
         if (std::isfinite(unit) && unit > 0.0 &&
             std::abs(x) <= reference.image.width() * unit * 0.5 &&
-            std::abs(y) <= reference.image.height() * unit * 0.5) return reference.id;
+            std::abs(y) <= reference.image.height() * unit * 0.5) {
+            if (!overlapping) return reference.id;
+            add_overlap(reference.id);
+            if (result.isEmpty()) result=reference.id;
+        }
     }
-    return {};
+    if (overlapping && !result.isEmpty()) {
+        overlapping->removeAll(result);
+        overlapping->push_front(result);
+    }
+    return result;
 }
 
 void PlanCanvas::invalidateRetainedPresentation() {

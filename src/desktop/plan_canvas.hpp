@@ -435,6 +435,9 @@ public:
     [[nodiscard]] QRectF overviewMapRect() const noexcept;
     [[nodiscard]] Vec2 viewCenter() const noexcept { return m_view_center; }
     [[nodiscard]] double viewScale() const noexcept { return m_scale; }
+    // Monotonic input authority: restoring the same camera values does not
+    // revive an edit captured before navigation or a display change.
+    [[nodiscard]] std::uint64_t navigationGeneration() const noexcept { return m_navigation_generation; }
     // Current screen grid increment, shared by painting and interactive snap.
     [[nodiscard]] double gridSpacingMetres() const noexcept;
     [[nodiscard]] double drawingLengthIncrementMetres() const noexcept;
@@ -486,6 +489,10 @@ public:
     // contextual editor without replaying a second selection/authoring press.
     void setEntityDoubleClicked(std::function<void(QString)> callback);
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
+    // Alt-click supplies distinct overlapping targets, with the ordinary pick
+    // first. Starting captures source authority; completion resolves the pick.
+    // The shell owns cycling and admission; a drag still navigates.
+    void setOverlapSelectionRequested(std::function<bool(bool, QStringList)> callback);
     // Ctrl-drag rectangle selection adds to the retained selection.
     void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
     // Commits one model-space translation after the interactive preview ends.
@@ -741,7 +748,8 @@ private:
     [[nodiscard]] QPointF toScreen(Vec2 point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 toModel(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 snapped(Vec2 point) const;
-    [[nodiscard]] QString hitTest(QPointF point, bool filtered = true) const;
+    [[nodiscard]] QString hitTest(QPointF point, bool filtered = true,
+                                  QStringList* overlapping = nullptr) const;
     [[nodiscard]] bool matchesSelectionFilter(const QString& id) const;
     [[nodiscard]] bool matchesSelectionType(const QString& type) const;
     [[nodiscard]] bool selectionInteractionEnabled() const;
@@ -968,6 +976,7 @@ private:
     QColor m_canvas_background{248, 250, 252};
     double m_scale{80.0};
     Vec2 m_view_center{0.0, 0.0};
+    std::uint64_t m_navigation_generation{};
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
     enum class LeftGesture {
@@ -979,6 +988,11 @@ private:
     bool m_left_dragging{false};
     QString m_pressed_entity;
     bool m_pressed_occupied{false};
+    bool m_overlap_selection{false};
+    double m_overlap_view_scale{};
+    QSize m_overlap_view_size;
+    qreal m_overlap_view_dpr{};
+    std::uint64_t m_overlap_navigation_generation{};
     CanvasSelectionFilter m_selection_filter{CanvasSelectionFilter::all};
     QStringList m_move_ids;
     std::optional<Vec2> m_move_preview_delta;
@@ -1069,6 +1083,7 @@ private:
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString)> m_entity_double_clicked;
     std::function<void(QString, bool)> m_entity_selection_clicked;
+    std::function<bool(bool, QStringList)> m_overlap_selection_requested;
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
     std::function<void(QStringList)> m_entities_move_started;

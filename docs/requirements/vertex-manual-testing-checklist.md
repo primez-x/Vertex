@@ -372,12 +372,13 @@ drawing; switching modes does not change existing geometry.
 ## Select, edit and transform drawings
 
 - [ ] **U055 — Click a line or room to select it**
-  - Expected: The intended object visibly highlights and its properties appear.
+  - Steps: Click a line, room or furniture item. Place overlapping furniture, a text label and a room over a reference image. Alt-click the same point repeatedly to reach the items underneath; then Alt-drag and Alt-click empty space.
+  - Expected: A selected object visibly highlights and its name appears in the selection badge. Double-click opens its quick properties. Repeated Alt-clicks cycle distinct eligible overlapping items. Alt-drag pans, and an empty Alt-click adds no drawing point.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U056 — Drag a selection rectangle**
-  - Steps: Place furniture and labels inside two rooms. Choose Areas in the selection filter beside the bottom-right canvas controls. Ctrl-drag a window around everything, then repeat with Symbols and Text labels. Return to All items. Try Ctrl-click, double-click and right-click under each filter.
+  - Steps: Place furniture and labels inside two rooms. Choose Areas in the selection filter beside the bottom-right canvas controls. Ctrl-drag a window around everything, then repeat with Symbols and Text labels. Return to All items. Try Ctrl-click, Alt-click overlapping items, double-click and right-click under each filter.
   - Expected: Ctrl-drag shows a visible marquee and objects in the selected region are selected on release.
     Only the chosen item kinds become new selections. Filtering leaves every item visible and does not change totals. Clicking an excluded item does not start a drawing. Existing selections retain their transform controls.
   - Result: Not tested
@@ -995,6 +996,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U162 — Change a door's width and height**
   - Canvas check: Select a door in the plan and drag either jamb handle. The opposite jamb stays fixed, the wall cut and circular swing update together, and the width/height readout follows the edit. Undo and Redo restore it. Use quick properties to change height.
+  - Plan check: Repeat in shifted, rotated and reflected horizontal plans. Crop around both jambs, then crop one out; narrow the depth until it cuts the opening. Both visible jambs offer handles when the full opening survives the depth limit. Partially clipped openings offer quick properties instead. Roll the wheel out and back during a jamb drag, then release: that cancelled drag must not change the door. Start a fresh drag and confirm one Undo restores it.
   - Expected: The opening and door update together.
   - Curved wall check: Repeat on a curved host with sufficient frame depth. The opposite jamb remains fixed; Arc W reports width along the wall, while the swing remains circular. An impossible leaf/frame fit rejects the edit without changing the project.
   - Result: Not tested
@@ -1019,6 +1021,8 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U166 — Change window size and sill height**
   - Canvas check: Select a window in the plan and drag either jamb handle. Its width changes along the wall while height and sill remain. Dragging into another opening or beyond the host wall is rejected without changing the saved geometry.
+  - Recovery check: While holding the jamb, make the proposed width overlap another opening or cross the fixed jamb, then move back to a valid width. The same drag should recover and its final release should create one edit. Releasing an invalid proposal changes nothing.
+  - Plan check: Repeat in a rotated or reflected horizontal plan and with both jambs visible in a crop. The jambs and frame follow the preview at the final click position. Clip one jamb or the opening's height out of the view: use quick properties to edit it. Undo once, Redo, save and reopen.
   - Expected: Plan, elevation and 3D agree.
   - Curved wall check: Resize both jambs separately. Rails follow the wall arc and Arc W measures along it; the native frame, sash and glass remain concentric with the host.
   - Result: Not tested
@@ -1033,6 +1037,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Choose Doorway in Library, set width and height, then click its preview on an existing wall. Repeat in a horizontal Architectural plan. Start another placement and right-click without dragging, then repeat with Escape.
   - Expected: The intended wall opening is visible.
   - Also check: Cancellation adds no object and preserves earlier walls. A cut that exceeds the host, overlaps another opening or cannot form a valid wall join is rejected without changing the project. Undo restores the wall after a valid placement.
+  - Resize check: Select the doorway and drag either jamb in a rotated horizontal plan. Its opposite jamb stays fixed and its height stays unchanged. One Undo restores the original opening and wall cut.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
