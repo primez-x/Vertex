@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 hosted library drag worker
+
+Hosted library drag proposals now capture the visible source, wall targets,
+layer/floor, horizontal or Site frame, opening dimensions and assembly once.
+The serial worker finds the exact host and regenerates real opening geometry,
+including curved hosts. Native generation and the straight-profile cache stay
+off the pointer callback; jobs receive detached values rather than canvas or
+live document access. SVG furniture retains its cached direct preview.
+
+Only the newest pending pointer request is retained. Publication checks the
+captured authority and viewport, active drag serial and source receipt. Drop,
+cancellation, leave, scene changes and navigation retire old proposals; a late
+completion cannot add an object or restore stale preview ink. The canvas now
+has a guarded UI-thread ghost-completion method. The existing click-to-place
+opening hover path still uses synchronous generation. No runtime work ran and
+neither compilation nor responsiveness has been qualified.
+Independent review accepted the repaired asynchronous source: obsolete or
+throwing observers cannot clear a newer drag, and drop binds its serial before
+admission. The admission observer is copied before invocation.
+
 ### October 7 Site model movement publication
 
 Site model drags now prepare a complete document or recovery-workspace edit in

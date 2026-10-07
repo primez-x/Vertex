@@ -2568,19 +2568,29 @@ void PlanCanvas::clearSymbolDragPreview() {
     update();
 }
 
+bool PlanCanvas::completeSymbolDragPreview(std::uint64_t serial,
+                                          std::optional<CanvasEntity> preview) {
+    if (!m_symbol_drag_active || serial != m_symbol_drag_preview_serial) return false;
+    if (preview) preview->selected = false;
+    m_symbol_drag_preview = std::move(preview);
+    update();
+    return true;
+}
+
 std::optional<Vec2> PlanCanvas::symbolDropPoint(const QString& id, QPointF position) {
     const auto raw = toModel(position, rect());
     if (!std::isfinite(raw.x) || !std::isfinite(raw.y)) return std::nullopt;
     const auto uses_raw_point = m_symbol_drop_uses_raw_point;
     const QPointer<PlanCanvas> guard(this);
+    const auto serial = m_symbol_drag_preview_serial;
     bool project_onto_host = false;
     try {
         project_onto_host = uses_raw_point && uses_raw_point(id);
     } catch (...) {
-        if (guard) clearSymbolDragPreview();
+        if (guard && serial == m_symbol_drag_preview_serial) clearSymbolDragPreview();
         return std::nullopt;
     }
-    if (!guard) return std::nullopt;
+    if (!guard || serial != m_symbol_drag_preview_serial) return std::nullopt;
     const auto point = project_onto_host ? raw : snapped(raw);
     return std::isfinite(point.x) && std::isfinite(point.y) ? std::optional{point} : std::nullopt;
 }
@@ -2593,22 +2603,23 @@ bool PlanCanvas::updateSymbolDragPreview(const QMimeData* mime, QPointF position
     const auto callback = m_symbol_drag_preview_requested;
     const QPointer<PlanCanvas> guard(this);
     const auto point = symbolDropPoint(payload->id, position);
-    if (!guard || serial != m_symbol_drag_preview_serial || !point) return false;
+    if (!guard || serial != m_symbol_drag_preview_serial) return false;
+    if (!point) {
+        clearSymbolDragPreview();
+        return false;
+    }
+    m_symbol_drag_active = true;
     // A valid library drag can enter away from a suitable host. An absent
     // proposal clears its ink while allowing later moves to find a host.
     std::optional<CanvasEntity> preview;
     try {
         if (callback) preview = callback(payload->id, payload->scale, *point);
     } catch (...) {
-        if (guard) clearSymbolDragPreview();
+        if (guard && serial == m_symbol_drag_preview_serial) clearSymbolDragPreview();
         return false;
     }
-    if (!guard || serial != m_symbol_drag_preview_serial) return false;
-    if (preview) preview->selected = false;
-    m_symbol_drag_active = true;
-    m_symbol_drag_preview = std::move(preview);
-    update();
-    return true;
+    if (!guard || serial != m_symbol_drag_preview_serial || !m_symbol_drag_active) return false;
+    return completeSymbolDragPreview(serial, std::move(preview));
 }
 
 void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
@@ -2645,9 +2656,10 @@ void PlanCanvas::dragLeaveEvent(QDragLeaveEvent* event) {
 void PlanCanvas::dropEvent(QDropEvent* event) {
     m_pending_dimension_space_tap.reset();
     clearSymbolDragPreview();
+    const auto serial = m_symbol_drag_preview_serial;
     const QPointer<PlanCanvas> guard(this);
     const bool admitted = admitInteraction();
-    if (!guard || !admitted) { event->ignore(); return; }
+    if (!guard || !admitted || serial != m_symbol_drag_preview_serial) { event->ignore(); return; }
     if(event->mimeData()->hasFormat(area_class_mime_type)) {
         const auto classification=decode_area_class_drag(event->mimeData());
         if(!classification && m_area_class_drop_rejected)m_area_class_drop_rejected();
@@ -2658,10 +2670,10 @@ void PlanCanvas::dropEvent(QDropEvent* event) {
     const auto payload = decode_symbol_drag(event->mimeData());
     const auto callback = m_symbol_dropped;
     if (!callback || !payload) { event->ignore(); return; }
-    const auto serial = m_symbol_drag_preview_serial;
     const auto point = symbolDropPoint(payload->id, event->position());
     if (!guard) { event->ignore(); return; }
-    if (serial != m_symbol_drag_preview_serial || !point) {
+    if (serial != m_symbol_drag_preview_serial) { event->ignore(); return; }
+    if (!point) {
         clearSymbolDragPreview();
         event->ignore();
         return;
@@ -2669,12 +2681,12 @@ void PlanCanvas::dropEvent(QDropEvent* event) {
     try {
         callback(payload->id, payload->scale, *point);
     } catch (...) {
-        if (guard) clearSymbolDragPreview();
+        if (guard && serial == m_symbol_drag_preview_serial) clearSymbolDragPreview();
         event->ignore();
         return;
     }
     if (!guard) { event->ignore(); return; }
-    clearSymbolDragPreview();
+    if (serial == m_symbol_drag_preview_serial) clearSymbolDragPreview();
     event->acceptProposedAction();
 }
 
@@ -6998,7 +7010,8 @@ void PlanCanvas::setInteractionAdmissionRequested(std::function<bool(bool)> call
 
 bool PlanCanvas::admitInteraction(bool context) {
     try {
-        return !m_interaction_admission_requested || m_interaction_admission_requested(context);
+        const auto callback = m_interaction_admission_requested;
+        return !callback || callback(context);
     } catch (...) {
         return false; // An observer cannot authorize a partially initialized gesture.
     }

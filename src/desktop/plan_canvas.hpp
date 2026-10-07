@@ -625,6 +625,12 @@ public:
     // Hovering never invokes the armed click-placement command.
     void setSymbolDragPreviewRequested(
         std::function<std::optional<CanvasEntity>(const QString&, double, Vec2)> callback);
+    [[nodiscard]] std::uint64_t symbolDragPreviewSerial() const noexcept {
+        return m_symbol_drag_preview_serial;
+    }
+    [[nodiscard]] bool symbolDragPreviewActive() const noexcept { return m_symbol_drag_active; }
+    // UI-thread completion replaces only the interactive ghost for the current drag.
+    bool completeSymbolDragPreview(std::uint64_t serial, std::optional<CanvasEntity> preview);
     void setAreaClassDropped(std::function<bool(QString, Vec2)> callback,
         std::function<void()> malformed_drop_rejected = {});
     // Interaction projection only; authoritative geometry is never changed.

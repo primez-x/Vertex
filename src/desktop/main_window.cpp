@@ -5208,15 +5208,38 @@ class MainWindow::Impl {
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
     };
+    struct HostedLibraryDragInput {
+        std::shared_ptr<const DocumentSnapshot> source;
+        std::vector<CanvasEntity> visible;
+        std::string layer_id;
+        std::optional<DrawingContext> architectural_context;
+        std::optional<BuildingViewFrame> plan_frame;
+        std::optional<std::map<QString,SitePresentationPlacement>> site_frames;
+        double width{};
+        double sill{};
+        double height{};
+        OpeningAssembly assembly;
+        std::optional<DoorOperation> operation;
+        // Only the serial library worker accesses this local profile cache.
+        std::shared_ptr<std::pair<std::string,Boundary>> plan_cache;
+    };
     struct LibraryDragPreviewCapture {
         QPointer<PlanCanvas> canvas;
         std::shared_ptr<const DocumentSnapshot> source;
         std::shared_ptr<const SourceEditAuthority> authority;
+        TransformViewportCapture viewport;
         QString catalog_id;
         double scale{};
         std::optional<BuildingViewFrame> plan_frame;
         std::optional<SitePresentationPlacement> site_frame;
         CanvasEntity artwork;
+        std::shared_ptr<const HostedLibraryDragInput> opening;
+    };
+    struct PendingLibraryDragPreview {
+        std::shared_ptr<const LibraryDragPreviewCapture> capture;
+        std::uint64_t serial{};
+        Vec2 point;
+        std::shared_ptr<std::optional<CanvasEntity>> result;
     };
     struct VisibleOpeningHost {
         Entity owner;
@@ -5362,6 +5385,9 @@ public:
         m_vertex_preview_timer->setObjectName(QStringLiteral("boundaryVertexPreviewPoll"));
         m_vertex_preview_timer->setInterval(16);
         QObject::connect(m_vertex_preview_timer, &QTimer::timeout, owner, [this] { pollVertexPreview(); });
+        m_library_drag_preview_timer=new QTimer(owner);
+        m_library_drag_preview_timer->setInterval(16);
+        QObject::connect(m_library_drag_preview_timer,&QTimer::timeout,owner,[this] { pollLibraryDragPreview(); });
     }
 
     ~Impl() {
@@ -5370,6 +5396,8 @@ public:
         m_opening_preview_queue.shutdown(false);
         m_vertex_preview_timer->stop();
         m_vertex_preview_queue.shutdown(false);
+        m_library_drag_preview_timer->stop();
+        m_library_drag_preview_queue.shutdown(false);
         // Jobs own detached values only. Join before destroying any owner state.
         try { waitForSaveBarrier(); }
         catch (...) { settleAutosave(false); }
@@ -33370,6 +33398,90 @@ public:
         return m_symbol_placement_frame ? unproject_plan_point(point,*m_symbol_placement_frame) : point;
     }
 
+    static std::optional<CanvasEntity> hostedLibraryDragGeometry(
+        const HostedLibraryDragInput& input,Vec2 point) {
+        const auto model=input.plan_frame ? unproject_plan_point(point,*input.plan_frame) : point;
+        const auto placement=visibleOpeningHostAt(*input.source,input.visible,model,point,input.width,
+            input.layer_id,input.architectural_context,input.site_frames ? &*input.site_frames : nullptr);
+        if (!placement) return std::nullopt;
+        auto host=placement->wall;
+        const auto length=segment_length(host.baseline);
+        if (input.width>length || placement->offset<0.0 || placement->offset+input.width>length) return std::nullopt;
+        const HostedOpening opening{"library-drag-opening",placement->offset,input.width,input.sill,input.height};
+        host.openings.push_back(opening);validate_wall_semantics(host);
+        CanvasEntity geometry{QStringLiteral("library-drag-preview"),QStringLiteral("opening"),
+            openingPlacementPlan(host,opening,input.assembly,input.operation,*input.plan_cache),0,false};
+        geometry.stroke_color=QColor(Qt::black);geometry.dark_stroke_color=QColor(210,226,239);
+        geometry.output_stroke_width_mm=.25;
+        if (placement->site_frame) geometry=site_presented_canvas_entity(geometry,*placement->site_frame);
+        else if (input.plan_frame) geometry.segments=project_plan_path(std::move(geometry.segments),*input.plan_frame);
+        return geometry;
+    }
+
+    bool libraryDragCaptureCurrent(const std::shared_ptr<const LibraryDragPreviewCapture>& capture) const noexcept {
+        try {
+            if (!capture || capture!=m_library_drag_capture || !capture->canvas || !capture->authority ||
+                !capture->source || !capture->canvas->isVisible() || !sourceEditAuthorityCurrent(*capture->authority) ||
+                m_boundary_session || m_linework_drawing || (m_pending_wall_start && !m_wall_chain_has_segments) ||
+                capture->canvas!=(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas)) return false;
+            const auto& viewport=capture->viewport;
+            const auto center=capture->canvas->viewCenter();
+            return viewport.canvas==capture->canvas && center.x==viewport.center.x && center.y==viewport.center.y &&
+                capture->canvas->viewScale()==viewport.zoom && capture->canvas->size()==viewport.size &&
+                capture->canvas->devicePixelRatioF()==viewport.dpr &&
+                capture->canvas->navigationGeneration()==viewport.navigation_generation &&
+                (!viewport.had_focus || capture->canvas->hasFocus());
+        } catch (...) { return false; }
+    }
+
+    bool libraryDragPreviewCurrent(const PendingLibraryDragPreview& request) const noexcept {
+        return libraryDragCaptureCurrent(request.capture) && request.capture->opening && request.result &&
+            request.capture->canvas->symbolDragPreviewActive() &&
+            request.capture->canvas->symbolDragPreviewSerial()==request.serial;
+    }
+
+    void cancelLibraryDragPreviewWork() {
+        m_pending_library_drag_preview.reset();
+        if (m_running_library_drag_preview)
+            (void)m_library_drag_preview_queue.cancel(m_library_drag_preview_sequence);
+    }
+
+    void startLibraryDragPreviewJob(PendingLibraryDragPreview request) {
+        const auto input=request.capture->opening;
+        const auto point=request.point;
+        const auto result=request.result;
+        m_library_drag_preview_sequence=m_library_drag_preview_queue.enqueue(
+            [input,point,result](const RegenerationCancellationToken& cancellation) {
+                if (!cancellation.is_cancelled()) {
+                    auto geometry=hostedLibraryDragGeometry(*input,point);
+                    if (!cancellation.is_cancelled()) *result=std::move(geometry);
+                }
+                return RegenerationReceipt{input->source->revision(),{}};
+            });
+        m_running_library_drag_preview=std::move(request);
+        m_library_drag_preview_timer->start();
+    }
+
+    void pollLibraryDragPreview() {
+        if (m_running_library_drag_preview && !libraryDragPreviewCurrent(*m_running_library_drag_preview))
+            (void)m_library_drag_preview_queue.cancel(m_library_drag_preview_sequence);
+        for (auto& completion:m_library_drag_preview_queue.take_completed()) {
+            if (!m_running_library_drag_preview || completion.sequence!=m_library_drag_preview_sequence) continue;
+            auto request=std::move(*m_running_library_drag_preview);
+            m_running_library_drag_preview.reset();
+            if (!libraryDragPreviewCurrent(request)) continue;
+            if (completion.succeeded() && completion.receipt->source_revision==request.capture->source->revision())
+                (void)request.capture->canvas->completeSymbolDragPreview(request.serial,std::move(*request.result));
+            else (void)request.capture->canvas->completeSymbolDragPreview(request.serial,std::nullopt);
+        }
+        if (!m_running_library_drag_preview && m_pending_library_drag_preview) {
+            auto request=std::move(*m_pending_library_drag_preview);
+            m_pending_library_drag_preview.reset();
+            if (libraryDragPreviewCurrent(request)) startLibraryDragPreviewJob(std::move(request));
+        }
+        if (!m_running_library_drag_preview && !m_pending_library_drag_preview) m_library_drag_preview_timer->stop();
+    }
+
     std::optional<CanvasEntity> symbolLibraryDragPreview(PlanCanvas* canvas,
         const QString& id,double scale,Vec2 point) {
         const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
@@ -33386,42 +33498,45 @@ public:
         if (!context || !context->complete()) return std::nullopt;
         if (!m_library_drag_capture || m_library_drag_capture->canvas!=canvas ||
             m_library_drag_capture->catalog_id!=id || m_library_drag_capture->scale!=scale ||
-            !sourceEditAuthorityCurrent(*m_library_drag_capture->authority) ||
+            !libraryDragCaptureCurrent(m_library_drag_capture) ||
             !source->shares_full_snapshot_with(*m_library_drag_capture->source)) {
             LibraryDragPreviewCapture capture;
             capture.canvas=canvas;capture.source=source;
             capture.authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
+            capture.viewport=TransformViewportCapture{canvas,canvas->viewCenter(),canvas->viewScale(),canvas->size(),
+                canvas->devicePixelRatioF(),canvas->navigationGeneration(),canvas->hasFocus()};
             capture.catalog_id=id;capture.scale=scale;
             if (!site) capture.plan_frame=canvasTransformPlanFrame(*source);
             if (site && !hosted) capture.site_frame=siteAnnotationCreationFrame(*source,*context);
             if (!hosted) capture.artwork=symbolPlacementArtwork(*definition,scale,context->layer_id).second;
-            m_library_drag_capture=std::move(capture);
+            else {
+                HostedLibraryDragInput input;
+                input.source=source;input.visible=canvas->entities();input.layer_id=context->layer_id;
+                input.architectural_context=capture.plan_frame ? context : std::nullopt;
+                input.plan_frame=capture.plan_frame;
+                if (site) input.site_frames=m_site_plan_frames;
+                const bool window=definition->category=="10_windows";
+                input.width=catalog_opening_width(*definition)*scale;
+                input.sill=window ? .9 : 0.0;input.height=window ? 1.2 : 2.1;
+                input.assembly=catalog_opening_assembly(window ? QStringLiteral("window") : QStringLiteral("door"),id);
+                if (input.assembly.window_layout==WindowLayoutKind::bay) input.assembly.window_bay_projection_m*=scale;
+                input.operation=catalog_door_operation(*definition);
+                input.plan_cache=std::make_shared<std::pair<std::string,Boundary>>();
+                capture.opening=std::make_shared<HostedLibraryDragInput>(std::move(input));
+            }
+            m_library_drag_capture=std::make_shared<LibraryDragPreviewCapture>(std::move(capture));
         }
         const auto& capture=*m_library_drag_capture;
         if (hosted) {
-            const bool window=definition->category=="10_windows";
-            const auto kind=window ? QStringLiteral("window") : QStringLiteral("door");
-            const auto width=catalog_opening_width(*definition)*scale;
-            const auto model=capture.plan_frame ? unproject_plan_point(point,*capture.plan_frame) : point;
-            const auto placement=visibleOpeningHostAt(*source,canvas->entities(),model,point,width,
-                context->layer_id,capture.plan_frame ? context : std::nullopt,site ? &m_site_plan_frames : nullptr);
-            if (!placement) return std::nullopt;
-            auto host=placement->wall;
-            const auto length=segment_length(host.baseline);
-            if (width>length || placement->offset<0.0 || placement->offset+width>length) return std::nullopt;
-            const HostedOpening opening{"library-drag-opening",placement->offset,width,window ? .9 : 0.0,window ? 1.2 : 2.1};
-            host.openings.push_back(opening);validate_wall_semantics(host);
-            auto assembly=catalog_opening_assembly(kind,id);
-            if (assembly.window_layout==WindowLayoutKind::bay) assembly.window_bay_projection_m*=scale;
-            const auto operation=catalog_door_operation(*definition);
-            CanvasEntity geometry{QStringLiteral("library-drag-preview"),QStringLiteral("opening"),
-                openingPlacementPlan(host,opening,assembly,operation,m_library_drag_opening_cache),0,false};
-            geometry.stroke_color=QColor(Qt::black);geometry.dark_stroke_color=QColor(210,226,239);
-            geometry.output_stroke_width_mm=.25;
-            if (placement->site_frame) geometry=site_presented_canvas_entity(geometry,*placement->site_frame);
-            else if (capture.plan_frame) geometry.segments=project_plan_path(std::move(geometry.segments),*capture.plan_frame);
-            return geometry;
+            PendingLibraryDragPreview request{m_library_drag_capture,canvas->symbolDragPreviewSerial(),point,
+                std::make_shared<std::optional<CanvasEntity>>()};
+            if (m_running_library_drag_preview) {
+                (void)m_library_drag_preview_queue.cancel(m_library_drag_preview_sequence);
+                m_pending_library_drag_preview=std::move(request);
+            } else startLibraryDragPreviewJob(std::move(request));
+            return std::nullopt;
         }
+        cancelLibraryDragPreviewWork();
         const auto model=capture.site_frame ? site_source_plan_point(point,*capture.site_frame) :
             capture.plan_frame ? unproject_plan_point(point,*capture.plan_frame) : point;
         auto geometry=capture.artwork;
@@ -39372,7 +39487,9 @@ private:
         });
         canvas->setSymbolDragPreviewRequested([this,canvas](const QString& id,double scale,Vec2 point) {
             try {return symbolLibraryDragPreview(canvas,id,scale,point);}
-            catch (const std::exception&) {m_library_drag_capture.reset();return std::optional<CanvasEntity>{};}
+            catch (const std::exception&) {
+                m_library_drag_capture.reset();cancelLibraryDragPreviewWork();return std::optional<CanvasEntity>{};
+            }
         });
         canvas->setEntitiesSelected([this,canvas](QStringList ids, bool additive) {
             try {
@@ -41589,6 +41706,9 @@ private:
     }
 
     void clearSitePublication() {
+        if (m_library_drag_capture && siteCanvas(m_library_drag_capture->canvas)) {
+            m_library_drag_capture.reset();cancelLibraryDragPreviewWork();
+        }
         if (m_opening_preview_site_input) clearOpeningWidthCapture();
         if (m_wall_move_site_capture) {
             m_wall_move_site_capture.reset(); m_site_wall_move_preview.reset(); m_site_wall_move_error.clear();
@@ -42141,6 +42261,7 @@ private:
         m_plan_publication_source.reset();
         m_plan_publication_authority.reset();
         m_library_drag_capture.reset();
+        cancelLibraryDragPreviewWork();
         clearOpeningWidthCapture();
         m_vertex_preview_authority.reset();
         m_wall_move_authority.reset();
@@ -50313,8 +50434,12 @@ private:
     std::optional<BuildingViewFrame> m_symbol_placement_frame;
     std::optional<SymbolInstance> m_symbol_placement_instance;
     std::optional<CanvasEntity> m_symbol_placement_preview;
-    std::optional<LibraryDragPreviewCapture> m_library_drag_capture;
-    std::pair<std::string,Boundary> m_library_drag_opening_cache;
+    std::shared_ptr<const LibraryDragPreviewCapture> m_library_drag_capture;
+    WorkspaceRegenerationQueue m_library_drag_preview_queue;
+    QTimer* m_library_drag_preview_timer{};
+    std::uint64_t m_library_drag_preview_sequence{};
+    std::optional<PendingLibraryDragPreview> m_running_library_drag_preview;
+    std::optional<PendingLibraryDragPreview> m_pending_library_drag_preview;
     QPushButton* m_drawing_measurement_button{};
     QAction* m_architectural_view_control_action{};
     std::vector<QAction*> m_architectural_actions;
