@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 physical-object rotation worker implementation
+
+Physical rotation preparation for columns, roofs, stairs, independent railings,
+beams and placed assembly roots now runs in the existing preview worker in
+Measurement, horizontal Architectural plans and Site. Press captures the actual
+source and retained scene once; pointer requests supply only their rotation and
+pivot. Native admission, authored consequences and dependent geometry/labels
+use that captured source. The worker retains the exact command for release and
+restores the object's physical selection axes before Site presentation is
+applied once. Unchanged selected presentations remain available when rotating
+back to the starting angle. Hosted railings keep their host-owned refusal.
+
+Transforms now fence viewport, navigation, focus and device scale in ordinary
+plans as well as Site. Site release also checks source context and the live
+preview serial; worker-prepared physical rotation applies directly. Embedded
+assembly children, annotations and area/stroke rotation retain their existing
+execution lanes. No builds, tests, probes, native jobs, packages, app launches or
+installations ran; compilation, runtime behavior and responsiveness remain
+unverified. The installed candidate is unchanged.
+
+Identity rotation bypasses transform codecs, and exact origin-return rotation,
+physical axis resizing and Site wall movement finish without dirtying the file
+or adding an Undo entry. The no-op decision follows the same captured-command
+and live-context admission as a real edit. Boundary and opening preview
+admission now use local exact presentation maps and owner sets, preserving the
+first retained duplicate and all derived-label guards without repeated full
+scene searches. Independent source review accepted the repaired rotation path,
+no-op handling and presentation lookup equivalence.
+
 ### October 7 Site wall-group drag implementation
 
 Site wall-group drags capture the displayed source, local scene and presentation

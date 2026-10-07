@@ -216,8 +216,31 @@ bool unambiguous_entity_presentations(const std::vector<CanvasEntity>& entities,
     return true;
 }
 
-bool same_label_presentation(const CanvasLabel& left, const CanvasLabel& right) {
-    return left.id == right.id && left.callout_role == right.callout_role;
+using PresentationSelection = QHash<QPair<QString, QString>, bool>;
+
+PresentationSelection retained_entity_presentation_selection(
+    const std::vector<CanvasEntity>& entities) {
+    PresentationSelection selected;
+    selected.reserve(static_cast<qsizetype>(entities.size()));
+    for (const auto& entity : entities) {
+        const QPair<QString, QString> key{entity.id, entity.presentation_key};
+        // Match find_if: the first retained presentation supplies selection,
+        // even when a later duplicate has a different selected flag.
+        if (!selected.contains(key)) selected.insert(key, entity.selected);
+    }
+    return selected;
+}
+
+PresentationSelection retained_label_presentation_selection(
+    const std::vector<CanvasLabel>& labels) {
+    PresentationSelection selected;
+    selected.reserve(static_cast<qsizetype>(labels.size()));
+    for (const auto& label : labels) {
+        // Label presentation identity is exactly owner ID plus callout role.
+        const QPair<QString, QString> key{label.id, label.callout_role};
+        if (!selected.contains(key)) selected.insert(key, label.selected);
+    }
+    return selected;
 }
 
 int label_text_alignment(const CanvasLabel& label) {
@@ -4382,19 +4405,20 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
     }
     std::vector<CanvasLabel> admitted_labels;
     admitted_labels.reserve(labels.size());
+    const auto retained_labels = retained_label_presentation_selection(m_labels);
+    QSet<QString> proposed_owner_ids;
+    for (const auto& entity : *result) proposed_owner_ids.insert(entity.id);
     const auto finite_point = [](Vec2 point) {
         return std::isfinite(point.x) && std::isfinite(point.y);
     };
     for (auto& label : labels) {
-        const auto original = std::find_if(m_labels.begin(), m_labels.end(),
-            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
-        if (original == m_labels.end()) {
+        const auto original = retained_labels.constFind({label.id, label.callout_role});
+        if (original == retained_labels.cend()) {
             // New derived callouts must belong to this admitted projection,
             // including linked-view dimensions whose line and label share ID.
-            if (std::none_of(result->begin(), result->end(),
-                [&](const auto& entity) { return entity.id == label.id; })) continue;
+            if (!proposed_owner_ids.contains(label.id)) continue;
             label.selected = false;
-        } else label.selected = original->selected;
+        } else label.selected = original.value();
         // Empty text is an intentional clearing override, not drawable input.
         // Match the committed output's finite presentation requirements for
         // visible labels, including optional placement and fill values.
@@ -4418,10 +4442,10 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
         }
         admitted_labels.push_back(std::move(label));
     }
+    const auto retained_entities = retained_entity_presentation_selection(m_entities);
     for (auto& entity : *result) {
-        const auto original = std::find_if(m_entities.begin(), m_entities.end(),
-            [&](const CanvasEntity& item) { return same_entity_presentation(item, entity); });
-        if (original != m_entities.end()) entity.selected = original->selected;
+        const auto original = retained_entities.constFind({entity.id, entity.presentation_key});
+        if (original != retained_entities.cend()) entity.selected = original.value();
     }
     m_opening_width_entities_preview = std::move(*result);
     rebuildEntityPresentationIndex(m_opening_width_entities_preview_index, m_opening_width_entities_preview);
@@ -4556,30 +4580,32 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
         if (m_vertex_release_pending) QTimer::singleShot(0,this,[this,serial]{finishBoundaryVertexPreview(serial);});
         return true;
     }
+    const auto retained_entities = retained_entity_presentation_selection(m_entities);
+    const auto retained_labels = retained_label_presentation_selection(m_labels);
+    QSet<QString> retained_owner_ids;
+    for (const auto& entity : m_entities) retained_owner_ids.insert(entity.id);
+    QSet<QString> proposed_view_dimension_ids;
+    for (const auto& entity : *result)
+        if (entity.type == QStringLiteral("section_overlay") && entity.dimension_end_ticks)
+            proposed_view_dimension_ids.insert(entity.id);
     for (auto& entity : *result) {
-        const auto original = std::find_if(m_entities.begin(), m_entities.end(),
-            [&](const CanvasEntity& item) { return same_entity_presentation(item, entity); });
-        if (original != m_entities.end()) entity.selected = original->selected;
+        const auto original = retained_entities.constFind({entity.id, entity.presentation_key});
+        if (original != retained_entities.cend()) entity.selected = original.value();
     }
     for (auto& label : labels) {
-        const auto original = std::find_if(m_labels.begin(), m_labels.end(),
-            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
-        if (original == m_labels.end()) {
+        const auto original = retained_labels.constFind({label.id, label.callout_role});
+        if (original == retained_labels.cend()) {
             // A repaired area may acquire its first qualified quantity. Only
             // Derived area labels belong to retained visible owners. A bound
             // view dimension may newly resolve during the proposal; admit its
             // value only alongside that exact proposed dimension line.
             const bool area_label = label.plan_only && label.avoid_components &&
-                std::any_of(m_entities.begin(), m_entities.end(),
-                    [&](const auto& entity) { return entity.id == label.id; });
+                retained_owner_ids.contains(label.id);
             const bool view_dimension = label.callout_role.isEmpty() &&
-                std::any_of(result->begin(), result->end(), [&](const auto& entity) {
-                    return entity.id == label.id && entity.type == QStringLiteral("section_overlay") &&
-                        entity.dimension_end_ticks;
-                });
+                proposed_view_dimension_ids.contains(label.id);
             if (!area_label && !view_dimension) continue;
             label.selected=false;
-        } else label.selected = original->selected;
+        } else label.selected = original.value();
         m_boundary_vertex_labels_preview.push_back(std::move(label));
     }
     m_boundary_vertex_entities_preview = std::move(*result);
