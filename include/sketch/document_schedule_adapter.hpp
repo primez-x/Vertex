@@ -13,6 +13,9 @@ namespace sketch {
 // entities. The ScheduleSnapshot is tied to the source Document revision;
 // diagnostics make malformed or incomplete rows visible without allowing a
 // partial row to masquerade as certified output.
+// Room footprints accept canonical boundary or retained legacy segments;
+// canonical measurements take precedence over aliases. An invalid supplied
+// footprint cannot fall back to a claimed area. Missing height stays absent.
 struct DocumentScheduleProjection {
     ScheduleSnapshot snapshot;
     std::vector<std::string> diagnostics;

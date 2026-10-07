@@ -1230,7 +1230,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U206 — Open a room schedule**
-  - Expected: Room names and areas match the project.
+  - Steps: Open **Tools > Schedules** and view rooms. Compare two named rooms of different sizes, including a room with a hole and a 2D room without a measured height. Resize and rename a room, then save and reopen the project.
+  - Expected: Names and net floor areas match the drawing; holes are deducted. Missing height and volume remain blank. Entered heights and calculated volumes follow the current measurements. Calculation details identify the actual saved footprint and measurements, and updates persist after reopening.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

@@ -39,6 +39,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <numbers>
 #include <numeric>
 #include <set>
@@ -494,6 +495,84 @@ bool finite_rect(const QRectF& rect) {
     return std::isfinite(rect.left()) && std::isfinite(rect.right()) &&
            std::isfinite(rect.top()) && std::isfinite(rect.bottom());
 }
+
+// Placement only asks whether any existing label intersects a candidate.
+// Keep the exact rectangles and Qt predicate, using cells to narrow that
+// boolean query. Large or unsafe rectangles always take the original scan.
+class LabelObstacleIndex {
+public:
+    void add(const QRectF& bounds) {
+        m_rectangles.push_back(bounds);
+        if (m_indexed) index(m_rectangles.size() - 1);
+    }
+
+    void enable() {
+        if (m_indexed) return;
+        m_indexed = true;
+        for (std::size_t i = 0; i < m_rectangles.size(); ++i) index(i);
+    }
+
+    [[nodiscard]] bool intersects(const QRectF& candidate) const {
+        const auto range = cellRange(candidate);
+        if (!m_indexed || !range) {
+            return std::any_of(m_rectangles.begin(), m_rectangles.end(),
+                [&](const auto& bounds) { return candidate.intersects(bounds); });
+        }
+        for (const auto i : m_fallback)
+            if (candidate.intersects(m_rectangles[i])) return true;
+        for (auto x = range->left; x <= range->right; ++x) {
+            for (auto y = range->top; y <= range->bottom; ++y) {
+                const auto cell = m_cells.find({x, y});
+                if (cell == m_cells.end()) continue;
+                for (const auto i : cell->second)
+                    if (candidate.intersects(m_rectangles[i])) return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] const std::vector<QRectF>& rectangles() const { return m_rectangles; }
+
+private:
+    struct CellRange {
+        std::int64_t left, right, top, bottom;
+    };
+
+    static std::optional<CellRange> cellRange(const QRectF& bounds) {
+        const auto normalized = bounds.normalized();
+        // Power-of-two cells preserve ordered endpoints without lossy integer
+        // quantization. Guard conversion and bound both insertion/query work.
+        constexpr double cell_size = 128.0;
+        constexpr double coordinate_limit = 1099511627776.0;
+        if (!finite_rect(normalized) ||
+            std::max({std::abs(normalized.left()), std::abs(normalized.right()),
+                      std::abs(normalized.top()), std::abs(normalized.bottom())}) > coordinate_limit)
+            return std::nullopt;
+        const CellRange range{
+            static_cast<std::int64_t>(std::floor(normalized.left() / cell_size)),
+            static_cast<std::int64_t>(std::floor(normalized.right() / cell_size)),
+            static_cast<std::int64_t>(std::floor(normalized.top() / cell_size)),
+            static_cast<std::int64_t>(std::floor(normalized.bottom() / cell_size))};
+        const auto columns = range.right - range.left + 1;
+        const auto rows = range.bottom - range.top + 1;
+        if (columns <= 0 || rows <= 0 || columns > 64 || rows > 64 || columns * rows > 64)
+            return std::nullopt;
+        return range;
+    }
+
+    void index(std::size_t i) {
+        const auto range = cellRange(m_rectangles[i]);
+        if (!range) { m_fallback.push_back(i); return; }
+        for (auto x = range->left; x <= range->right; ++x)
+            for (auto y = range->top; y <= range->bottom; ++y)
+                m_cells[{x, y}].push_back(i);
+    }
+
+    bool m_indexed{};
+    std::vector<QRectF> m_rectangles;
+    std::vector<std::size_t> m_fallback;
+    std::map<std::pair<std::int64_t, std::int64_t>, std::vector<std::size_t>> m_cells;
+};
 
 bool ordinary_axis_transform(const QTransform& transform) {
     return transform.isAffine() && transform.m33() == 1.0 &&
@@ -3317,7 +3396,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     };
     std::vector<QRectF> footprints(labels.size());
     std::vector<LabelPaintLayout> paint_layouts(labels.size());
-    std::vector<QRectF> obstacles;
+    LabelObstacleIndex obstacles;
     std::vector<std::size_t> automatic_labels;
     const auto finite_rect = [](const QRectF& bounds) {
         return std::isfinite(bounds.left()) && std::isfinite(bounds.right()) &&
@@ -3363,7 +3442,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         if (!finite_rect(bounds)) continue;
         if (label.automatic_linear_placement && valid_automatic(*label.automatic_linear_placement))
             automatic_labels.push_back(i);
-        else obstacles.push_back(bounds);
+        else obstacles.add(bounds);
     }
     QFont grid_font = base_font;
     grid_font.setPixelSize(output ? static_cast<int>(std::clamp(std::lround(
@@ -3382,13 +3461,14 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
             auto bounds = grid_metrics.boundingRect(prefix + QString::number(line.index));
             bounds.moveCenter((line.axis == ReferenceGridAxis::x ? end : start) + outward*(6.0/length));
             bounds.adjust(-4, -2, 4, 2);
-            if (finite_rect(bounds)) obstacles.push_back(bounds);
+            if (finite_rect(bounds)) obstacles.add(bounds);
         }
     }
     std::stable_sort(automatic_labels.begin(), automatic_labels.end(), [&](auto a, auto b) {
         if (labels[a].id != labels[b].id) return labels[a].id < labels[b].id;
         return labels[a].callout_role < labels[b].callout_role;
     });
+    if (!automatic_labels.empty()) obstacles.enable();
     // Millimetres converted through the actual paper/device scale, including
     // high-DPI and fitted-sheet output. Padded rotated rectangles are a
     // conservative footprint: their glyphs/backgrounds cannot overlap.
@@ -3439,11 +3519,9 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
             const auto bounds = footprint.translated(model_screen(position));
             if (!std::isfinite(position.x) || !std::isfinite(position.y) || !finite_rect(bounds)) return false;
             const auto padded = bounds.adjusted(-gap, -gap, gap, gap);
-            if (std::any_of(obstacles.begin(), obstacles.end(), [&](const auto& other) {
-                return padded.intersects(other);
-            })) return false;
+            if (obstacles.intersects(padded)) return false;
             label.position = position;
-            obstacles.push_back(bounds);
+            obstacles.add(bounds);
             return true;
         };
         for (int lane = 0; lane < 16 && !placed; ++lane) {
@@ -3456,7 +3534,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
             // obstacle in the midpoint normal, rather than unbounded retries.
             double offset_pixels = baseline_distance*scale;
             const auto origin = model_screen(midpoint);
-            for (const auto& other : obstacles)
+            for (const auto& other : obstacles.rectangles())
                 for (const auto corner : {other.topLeft(), other.topRight(), other.bottomLeft(), other.bottomRight()})
                     offset_pixels = std::max(offset_pixels,
                         QPointF::dotProduct(corner-origin, screen_normal)+outward_extent+gap+1);
@@ -3464,7 +3542,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
                 // Overflowing metadata is presentation-invalid; retain the
                 // finite source anchor and reserve its footprint for others.
                 const auto bounds = footprint.translated(model_screen(label.position));
-                if (finite_rect(bounds)) obstacles.push_back(bounds);
+                if (finite_rect(bounds)) obstacles.add(bounds);
             }
         }
     }

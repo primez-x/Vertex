@@ -229,6 +229,25 @@ painting path. Independent source review approved the cache lifetime, font
 policy and culling envelope. This source batch has not been compiled, rendered
 or measured; the installed candidate remains unchanged.
 
+Automatic dimension placement now narrows collision queries through a temporary
+cell index. It retains the exact rectangles, Qt intersection predicate, stable
+label order and accepted placement sequence. Oversized or unsafe queries use
+the original complete scan; oversized obstacles remain in every query's
+fallback set. The dense-plan escape still examines every original obstacle in
+order. This is a source implementation, not a measured responsiveness result.
+Independent source review approved the conservative query and bounded indexing.
+
+Room schedules now accept saved legacy segment footprints and height aliases
+with canonical fields taking precedence. A supplied malformed footprint cannot
+silently fall back to a claimed area. Net floor area retains analytical hole
+deductions, unknown height/volume stays absent, and read-only quantity provenance
+identifies the actual retained fields. The schedule display still uses one
+canonical height column. No document migration, inferred measurement or appraisal
+eligibility change is introduced. Compilation and application behavior remain
+unobserved for these source changes.
+Independent source review approved geometry precedence, quantity provenance and
+the retained schedule editing boundary.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

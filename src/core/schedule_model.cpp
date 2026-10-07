@@ -67,6 +67,7 @@ ScheduleSnapshot build_schedule(const std::vector<ScheduleRecord>& records,
                 // map.  It remains provenance-only and therefore cannot be
                 // edited as a schedule cell.
                 const bool geometry_source = ref.property == "boundary" ||
+                                             ref.property == "segments" ||
                                              ref.property == "holes" ||
                                              ref.property == "geometry";
                 if (source == sources.end() || (ref.property != "mark" &&

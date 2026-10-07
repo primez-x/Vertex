@@ -193,7 +193,12 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
 void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
               std::vector<std::string>& diagnostics) {
     const auto area = finite_field(entity, "area_m2");
-    const auto boundary = boundary_field(entity, "boundary");
+    const auto boundary_name = field(entity, "boundary") != nullptr ? "boundary" : "segments";
+    const auto boundary = boundary_field(entity, boundary_name);
+    if (field(entity, boundary_name) != nullptr && !boundary) {
+        diagnostic(diagnostics, entity, std::string(boundary_name) + " must contain valid segments");
+        return;
+    }
     const bool use_stored_area = !boundary && area.has_value();
     double area_value = use_stored_area ? *area : 0.0;
     std::vector<Boundary> holes;
@@ -232,7 +237,7 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
             }
         }
         area_value = std::abs(signed_area(*boundary));
-        area_sources.push_back({entity.id, "boundary"});
+        area_sources.push_back({entity.id, boundary_name});
         for (const auto& hole : holes) {
             area_value -= std::abs(signed_area(hole));
         }
@@ -257,9 +262,10 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
     if (const auto name = text_field(entity, "name")) record.properties.emplace("name", *name);
     if (const auto boundary_id = text_field(entity, "boundary_id"))
         record.properties.emplace("boundary_id", *boundary_id);
-    const auto height = finite_field(entity, "height_m");
-    if (field(entity, "height_m") != nullptr && (!height || !positive(*height))) {
-        diagnostic(diagnostics, entity, "height_m must be finite and positive");
+    const auto height_name = field(entity, "height_m") != nullptr ? "height_m" : "height";
+    const auto height = finite_field(entity, height_name);
+    if (field(entity, height_name) != nullptr && (!height || !positive(*height))) {
+        diagnostic(diagnostics, entity, std::string(height_name) + " must be finite and positive");
         return;
     }
     if (height) record.properties.emplace("height_m", ScheduleQuantity{*height, ScheduleUnit::metre});
@@ -476,6 +482,18 @@ DocumentScheduleProjection project_schedules(
             if (source_height != row.cells.end()) {
                 source_height->second.editable = false;
                 source_height->second.explanation = "Stored room height from the document";
+                const auto source = document.entities().find(row.object_id);
+                if (source != document.entities().end() &&
+                    field(source->second, "height_m") == nullptr && field(source->second, "height") != nullptr) {
+                    // Keep one canonical display column, but identify the
+                    // actual retained measurement in read-only provenance.
+                    source_height->second.sources = {{row.object_id, "height"}};
+                    const auto volume = row.cells.find("volume");
+                    if (volume != row.cells.end())
+                        for (auto& ref : volume->second.sources)
+                            if (ref.object_id == row.object_id && ref.property == "height_m")
+                                ref.property = "height";
+                }
             }
         }
     } catch (const std::exception& error) {
