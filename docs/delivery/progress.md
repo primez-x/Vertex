@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 broader Site model movement and area-label capture
+
+The captured Site move lane now covers real transformable architectural
+objects, closed measured areas and measured strokes, including mixed model
+groups in one source frame. It retains the existing complete translation
+builder, original refusals and exact worker command on release. Physical
+selection frames follow their candidate dimensions; placed assembly frames
+translate without losing orientation. References, typed annotations and
+embedded children retain their current handling.
+
+Shared Site press capture now supplies retained area-label footprints for
+corner, physical resize, rotation and model-move proposals. These inputs were
+empty, causing non-appraisal area callouts to reject an otherwise valid
+projection. Component obstacles retain their owner and presentation identities,
+so moved and resized assemblies use their candidate bounds rather than their
+old positions. Label layout is partitioned by property, building, floor and
+rigid presentation frame; components and labels in another presentation cannot
+displace that area's local label. Geometry, frames, text metrics and obstacles
+are values captured once before worker execution. No builds, tests, probes, native jobs, packages,
+app launches or installations ran. Compilation, runtime behavior and
+responsiveness remain unverified; the installed candidate is unchanged.
+
 ### October 7 physical-object rotation worker implementation
 
 Physical rotation preparation for columns, roofs, stairs, independent railings,
