@@ -424,6 +424,7 @@ drawing; switching modes does not change existing geometry.
   - Wall handle check: Select a wall containing a door and a window. Drag either endpoint grip to change its length and direction; start slightly off the grip centre to check that it does not jump. The other endpoint stays fixed, connected geometry and wall measurements follow the preview, and one Undo restores the edit. Try an invalid shortening that would put an opening beyond the wall, then drag back to a valid length before releasing. Repeat on a curved wall: its signed turn remains curved, rather than becoming a straight stroke.
   - Length magnets: Repeat endpoint drags at several zoom levels in imperial and metric. Read the live length, including the arc length of a curved wall. Approach another visible wall endpoint and centerline; its exact contact takes priority over round dimensions. Hold Shift or turn Snap off for fine placement, then release Shift without moving before ending the drag. Repeat in a rotated/reflected saved plan, with the opposite endpoint cropped out, and in Site Plan. Hidden or cropped geometry must not attract the grip; returning to the original point makes no edit.
   - Connected corner: With Snap on, nudge a joined wall corner by the smallest available length increment. The adjoining wall must follow the preview; its old corner or baseline must not pull the grip back to the starting location. An unrelated nearby endpoint remains a valid magnet.
+  - Measured corner: Drag a completed measured area's corner, then the endpoint of a measured line with a saved dimension or relationship. Release immediately after the final movement. Related geometry, dimensions, room labels and Details calculations must agree with the final preview and change in one Undo step. Repeat in a reflected/cropped horizontal plan, Site Plan and a recovery copy. Escape, a conflicting locked measurement or navigation during a pending drag must leave the original drawing intact.
   - View check: Repeat in Measurement, Site Plan and a shifted, rotated or reflected horizontal Architectural plan. Cropped-out or depth-hidden endpoints offer no grip, and elevations and sections offer quick properties instead. Zoom away and back or press Escape during a drag, then release: no endpoint change should apply. Save and reopen a valid edit, then undo and redo it.
   - Release check: Release immediately after moving the grip, before its last preview finishes. Only the final valid proposal may apply, once. Return to the starting point and release; no edit is added. Repeat from an unsaved recovery copy and confirm the recovered project still reports unsaved work.
   - Notes / issues / screenshots: ____________________
@@ -750,6 +751,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Select a symbol. Drag its right/left side handle, then its top/bottom side handle. Double-click it and enter exact width and depth.
   - Expected: Each side handle changes only its corresponding dimension; the opposite edge stays fixed. Dimensions appear on the canvas, including on rotated symbols. Exact entries update the footprint and undo restores each edit.
   - Rotated plan check: Resize newly placed furniture in a rotated horizontal architectural plan. Drag each side handle separately; the opposite side stays fixed, and Properties shows the same physical width and depth as the canvas.
+  - Site check: Repeat with a rotated building in Site Plan. Drag both width and depth handles; the fixed opposite edge and detailed artwork must stay in the same Site location. Release while the preview is pending, then compare the saved dimensions, Undo, Redo and reopen. A zero-change drag adds no edit.
   - Also try: Resize a flipped symbol with custom colors. Release as soon as the final preview appears, then Undo and Redo. Start another resize and press Escape; its size and artwork must remain unchanged. In a fresh drag, move a side handle away and back to its starting dimension before release; no extra Undo step should appear.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -764,6 +766,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Note the symbol's starting angle. Drag the rotation handle to 45, 90 and 180 degrees, releasing between drags. Hold Shift to choose an angle between snapping points. Return to the starting angle (zero for an initially unrotated symbol).
   - Expected: The selection box and rotation handle retain the object's angle after release. Rotation snaps every 45 degrees, Shift permits fine adjustment, and a live angle matches the saved orientation. Returning to the starting angle restores the original orientation; undo/redo and save/reopen preserve it.
   - Rotated plan check: Repeat with a newly placed furniture item in a rotated horizontal architectural plan. The degree readout and 45-degree stops match the object's saved angle in Properties, even though the view is rotated. Changing the plan's viewing angle does not rotate the furniture itself.
+  - Site check: Rotate furniture in a shifted or rotated building's Site presentation, then resize it proportionally. Its artwork, physical dimensions and selection frame must match the final preview after release. Cancel one drag and return another to its starting size and angle. Repeat after opening a recovery copy.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -827,6 +830,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U129 — Move and rotate a label**
+  - Site check: Add ordinary text in a rotated building's Site Plan. Rotate it and resize its text with the corner grip. Release while the final preview is pending; the accepted text must retain its final size, position and angle. Undo, Redo, save and reopen; cancel another drag with Escape.
   - Steps: Add ordinary text from + Text, select it and move it. Drag its rotation grip, release and double-click to compare its saved angle. Use the corner handle to resize its text. Repeat in a rotated or reflected horizontal plan, then Undo, Redo, save and reopen. Cancel one drag with Escape and return another to its starting angle before releasing.
   - Expected: It stays readable and retains its position and angle.
   - Result: Not tested
@@ -902,6 +906,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U142 — Rotate and flip a reference**
+  - Site check: Select a calibrated reference in Site Plan. Rotate it and resize it proportionally, then release while its final preview is pending. Check its alignment, image, flip settings and calibration, then Undo, Redo and reopen. Cancel one drag and return another exactly to its original size and angle before release.
   - Steps: Select a calibrated reference and drag its rotation grip to a common angle, then use Shift for a fine angle. Release and compare its saved angle. Flip it in properties, rotate it again and check both settings. Undo, Redo, save and reopen; cancel one rotation with Escape. Its calibration record and image must remain intact.
   - Expected: The image aligns as intended without moving unrelated geometry.
   - Result: Not tested

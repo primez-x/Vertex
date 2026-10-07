@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site presentation transforms and measured corners
+
+Site Plan symbols, authored text and calibrated references now use the
+captured presentation worker and prepared publication path. Symbol width and
+depth handles prepare independent axis changes there as well. Typed owner
+and child identities remain separate from render aliases; local captured
+artwork, labels and references apply their captured Site placement once.
+Release checks the Site edit/publication generations as well as source,
+selection, view, viewport, serial, exact intent and font/DPI before publishing
+the consumed ticket. The previous Site presentation command-building and
+native-release fallbacks are removed. Generic Site measured geometry and
+embedded assembly transforms still retain their previous path.
+
+Measured boundary and linework endpoint drags now also capture publication
+authority. Their existing complete constraint commands receive authored
+consequences and native preparation in the worker before candidate projection.
+Release publishes that exact prepared candidate once, including in Site and
+recovery, instead of augmenting and readmitting it after the preview. Unchanged
+candidates retain captured presentations; original-point release remains without history.
+These source changes remain uncompiled and unexercised. No build, test, probe,
+native job, launch, package or installation ran. Manual checks remain Not tested.
+Independent source review accepted the integrated Site presentation and
+measured endpoint changes, including preservation of sealed constraint proofs.
+
 ### October 7 stationary precision changes
 
 Ordinary object and mixed-selection moves now honor Shift and raw-point input

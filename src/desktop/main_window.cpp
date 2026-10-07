@@ -5236,11 +5236,14 @@ class MainWindow::Impl {
     };
     struct PresentationTransformCapture {
         std::string owner_id;
+        std::string child_id;
         QString id;
         bool reference{};
         bool symbol{};
         std::optional<SymbolDefinition> definition;
         std::optional<BuildingViewFrame> frame;
+        std::optional<SitePresentationPlacement> site_frame;
+        std::uint64_t site_generation{},site_publication_generation{};
         std::vector<CanvasEntity> entities;
         std::vector<CanvasLabel> labels;
         std::vector<CanvasReference> references;
@@ -20958,6 +20961,10 @@ public:
                 if (measured) {
                     std::optional<DocumentSnapshot> candidate;
                     vertex_command=measuredStrokeGeometryCommand(source,edit,std::nullopt,&candidate);
+                    if (prepared) {
+                        vertex_command=augmentAuthoredCommand(*vertex_command,source);
+                        return prepareCanvasEdit(source,*vertex_command,edit_source,*prepared);
+                    }
                     return *candidate;
                 }
                 ConstraintAuthoringIntent intent;
@@ -20967,6 +20974,10 @@ public:
                 requireAcceptedConstraintPreview(preview);
                 std::optional<DocumentSnapshot> candidate;
                 vertex_command=constraint_authoring_verified_command(source,preview,&candidate);
+                if (prepared) {
+                    vertex_command=augmentAuthoredCommand(*vertex_command,source);
+                    return prepareCanvasEdit(source,*vertex_command,edit_source,*prepared);
+                }
                 return *candidate;
             }();
             const auto& candidate=candidate_snapshot.entities();
@@ -20976,6 +20987,8 @@ public:
                 if (const auto* changes=std::get_if<ApplyEntityChanges>(&*vertex_command);
                     changes && changes->entity_changes.empty() && changes->asset_changes.empty())
                     retainNoOpMovePresentations(*result,source,candidate_snapshot,retained,labels,{entity_id});
+            if (result && !endpoint_object)
+                retainNoOpMovePresentations(*result,source,candidate_snapshot,retained,labels,{entity_id});
             if (result && !measured && !endpoint_object) {
                 const auto geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
                 result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
@@ -22211,11 +22224,19 @@ public:
     static VertexPreviewProjection presentationTransformProjection(const DocumentSnapshot& candidate,
         const PresentationTransformCapture& capture,bool no_op) {
         VertexPreviewProjection result;
+        const auto present=[&]() {
+            if (capture.site_frame) {
+                for (auto& item:result.entities) item=site_presented_canvas_entity(item,*capture.site_frame);
+                for (auto& item:result.labels) item=site_presented_canvas_label(item,*capture.site_frame);
+                for (auto& item:result.references) item=site_presented_canvas_reference(item,*capture.site_frame);
+            }
+            return std::move(result);
+        };
         if (no_op) {
             result.entities=capture.entities;result.labels=capture.labels;result.references=capture.references;
-            return result;
+            return present();
         }
-        const auto wanted=capture.id.toStdString();
+        const auto wanted=capture.reference ? capture.id.toStdString() : capture.child_id;
         if (capture.reference) {
             if (capture.references.size()!=1) throw std::invalid_argument("The captured reference presentation is unavailable.");
             auto reference=capture.references.front();
@@ -22223,7 +22244,7 @@ public:
             reference.scale=read_number(owner.properties,"scale",1.0);
             reference.rotation_degrees=read_number(owner.properties,"rotation_degrees",0.0);
             result.references.push_back(std::move(reference));
-            return result;
+            return present();
         }
         const auto state=decode_annotation_entity(candidate.entities().at(capture.owner_id));
         if (!capture.symbol) {
@@ -22236,7 +22257,7 @@ public:
             proposed.rotation_radians=label->placement.rotation_radians;
             result.labels.push_back(std::move(proposed));
             if (capture.frame) project_plan_model_labels(result.labels,candidate,*capture.frame);
-            return result;
+            return present();
         }
         const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),
             [&](const auto& value){return value.id==wanted;});
@@ -22267,7 +22288,7 @@ public:
         }
         if (capture.frame) project_model_plan_symbol(proposed,*capture.frame);
         result.entities.push_back(std::move(proposed));
-        return result;
+        return present();
     }
 
     static Command ordinaryGeometryTransformCommand(const DocumentSnapshot& source,
@@ -22401,7 +22422,8 @@ public:
                         if (cancellation.is_cancelled()) result->reset();
                     } else if (presentation_capture && presentation_intent && prepared_move) {
                         const auto& intent=*presentation_intent;
-                        const auto wanted=presentation_capture->id.toStdString();
+                        const auto wanted=presentation_capture->reference
+                            ? presentation_capture->id.toStdString() : presentation_capture->child_id;
                         const Command command=intent.axes
                             ? Command{annotation_axis_resize_command(*source,presentation_capture->owner_id,wanted,
                                 intent.axes->first,intent.axes->second,intent.source_anchor,source->revision())}
@@ -22824,7 +22846,7 @@ public:
             canvas, m_document, std::move(source), std::move(authority),
             id, canvas->viewCenter(), canvas->viewScale(), canvas->size(), canvas->devicePixelRatioF(),
             canvas->navigationGeneration(), site ? m_site_edit_generation : 0, site, canvas->hasFocus(),
-            std::move(site_input),planEndpointObjectType(type) ? captureCanvasEditSource() : nullptr});
+            std::move(site_input),captureCanvasEditSource()});
     }
 
     void clearOpeningWidthCapture() {
@@ -22908,7 +22930,7 @@ public:
         if (!planEndpointCaptureCurrent(capture) || capture->canvas != canvas || capture->entity_id != id ||
             capture->source->revision() != revision || !preview ||
             preview->capture != capture || preview->vertex_id != endpoint ||
-            (capture->edit_source && !preview->prepared) ||
+            !capture->edit_source || !preview->prepared ||
             preview->serial == std::numeric_limits<std::uint64_t>::max() ||
             canvas->boundaryVertexPreviewSerial() != preview->serial + 1)
             throw std::invalid_argument("The endpoint preview or its displayed context changed. Start the drag again.");
@@ -22922,10 +22944,9 @@ public:
                 changes && changes->entity_changes.empty() && changes->asset_changes.empty()) {
                 clearError();return true;
             }
-        // Physical endpoint publication consumes the worker's native-admitted
-        // candidate; boundary and measured-linework gestures retain their lane.
-        if (capture->edit_source) publishPreparedCanvasEdit(preview->prepared,capture->edit_source);
-        else applyAuthoredCommand(preview->command);
+        // Every endpoint publishes the exact worker-admitted command, including
+        // its authored measurement, annotation and room consequences.
+        publishPreparedCanvasEdit(preview->prepared,capture->edit_source);
         clearError();
         refresh();
         return true;
@@ -23069,6 +23090,15 @@ public:
             active_canvas->viewScale()!=viewport.zoom || active_canvas->size()!=viewport.size ||
             active_canvas->devicePixelRatioF()!=viewport.dpr ||
             active_canvas->navigationGeneration()!=viewport.navigation_generation) return false;
+        if (m_presentation_transform_capture && m_presentation_transform_capture->site_frame) {
+            try {
+                requireSiteEditCurrent();
+                const auto& capture=*m_presentation_transform_capture;
+                if (!siteCanvas(active_canvas) || m_entity_transform_source!=m_site_edit_source ||
+                    capture.site_generation!=m_site_edit_generation ||
+                    capture.site_publication_generation!=m_site_publication_generation) return false;
+            } catch (...) { return false; }
+        }
         if (!m_entity_transform_site_capture) return true;
         try {
             requireSiteEditCurrent();
@@ -23120,36 +23150,48 @@ public:
         m_entity_transform_viewport=TransformViewportCapture{canvas,canvas->viewCenter(),canvas->viewScale(),
             canvas->size(),canvas->devicePixelRatioF(),canvas->navigationGeneration(),canvas->hasFocus()};
         m_entity_transform_context=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*m_entity_transform_source));
-        if (!siteCanvas(canvas)) {
+        {
+            const bool site=siteCanvas(canvas);
             const auto wanted=id.toStdString();
-            const auto annotations=annotation_selection_owners(*m_entity_transform_source,{id});
+            const auto annotations=site ? std::map<std::string,std::string,std::less<>>{}
+                : annotation_selection_owners(*m_entity_transform_source,{id});
             const auto entity=m_entity_transform_source->entities().find(wanted);
             const auto annotation=annotations.find(wanted);
-            if (annotation!=annotations.end() || (entity!=m_entity_transform_source->entities().end() &&
+            const auto typed=site ? m_site_edit_annotation_targets.find(id) : m_site_edit_annotation_targets.end();
+            const bool is_annotation=site ? typed!=m_site_edit_annotation_targets.end() : annotation!=annotations.end();
+            if (is_annotation || (entity!=m_entity_transform_source->entities().end() &&
                 entity->second.type=="reference_asset")) {
                 auto capture=std::make_shared<PresentationTransformCapture>();
-                capture->id=id;capture->frame=m_entity_transform_frame;
+                capture->id=id;capture->child_id=site && is_annotation ? typed->second.child_id : wanted;
+                if (site) {
+                    capture->site_frame=siteEditFrame({id});
+                    capture->site_generation=m_site_edit_generation;
+                    capture->site_publication_generation=m_site_publication_generation;
+                } else capture->frame=m_entity_transform_frame;
                 capture->font=canvas->font();capture->dpi_x=canvas->logicalDpiX();capture->dpi_y=canvas->logicalDpiY();
-                if (annotation!=annotations.end()) {
-                    capture->owner_id=annotation->second;
-                    const auto state=decode_annotation_entity(m_entity_transform_source->entities().at(annotation->second));
+                if (is_annotation) {
+                    capture->owner_id=site ? typed->second.owner_entity_id : annotation->second;
+                    const auto state=decode_annotation_entity(m_entity_transform_source->entities().at(capture->owner_id));
                     capture->symbol=std::any_of(state.symbols.begin(),state.symbols.end(),
-                        [&](const auto& symbol){return symbol.id==wanted;});
+                        [&](const auto& symbol){return symbol.id==capture->child_id;});
                     if (capture->symbol) {
                         const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),
-                            [&](const auto& value){return value.id==wanted;});
+                            [&](const auto& value){return value.id==capture->child_id;});
                         capture->definition=resolved_symbol_definition(*symbol,desktop_symbol_catalog());
-                        for (const auto& item:canvas->entities()) if (item.id==id) capture->entities.push_back(item);
+                        const auto& geometry=site ? m_site_edit_local_geometry : canvas->entities();
+                        for (const auto& item:geometry) if (item.id==id) capture->entities.push_back(item);
                         if (capture->entities.size()!=1 || capture->entities.front().segments.empty())
                             throw std::invalid_argument("The selected component has no unique visible presentation.");
                     } else {
-                        for (const auto& label:canvas->labels()) if (label.id==id) capture->labels.push_back(label);
+                        const auto& labels=site ? m_site_edit_local_labels : canvas->labels();
+                        for (const auto& label:labels) if (label.id==id) capture->labels.push_back(label);
                         if (capture->labels.size()!=1)
                             throw std::invalid_argument("The selected label has no unique visible presentation.");
                     }
                 } else {
                     capture->reference=true;
-                    for (const auto& reference:canvas->references()) if (reference.id==id) capture->references.push_back(reference);
+                    const auto& references=site ? m_site_edit_local_references : canvas->references();
+                    for (const auto& reference:references) if (reference.id==id) capture->references.push_back(reference);
                     if (capture->references.size()!=1 || !capture->references.front().visible ||
                         capture->references.front().image.isNull())
                         throw std::invalid_argument("The selected reference has no unique visible presentation.");
@@ -23241,7 +23283,7 @@ public:
     std::optional<std::vector<CanvasEntity>> previewEntityAxisResizeFromCanvas(
         PlanCanvas* canvas,const QString& id,double scale_x,double scale_y,Vec2 canvas_anchor,std::uint64_t serial) {
         m_ordinary_transform_preview.reset();m_ordinary_transform_intent.reset();
-        if (!siteCanvas(canvas) && m_presentation_transform_capture) {
+        if (m_presentation_transform_capture) {
             PresentationTransformIntent intent;intent.axes=std::pair{scale_x,scale_y};intent.canvas_point=canvas_anchor;
             return previewPresentationTransformFromCanvas(canvas,id,intent,serial);
         }
@@ -23250,9 +23292,9 @@ public:
         const auto found=m_entity_transform_source->entities().find(id.toStdString());
         // Presentation targets use their own captured worker lane above;
         // physical objects require regenerated document geometry here.
-        if (!siteCanvas(canvas) &&
-            ((found!=m_entity_transform_source->entities().end() && found->second.type=="reference_asset") ||
-             annotation_selection_owners(*m_entity_transform_source,{id}).contains(id.toStdString()))) {
+        if ((found!=m_entity_transform_source->entities().end() && found->second.type=="reference_asset") ||
+            (siteCanvas(canvas) ? m_site_edit_annotation_targets.contains(id)
+                : annotation_selection_owners(*m_entity_transform_source,{id}).contains(id.toStdString()))) {
             setError(QStringLiteral("The presentation resize has no captured admitted preview. Start again."));
             return std::vector<CanvasEntity>{};
         }
@@ -23354,8 +23396,9 @@ public:
                     intent.axes->first<=0.0 || intent.axes->second<=0.0 ||
                     !std::isfinite(intent.source_anchor.x) || !std::isfinite(intent.source_anchor.y))))
                 throw std::invalid_argument("The presentation transform source, selection or view changed. Start again.");
-            if (intent.axes) intent.source_anchor=capture->frame
-                ? unproject_plan_point(intent.canvas_point,*capture->frame) : intent.canvas_point;
+            if (intent.axes) intent.source_anchor=capture->site_frame
+                ? site_source_plan_point(intent.canvas_point,*capture->site_frame)
+                : capture->frame ? unproject_plan_point(intent.canvas_point,*capture->frame) : intent.canvas_point;
             // Authored labels retain their explicit view-oriented angle when
             // their model-plan anchor is projected. Only symbol axes inherit
             // the model-plan frame's handedness.
@@ -23397,6 +23440,15 @@ public:
             canvas->entityTransformPreviewSerial()!=preview->serial || m_entity_transform_serial!=preview->serial ||
             canvas->font()!=capture->font || canvas->logicalDpiX()!=capture->dpi_x || canvas->logicalDpiY()!=capture->dpi_y ||
             preview->intent.axes!=axes || preview->intent.scale!=scale || preview->intent.radians!=radians ||
+            !m_presentation_transform_intent ||
+            m_presentation_transform_intent->axes!=preview->intent.axes ||
+            m_presentation_transform_intent->scale!=preview->intent.scale ||
+            m_presentation_transform_intent->radians!=preview->intent.radians ||
+            m_presentation_transform_intent->source_radians!=preview->intent.source_radians ||
+            m_presentation_transform_intent->source_anchor.x!=preview->intent.source_anchor.x ||
+            m_presentation_transform_intent->source_anchor.y!=preview->intent.source_anchor.y ||
+            m_presentation_transform_intent->canvas_point.x!=preview->intent.canvas_point.x ||
+            m_presentation_transform_intent->canvas_point.y!=preview->intent.canvas_point.y ||
             (axes && (preview->intent.canvas_point.x!=anchor.x || preview->intent.canvas_point.y!=anchor.y)))
             throw std::invalid_argument("The exact presentation transform preview or editing source changed. Start again.");
         const bool no_op=axes ? axes->first==1.0 && axes->second==1.0 : scale==1.0 && radians==0.0;
@@ -23477,11 +23529,19 @@ public:
 
     std::optional<std::vector<CanvasEntity>> previewEntityTransformFromCanvas(
         PlanCanvas* canvas,const QString& id,double scale,double radians,Vec2 canvas_pivot,std::uint64_t serial) {
-        if (!siteCanvas(canvas) && m_presentation_transform_capture) {
+        if (m_presentation_transform_capture) {
             PresentationTransformIntent intent;intent.scale=scale;intent.radians=radians;intent.canvas_point=canvas_pivot;
             return previewPresentationTransformFromCanvas(canvas,id,intent,serial);
         }
         m_entity_transform_prepared.reset();
+        if (siteCanvas(canvas) && m_entity_transform_source) {
+            const auto found=m_entity_transform_source->entities().find(id.toStdString());
+            if (m_site_edit_annotation_targets.contains(id) ||
+                (found!=m_entity_transform_source->entities().end() && found->second.type=="reference_asset")) {
+                setError(QStringLiteral("The Site presentation transform has no captured admitted preview. Start again."));
+                return std::vector<CanvasEntity>{};
+            }
+        }
         if (canvas && m_entity_transform_source) {
             const auto found=m_entity_transform_source->entities().find(id.toStdString());
             if (found!=m_entity_transform_source->entities().end() && physicalPlanRotationFamily(found->second.type) &&
@@ -23507,7 +23567,6 @@ public:
                 const auto local=site_source_plan_point(canvas_pivot,siteEditFrame({id}));
                 const PlanarTransform transform{local,radians,false,false,{}};
                 const auto command=[&]() -> Command {
-                    if (m_site_edit_annotation_targets.contains(id)) return siteAnnotationTransform(id,scale,radians);
                     const auto c=std::cos(radians),s=std::sin(radians);
                     const ArchitecturalTransform gesture{local.x-scale*(c*local.x-s*local.y),local.y-scale*(s*local.x+c*local.y),0.0,radians,scale};
                     if(geometric_assembly_for_child(*m_site_edit_source,id.toStdString()))
@@ -23518,11 +23577,6 @@ public:
                     if (entity.type=="wall" || is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework") {
                         if (std::abs(scale-1.0)>1e-9) throw std::invalid_argument("Use source floor plan dimensions to resize physical walls and closed areas.");
                         return makeSelectionGeometryTransformCommand(*m_site_edit_source,{id},transform);
-                    }
-                    if(entity.type=="reference_asset") {
-                        auto updated=entity;updated.properties["scale"]=read_number(entity.properties,"scale",1.0)*scale;
-                        updated.properties["rotation_degrees"]=read_number(entity.properties,"rotation_degrees",0.0)+radians*180.0/std::numbers::pi;
-                        return ApplyEntityChanges{m_site_edit_source->revision(),{EntityChange::upsert(std::move(updated))},{},"Transform Site Plan reference"};
                     }
                     ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};
                     operation.transform=gesture;
@@ -24729,9 +24783,7 @@ public:
             if (siteCanvas(m_architecturalCanvas)) {
                 anchor=site_source_plan_point(anchor,siteEditFrame({requested_id}));
                 if (m_site_edit_annotation_targets.contains(requested_id)) {
-                    const auto command=siteAnnotationTransform(requested_id,1.0,0.0,anchor,scale_x,scale_y);
-                    (void)Document::preview_command(*m_site_edit_source,command);requireSiteEditCurrent();
-                    applyDocumentCommand(command);clearError();refresh();return true;
+                    throw std::invalid_argument("The Site symbol resize has no captured admitted preview. Start again.");
                 }
             }
             if (!siteCanvas(m_architecturalCanvas) &&
@@ -24739,8 +24791,8 @@ public:
                  m_entity_transform_canvas != (m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas)))
                 throw std::invalid_argument("The resize source or editing context changed.");
             const auto wanted = requested_id.toStdString();
-            const auto annotation_owners = annotation_selection_owners(source, {requested_id});
-            if (annotation_owners.contains(wanted))
+            if (!siteCanvas(m_architecturalCanvas) &&
+                annotation_selection_owners(source, {requested_id}).contains(wanted))
                 throw std::invalid_argument("The symbol resize has no captured admitted preview. Start again.");
             const auto& entity = source.entities().at(wanted);
             if (const auto frame = m_entity_transform_frame)
@@ -24835,6 +24887,10 @@ public:
 
             const auto source = authoringSnapshot();
             if (siteCanvas(m_architecturalCanvas)) {
+                const auto target=source.entities().find(requested_id.toStdString());
+                if (m_site_edit_annotation_targets.contains(requested_id) ||
+                    (target!=source.entities().end() && target->second.type=="reference_asset"))
+                    throw std::invalid_argument("The Site presentation transform has no captured admitted preview. Start again.");
                 (void)siteEditFrame({requested_id});
                 if (!entityTransformContextUnchanged() || m_entity_transform_canvas!=m_architecturalCanvas ||
                     m_entity_transform_id!=requested_id || !m_entity_transform_ready || !m_entity_transform_command ||
@@ -42879,30 +42935,6 @@ private:
         return makeSelectionGeometryTranslationCommand(source,std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes),local);
     }
 
-    Command siteAnnotationTransform(const QString& id,double scale,double radians,
-        std::optional<Vec2> anchor={},double scale_x=1.0,double scale_y=1.0) {
-        (void)siteEditFrame({id});
-        const auto& target=m_site_edit_annotation_targets.at(id);
-        auto entity=m_site_edit_source->entities().at(target.owner_entity_id);
-        if(anchor) upgrade_annotation_transform_version(entity,decode_annotation_entity(entity));
-        auto& child=annotation_child_record(entity,target.child_id);
-        auto& placement=child.at("placement");
-        if (anchor) {
-            const auto angle=placement.at("rotation_radians").get<double>();
-            const auto c=std::cos(angle),s=std::sin(angle);
-            const auto dx=placement.at("x").get<double>()-anchor->x,dy=placement.at("y").get<double>()-anchor->y;
-            const auto x=(c*dx+s*dy)*scale_x,y=(-s*dx+c*dy)*scale_y;
-            placement["x"]=anchor->x+c*x-s*y;placement["y"]=anchor->y+s*x+c*y;
-            child["width_scale"]=child.value("width_scale",1.0)*scale_x;
-            child["depth_scale"]=child.value("depth_scale",1.0)*scale_y;
-        } else {
-            placement["scale"]=placement.at("scale").get<double>()*scale;
-            placement["rotation_radians"]=std::remainder(placement.at("rotation_radians").get<double>()+radians,2.0*std::numbers::pi);
-        }
-        validate_annotation_entity(entity);
-        return ApplyEntityChanges{m_site_edit_source->revision(),{EntityChange::upsert(std::move(entity))},{},"Transform Site Plan annotation"};
-    }
-
     Entity siteAnnotationCarrier(const DocumentSnapshot& source,const DrawingContext& context) const {
         for (const auto& [id,entity] : source.entities()) {
             (void)id;
@@ -46742,7 +46774,7 @@ private:
             if (const auto found = snapshot.entities().find(wanted); found != snapshot.entities().end()) {
                 try { (void)plan_axis_resize_frame(found->second); axis_resize = true; }
                 catch (const std::exception&) {}
-            } else {
+            } else if (!siteCanvas(m_architecturalCanvas)) {
                 for (const auto& [id, entity] : snapshot.entities()) {
                     (void)id;
                     if (entity.type != kAnnotationEntityType) continue;
@@ -46759,7 +46791,8 @@ private:
             axis_resize=std::any_of(state.symbols.begin(),state.symbols.end(),[&](const auto& value){return value.id==target.child_id;});
             resize_selection=true;rotate_selection=true;
         }
-        if(siteCanvas(m_architecturalCanvas) && m_selected_ids.size()==1 && m_document->is_editable()) {
+        if(siteCanvas(m_architecturalCanvas) && m_selected_ids.size()==1 && m_document->is_editable() &&
+            !m_site_annotation_targets.contains(m_selected_id)) {
             const auto source=m_document->snapshot();
             const auto found=source.entities().find(m_selected_id.toStdString());
             if(found!=source.entities().end()) {
