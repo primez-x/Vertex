@@ -56,6 +56,7 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QShowEvent>
+#include <QTabletEvent>
 #include <QWheelEvent>
 #include <QTimer>
 #include <QThread>
@@ -248,6 +249,14 @@ public:
     enum class Gesture { none, select, additive_select, overlap_select, overlap_pan, edit, pan, orbit, move, manipulate };
     Gesture gesture = Gesture::none;
     Qt::MouseButton initiating_button = Qt::NoButton;
+    bool tablet_active{};
+    Qt::MouseButton tablet_button = Qt::NoButton;
+    QPointer<const QPointingDevice> tablet_device;
+    int tablet_dispatch_depth{};
+    bool tablet_dispatch_retired{};
+    QPointer<const QPointingDevice> tablet_dispatch_device;
+    Qt::MouseButton tablet_dispatch_button = Qt::NoButton;
+    std::chrono::steady_clock::time_point tablet_mouse_suppression_until;
     QPoint navigation_start;
     QPointF left_press;
     bool left_moved{};
@@ -956,12 +965,12 @@ public:
     void begin_overlap_selection() noexcept {
         const QPointer<NativeModelView> guard(owner);
         try {
-            owner->cancelInteraction();
+            owner->resetInteraction(true,true);
             detach_manipulator();
             view->Redraw();
+            if (!owner->claimPointer(Qt::LeftButton)) return;
             selection_capture=capture_selection();
             gesture_snapshot=published_snapshot;
-            initiating_button=Qt::LeftButton;
             gesture=Gesture::overlap_select;
         } catch (const Standard_Failure& error) {
             if (guard) refuse_overlap_input(QStringLiteral("3D overlap selection failed: ")+exception_text(error));
@@ -1245,6 +1254,11 @@ NativeModelView::NativeModelView(QWidget* parent)
     : QWidget(parent), m_impl(std::make_unique<Impl>(this)) {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    setAttribute(Qt::WA_TabletTracking, true);
+    // Receive TouchBegin so live pen input can reject palm contacts. Idle
+    // touch still falls through QWidget::event, which ignores it and retains
+    // Qt's normal mouse fallback rather than claiming a touch gesture here.
+    setAttribute(Qt::WA_AcceptTouchEvents, true);
     setMinimumSize(480, 360);
     setAttribute(Qt::WA_NativeWindow, true);
     setAttribute(Qt::WA_PaintOnScreen, true);
@@ -1516,7 +1530,12 @@ void NativeModelView::cancelInteraction() {
     resetInteraction(true);
 }
 
-void NativeModelView::resetInteraction(bool restore_controls) {
+void NativeModelView::resetInteraction(bool restore_controls, bool keep_tablet_dispatch) {
+    if (m_impl->tablet_dispatch_depth && !keep_tablet_dispatch) m_impl->tablet_dispatch_retired=true;
+    m_impl->tablet_active=false;
+    m_impl->tablet_button=Qt::NoButton;
+    m_impl->tablet_device.clear();
+    m_impl->initiating_button=Qt::NoButton;
     // A retired gesture cannot revive a fractional wheel burst after focus,
     // capture or selection returns. wheelEvent computes carry before this
     // reset and publishes its own new context only after navigation succeeds.
@@ -1535,7 +1554,6 @@ void NativeModelView::resetInteraction(bool restore_controls) {
     if (m_impl->selection_rectangle) m_impl->selection_rectangle->hide();
     m_impl->clear_translation_preview();
     m_impl->gesture = Impl::Gesture::none;
-    m_impl->initiating_button = Qt::NoButton;
     m_impl->left_moved = false;
     m_impl->translation_entity_id.reset();
     m_impl->translation_start.reset();
@@ -1545,11 +1563,28 @@ void NativeModelView::resetInteraction(bool restore_controls) {
 }
 
 bool NativeModelView::event(QEvent* event) {
+    const QPointer<NativeModelView> input_guard(this);
+    if (m_impl) retireDisconnectedTablet();
+    if (!input_guard) { event->accept(); return true; }
+    if (m_impl && (m_impl->tablet_active || m_impl->tablet_dispatch_depth) && event->type()==QEvent::Wheel) {
+        event->accept();
+        return true;
+    }
+    if (m_impl && (event->type()==QEvent::TouchBegin || event->type()==QEvent::TouchUpdate ||
+                   event->type()==QEvent::TouchEnd || event->type()==QEvent::TouchCancel)) {
+        if (m_impl->tablet_active || (m_impl->tablet_dispatch_depth && m_impl->initiating_button!=Qt::NoButton)) {
+            event->accept();
+            return true;
+        }
+        // An independent touch sequence keeps Qt's original fallback behavior;
+        // it must not be mistaken for a finished pen's synthesized mouse tail.
+        if (event->type()==QEvent::TouchBegin) m_impl->tablet_mouse_suppression_until={};
+    }
     if (m_impl && (event->type()==QEvent::ScreenChangeInternal ||
                    event->type()==QEvent::DevicePixelRatioChange))
         m_impl->navigation_changed();
     if (m_impl && (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
-                   event->type() == QEvent::WindowDeactivate || event->type() == QEvent::FocusOut)) {
+                   event->type() == QEvent::WindowBlocked || event->type() == QEvent::WindowDeactivate || event->type() == QEvent::FocusOut)) {
         cancelInteraction();
         if (event->type()!=QEvent::UngrabMouse) m_impl->space_pan_armed=false;
     }
@@ -1607,7 +1642,166 @@ void NativeModelView::paintEvent(QPaintEvent* event) {
     }
 }
 
+bool NativeModelView::claimPointer(Qt::MouseButton button) {
+    if (m_impl->tablet_dispatch_depth) {
+        if (m_impl->tablet_dispatch_retired || !m_impl->tablet_dispatch_device) return false;
+        m_impl->tablet_active=true;
+        m_impl->tablet_button=button;
+        m_impl->tablet_device=m_impl->tablet_dispatch_device;
+    }
+    m_impl->initiating_button=button;
+    return true;
+}
+
+bool NativeModelView::suppressMouseInput(const QMouseEvent* event) const {
+    if (m_impl->tablet_active || m_impl->tablet_dispatch_depth) return true;
+    if (std::chrono::steady_clock::now()>=m_impl->tablet_mouse_suppression_until) return false;
+    const auto device=event->pointingDevice();
+    const bool pen=device && (device->type()==QInputDevice::DeviceType::Stylus ||
+                              device->type()==QInputDevice::DeviceType::Airbrush);
+    return pen || event->source()!=Qt::MouseEventNotSynthesized;
+}
+
+void NativeModelView::retireDisconnectedTablet() noexcept {
+    if (!m_impl->tablet_active || m_impl->tablet_device) return;
+    cancelTabletInteraction();
+}
+
+void NativeModelView::cancelTabletInteraction() noexcept {
+    const QPointer<NativeModelView> guard(this);
+    try { cancelInteraction(); }
+    catch (const Standard_Failure& error) {
+        if (guard) { try { m_impl->show_input_error(QStringLiteral("3D pen cancellation failed: ")+exception_text(error)); } catch (...) {} }
+    } catch (const std::exception& error) {
+        if (guard) { try { m_impl->show_input_error(QStringLiteral("3D pen cancellation failed: ")+exception_text(error)); } catch (...) {} }
+    } catch (...) {
+        if (guard) { try { m_impl->show_input_error(QStringLiteral("3D pen cancellation failed: unknown failure")); } catch (...) {} }
+    }
+}
+
 void NativeModelView::mousePressEvent(QMouseEvent* event) {
+    if (suppressMouseInput(event)) { event->accept(); return; }
+    const QPointer<NativeModelView> guard(this);
+    pointerPress(event);
+    if (guard && !event->isAccepted()) QWidget::mousePressEvent(event);
+}
+
+void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (suppressMouseInput(event)) { event->accept(); return; }
+    pointerDoubleClick(event);
+}
+
+void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
+    if (suppressMouseInput(event)) { event->accept(); return; }
+    const QPointer<NativeModelView> guard(this);
+    pointerMove(event);
+    if (guard && !event->isAccepted()) QWidget::mouseMoveEvent(event);
+}
+
+void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
+    if (suppressMouseInput(event)) { event->accept(); return; }
+    const QPointer<NativeModelView> guard(this);
+    pointerRelease(event);
+    if (guard && !event->isAccepted()) QWidget::mouseReleaseEvent(event);
+}
+
+void NativeModelView::tabletEvent(QTabletEvent* event) {
+    const QPointer<NativeModelView> guard(this);
+    retireDisconnectedTablet();
+    if (!guard) { event->accept(); return; }
+    // Accept actual tablet packets, including refused/stale packets, so Qt
+    // does not synthesize a second mouse authoring gesture from them.
+    event->accept();
+    if (!event->pointingDevice()) return;
+    const auto device=event->pointingDevice();
+    if (m_impl->tablet_dispatch_depth) {
+        // Admission/capture callbacks may process nested Qt events before the
+        // shared press routine claims its button. Retain that dispatched owner
+        // too: a same-pen release cannot disappear and let the outer press arm.
+        if (!m_impl->tablet_dispatch_retired && m_impl->tablet_dispatch_device.data()==device &&
+            m_impl->tablet_dispatch_button!=Qt::NoButton &&
+            !event->buttons().testFlag(m_impl->tablet_dispatch_button))
+            cancelTabletInteraction();
+        return;
+    }
+    const auto dispatch_button = m_impl->tablet_active ? m_impl->tablet_button
+        : event->type()==QEvent::TabletPress ? event->button() : Qt::NoButton;
+    if (event->type()==QEvent::TabletPress) {
+        if (m_impl->tablet_active) {
+            // Qt can classify Left -> Right as a press because the new mask
+            // is numerically larger. The old owner still ended in that packet.
+            if (m_impl->tablet_device.data()==device && !event->buttons().testFlag(m_impl->tablet_button))
+                cancelTabletInteraction();
+            return;
+        }
+        if (m_impl->initiating_button!=Qt::NoButton ||
+            (event->button()!=Qt::LeftButton && event->button()!=Qt::RightButton && event->button()!=Qt::MiddleButton) ||
+            !event->buttons().testFlag(event->button())) return;
+    } else if (event->type()==QEvent::TabletMove) {
+        if (m_impl->tablet_active) {
+            if (m_impl->tablet_device.data()!=device) return;
+            if (!event->buttons().testFlag(m_impl->tablet_button)) {
+                cancelTabletInteraction();
+                return;
+            }
+        } else if (m_impl->initiating_button!=Qt::NoButton || event->buttons()!=Qt::NoButton) return;
+    } else if (event->type()==QEvent::TabletRelease) {
+        if (!m_impl->tablet_active || m_impl->tablet_device.data()!=device) return;
+        // Qt names the first changed button bit when several bits change in
+        // one packet. A missing owner with another named button cancels the
+        // gesture; an extra-button release while the owner is held does not.
+        if (event->button()!=m_impl->tablet_button) {
+            if (!event->buttons().testFlag(m_impl->tablet_button)) cancelTabletInteraction();
+            return;
+        }
+        if (event->buttons().testFlag(m_impl->tablet_button)) return;
+        // A release retires its device before contextual callbacks can run a
+        // nested event loop. The shared routine still owns the original button.
+        m_impl->tablet_active=false;
+        m_impl->tablet_button=Qt::NoButton;
+        m_impl->tablet_device.clear();
+    } else return;
+    m_impl->tablet_mouse_suppression_until=std::chrono::steady_clock::now()+std::chrono::milliseconds(500);
+    m_impl->tablet_dispatch_depth++;
+    m_impl->tablet_dispatch_retired=false;
+    m_impl->tablet_dispatch_device=device;
+    m_impl->tablet_dispatch_button=dispatch_button;
+    struct TabletDispatchReset {
+        QPointer<NativeModelView> owner;
+        ~TabletDispatchReset() {
+            if (!owner) return;
+            auto& impl=*owner->m_impl;
+            if (--impl.tablet_dispatch_depth==0) {
+                impl.tablet_dispatch_device.clear();
+                impl.tablet_dispatch_button=Qt::NoButton;
+                impl.tablet_dispatch_retired=false;
+            }
+        }
+    } reset_dispatch{guard};
+    const auto refuse=[&](const QString& message) noexcept {
+        if (!guard) return;
+        try { cancelInteraction(); } catch (...) {}
+        if (guard) { try { m_impl->show_input_error(message); } catch (...) {} }
+    };
+    try {
+        const auto point=event->position(),global=event->globalPosition();
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) ||
+            !std::isfinite(global.x()) || !std::isfinite(global.y()))
+            throw std::invalid_argument("The pen pointer position is unavailable.");
+        if (event->type()==QEvent::TabletPress) pointerPress(event);
+        else if (event->type()==QEvent::TabletMove) pointerMove(event);
+        else pointerRelease(event);
+    } catch (const Standard_Failure& error) {
+        refuse(QStringLiteral("3D pen input failed: ")+exception_text(error));
+    } catch (const std::exception& error) {
+        refuse(QStringLiteral("3D pen input failed: ")+exception_text(error));
+    } catch (...) {
+        refuse(QStringLiteral("3D pen input failed: unknown failure"));
+    }
+    event->accept();
+}
+
+void NativeModelView::pointerPress(QSinglePointEvent* event) {
     if (!m_impl->native_ready || m_impl->view.IsNull()) {
         event->ignore();
         return;
@@ -1627,14 +1821,14 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton ||
         (event->button()==Qt::LeftButton && m_impl->space_pan_armed)) {
         // Camera changes invalidate an armed Move's view-plane anchor.
-        cancelInteraction();
+        resetInteraction(true,true);
         if (event->button()==Qt::RightButton && isReady()) {
             m_impl->detach_manipulator();
             m_impl->view->Redraw();
             m_impl->selection_capture=m_impl->capture_selection();
             m_impl->gesture_snapshot=m_impl->published_snapshot;
         }
-        m_impl->initiating_button = event->button();
+        if (!claimPointer(event->button())) { event->accept(); return; }
         m_impl->gesture = event->button() == Qt::RightButton ? Impl::Gesture::orbit : Impl::Gesture::pan;
         m_impl->navigation_start = QPoint(point.x, point.y);
         if (m_impl->gesture == Impl::Gesture::orbit)
@@ -1652,10 +1846,10 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
         }
         if (!admitSceneInput(true)) { event->accept(); return; }
         if (event->modifiers().testFlag(Qt::ControlModifier)) {
-            cancelInteraction();
+            resetInteraction(true,true);
             m_impl->detach_manipulator();
             m_impl->view->Redraw();
-            m_impl->initiating_button=Qt::LeftButton;
+            if (!claimPointer(Qt::LeftButton)) { event->accept(); return; }
             m_impl->gesture=Impl::Gesture::additive_select;
             m_impl->selection_capture=m_impl->capture_selection();
             m_impl->gesture_snapshot=m_impl->published_snapshot;
@@ -1667,14 +1861,14 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
             event->accept();
             return;
         }
-        m_impl->initiating_button = Qt::LeftButton;
+        if (!claimPointer(Qt::LeftButton)) { event->accept(); return; }
         const auto capture_transform = [this](const QString& target) {
             m_impl->gesture_snapshot = m_impl->published_snapshot;
             const QPointer<NativeModelView> guard(this);
             try {
                 const auto observer=onTransformGestureStarted;
                 if (observer) observer(target);
-                return !guard.isNull();
+                return !guard.isNull() && (!m_impl->tablet_dispatch_depth || !m_impl->tablet_dispatch_retired);
             } catch (const std::exception& error) {
                 if (guard) {
                     guard->cancelInteraction();
@@ -1717,16 +1911,16 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    QWidget::mousePressEvent(event);
+    event->ignore();
 }
 
-void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
+void NativeModelView::pointerDoubleClick(QSinglePointEvent* event) {
     // Qt replaces the second press with a double-click event. Modified Alt
     // repeats still need their normal press/release cycle, with Ctrl priority.
     if (event->button()==Qt::LeftButton && event->buttons()==Qt::LeftButton &&
         event->modifiers().testFlag(Qt::AltModifier) &&
         !event->modifiers().testFlag(Qt::ControlModifier)) {
-        mousePressEvent(event);
+        pointerPress(event);
         return;
     }
     // The second press belongs to Edit, never to an armed Move. Delay the
@@ -1752,7 +1946,7 @@ void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
     event->accept();
 }
 
-void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
+void NativeModelView::pointerMove(QSinglePointEvent* event) {
     if (!m_impl->native_ready || m_impl->view.IsNull()) {
         event->ignore();
         return;
@@ -1830,10 +2024,10 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
         m_impl->context->MoveTo(point.x, point.y, m_impl->view, false);
         m_impl->viewer->RedrawImmediate();
     }
-    QWidget::mouseMoveEvent(event);
+    event->ignore();
 }
 
-void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
+void NativeModelView::pointerRelease(QSinglePointEvent* event) {
     if (event->button() != m_impl->initiating_button || event->button() == Qt::NoButton) {
         event->accept();
         return;
@@ -2001,7 +2195,7 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    QWidget::mouseReleaseEvent(event);
+    event->ignore();
 }
 
 bool NativeModelView::admitSceneInput(bool starting) {

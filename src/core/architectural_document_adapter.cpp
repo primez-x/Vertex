@@ -877,10 +877,11 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
                 before->properties, entity.properties, {"style", "roof_ids"})))
                 changed_roof_joins.insert(entity.id);
             if (!building_property_geometry_changed(before, entity)) continue;
-            // Decode already admits native geometry for these independent
-            // forms. Resolve placement on the completed authored candidate;
+            // The shared physical admission already decodes beams. Other
+            // independent forms retain their native codec admission here;
             // hosted conversions retain the host-map admission below.
-            (void)decode_building_entity(resolve_vertical_placement(preview, entity));
+            if (entity.type != "beam")
+                (void)decode_building_entity(resolve_vertical_placement(preview, entity));
             if (entity.type == "roof") changed_roofs.insert(entity.id);
         }
         if (!changed_roofs.empty() || !changed_roof_joins.empty()) {
@@ -914,7 +915,7 @@ void validate_architectural_geometry_changes(
     const DocumentSnapshot& source, const DocumentSnapshot& candidate,
     const std::vector<std::string>& required_ids) {
     const auto& entities = candidate.entities();
-    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids;
+    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids, beam_ids;
     const auto include = [&](const Entity& entity, bool required) {
         const auto& p = entity.properties;
         if (entity.type == "wall" && (required || p.contains("baseline"))) {
@@ -932,6 +933,9 @@ void validate_architectural_geometry_changes(
                    (required || p.contains("boundary") || p.contains("segments"))) {
             room_ids.insert(entity.id);
             if (required || has_document_room_volume_fields(entity)) full_room_ids.insert(entity.id);
+        } else if (entity.type == "beam" &&
+                   (required || canonical_form(entity, "beam", 1, "straight_beam"))) {
+            beam_ids.insert(entity.id);
         }
     };
     const auto changed = [](const Entity* before, const Entity& after,
@@ -965,6 +969,9 @@ void validate_architectural_geometry_changes(
             physical_change = changed(before, entity, {"boundary", "segments", "holes", "height_m",
                 "height", "elevation_m", "elevation", "vertical_placement", "layer_id",
                 "floor_id", "building_id", "property_id"});
+        else if (entity.type == "beam" ||
+                 (before && canonical_form(*before, "beam", 1, "straight_beam")))
+            physical_change = building_property_geometry_changed(before, entity);
         if (!physical_change) continue;
         if (entity.type == "opening" && before && before->properties.contains("wall_id") &&
             !entity.properties.contains("wall_id"))
@@ -979,7 +986,7 @@ void validate_architectural_geometry_changes(
         if (found == entities.end())
             throw std::invalid_argument("The edited physical object is missing: " + id);
         const auto& type = found->second.type;
-        if (type != "wall" && type != "opening" && type != "slab" && type != "room")
+        if (type != "wall" && type != "opening" && type != "slab" && type != "room" && type != "beam")
             throw std::invalid_argument("The edited object has no supported physical descriptor: " + id);
         include(found->second, true);
     }
@@ -1084,6 +1091,15 @@ void validate_architectural_geometry_changes(
             if (!read_document_room_footprint(found->second, footprint, error))
                 throw std::invalid_argument("Room " + id + ": " + error);
         }
+    }
+    for (const auto& id : beam_ids) {
+        const auto found = entities.find(id);
+        if (found == entities.end()) continue;
+        // The canonical codec admits the native beam, including a stable
+        // section frame, after placement resolves against the full candidate.
+        const auto object = decode_building_entity(resolve_vertical_placement(candidate, found->second));
+        if (!std::holds_alternative<Beam>(object))
+            throw std::invalid_argument("The edited beam lost its physical descriptor: " + id);
     }
 }
 
@@ -1257,6 +1273,32 @@ ApplyEntityChanges room_dimension_update_command(const DocumentSnapshot& source,
     const auto candidate = Document::preview_command(source, Command{command});
     // The supplied dimensions are local measurements. Admission also resolves
     // the completed floor/level placement before any caller can publish them.
+    validate_architectural_geometry_changes(source, candidate, {entity_id});
+    return command;
+}
+
+ApplyEntityChanges beam_endpoint_update_command(const DocumentSnapshot& source,
+    const std::string& entity_id, const BeamEndpointEdit& edit, Revision expected_revision) {
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
+    auto entity = semantic_entity(source, entity_id, "beam", expected_revision);
+    if (edit.endpoint != BeamEndpoint::start && edit.endpoint != BeamEndpoint::end)
+        throw std::invalid_argument("Beam endpoint role is invalid");
+    if (!std::isfinite(edit.proposed_position.x) || !std::isfinite(edit.proposed_position.y))
+        throw std::invalid_argument("Beam endpoint target must be finite");
+    if (!canonical_form(entity, "beam", 1, "straight_beam"))
+        throw std::invalid_argument("Beam endpoint editing requires a canonical straight beam");
+    const auto beam = std::get<Beam>(decode_building_entity(entity));
+    const auto& endpoint = edit.endpoint == BeamEndpoint::start ? beam.start : beam.end;
+    if (endpoint.x == edit.proposed_position.x && endpoint.y == edit.proposed_position.y)
+        throw std::invalid_argument("Beam endpoint target makes no document change");
+    // Preserve the original three-coordinate array and its exact Z field;
+    // re-encoding the whole beam would replace opaque source properties.
+    auto& coordinates = entity.properties.at(edit.endpoint == BeamEndpoint::start ? "start_m" : "end_m");
+    coordinates.at(0) = edit.proposed_position.x;
+    coordinates.at(1) = edit.proposed_position.y;
+    ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Move beam endpoint"};
+    const auto candidate = Document::preview_command(source, Command{command});
     validate_architectural_geometry_changes(source, candidate, {entity_id});
     return command;
 }

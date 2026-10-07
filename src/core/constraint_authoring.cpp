@@ -326,6 +326,10 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
             result.wall_resize->anchored_endpoint != WallResizeAnchor::end) {
             invalid("Wall resize anchor is invalid");
         }
+        if (const auto& endpoint = result.wall_resize->proposed_endpoint;
+            endpoint && (!std::isfinite(endpoint->x) || !std::isfinite(endpoint->y))) {
+            invalid("Wall resize endpoint target must be finite");
+        }
     }
     if (result.wall_geometry_move.has_value()) {
         auto& move = *result.wall_geometry_move;
@@ -1309,24 +1313,43 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             if (!std::isfinite(old_length) || old_length <= default_geometry_tolerance_metres) {
                 invalid("Selected wall has a degenerate or unrepresentable baseline");
             }
-            const long double ux = dx / old_length;
-            const long double uy = dy / old_length;
             Segment target = old;
-            long double length=resize.exact_length.metres;
-            if (old.sweep_radians!=0) {
-                PersistentConstraint physical;
-                physical.id="resize-physical-arc";
-                physical.relation=ConstraintRelationKind::fixed_arc_length;
-                physical.bindings={{resize.wall_id,WallEndpointRole::start},{resize.wall_id,WallEndpointRole::end}};
-                physical.length=resize.exact_length;
-                length=constraint_arc_chord_target(physical,candidate);
-            }
-            if (resize.anchored_endpoint == WallResizeAnchor::start) {
-                target.end = {static_cast<double>(static_cast<long double>(old.start.x) + ux * length),
-                              static_cast<double>(static_cast<long double>(old.start.y) + uy * length)};
+            if (resize.proposed_endpoint) {
+                if (resize.anchored_endpoint == WallResizeAnchor::start)
+                    target.end = *resize.proposed_endpoint;
+                else
+                    target.start = *resize.proposed_endpoint;
+                const auto chord_length = std::hypot(target.end.x - target.start.x,
+                                                     target.end.y - target.start.y);
+                if (!std::isfinite(chord_length) ||
+                    chord_length <= constraint_linear_tolerance_metres) {
+                    invalid("Wall resize endpoint target baseline is degenerate or unrepresentable");
+                }
+                const auto physical_length = segment_length(target);
+                if (!std::isfinite(physical_length) ||
+                    std::abs(physical_length - resize.exact_length.metres) >
+                        constraint_linear_tolerance_metres) {
+                    invalid("Wall resize endpoint target does not match the exact physical length");
+                }
             } else {
-                target.start = {static_cast<double>(static_cast<long double>(old.end.x) - ux * length),
-                                static_cast<double>(static_cast<long double>(old.end.y) - uy * length)};
+                const long double ux = dx / old_length;
+                const long double uy = dy / old_length;
+                long double length=resize.exact_length.metres;
+                if (old.sweep_radians!=0) {
+                    PersistentConstraint physical;
+                    physical.id="resize-physical-arc";
+                    physical.relation=ConstraintRelationKind::fixed_arc_length;
+                    physical.bindings={{resize.wall_id,WallEndpointRole::start},{resize.wall_id,WallEndpointRole::end}};
+                    physical.length=resize.exact_length;
+                    length=constraint_arc_chord_target(physical,candidate);
+                }
+                if (resize.anchored_endpoint == WallResizeAnchor::start) {
+                    target.end = {static_cast<double>(static_cast<long double>(old.start.x) + ux * length),
+                                  static_cast<double>(static_cast<long double>(old.start.y) + uy * length)};
+                } else {
+                    target.start = {static_cast<double>(static_cast<long double>(old.end.x) - ux * length),
+                                    static_cast<double>(static_cast<long double>(old.end.y) - uy * length)};
+                }
             }
             if (!std::isfinite(target.start.x) || !std::isfinite(target.start.y) ||
                 !std::isfinite(target.end.x) || !std::isfinite(target.end.y)) {
@@ -1447,6 +1470,18 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         }
 
         const auto coincident_points = canonicalize_coincident_points(request, positions, solved_points);
+        if (intent.wall_resize && intent.wall_resize->proposed_endpoint) {
+            const auto& resize = *intent.wall_resize;
+            const auto& old = old_baselines.at(resize.wall_id);
+            const auto expected_start = resize.anchored_endpoint == WallResizeAnchor::start
+                ? old.start : *resize.proposed_endpoint;
+            const auto expected_end = resize.anchored_endpoint == WallResizeAnchor::end
+                ? old.end : *resize.proposed_endpoint;
+            if (!points_exact(solved_points.at(point_id({resize.wall_id, WallEndpointRole::start})), expected_start) ||
+                !points_exact(solved_points.at(point_id({resize.wall_id, WallEndpointRole::end})), expected_end)) {
+                invalid("Constraint solve did not preserve exact wall resize endpoint targets");
+            }
+        }
         std::set<std::string,std::less<>> selected_rigid_ids;
         for (const auto& wall_id : affected_walls) {
             const auto old = old_baselines.at(wall_id);
@@ -1456,7 +1491,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 solved_points.at(point_id({wall_id, WallEndpointRole::end})),
                 rigid_transform ? transform_segment(old,*rigid_transform).sweep_radians :
                     exterior_physical_ids.contains(wall_id) ? read_baseline(candidate.at(wall_id)).sweep_radians : old.sweep_radians};
-            if (!rigid_transform && baseline_same(old, proposed) &&
+            const bool endpoint_target = intent.wall_resize &&
+                intent.wall_resize->wall_id == wall_id && intent.wall_resize->proposed_endpoint;
+            if (!rigid_transform && !endpoint_target && baseline_same(old, proposed) &&
                 (!coincident_points.contains(point_id({wall_id, WallEndpointRole::start})) ||
                     points_exact(old.start, proposed.start)) &&
                 (!coincident_points.contains(point_id({wall_id, WallEndpointRole::end})) ||

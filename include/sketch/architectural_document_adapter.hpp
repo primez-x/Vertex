@@ -42,6 +42,23 @@ struct RoomDimensionEdit {
     const DocumentSnapshot& source, const std::string& entity_id,
     const RoomDimensionEdit& edit, Revision expected_revision);
 
+enum class BeamEndpoint { start, end };
+
+// Move one authored endpoint in plan metres. Its original Z, the opposite
+// endpoint, section, up vector and all other source payload remain unchanged.
+struct BeamEndpointEdit {
+    BeamEndpoint endpoint{BeamEndpoint::end};
+    Vec2 proposed_position{};
+};
+
+// Requires an editable revision-fenced source and a real canonical beam.
+// Native geometry and complete Document relationships admit the detached
+// candidate before one command is returned. Publication must retain the
+// caller's complete captured-source fence, as for other adapter commands.
+[[nodiscard]] ApplyEntityChanges beam_endpoint_update_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    const BeamEndpointEdit& edit, Revision expected_revision);
+
 // Typed semantic edits retain the container's identity, extensions and unrelated
 // properties. Apply through Document for atomic admission and revision fencing.
 [[nodiscard]] ApplyEntityChanges assembly_type_update_command(
@@ -58,14 +75,15 @@ struct RoomDimensionEdit {
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
     Revision expected_revision);
 
-// Admit changed physical wall/opening, slab and room descriptors against the
-// complete detached candidate. Hosted siblings and affected fused joins
+// Admit changed physical wall/opening, slab, room and canonical beam descriptors
+// against the complete detached candidate. Hosted siblings and affected fused joins
 // participate even when hidden. Changed plan-only room footprints receive
 // analytical admission without manufacturing missing volume fields.
 // Metadata-only edits and incomplete legacy transport descriptors do not force
 // solid generation. Explicit required IDs must have valid physical geometry,
 // including a full room volume when a room ID is explicitly required and when
-// its entered dimension is unchanged.
+// its entered dimension is unchanged. Beam admission uses the canonical codec
+// and native builder with the completed candidate's resolved vertical placement.
 void validate_architectural_geometry_changes(
     const DocumentSnapshot& source, const DocumentSnapshot& candidate,
     const std::vector<std::string>& required_ids = {});

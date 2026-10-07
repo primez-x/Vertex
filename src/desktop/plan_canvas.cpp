@@ -2799,8 +2799,11 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         if (const auto vertex = vertexHandleAt(position, QRectF(rect()))) {
             m_left_gesture = LeftGesture::vertex_move;
             m_vertex_move_handle = *vertex;
-            if (m_entity_edit_gesture_started) m_entity_edit_gesture_started(vertex->entity_id);
+            m_vertex_move_press_pointer = toModel(position, rect());
             m_vertex_move_preview = vertex->source_position;
+            const QPointer<PlanCanvas> guard(this);
+            if (m_entity_edit_gesture_started) m_entity_edit_gesture_started(vertex->entity_id);
+            if (!guard || m_left_gesture != LeftGesture::vertex_move || !m_vertex_move_handle) return;
             setCursor(Qt::SizeAllCursor);
             return;
         }
@@ -3156,11 +3159,10 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto opening_valid = m_opening_width_preview_valid ||
             (m_opening_width_preview_pending && std::isfinite(opening_scale) &&
              opening_scale > 0.0);
-        // A tablet/touch/mouse release can cross the drag threshold without an
-        // intermediate move event. Commit the actual snapped release point,
-        // while a stationary press remains a no-op.
-        const auto vertex_target = gesture == LeftGesture::vertex_move && dragging
-            ? std::optional<Vec2>(inputPoint(position)) : m_vertex_move_preview;
+        // pointerMove above also handles a release that crosses the drag
+        // threshold without an intermediate move event. Commit its snapped,
+        // grab-offset-adjusted target in the local callback path as well.
+        const auto vertex_target = m_vertex_move_preview;
         // Pending exact geometry is not trusted for admission. The document
         // command recomputes the final target; a known invalid result rejects.
         const bool vertex_valid = vertex_target && std::isfinite(vertex_target->x) &&
@@ -3290,6 +3292,7 @@ void PlanCanvas::resetGesture() {
     m_axis_scale_x_preview = 1.0;
     m_axis_scale_y_preview = 1.0;
     m_vertex_move_handle.reset();
+    m_vertex_move_press_pointer.reset();
     m_vertex_move_preview.reset();
     m_boundary_vertex_entities_preview.clear();
     m_boundary_vertex_labels_preview.clear();
@@ -4301,21 +4304,26 @@ void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
     const auto serial = ++m_boundary_vertex_preview_serial;
     const auto handle = *m_vertex_move_handle;
     m_boundary_vertex_preview_pointer = point;
-    m_vertex_move_preview = inputPoint(point);
+    const auto pointer = toModel(point, rect());
+    const auto target = m_vertex_move_press_pointer
+        ? handle.source_position + (pointer - *m_vertex_move_press_pointer) : pointer;
+    // The hit area is deliberately larger than the painted grip. Keep that
+    // press offset during motion, then apply the normal model/grid snapping.
+    m_vertex_move_preview = inputPoint(toScreen(target, rect()));
     m_boundary_vertex_preview_valid = false;
     m_boundary_vertex_preview_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
     m_boundary_vertex_entities_preview.clear();
     m_boundary_vertex_labels_preview.clear();
     m_boundary_vertex_metrics_preview.reset();
-    const auto target = *m_vertex_move_preview;
-    if (!std::isfinite(target.x) || !std::isfinite(target.y) ||
+    const auto snapped_target = *m_vertex_move_preview;
+    if (!std::isfinite(snapped_target.x) || !std::isfinite(snapped_target.y) ||
         !m_boundary_vertex_preview_requested) return;
     std::optional<std::vector<CanvasEntity>> preview;
     m_boundary_vertex_preview_request_in_progress = true;
     try {
         preview = m_boundary_vertex_preview_requested(handle.entity_id, handle.vertex_id,
-                                                      target, handle.source_revision);
+                                                      snapped_target, handle.source_revision);
     } catch (const std::exception&) {
         if (m_boundary_vertex_preview_serial == serial) {
             m_boundary_vertex_preview_request_in_progress = false;
@@ -4369,7 +4377,8 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     // cannot be a preview of this edit and is treated as a known invalid result.
     const bool invalid_metrics = metrics &&
         (!std::isfinite(metrics->area_square_metres) || metrics->area_square_metres < 0 ||
-         !std::isfinite(metrics->perimeter_metres) || metrics->perimeter_metres < 0);
+         !std::isfinite(metrics->perimeter_metres) || metrics->perimeter_metres < 0 ||
+         (metrics->length_metres && (!std::isfinite(*metrics->length_metres) || *metrics->length_metres <= 0)));
     if (invalid_metrics || !result || !unambiguous_entity_presentations(*result, m_entities) || std::none_of(result->begin(), result->end(),
         [&](const CanvasEntity& entity) { return entity.id == m_vertex_move_handle->entity_id; })) {
         update();
@@ -4481,13 +4490,17 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
         else if (invalid) text += QStringLiteral("  ·  Invalid");
         else if (m_boundary_vertex_preview_valid && m_boundary_vertex_metrics_preview) {
             const auto& totals = *m_boundary_vertex_metrics_preview;
-            constexpr double metres_per_foot = .3048;
-            const auto area = m_metric_units
-                ? QStringLiteral("%1 m²").arg(totals.area_square_metres,0,'f',2)
-                : QStringLiteral("%1 ft²").arg(totals.area_square_metres /
-                    (metres_per_foot*metres_per_foot),0,'f',2);
-            text += QStringLiteral("\nArea %1  ·  Perimeter %2")
-                .arg(area,display_cursor_length(totals.perimeter_metres,m_metric_units));
+            if (totals.length_metres) {
+                text += QStringLiteral("\nLength %1").arg(display_cursor_length(*totals.length_metres,m_metric_units));
+            } else {
+                constexpr double metres_per_foot = .3048;
+                const auto area = m_metric_units
+                    ? QStringLiteral("%1 m²").arg(totals.area_square_metres,0,'f',2)
+                    : QStringLiteral("%1 ft²").arg(totals.area_square_metres /
+                        (metres_per_foot*metres_per_foot),0,'f',2);
+                text += QStringLiteral("\nArea %1  ·  Perimeter %2")
+                    .arg(area,display_cursor_length(totals.perimeter_metres,m_metric_units));
+            }
         }
         const QFontMetricsF metrics(readout_font,painter.device());
         auto panel = metrics.boundingRect(QRectF(0,0,1000,1000),Qt::AlignCenter,text)

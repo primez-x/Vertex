@@ -13,6 +13,10 @@
 #include <set>
 #include <string>
 
+QT_BEGIN_NAMESPACE
+class QSinglePointEvent;
+QT_END_NAMESPACE
+
 namespace sketch {
 
 class DocumentSnapshot;
@@ -169,12 +173,21 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void tabletEvent(QTabletEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     QPaintEngine* paintEngine() const override;
 
 private:
     [[nodiscard]] bool admitSceneInput(bool starting);
-    void resetInteraction(bool restore_controls);
+    void resetInteraction(bool restore_controls, bool keep_tablet_dispatch = false);
+    [[nodiscard]] bool claimPointer(Qt::MouseButton button);
+    [[nodiscard]] bool suppressMouseInput(const QMouseEvent* event) const;
+    void retireDisconnectedTablet() noexcept;
+    void cancelTabletInteraction() noexcept;
+    void pointerPress(QSinglePointEvent* event);
+    void pointerDoubleClick(QSinglePointEvent* event);
+    void pointerMove(QSinglePointEvent* event);
+    void pointerRelease(QSinglePointEvent* event);
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

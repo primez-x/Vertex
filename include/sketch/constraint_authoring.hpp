@@ -53,6 +53,10 @@ struct WallResizeIntent {
     Quantity exact_length; // Physical baseline length, including circular arcs.
     WallResizeAnchor anchored_endpoint{WallResizeAnchor::start};
     bool move_connected_walls{true};
+    // When supplied, pin the moving endpoint to this position and retain the
+    // opposite source endpoint and signed sweep. exact_length must match the
+    // resulting physical baseline. Otherwise resize along the source chord.
+    std::optional<Vec2> proposed_endpoint{};
 };
 
 struct WallGeometryMoveTarget {

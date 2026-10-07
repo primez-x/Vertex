@@ -417,6 +417,8 @@ drawing; switching modes does not change existing geometry.
   - Expected: The preview identifies the fixed endpoint and shows it stationary; Apply produces the same shape shown in the preview.
   - Result: Not tested
   - Steps: Record or dimension both endpoints of one boundary edge. Enter a new length and compare the previews for **Keep start fixed** and **Keep end fixed** before applying either. Apply with start fixed, undo, then repeat with end fixed. Confirm the chosen endpoint stays in the same grid position each time and undo/redo restores the exact prior/resulting shape.
+  - Wall handle check: Select a wall containing a door and a window. Drag either endpoint grip to change its length and direction; start slightly off the grip centre to check that it does not jump. The other endpoint stays fixed, connected geometry and wall measurements follow the preview, and one Undo restores the edit. Try an invalid shortening that would put an opening beyond the wall, then drag back to a valid length before releasing. Repeat on a curved wall: its signed turn remains curved, rather than becoming a straight stroke.
+  - View check: Repeat in Measurement, Site Plan and a shifted, rotated or reflected horizontal Architectural plan. Cropped-out or depth-hidden endpoints offer no grip, and elevations and sections offer quick properties instead. Zoom away and back or press Escape during a drag, then release: no endpoint change should apply. Save and reopen a valid edit, then undo and redo it.
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U063 — Choose whether connected geometry moves with an edit**
@@ -942,8 +944,9 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U153 — Draw with an active pen, if available**
   - Steps: Use the pen tip to draw a wall, select an object and drag it. With a barrel button mapped to right-click, drag to pan, tap to cancel an unfinished wall or new symbol, and tap an existing object to open its menu. Try a middle-mapped button if supported. During a tip drag, press and release another pen button before releasing the tip. Try palm contact or moving the mouse during that pen drag, then use mouse and touch after lifting or disconnecting the pen.
+    Switch to 3D. Select an object with the tip, choose Move object and drag it, then try its translation control. Try Ctrl-tip selection, right-barrel drag to orbit, a stationary right-barrel menu and middle-barrel pan. Cancel a pen move with Escape or by changing focus. Lift the pen and immediately tap with touch, then use the mouse.
   - Expected: Pen placement behaves predictably without duplicate clicks.
-    Barrel actions follow their mouse equivalents. Extra buttons or another device do not take over or finish the active pen drag. Mouse and touch remain usable after the pen is disconnected.
+    Barrel actions follow their mouse equivalents in each view. Each accepted object movement is one Undo step. Extra buttons, palm contact or another device do not take over or finish the active pen drag. Cancelled moves restore the original object. Mouse and touch remain usable after the pen lifts or disconnects.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1075,7 +1078,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U174 — Create and resize a beam**
-  - Expected: Its span, section and position are correct.
+  - Steps: Create a beam and select it on the plan. Drag each endpoint grip, including a grab near the edge of the grip's hit area. Check the live length. Repeat in a rotated saved plan and Site view. Try collapsing the axis, cancel a valid drag with Escape, then accept a valid edit. Undo, Redo, save and reopen. For a sloped beam, compare its retained endpoint elevations and section before and after.
+  - Expected: The chosen endpoint changes X/Y with the opposite endpoint fixed. Endpoint elevations, section and up direction remain unchanged. The live length is the physical 3D span. Invalid geometry changes nothing; cancellation restores the original, and each accepted drag is one Undo step. Hidden endpoints outside a saved plan's crop or depth have no grip.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

@@ -65,6 +65,16 @@ Synthetic mouse events cannot duplicate a pen or touch action. One-finger input
 uses the plan pointer contract; a second finger cancels that edit and starts
 pan/pinch navigation until all fingers lift.
 
+Native 3D pen packets use the same pointer controls as the mouse: the tip
+selects or operates an armed Move/manipulator, a right-mapped barrel orbits on
+drag and opens context actions on a stationary release, and a middle-mapped
+barrel pans. The initiating pen and button own the gesture. Losing that button,
+the device, focus or capture cancels the edit; other buttons cannot commit it.
+Live pen input accepts palm contacts without starting a second action. After
+release, a short duplicate-mouse guard distinguishes pen-generated input from
+independent mouse input, and a new touch sequence retains Qt's ordinary pointer
+fallback. Pressure and tilt do not alter authored dimensions.
+
 Vertical wheel input zooms at the pointer in both plans and 3D. Angular wheel
 deltas take priority when a driver reports both forms; pixel-only touchpad
 input is supported without applying display scaling twice. Native 3D retains
@@ -125,7 +135,9 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Selected symbols use an oriented selection frame that retains their saved rotation. Corner handles scale proportionally; side handles resize local width or depth with the opposite edge anchored. Canvas dimensions show the current physical footprint.
 - Rotation uses a positive counterclockwise model angle. The handle and frame retain the committed orientation and preview the resulting angle, snapping to absolute 45-degree increments (including 0°, 90°, 180° and 270°); Shift bypasses snapping for fine adjustment. The canvas callout displays the current angle while rotating. Release commits once, Escape restores the document, and editing controls never appear in output.
 - Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
-- Direct endpoint grips for additional architectural object types.
+- Selected walls have endpoint grips in Measurement, Site and horizontal Architectural plans. Dragging one changes the physical baseline length and direction with the opposite endpoint fixed. Curves retain their signed sweep. The grip's larger hit area preserves the original press offset before snapping. The preview solves connected geometry, admits the completed physical hosts and retains the exact command for one released Undo step. Crop and depth limits remove grips for invisible endpoints; elevation and section views use Properties. Navigation, source or context changes invalidate the retained edit even if the view later returns to its earlier position.
+- Selected structural beams have endpoint grips in those same horizontal views. The chosen endpoint changes X/Y while both original endpoint elevations, the opposite endpoint and the actual cross-section/up direction stay fixed. The readout uses physical 3D span, and the native beam codec rejects a degenerate axis or unstable section frame. Preview and release retain the same complete source/context authority and exact admitted command as wall endpoint edits.
+- Direct endpoint grips for other architectural object types.
 - Windows hardware qualification of pen barrel mappings and touch navigation.
 
 ## Acceptance sequences

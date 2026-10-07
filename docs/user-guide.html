@@ -205,6 +205,17 @@
   ownership until release; another button, mouse movement or palm contact
   cannot complete that edit. A second finger during a one-finger touch edit
   cancels the edit and starts pan/pinch navigation.</p>
+  <p>In 3D, the pen tip selects an object or drags an armed Move or transform
+  control. A right-mapped barrel orbits while dragging and opens context actions
+  when tapped; a middle-mapped barrel pans. Escape, focus loss or a disconnected
+  pen cancels the active movement. Pressure and tilt do not change dimensions.
+  Mouse and ordinary touch input remain available after the pen lifts.</p>
+  <p>A selected structural beam has endpoint grips in Measurement, Site and
+  horizontal Architectural plans. Drag either grip to change its plan position;
+  the opposite end, both endpoint elevations and the section stay fixed. The
+  live length includes any retained rise. A hidden endpoint outside a saved
+  plan's crop or depth has no grip. Escape restores the original beam, and an
+  accepted drag is one Undo step.</p>
   <p>To select underneath another item in a plan, hold <strong>Alt</strong> and
   click the overlapping items repeatedly. Each click selects the next eligible
   object at that point, using the current selection filter. Alt-clicking empty
@@ -244,7 +255,12 @@
   and the wall name and other properties remain in place.</p>
   <p>Wall endpoints authored together in the same floor, layer and design phase
   retain their connection. To change a wall length, use its dimensions and
-  constraints editor and review connected movement before applying the edit.</p>
+  constraints editor and review connected movement before applying the edit.
+  You can also select the wall and drag either endpoint grip to change its
+  length and direction while keeping the opposite end fixed. Connected geometry
+  follows the preview. Curved walls retain their signed turn, and conflicting
+  constraints or invalid hosted openings prevent the edit. Endpoint grips
+  follow horizontal plan axes and appear only for visible endpoints.</p>
   <p>Select a wall, then drag inside its selection frame to move it. Connected
   corners move together and adjoining walls adjust; the live preview includes
   hosted doors and windows. Ctrl-click several walls to move them together.

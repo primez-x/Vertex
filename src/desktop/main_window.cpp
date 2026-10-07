@@ -4741,6 +4741,37 @@ std::string building_plan_source_key(const DocumentSnapshot& snapshot, const Ent
     return key;
 }
 
+void retain_beam_endpoint_handles(CanvasEntity& entity, const Beam& beam, Revision revision,
+    bool interactive, const ArchitecturalViewContext* view = nullptr) {
+    entity.vertex_handles.clear();
+    if (!interactive || !entity.selected || (view && !horizontal_plan_frame(view->frame))) return;
+    for (const auto& [endpoint, role] : {
+            std::pair{beam.start, QStringLiteral("beam:start")},
+            std::pair{beam.end, QStringLiteral("beam:end")}}) {
+        if (view && std::isfinite(view->depth.far_depth_m)) {
+            const auto& depth = view->depth;
+            const Vec3 plane_origin{
+                depth.origin.x + depth.direction.x * depth.far_depth_m,
+                depth.origin.y + depth.direction.y * depth.far_depth_m,
+                depth.origin.z + depth.direction.z * depth.far_depth_m};
+            const auto distance = (endpoint.x - plane_origin.x) * depth.direction.x +
+                (endpoint.y - plane_origin.y) * depth.direction.y +
+                (endpoint.z - plane_origin.z) * depth.direction.z;
+            // A partially clipped solid remains visible, but its hidden axis
+            // endpoint must not become an authoring grip at the cut plane.
+            if (!std::isfinite(distance) || distance > 0.0) continue;
+        }
+        const Vec2 model{endpoint.x, endpoint.y};
+        const auto point = view ? project_plan_point(model, view->frame) : model;
+        if (view && view->crop) {
+            const auto& crop = *view->crop;
+            if (point.x < crop.min_horizontal_m || point.x > crop.max_horizontal_m ||
+                point.y < crop.min_vertical_m || point.y > crop.max_vertical_m) continue;
+        }
+        entity.vertex_handles.push_back({role, point, revision});
+    }
+}
+
 TopoDS_Shape document_roof_join_shape(const DocumentSnapshot& snapshot, const Entity& entity) {
     const auto join = parse_roof_join(entity.properties, entity.id);
     std::vector<TopoDS_Shape> roofs;
@@ -4765,6 +4796,29 @@ class MainWindow::Impl {
     enum class DrawingMode { wall, measurement, measured_lines };
 
     struct SourceEditAuthority;
+
+    struct PlanEndpointCapture {
+        QPointer<PlanCanvas> canvas;
+        std::shared_ptr<Document> document;
+        std::shared_ptr<const DocumentSnapshot> source;
+        std::shared_ptr<const SourceEditAuthority> authority;
+        QString entity_id;
+        Vec2 view_center;
+        double zoom{};
+        QSize size;
+        double dpr{};
+        std::uint64_t navigation_generation{};
+        std::uint64_t site_generation{};
+        bool site{};
+        bool had_focus{};
+    };
+    struct PlanEndpointPreviewCommand {
+        std::shared_ptr<const PlanEndpointCapture> capture;
+        std::uint64_t serial{};
+        QString vertex_id;
+        Vec2 position;
+        Command command;
+    };
 
     struct PendingOpeningPreview {
         QPointer<PlanCanvas> canvas;
@@ -4808,6 +4862,8 @@ class MainWindow::Impl {
         bool entity_transform_preview{};
         std::optional<PlanarTransform> rigid_transform;
         std::shared_ptr<const SourceEditAuthority> authority;
+        std::shared_ptr<const PlanEndpointCapture> plan_endpoint_capture;
+        std::shared_ptr<std::optional<Command>> plan_endpoint_command;
     };
 
 public:
@@ -19605,6 +19661,42 @@ public:
         return *proof;
     }
 
+    static Command planEndpointCommand(const DocumentSnapshot& source, const QString& id,
+        const QString& endpoint, Vec2 position) {
+        const auto& wall = source.entities().at(id.toStdString());
+        if (wall.type == "beam") {
+            if (endpoint != QStringLiteral("beam:start") && endpoint != QStringLiteral("beam:end"))
+                throw std::invalid_argument("Choose a beam endpoint handle.");
+            return beam_endpoint_update_command(source, wall.id,
+                {endpoint == QStringLiteral("beam:start") ? BeamEndpoint::start : BeamEndpoint::end, position},
+                source.revision());
+        }
+        if (wall.type != "wall" || (endpoint != QStringLiteral("wall:start") &&
+            endpoint != QStringLiteral("wall:end")))
+            throw std::invalid_argument("Choose a wall endpoint handle.");
+        const auto baseline = read_required_segment(wall.properties, "baseline");
+        if (!baseline || !std::isfinite(position.x) || !std::isfinite(position.y))
+            throw std::invalid_argument("The wall endpoint target is unavailable.");
+        auto proposed = *baseline;
+        const bool moving_start = endpoint == QStringLiteral("wall:start");
+        if (moving_start) proposed.start = position;
+        else proposed.end = position;
+        const auto length = segment_length(proposed);
+        if (!std::isfinite(length) || length <= default_geometry_tolerance_metres)
+            throw std::invalid_argument("The proposed wall is too short or outside the supported range.");
+        // Pointer geometry supplies a derived physical quantity, never a
+        // replacement for the retained endpoint coordinates. Nanometre decimal
+        // rounding is below the model tolerance; the core checks agreement.
+        const auto quantity = parse_quantity((QString::number(length, 'f', 9) + QStringLiteral(" m")).toStdString(), Unit::metre);
+        ConstraintAuthoringIntent intent;
+        intent.wall_resize = WallResizeIntent{wall.id, quantity,
+            moving_start ? WallResizeAnchor::end : WallResizeAnchor::start, true, position};
+        intent.message = "Move wall endpoint and connected geometry";
+        const auto preview = preview_constraint_authoring(source, intent);
+        requireAcceptedConstraintPreview(preview);
+        return constraint_authoring_verified_command(source, preview, nullptr);
+    }
+
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
         const Entity& original, const ArchitecturalTransaction& transaction) {
         const auto& operations=transaction.operations();
@@ -19620,6 +19712,27 @@ public:
             }
         }
         return architectural_transaction_command(source,transaction,source.revision());
+    }
+
+    static CanvasBoundaryPreviewMetrics endpointPreviewMetrics(const Entity& entity) {
+        double length{};
+        if (entity.type == "wall") {
+            const auto baseline = read_required_segment(entity.properties, "baseline");
+            if (!baseline) throw std::invalid_argument("The wall endpoint length is unavailable.");
+            length = segment_length(*baseline);
+        } else if (entity.type == "beam") {
+            // These exact three-coordinate arrays were admitted by the beam
+            // codec. Include the retained rise, rather than reporting an XY
+            // screen projection as the physical length of a sloped beam.
+            const auto& start = entity.properties.at("start_m");
+            const auto& end = entity.properties.at("end_m");
+            length = std::hypot(end.at(0).get<double>() - start.at(0).get<double>(),
+                end.at(1).get<double>() - start.at(1).get<double>(),
+                end.at(2).get<double>() - start.at(2).get<double>());
+        }
+        if (!std::isfinite(length) || length <= 0.0)
+            throw std::invalid_argument("The endpoint length is unavailable.");
+        return {0.0, 0.0, length};
     }
 
     static WallGeometryMoveIntent wallTranslationIntent(const DocumentSnapshot& source,
@@ -19700,12 +19813,22 @@ public:
         const std::set<std::string, std::less<>>& appraisal_area_ids,
         const std::map<QString,QRectF>& label_footprints,const std::vector<Bounds2>& component_bounds,
         const QString& entity_id,const QString& vertex_id,Vec2 position,
-        const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font) {
+        const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font,
+        std::optional<Command>* admitted_command = nullptr) {
         try {
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
+            const auto& owner = source.entities().at(edit.boundary_id);
+            const bool endpoint_object = owner.type == "wall" || owner.type == "beam";
             const bool measured=source.entities().at(edit.boundary_id).type=="measurement_linework";
+            std::optional<Command> endpoint_command;
             const auto candidate_snapshot = [&] {
+                if (endpoint_object) {
+                    endpoint_command = augmentAuthoredCommand(planEndpointCommand(source, entity_id, vertex_id, position), source);
+                    const auto candidate = Document::preview_command(source, *endpoint_command);
+                    validate_architectural_geometry_changes(source, candidate, {edit.boundary_id});
+                    return candidate;
+                }
                 if (measured) return Document::preview_command(source,measuredStrokeGeometryCommand(source,edit));
                 ConstraintAuthoringIntent intent;
                 intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
@@ -19716,12 +19839,15 @@ public:
             const auto& candidate=candidate_snapshot.entities();
             auto result = computeConstraintGeometryProjection(source, candidate_snapshot, retained, eligible,
                 labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context, label_font);
-            if (result && !measured) {
+            if (result && !measured && !endpoint_object) {
                 const auto geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
                 result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
             }
+            if (result && endpoint_object) result->metrics = endpointPreviewMetrics(candidate.at(edit.boundary_id));
+            if (result && endpoint_command && admitted_command) *admitted_command = std::move(*endpoint_command);
             return result;
-        } catch (const std::exception&) { return std::nullopt; }
+        } catch (const Standard_Failure&) { return std::nullopt; }
+          catch (const std::exception&) { return std::nullopt; }
     }
 
     static std::optional<VertexPreviewProjection> computeConstraintGeometryProjection(
@@ -19847,6 +19973,7 @@ public:
                 const auto& entity=found->second;
                 auto proposed=item;
                 bool world_paths = true;
+                std::optional<Beam> edited_beam;
                 if (is_closed_boundary_entity(entity.type) &&
                     !explicit_area_appearances.contains(entity.id)) {
                     const auto presentation = effective_plan_area_presentation(entity,
@@ -19892,7 +20019,28 @@ public:
                     for (auto& handle : proposed.vertex_handles)
                         for (const auto& edge : after.segments)
                             if (handle.id.toStdString()==edge.start_vertex_id) handle.position=edge.segment.start;
+                } else if (entity.type == "beam" && entity != source.entities().at(entity.id)) {
+                    const auto object = decode_building_entity(effective_building_geometry_entity(candidate_snapshot, entity));
+                    const auto& beam = std::get<Beam>(object);
+                    edited_beam = beam;
+                    proposed.stroke_segments.reset();
+                    proposed.holes.clear();
+                    proposed.resize_frame.reset();
+                    if (shape_projection && view_context) {
+                        proposed.segments = project_architectural_view_shape(make_building_shape(object, candidate),
+                            BuildingViewKind::plan, *view_context).value_or(Boundary{});
+                        retain_beam_endpoint_handles(proposed, beam, source.revision(), source.is_editable(), &*view_context);
+                        world_paths = false;
+                    } else {
+                        proposed.segments = project_building_plan(object, candidate);
+                        retain_beam_endpoint_handles(proposed, beam, source.revision(), source.is_editable());
+                    }
                 } else if (const auto wall=changed_walls.find(entity.id);wall!=changed_walls.end()) {
+                    for (auto& handle : proposed.vertex_handles) {
+                        if (handle.id == QStringLiteral("wall:start")) handle.position = wall->second.baseline.start;
+                        else if (handle.id == QStringLiteral("wall:end")) handle.position = wall->second.baseline.end;
+                        if (shape_projection && view_context) handle.position = project_plan_point(handle.position, view_context->frame);
+                    }
                     proposed.snap_points={wall->second.baseline.start,wall->second.baseline.end};
                     proposed.snap_segments={wall->second.baseline};
                     if (view_context) proposed.snap_segments=project_plan_path(
@@ -20004,6 +20152,9 @@ public:
                                                     {crop.max_horizontal_m, crop.max_vertical_m}});
                     }
                 }
+                if (edited_beam && view_context)
+                    retain_beam_endpoint_handles(proposed, *edited_beam, source.revision(),
+                        source.is_editable() && !proposed.segments.empty(), &*view_context);
                 // A previously captured owner needs an empty override when it
                 // leaves the view. Newly eligible owners contribute only once
                 // their candidate actually intersects the captured depth/crop.
@@ -20214,8 +20365,9 @@ public:
         const auto label_font=request.label_font;
         const auto entities_move_candidate=request.entities_move_candidate;
         const auto rigid_transform=request.rigid_transform;
+        const auto endpoint_command=request.plan_endpoint_command;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (entities_move_candidate) {
@@ -20251,7 +20403,8 @@ public:
                             *result=computeConstraintGeometryProjection(*source,preview_constraint_authoring_snapshot(*source,preview),*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,label_font);
                     } else *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
-                        *label_footprints,*component_bounds,id,vertex,position,view_context,label_font);
+                        *label_footprints,*component_bounds,id,vertex,position,view_context,label_font,
+                        endpoint_command ? endpoint_command.get() : nullptr);
                 }
                 return RegenerationReceipt{source->revision(),{}};
             });
@@ -20313,9 +20466,71 @@ public:
         return m_plan_publication_source;
     }
 
+    void capturePlanEndpointEdit(PlanCanvas* canvas, const QString& id,
+        std::shared_ptr<const DocumentSnapshot> source) {
+        m_plan_endpoint_preview.reset();
+        m_plan_endpoint_capture.reset();
+        const auto& type = source->entities().at(id.toStdString()).type;
+        if (type != "wall" && type != "beam") return;
+        const bool site = siteCanvas(canvas);
+        m_plan_endpoint_capture = std::make_shared<PlanEndpointCapture>(PlanEndpointCapture{
+            canvas, m_document, std::move(source), site ? m_site_edit_authority : m_vertex_preview_authority,
+            id, canvas->viewCenter(), canvas->viewScale(), canvas->size(), canvas->devicePixelRatioF(),
+            canvas->navigationGeneration(), site ? m_site_edit_generation : 0, site, canvas->hasFocus()});
+    }
+
+    bool planEndpointCaptureCurrent(const std::shared_ptr<const PlanEndpointCapture>& capture) const noexcept {
+        try {
+            if (!capture || capture != m_plan_endpoint_capture || !capture->canvas ||
+                capture->document != m_document || !capture->source || !capture->authority ||
+                !capture->canvas->isVisible() || (capture->had_focus && !capture->canvas->hasFocus()) ||
+                capture->entity_id != m_selected_id || m_selected_ids.size() != 1 ||
+                m_boundary_session || m_linework_drawing || m_pending_wall_start ||
+                !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
+                !sourceEditAuthorityCurrent(*capture->authority)) return false;
+            const auto center = capture->canvas->viewCenter();
+            if (center.x != capture->view_center.x || center.y != capture->view_center.y ||
+                capture->canvas->viewScale() != capture->zoom || capture->canvas->size() != capture->size ||
+                capture->canvas->devicePixelRatioF() != capture->dpr ||
+                capture->canvas->navigationGeneration() != capture->navigation_generation) return false;
+            if (capture->site) {
+                requireSiteEditCurrent();
+                return capture->site_generation == m_site_edit_generation && capture->source == m_site_edit_source;
+            }
+            return capture->canvas == m_vertex_preview_canvas && capture->source == m_vertex_preview_source &&
+                capture->authority == m_vertex_preview_authority;
+        } catch (...) { return false; }
+    }
+
+    bool commitPlanEndpointFromCanvas(PlanCanvas* canvas, const QString& id,
+        const QString& endpoint, Vec2 position, std::uint64_t revision) {
+        const auto capture = m_plan_endpoint_capture;
+        if (!planEndpointCaptureCurrent(capture) || capture->canvas != canvas || capture->entity_id != id ||
+            capture->source->revision() != revision || !m_plan_endpoint_preview ||
+            m_plan_endpoint_preview->capture != capture || m_plan_endpoint_preview->vertex_id != endpoint ||
+            m_plan_endpoint_preview->serial == std::numeric_limits<std::uint64_t>::max() ||
+            canvas->boundaryVertexPreviewSerial() != m_plan_endpoint_preview->serial + 1)
+            throw std::invalid_argument("The endpoint preview or its displayed context changed. Start the drag again.");
+        if (capture->site) position = site_source_plan_point(position, siteEditFrame({id}));
+        else if (m_vertex_preview_view_context)
+            position = unproject_plan_point(position, m_vertex_preview_view_context->frame);
+        if (position.x != m_plan_endpoint_preview->position.x || position.y != m_plan_endpoint_preview->position.y)
+            throw std::invalid_argument("The endpoint release differs from its admitted preview.");
+        const auto command = m_plan_endpoint_preview->command;
+        m_plan_endpoint_preview.reset();
+        // Publish the same source-bound command admitted by the latest preview.
+        // Do not solve, augment or regenerate a different edit on release.
+        applyAuthoredCommand(command);
+        clearError();
+        refresh();
+        return true;
+    }
+
     bool moveBoundaryVertexFromCanvas(PlanCanvas* canvas, const QString& id,
         const QString& vertex, Vec2 position, std::uint64_t revision) {
         try {
+            if (m_plan_endpoint_capture && m_plan_endpoint_capture->entity_id == id)
+                return commitPlanEndpointFromCanvas(canvas, id, vertex, position, revision);
             if (siteCanvas(canvas)) {
                 position=site_source_plan_point(position,siteEditFrame({id}));
                 return moveSelectedBoundaryVertex(vertex,position,static_cast<Revision>(revision));
@@ -20772,15 +20987,23 @@ public:
     }
 
     std::optional<std::vector<CanvasEntity>> previewBoundaryVertexFromCanvas(
-        PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision) {
+        PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision,
+        std::optional<CanvasBoundaryPreviewMetrics>* metrics_out = nullptr) {
+        const auto endpoint_capture = m_plan_endpoint_capture && m_plan_endpoint_capture->entity_id == id
+            ? m_plan_endpoint_capture : nullptr;
+        if (endpoint_capture) {
+            m_plan_endpoint_preview.reset();
+            if (!planEndpointCaptureCurrent(endpoint_capture)) return std::vector<CanvasEntity>{};
+        }
         if (siteCanvas(canvas) && !m_site_preview_dispatching) {
             const auto serial=canvas->boundaryVertexPreviewSerial();
             if (!sitePreviewContextCurrent() || !canvas->markBoundaryVertexPreviewPending(serial)) return std::vector<CanvasEntity>{};
             const auto generation=m_site_edit_generation;
             queueSitePreview([this,target=QPointer<PlanCanvas>(canvas),id,vertex,position,revision,serial,generation] {
                 if (!target || generation!=m_site_edit_generation) return;
-                auto result=previewBoundaryVertexFromCanvas(target,id,vertex,position,revision);
-                (void)target->completeBoundaryVertexPreview(serial,std::move(result),m_site_preview_labels);
+                std::optional<CanvasBoundaryPreviewMetrics> metrics;
+                auto result=previewBoundaryVertexFromCanvas(target,id,vertex,position,revision,&metrics);
+                (void)target->completeBoundaryVertexPreview(serial,std::move(result),m_site_preview_labels,metrics);
             });
             return std::nullopt;
         }
@@ -20789,16 +21012,30 @@ public:
                 if (!m_site_edit_source || m_site_edit_source->revision()!=revision) throw std::invalid_argument("The Site Plan gesture source is unavailable.");
                 const auto local=site_source_plan_point(position,siteEditFrame({id}));
                 const BoundaryGeometryEdit edit{id.toStdString(),BoundaryGeometryEditKind::move_vertex,vertex.toStdString(),local};
-                const auto command=m_site_edit_source->entities().at(id.toStdString()).type=="measurement_linework"
-                    ? measuredStrokeGeometryCommand(*m_site_edit_source,edit) : boundaryGeometryCommand(*m_site_edit_source,edit,true);
+                const auto& type = m_site_edit_source->entities().at(id.toStdString()).type;
+                const bool endpoint_object = type == "wall" || type == "beam";
+                const auto command = endpoint_object ? augmentAuthoredCommand(planEndpointCommand(*m_site_edit_source, id, vertex, local), *m_site_edit_source)
+                    : m_site_edit_source->entities().at(id.toStdString()).type=="measurement_linework"
+                        ? measuredStrokeGeometryCommand(*m_site_edit_source,edit) : boundaryGeometryCommand(*m_site_edit_source,edit,true);
                 const auto candidate=Document::preview_command(*m_site_edit_source,command);
+                if (endpoint_object) validate_architectural_geometry_changes(*m_site_edit_source, candidate, {id.toStdString()});
                 auto proposed=sitePreviewGeometry(candidate,{},SiteEditTransform{});
+                const auto metrics = endpoint_object
+                    ? std::optional{endpointPreviewMetrics(candidate.entities().at(id.toStdString()))} : std::nullopt;
+                if (metrics_out) *metrics_out = metrics;
                 const auto serial=canvas->boundaryVertexPreviewSerial();
+                if (endpoint_object && endpoint_capture && planEndpointCaptureCurrent(endpoint_capture))
+                    m_plan_endpoint_preview = PlanEndpointPreviewCommand{endpoint_capture, serial, vertex, local, command};
                 if(canvas->markBoundaryVertexPreviewPending(serial)) {
-                    (void)canvas->completeBoundaryVertexPreview(serial,proposed,m_site_preview_labels);
+                    (void)canvas->completeBoundaryVertexPreview(serial,proposed,m_site_preview_labels,metrics);
                     return std::nullopt;
                 }
                 return proposed;
+            } catch (const Standard_Failure& error) {
+                const auto* message = error.GetMessageString();
+                setError(message && *message ? QString::fromUtf8(message)
+                    : QStringLiteral("The endpoint preview could not be generated."));
+                return std::vector<CanvasEntity>{};
             } catch (const std::exception& error) {setError(QString::fromUtf8(error.what()));return std::vector<CanvasEntity>{};}
         }
         if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
@@ -20818,6 +21055,10 @@ public:
             std::make_shared<std::optional<VertexPreviewProjection>>()};
         request.authority=m_vertex_preview_authority;
         request.label_font=canvas->font();
+        if (endpoint_capture) {
+            request.plan_endpoint_capture = endpoint_capture;
+            request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
+        }
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
             m_pending_vertex_preview=std::move(request);
@@ -20828,6 +21069,8 @@ public:
     void pollVertexPreview() {
         const auto reject=[&](const PendingVertexPreview& request) {
             if (!request.canvas) return;
+            if (m_plan_endpoint_preview && m_plan_endpoint_preview->capture == request.plan_endpoint_capture &&
+                m_plan_endpoint_preview->serial == request.serial) m_plan_endpoint_preview.reset();
             if (request.entity_transform_preview) {
                 if (request.serial==m_entity_transform_serial) m_entity_transform_ready=false;
                 (void)request.canvas->completeEntityTransformPreview(request.serial,std::nullopt);
@@ -20842,6 +21085,7 @@ public:
                     !sourceEditAuthorityCurrent(*request.authority) || m_boundary_session || m_linework_drawing ||
                     m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
                     fullSnapshotDigest(*request.source) != request.authority->source_digest) return false;
+                if (request.plan_endpoint_capture && !planEndpointCaptureCurrent(request.plan_endpoint_capture)) return false;
                 if (request.entity_transform_preview)
                     return request.serial==m_entity_transform_serial &&
                         request.canvas->entityTransformPreviewSerial()==request.serial &&
@@ -20860,6 +21104,11 @@ public:
                 continue;
             }
             auto& projection=**request.result;
+            if (request.plan_endpoint_capture) {
+                if (!request.plan_endpoint_command || !*request.plan_endpoint_command) { reject(request); continue; }
+                m_plan_endpoint_preview = PlanEndpointPreviewCommand{request.plan_endpoint_capture, request.serial,
+                    request.vertex_id, request.position, **request.plan_endpoint_command};
+            }
             if (request.entity_transform_preview) {
                 m_entity_transform_ready=true;
                 if (!request.canvas->completeEntityTransformPreview(request.serial,
@@ -36185,8 +36434,9 @@ private:
             }
         });
         canvas->setEntityEditGestureStarted([this,canvas](QString id) {
+            m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
             if (siteCanvas(canvas)) {
-                try {captureSiteEdit(canvas);}
+                try {captureSiteEdit(canvas);capturePlanEndpointEdit(canvas,id,m_site_edit_source);}
                 catch(const std::exception& error){clearSitePublication();setError(QString::fromUtf8(error.what()));}
                 return;
             }
@@ -36213,11 +36463,13 @@ private:
                     m_opening_preview_document=m_document;
                     m_opening_preview_canvas=canvas;
                 } else captureConstraintGeometryPreview(canvas,source->revision());
+                capturePlanEndpointEdit(canvas,id,source);
             } catch (const std::exception& error) {
                 m_opening_preview_source.reset(); m_opening_preview_authority.reset();
                 m_opening_preview_view_context.reset();
                 m_opening_preview_command.reset();m_opening_preview_release_pending=false;
                 m_vertex_preview_source.reset(); m_vertex_preview_authority.reset();
+                m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
                 setError(QString::fromUtf8(error.what()));
             }
         });
@@ -36406,6 +36658,7 @@ private:
             }
         });
         canvas->setEntitiesMoveStarted([this,canvas](QStringList ids) {
+            m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
             m_wall_move_source.reset();
             m_wall_move_authority.reset();
             try {
@@ -36475,6 +36728,7 @@ private:
                 return transformSelectionFromCanvas(id, scale, rotation);
             });
         canvas->setEntityTransformStarted([this,canvas](QString id) {
+            m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
             m_entity_transform_source.reset(); m_entity_transform_context.reset();
             try { captureSiteEdit(canvas); captureEntityTransformFromCanvas(canvas,id); }
             catch (const std::exception& error) {
@@ -37501,8 +37755,12 @@ private:
                         cached = caches.projections.insert_or_assign(
                             id, std::make_pair(key, std::move(projection))).first;
                     }
-                    all_geometry.push_back(CanvasEntity{id_from(id), QString::fromStdString(entity.type),
-                        cached->second.second, 0.0, id_from(id) == options.selected_id});
+                    CanvasEntity retained{id_from(id), QString::fromStdString(entity.type),
+                        cached->second.second, 0.0, id_from(id) == options.selected_id};
+                    if (entity.type == "beam" && retained.selected && options.interactive && snapshot.is_editable())
+                        retain_beam_endpoint_handles(retained, std::get<Beam>(decode_building_entity(resolved)),
+                            snapshot.revision(), true);
+                    all_geometry.push_back(std::move(retained));
                 } catch (const std::exception& error) {
                     caches.projections.erase(id);
                     append_geometry_error(QStringLiteral("Object %1: %2")
@@ -37742,6 +38000,11 @@ private:
                 canvas_entity.stroke_segments = wall_plans.at(id).strokes;
                 canvas_entity.stroke_color = QColor(35, 77, 113);
                 canvas_entity.dark_stroke_color = QColor(143, 198, 245);
+                if (canvas_entity.selected && options.interactive && snapshot.is_editable())
+                    if (const auto baseline = read_required_segment(entity.properties, "baseline")) {
+                        canvas_entity.vertex_handles.push_back({QStringLiteral("wall:start"), baseline->start, snapshot.revision()});
+                        canvas_entity.vertex_handles.push_back({QStringLiteral("wall:end"), baseline->end, snapshot.revision()});
+                    }
             }
             all_geometry.push_back(std::move(canvas_entity));
         }
@@ -38481,6 +38744,7 @@ private:
     }
 
     void clearSitePublication() {
+        m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
         ++m_site_publication_generation;
         ++m_site_edit_generation;
         m_site_publication_source.reset();m_site_publication_authority.reset();
@@ -39013,6 +39277,7 @@ private:
             (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
         m_vertex_preview_source.reset();
         m_vertex_preview_scene.reset();
+        m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
         m_vertex_preview_eligible.reset();
         m_vertex_preview_labels.reset();
         m_vertex_preview_appraisal_area_ids.reset();
@@ -39218,12 +39483,13 @@ private:
                 retained.snap_points.clear();
                 retained.snap_segments.clear();
                 retained.drawing_alignment_segments.clear();
-                if (kind != BuildingViewKind::plan || !horizontal_plan_frame(frame) ||
-                    !scene_options.active_context) return;
+                retained.vertex_handles.clear();
+                if (kind != BuildingViewKind::plan || !horizontal_plan_frame(frame)) return;
                 const auto context = snap_organization->drawing_context(source.id);
-                const auto& active = *scene_options.active_context;
-                if (!context || context->property_id != active.property_id ||
-                    context->building_id != active.building_id || context->floor_id != active.floor_id) return;
+                const bool snap_eligible = context && scene_options.active_context &&
+                    context->property_id == scene_options.active_context->property_id &&
+                    context->building_id == scene_options.active_context->building_id &&
+                    context->floor_id == scene_options.active_context->floor_id;
                 const auto baseline = read_required_segment(source.properties, "baseline");
                 if (!baseline) return;
                 const auto support = physical ? horizontal_wall_snap_spans(*physical, view_context.depth)
@@ -39235,16 +39501,22 @@ private:
                                    {view_context.crop->max_horizontal_m, view_context.crop->max_vertical_m}};
                     projected = clip_boundary_to_bounds(projected, *crop);
                 }
-                retained.snap_segments = projected;
-                retained.drawing_alignment_segments = std::move(projected);
-                for (const auto& [endpoint, supported] : {
-                        std::pair{baseline->start, support.start_visible},
-                        std::pair{baseline->end, support.end_visible}}) {
+                if (snap_eligible) {
+                    retained.snap_segments = projected;
+                    retained.drawing_alignment_segments = std::move(projected);
+                }
+                for (const auto& [endpoint, supported, role] : {
+                        std::tuple{baseline->start, support.start_visible, QStringLiteral("wall:start")},
+                        std::tuple{baseline->end, support.end_visible, QStringLiteral("wall:end")}}) {
                     if (!supported) continue;
                     const auto point = project_plan_point(endpoint, frame);
                     if (!crop || (point.x >= crop->minimum.x && point.x <= crop->maximum.x &&
                                   point.y >= crop->minimum.y && point.y <= crop->maximum.y))
-                        retained.snap_points.push_back(point);
+                        {
+                            if (snap_eligible) retained.snap_points.push_back(point);
+                            if (retained.selected && scene_options.interactive && snapshot.is_editable())
+                                retained.vertex_handles.push_back({role, point, snapshot.revision()});
+                        }
                 }
             };
             // Conventional plans retain analytical boundaries and annotations;
@@ -39279,6 +39551,13 @@ private:
                         if (retained.type == QStringLiteral("wall")) {
                             const auto source = snapshot.entities().find(retained.id.toStdString());
                             if (source != snapshot.entities().end()) retain_wall_snap_targets(retained, source->second);
+                        }
+                        if (retained.type == QStringLiteral("beam") && retained.selected &&
+                            scene_options.interactive && snapshot.is_editable()) {
+                            const auto& source = snapshot.entities().at(retained.id.toStdString());
+                            retain_beam_endpoint_handles(retained, std::get<Beam>(decode_building_entity(
+                                effective_building_geometry_entity(snapshot, source))), snapshot.revision(),
+                                kind == BuildingViewKind::plan && scene_options.interactive && snapshot.is_editable(), &view_context);
                         }
                         if (!retained.paper_stroke_width_on_screen)
                             retained.output_stroke_width_mm = view_context.presentation.projection_line_mm;
@@ -39447,9 +39726,12 @@ private:
                         const auto decoded = decode_building_entity(resolved);
                         const auto projection = cached_projection(id, [&] { return make_building_shape(decoded, snapshot.entities()); });
                         if (!projection) continue;
-                        result.push_back(decorate_projection(CanvasEntity{
-                            id_from(id), QString::fromStdString(entity.type),
-                            *projection, 0.0, id_from(id) == m_selected_id}));
+                        CanvasEntity retained{id_from(id), QString::fromStdString(entity.type),
+                            *projection, 0.0, id_from(id) == m_selected_id};
+                        if (entity.type == "beam")
+                            retain_beam_endpoint_handles(retained, std::get<Beam>(decoded), snapshot.revision(),
+                                kind == BuildingViewKind::plan && scene_options.interactive && snapshot.is_editable(), &view_context);
+                        result.push_back(decorate_projection(std::move(retained)));
                         continue;
                     }
                     if (entity.type == "wall") {
@@ -47134,6 +47416,8 @@ private:
     std::optional<PendingVertexPreview> m_running_vertex_preview;
     std::optional<PendingVertexPreview> m_pending_vertex_preview;
     std::shared_ptr<const DocumentSnapshot> m_vertex_preview_source;
+    std::shared_ptr<const PlanEndpointCapture> m_plan_endpoint_capture;
+    std::optional<PlanEndpointPreviewCommand> m_plan_endpoint_preview;
     std::shared_ptr<const DocumentSnapshot> m_wall_move_source;
     std::shared_ptr<Document> m_wall_move_document;
     QPointer<PlanCanvas> m_wall_move_canvas;

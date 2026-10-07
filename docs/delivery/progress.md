@@ -483,6 +483,53 @@ it before a later context can revive it. The corrected source was approved.
 No application build, test, probe, package or installation was started for this
 batch; the installed checkpoint above is unchanged.
 
+Selected walls now expose baseline endpoint grips in Measurement, Site and
+horizontal Architectural plans. A drag changes length and direction with the
+opposite endpoint anchored, retaining a curved wall's signed sweep. Larger grip
+hit areas preserve the actual grab offset before normal snapping. The exact
+captured-source preview solves connected geometry, admits the completed physical
+host graph and retains its augmented command for one released history step.
+Crop/depth eligibility and complete source/context/camera generations fence
+both grips and publication. Invalid proposals can recover during the same drag;
+navigation or authority changes cannot revive them. Independent source review
+found an off-center release mismatch in the shared local callback fallback;
+root corrected it to use the final preview target and added native-error
+containment to the Site preview boundary. No build or runtime result is claimed.
+
+Native 3D now routes actual pen packets through the same mouse selection,
+navigation, explicit Move and manipulator routines. The actual weak device and
+initiating button own the gesture before callbacks; additional buttons, foreign
+input, palm contacts and duplicate synthesized mouse events cannot finish it.
+Cancellation and callback destruction cannot rearm a retired dispatch. The
+selected Qt 6.11.2 source exposed a touch delivery prerequisite and a combined
+tablet-button transition; the implementation now enables touch delivery while
+retaining ordinary idle fallback, and cancels a lost owner without committing.
+These source changes have not been compiled or exercised with hardware. No
+application build, test, probe, package or installed cutover was started.
+
+Independent native-pen source review found two further button-ownership gaps:
+a numerically increasing Qt button mask could lose the original owner, and a
+nested release during admission could disappear before the outer press armed.
+Both are corrected. The dispatched button survives until callbacks return;
+same-device ownership loss retires it before suppression, while genuine extra
+buttons and foreign devices remain unable to take over. The follow-up source
+review approved those corrections, with runtime and hardware still unobserved.
+
+Structural beams now share the captured endpoint-edit workflow across the
+Measurement, Site and horizontal Architectural plans. The typed adapter changes
+only the chosen endpoint's exact X/Y fields, retaining both authored Z values,
+the opposite endpoint, section/up vector and unrelated payload. Shared physical
+admission includes changed/required beams and retains the original canonical
+owner if an edit corrupts its schema. Actual candidate beam geometry supplies
+the preview; crop and depth withhold hidden endpoint grips. Wall and beam
+endpoint callouts show the admitted physical length, including beam rise and
+wall curvature, rather than displaying area totals for an open axis. No build,
+test, probe, package or installed cutover was made for this source batch.
+Independent source review found a near-unit view-direction mismatch at the beam
+far cut. Grip eligibility now uses the exact native plane construction and
+finite signed-distance predicate. The correction was approved at source level;
+compiled geometry and interaction remain unobserved.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

@@ -247,6 +247,8 @@ struct CanvasLabel {
 struct CanvasBoundaryPreviewMetrics {
     double area_square_metres{};
     double perimeter_metres{};
+    // An open physical axis uses its admitted length instead of area totals.
+    std::optional<double> length_metres;
 };
 
 // A raster underlay is a retained presentation value sourced from a
@@ -1041,6 +1043,7 @@ private:
     bool m_transform_preview_request_in_progress{};
     bool m_transform_release_pending{};
     std::optional<VertexHandleHit> m_vertex_move_handle;
+    std::optional<Vec2> m_vertex_move_press_pointer;
     std::optional<Vec2> m_vertex_move_preview;
     std::vector<CanvasEntity> m_boundary_vertex_entities_preview;
     std::vector<CanvasLabel> m_boundary_vertex_labels_preview;
