@@ -357,6 +357,20 @@ finite-depth support and unsafe derived spans; root corrected those findings.
 No application build, test, package or installed cutover was performed. Numeric,
 visual, interaction and performance outcomes remain unobserved.
 
+Hosted Door, Window and Doorway placement and library drops now stay in the
+current Measurement or horizontal Architectural plan. Arming retains the
+actual displayed authoring snapshot and, where applicable, its inverse plan
+frame. Hover, preset changes and commit guard that same source and context;
+cropped or hidden walls cannot authorize a placement. Recovered Measurement
+projects no longer fall back to the compatibility snapshot for host lookup.
+The completed augmented candidate admits the host, hidden siblings, manufactured
+assemblies and affected joins before one command. The selected-wall dialog uses
+the same recovered source and guards it across its modal edit; native admission
+errors are contained as ordinary opening errors. Independent source review
+approved the combined placement candidate; root reviewed the dialog and error
+containment additions. No build, test, package or installed change was made.
+Compilation, rendering and interaction remain unobserved.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

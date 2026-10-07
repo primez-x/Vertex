@@ -981,8 +981,10 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U161 — Insert a door into a wall**
+  - Steps: In Measurement, draw a wall, choose Door in Library, set its width and height, then hover and click on that wall. Repeat in a horizontal Architectural plan and in a saved plan with rotated axes or a shifted origin. Use a library door by drag/drop and by double-click followed by placement.
   - Library check: Place a door from the component list on an existing wall. Confirm it becomes a hosted opening, rather than a floating furniture symbol. Try placement away from a wall; the app should explain the missing host without adding an unrelated annotation.
   - Expected: Choose Door in the Library tab, set its width and height, then move onto an existing wall. A placement preview shows the opening and swing before clicking. The door cuts that wall and remains hosted there after save/reopen.
+  - Also check: Placement stays in the selected plan. Only visible walls on the active layer accept it; a cropped-out continuation does not. An elevation or section explains that a horizontal plan is needed. Changing the layer, view or source while placing refuses the old placement. Recover unsaved wall changes and confirm the preview uses those recovered walls. One Undo removes the placed door and restores its wall cut.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1004,6 +1006,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U165 — Insert a window into a wall**
+  - Steps: Place a window through the Library action and through a hosted library item in Measurement and a horizontal Architectural plan. Repeat in a shifted or rotated saved plan; verify that the preview and final opening occupy the same wall position.
   - Library check: Repeat using a window from the component list. The library and Window action must use the same hosted placement and wall cut. Undo, redo, save and reopen the result.
   - Expected: Choose Window in the Library tab, set its width, height and sill, then click the placement preview on an existing wall. The window and opening appear in that wall in 2D, elevation and 3D.
   - Result: Not tested
@@ -1022,7 +1025,9 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U168 — Add an opening without a door or window**
+  - Steps: Choose Doorway in Library, set width and height, then click its preview on an existing wall. Repeat in a horizontal Architectural plan. Start another placement and right-click without dragging, then repeat with Escape.
   - Expected: The intended wall opening is visible.
+  - Also check: Cancellation adds no object and preserves earlier walls. A cut that exceeds the host, overlaps another opening or cannot form a valid wall join is rejected without changing the project. Undo restores the wall after a valid placement.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
