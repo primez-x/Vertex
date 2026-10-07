@@ -210,12 +210,26 @@
   when tapped; a middle-mapped barrel pans. Escape, focus loss or a disconnected
   pen cancels the active movement. Pressure and tilt do not change dimensions.
   Mouse and ordinary touch input remain available after the pen lifts.</p>
+  <p>In 3D, tap with one finger to select, or drag an armed Move or transform
+  control. Adding a second finger cancels the object edit before pan and pinch
+  start. After one finger lifts, the remaining finger stays in navigation;
+  lift all fingers before starting another selection or edit. Escape or losing
+  focus cancels the interaction.</p>
   <p>A selected structural beam has endpoint grips in Measurement, Site and
   horizontal Architectural plans. Drag either grip to change its plan position;
   the opposite end, both endpoint elevations and the section stay fixed. The
   live length includes any retained rise. A hidden endpoint outside a saved
   plan's crop or depth has no grip. Escape restores the original beam, and an
   accepted drag is one Undo step.</p>
+  <p>Selected independent rooms and slabs have vertex grips on their outer
+  outline and holes in Measurement, Site and horizontal Architectural plans.
+  Drag a grip to change that corner and its adjoining edges. The readout shows
+  net area after holes and the outer perimeter. Curves retain their sweep;
+  slab thickness and elevation, and any entered room height and elevation,
+  stay unchanged. A room without volume measurements stays a 2D room.
+  Escape cancels, and one Undo restores an accepted drag. Wall-derived rooms
+  follow their source walls. Hidden vertices and crop intersections have no
+  editing grip.</p>
   <p>To select underneath another item in a plan, hold <strong>Alt</strong> and
   click the overlapping items repeatedly. Each click selects the next eligible
   object at that point, using the current selection filter. Alt-clicking empty

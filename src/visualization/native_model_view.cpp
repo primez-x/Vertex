@@ -57,6 +57,7 @@
 #include <QScreen>
 #include <QShowEvent>
 #include <QTabletEvent>
+#include <QTouchEvent>
 #include <QWheelEvent>
 #include <QTimer>
 #include <QThread>
@@ -67,6 +68,7 @@
 #include <cmath>
 #include <exception>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -257,6 +259,22 @@ public:
     QPointer<const QPointingDevice> tablet_dispatch_device;
     Qt::MouseButton tablet_dispatch_button = Qt::NoButton;
     std::chrono::steady_clock::time_point tablet_mouse_suppression_until;
+    struct TouchGesture {
+        QPointer<const QPointingDevice> device;
+        std::set<int> ids;
+        int primary_id{};
+        bool navigation{};
+        std::optional<std::array<int, 2>> pair;
+        QPointF centroid;
+        double distance{};
+        double zoom_remainder{};
+        SelectionCapture context;
+    };
+    std::optional<TouchGesture> touch;
+    int touch_dispatch_depth{};
+    bool touch_dispatch_retired{};
+    QPointer<const QPointingDevice> touch_dispatch_device;
+    std::chrono::steady_clock::time_point touch_mouse_suppression_until;
     QPoint navigation_start;
     QPointF left_press;
     bool left_moved{};
@@ -1255,9 +1273,8 @@ NativeModelView::NativeModelView(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setAttribute(Qt::WA_TabletTracking, true);
-    // Receive TouchBegin so live pen input can reject palm contacts. Idle
-    // touch still falls through QWidget::event, which ignores it and retains
-    // Qt's normal mouse fallback rather than claiming a touch gesture here.
+    // Own actual touch sequences; accepting them prevents Qt's mouse fallback
+    // from duplicating a touch selection or an object-edit completion.
     setAttribute(Qt::WA_AcceptTouchEvents, true);
     setMinimumSize(480, 360);
     setAttribute(Qt::WA_NativeWindow, true);
@@ -1532,6 +1549,10 @@ void NativeModelView::cancelInteraction() {
 
 void NativeModelView::resetInteraction(bool restore_controls, bool keep_tablet_dispatch) {
     if (m_impl->tablet_dispatch_depth && !keep_tablet_dispatch) m_impl->tablet_dispatch_retired=true;
+    if (!keep_tablet_dispatch || !m_impl->touch_dispatch_depth) {
+        if (m_impl->touch_dispatch_depth) m_impl->touch_dispatch_retired=true;
+        m_impl->touch.reset();
+    }
     m_impl->tablet_active=false;
     m_impl->tablet_button=Qt::NoButton;
     m_impl->tablet_device.clear();
@@ -1552,40 +1573,58 @@ void NativeModelView::resetInteraction(bool restore_controls, bool keep_tablet_d
     m_impl->gesture_snapshot.reset();
     m_impl->selection_capture.reset();
     if (m_impl->selection_rectangle) m_impl->selection_rectangle->hide();
-    m_impl->clear_translation_preview();
+    // Retire logical ownership before native presentation restoration can
+    // throw. The retained preview IDs suffice to restore its derived solids.
     m_impl->gesture = Impl::Gesture::none;
     m_impl->left_moved = false;
     m_impl->translation_entity_id.reset();
     m_impl->translation_start.reset();
+    m_impl->clear_translation_preview();
     if (restore_controls) { try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); } }
     unsetCursor();
     if (m_impl->native_ready && !m_impl->view.IsNull()) m_impl->view->Redraw();
+}
+
+void NativeModelView::resetCompletedPointerInteraction(bool restore_controls) {
+    // Shared release picking performs a second admission after restoring the
+    // native preview. Preserve only its still-valid completing touch proof;
+    // explicit cancellation continues to retire the dispatch unconditionally.
+    const bool completing_touch=m_impl->touch_dispatch_depth && !m_impl->touch_dispatch_retired &&
+        m_impl->touch && m_impl->touch->device && m_impl->selection_current(m_impl->touch->context);
+    resetInteraction(restore_controls,completing_touch);
 }
 
 bool NativeModelView::event(QEvent* event) {
     const QPointer<NativeModelView> input_guard(this);
     if (m_impl) retireDisconnectedTablet();
     if (!input_guard) { event->accept(); return true; }
-    if (m_impl && (m_impl->tablet_active || m_impl->tablet_dispatch_depth) && event->type()==QEvent::Wheel) {
+    if (m_impl) retireDisconnectedTouch();
+    if (!input_guard) { event->accept(); return true; }
+    if (m_impl && (m_impl->tablet_active || m_impl->tablet_dispatch_depth ||
+                   m_impl->touch || m_impl->touch_dispatch_depth) && event->type()==QEvent::Wheel) {
         event->accept();
         return true;
     }
     if (m_impl && (event->type()==QEvent::TouchBegin || event->type()==QEvent::TouchUpdate ||
                    event->type()==QEvent::TouchEnd || event->type()==QEvent::TouchCancel)) {
-        if (m_impl->tablet_active || (m_impl->tablet_dispatch_depth && m_impl->initiating_button!=Qt::NoButton)) {
+        if (m_impl->tablet_active || m_impl->tablet_dispatch_depth) {
             event->accept();
             return true;
         }
-        // An independent touch sequence keeps Qt's original fallback behavior;
-        // it must not be mistaken for a finished pen's synthesized mouse tail.
-        if (event->type()==QEvent::TouchBegin) m_impl->tablet_mouse_suppression_until={};
+        touchEvent(static_cast<QTouchEvent*>(event));
+        return true;
     }
     if (m_impl && (event->type()==QEvent::ScreenChangeInternal ||
-                   event->type()==QEvent::DevicePixelRatioChange))
+                   event->type()==QEvent::DevicePixelRatioChange)) {
         m_impl->navigation_changed();
+        if (m_impl->touch) cancelTouchInteraction();
+        if (!input_guard) { event->accept(); return true; }
+    }
     if (m_impl && (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
                    event->type() == QEvent::WindowBlocked || event->type() == QEvent::WindowDeactivate || event->type() == QEvent::FocusOut)) {
-        cancelInteraction();
+        if (m_impl->touch || m_impl->touch_dispatch_depth) cancelTouchInteraction();
+        else cancelInteraction();
+        if (!input_guard) { event->accept(); return true; }
         if (event->type()!=QEvent::UngrabMouse) m_impl->space_pan_armed=false;
     }
     if (event->type()==QEvent::ShortcutOverride &&
@@ -1602,7 +1641,9 @@ bool NativeModelView::event(QEvent* event) {
     }
     if (event->type() == QEvent::KeyPress &&
         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
-        cancelInteraction();
+        if (m_impl->touch || m_impl->touch_dispatch_depth) cancelTouchInteraction();
+        else cancelInteraction();
+        if (!input_guard) { event->accept(); return true; }
         m_impl->space_pan_armed=false;
         event->accept();
         return true;
@@ -1622,6 +1663,9 @@ void NativeModelView::showEvent(QShowEvent* event) {
 }
 
 void NativeModelView::resizeEvent(QResizeEvent* event) {
+    const QPointer<NativeModelView> guard(this);
+    if (m_impl->touch) cancelTouchInteraction();
+    if (!guard) return;
     m_impl->navigation_changed();
     QWidget::resizeEvent(event);
     m_impl->refresh_status_label();
@@ -1643,6 +1687,9 @@ void NativeModelView::paintEvent(QPaintEvent* event) {
 }
 
 bool NativeModelView::claimPointer(Qt::MouseButton button) {
+    if (m_impl->touch_dispatch_depth && m_impl->tablet_dispatch_depth) return false;
+    if (m_impl->touch_dispatch_depth &&
+        (m_impl->touch_dispatch_retired || !m_impl->touch || !m_impl->touch->device)) return false;
     if (m_impl->tablet_dispatch_depth) {
         if (m_impl->tablet_dispatch_retired || !m_impl->tablet_dispatch_device) return false;
         m_impl->tablet_active=true;
@@ -1654,7 +1701,11 @@ bool NativeModelView::claimPointer(Qt::MouseButton button) {
 }
 
 bool NativeModelView::suppressMouseInput(const QMouseEvent* event) const {
-    if (m_impl->tablet_active || m_impl->tablet_dispatch_depth) return true;
+    if (m_impl->tablet_active || m_impl->tablet_dispatch_depth || m_impl->touch || m_impl->touch_dispatch_depth) return true;
+    if (std::chrono::steady_clock::now()<m_impl->touch_mouse_suppression_until &&
+        (event->source()!=Qt::MouseEventNotSynthesized ||
+         (event->pointingDevice() && (event->pointingDevice()->type()==QInputDevice::DeviceType::TouchScreen ||
+                                     event->pointingDevice()->type()==QInputDevice::DeviceType::TouchPad)))) return true;
     if (std::chrono::steady_clock::now()>=m_impl->tablet_mouse_suppression_until) return false;
     const auto device=event->pointingDevice();
     const bool pen=device && (device->type()==QInputDevice::DeviceType::Stylus ||
@@ -1705,6 +1756,223 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
     if (guard && !event->isAccepted()) QWidget::mouseReleaseEvent(event);
 }
 
+void NativeModelView::retireDisconnectedTouch() noexcept {
+    if (m_impl->touch && !m_impl->touch->device) cancelTouchInteraction();
+}
+
+void NativeModelView::cancelTouchInteraction() noexcept {
+    const QPointer<NativeModelView> guard(this);
+    try { cancelInteraction(); }
+    catch (...) {
+        if (!guard) return;
+        try { unsetCursor(); } catch (...) {}
+        if (guard) { try { m_impl->show_input_error(QStringLiteral("3D touch cancellation failed.")); } catch (...) {} }
+    }
+}
+
+void NativeModelView::touchEvent(QTouchEvent* event) {
+    const QPointer<NativeModelView> guard(this);
+    event->accept();
+    if (m_impl->tablet_active || m_impl->tablet_dispatch_depth) return;
+    const auto device=event->pointingDevice();
+    if (m_impl->touch_dispatch_depth) {
+        if (m_impl->touch_dispatch_retired) return;
+        const auto dispatch_device=m_impl->touch_dispatch_device.data();
+        if (device && dispatch_device && device!=dispatch_device) return;
+        // Qt can deliver terminal/contact-changing packets while an admission
+        // observer pumps events. Consuming them without retirement would let
+        // the outer press claim a sequence that has already ended.
+        bool retire=!device || !dispatch_device || event->type()==QEvent::TouchCancel ||
+            event->type()==QEvent::TouchEnd || event->type()==QEvent::TouchBegin || event->points().isEmpty();
+        bool primary_present=false;
+        for (const auto& point : event->points()) {
+            if (point.state()==QEventPoint::Released ||
+                (m_impl->touch && !m_impl->touch->ids.contains(point.id())) ||
+                (!m_impl->touch && point.state()==QEventPoint::Pressed)) retire=true;
+            if (m_impl->touch && point.id()==m_impl->touch->primary_id && point.state()!=QEventPoint::Released)
+                primary_present=true;
+        }
+        if (m_impl->touch && !m_impl->touch->navigation && !primary_present) retire=true;
+        if (retire) {
+            m_impl->touch_dispatch_retired=true;
+            m_impl->touch_mouse_suppression_until=std::chrono::steady_clock::now()+std::chrono::milliseconds(500);
+            cancelTouchInteraction();
+        }
+        return;
+    }
+    if (event->type()==QEvent::TouchCancel) {
+        if (m_impl->touch && (!device || m_impl->touch->device.data()==device)) cancelTouchInteraction();
+        return;
+    }
+    if (!device || (m_impl->touch && m_impl->touch->device.data()!=device)) return;
+    m_impl->touch_mouse_suppression_until=std::chrono::steady_clock::now()+std::chrono::milliseconds(500);
+    if (!m_impl->touch && event->type()!=QEvent::TouchBegin) return;
+    if (!m_impl->touch && m_impl->initiating_button!=Qt::NoButton) return;
+    m_impl->touch_dispatch_depth++;
+    m_impl->touch_dispatch_retired=false;
+    m_impl->touch_dispatch_device=device;
+    struct TouchDispatchReset {
+        QPointer<NativeModelView> owner;
+        ~TouchDispatchReset() {
+            if (!owner) return;
+            auto& impl=*owner->m_impl;
+            if (--impl.touch_dispatch_depth==0) {
+                impl.touch_dispatch_retired=false;
+                impl.touch_dispatch_device.clear();
+            }
+        }
+    } reset_dispatch{guard};
+    const auto refuse=[&](const QString& message) noexcept {
+        if (!guard) return;
+        cancelTouchInteraction();
+        if (guard) { try { m_impl->show_input_error(message); } catch (...) {} }
+    };
+    try {
+        if (event->pointCount()>32) throw std::invalid_argument("Too many touch contacts. Start again.");
+        std::map<int, const QEventPoint*> active;
+        const QEventPoint* primary=nullptr;
+        for (const auto& point : event->points()) {
+            const auto position=point.position(),global=point.globalPosition();
+            if (!std::isfinite(position.x()) || !std::isfinite(position.y()) ||
+                !std::isfinite(global.x()) || !std::isfinite(global.y()))
+                throw std::invalid_argument("The touch position is unavailable.");
+            if (point.state()!=QEventPoint::Released && !active.emplace(point.id(),&point).second)
+                throw std::invalid_argument("The touch contact identity is ambiguous.");
+        }
+        if (!m_impl->touch) {
+            if (!isReady() || active.empty()) return;
+            m_impl->complete_initial_fit();
+            if (!guard || m_impl->touch_dispatch_retired) return;
+            if (!m_impl->touch_dispatch_device) { cancelTouchInteraction(); return; }
+            if (!isReady()) return;
+            const auto first=active.begin()->first;
+            m_impl->touch=Impl::TouchGesture{m_impl->touch_dispatch_device.data(),{},first,false,std::nullopt,
+                {},0.0,0.0,m_impl->capture_selection()};
+            m_impl->tablet_mouse_suppression_until={};
+            m_impl->touch_mouse_suppression_until={};
+        }
+        auto capture=*m_impl->touch;
+        if (!m_impl->selection_current(capture.context))
+            throw std::invalid_argument("The displayed 3D source, selection or camera changed. Start touch again.");
+        for (const auto& point : event->points()) {
+            if (point.id()==capture.primary_id) primary=&point;
+            if (point.state()==QEventPoint::Released) capture.ids.erase(point.id());
+            else if (point.state()==QEventPoint::Pressed || event->type()==QEvent::TouchBegin)
+                capture.ids.insert(point.id());
+            else if (!capture.ids.contains(point.id()))
+                throw std::invalid_argument("The touch contact sequence changed. Start again.");
+        }
+        if (capture.ids.size()>32 || (event->type()==QEvent::TouchEnd && !capture.ids.empty()))
+            throw std::invalid_argument("The touch contact sequence is incomplete. Start again.");
+        m_impl->touch->ids=capture.ids;
+        m_impl->touch_mouse_suppression_until=std::chrono::steady_clock::now()+std::chrono::milliseconds(500);
+        if (!capture.navigation && (capture.ids.size()>=2 ||
+            (!capture.ids.empty() && !capture.ids.contains(capture.primary_id)))) {
+            // Retire and restore any single-finger object preview before the
+            // second contact can move the camera. This path emits no command.
+            m_impl->touch->navigation=true;
+            resetInteraction(true,true);
+            if (!guard || m_impl->touch_dispatch_retired || !m_impl->touch) return;
+            m_impl->detach_manipulator();
+            if (!m_impl->selection_current(capture.context))
+                throw std::invalid_argument("The displayed 3D context changed before touch navigation.");
+            capture.navigation=true;
+        }
+        if (capture.navigation) {
+            if (capture.ids.empty()) { cancelTouchInteraction(); return; }
+            auto pair=capture.pair;
+            if (pair && (!capture.ids.contains((*pair)[0]) || !capture.ids.contains((*pair)[1]))) pair.reset();
+            if (!pair && active.size()>=2) pair=std::array<int,2>{active.begin()->first,std::next(active.begin())->first};
+            if (!pair || !active.contains((*pair)[0]) || !active.contains((*pair)[1])) {
+                m_impl->touch->pair.reset();
+                m_impl->touch->zoom_remainder=0.0;
+                return; // A one-finger remainder never resumes object input.
+            }
+            const auto first=active.at((*pair)[0])->position(),second=active.at((*pair)[1])->position();
+            const auto centroid=(first+second)*0.5;
+            const auto distance=std::hypot(first.x()-second.x(),first.y()-second.y());
+            if (!std::isfinite(distance) || distance<=0.0)
+                throw std::invalid_argument("The touch navigation span is unavailable.");
+            if (capture.pair==pair) {
+                const auto previous=m_impl->input_point(capture.centroid),current=m_impl->input_point(centroid);
+                const auto dx=static_cast<std::int64_t>(current.x)-previous.x;
+                const auto dy=static_cast<std::int64_t>(previous.y)-current.y;
+                if (std::abs(dx)>std::numeric_limits<int>::max() || std::abs(dy)>std::numeric_limits<int>::max())
+                    throw std::invalid_argument("The touch pan is outside the supported pixel range.");
+                const auto ratio=m_impl->input_scale();
+                const auto movement=(distance-capture.distance)*ratio;
+                if (!std::isfinite(ratio) || ratio<=0.0 || !std::isfinite(movement))
+                    throw std::invalid_argument("The native touch pixel mapping is unavailable.");
+                const auto accumulated=std::clamp(movement,-120.0,120.0)+capture.zoom_remainder;
+                const auto zoom=static_cast<int>(std::trunc(accumulated));
+                const auto end_y=static_cast<std::int64_t>(current.y)+zoom;
+                if (end_y<std::numeric_limits<int>::min() || end_y>std::numeric_limits<int>::max())
+                    throw std::invalid_argument("The touch zoom anchor is outside the supported pixel range.");
+                if (dx || dy || zoom) {
+                    m_impl->navigation_changed();
+                    if (dx || dy) m_impl->view->Pan(static_cast<int>(dx),static_cast<int>(dy),1.0,true);
+                    if (zoom) {
+                        m_impl->view->StartZoomAtPoint(current.x,current.y);
+                        m_impl->view->ZoomAtPoint(current.x,current.y,current.x,static_cast<int>(end_y));
+                    }
+                }
+                if (!guard || m_impl->touch_dispatch_retired || !m_impl->touch) return;
+                m_impl->touch->zoom_remainder=accumulated-zoom;
+                // Only our successful camera change advances this capture;
+                // source, selection, size and DPR remain the original proof.
+                m_impl->touch->context.camera=m_impl->view->Camera()->WorldViewProjState();
+                m_impl->touch->context.navigation_generation=m_impl->navigation_generation;
+            } else m_impl->touch->zoom_remainder=0.0;
+            m_impl->touch->pair=pair;
+            m_impl->touch->centroid=centroid;
+            m_impl->touch->distance=distance;
+            return;
+        }
+        if (!primary) throw std::invalid_argument("The initiating touch contact is unavailable.");
+        class TouchPointer final : public QSinglePointEvent {
+        public:
+            TouchPointer(QEvent::Type type,const QPointingDevice* device,const QEventPoint& point,
+                         Qt::MouseButton button,Qt::MouseButtons buttons,Qt::KeyboardModifiers modifiers)
+                : QSinglePointEvent(type,device,point,button,buttons,modifiers,Qt::MouseEventNotSynthesized) {}
+        } pointer(event->type()==QEvent::TouchBegin ? QEvent::MouseButtonPress :
+                  primary->state()==QEventPoint::Released ? QEvent::MouseButtonRelease : QEvent::MouseMove,
+                  device,*primary,event->type()==QEvent::TouchBegin || primary->state()==QEventPoint::Released ?
+                  Qt::LeftButton : Qt::NoButton,primary->state()==QEventPoint::Released ? Qt::NoButton : Qt::LeftButton,
+                  event->modifiers());
+        pointer.setTimestamp(event->timestamp());
+        if (event->type()==QEvent::TouchBegin) pointerPress(&pointer);
+        else if (primary->state()==QEventPoint::Released) {
+            if (!capture.ids.empty()) throw std::invalid_argument("The initiating touch ended with contacts still active.");
+            if (!admitSceneInput(false) || !guard || m_impl->touch_dispatch_retired || !m_impl->touch) return;
+            if (!m_impl->touch->device || !m_impl->selection_current(capture.context)) {
+                cancelTouchInteraction();
+                return;
+            }
+            pointerRelease(&pointer);
+            if (guard && m_impl->touch) cancelTouchInteraction();
+        } else {
+            if (!admitSceneInput(false) || !guard || m_impl->touch_dispatch_retired || !m_impl->touch) return;
+            if (!m_impl->touch->device || !m_impl->selection_current(capture.context)) {
+                cancelTouchInteraction();
+                return;
+            }
+            const auto camera_gesture=m_impl->gesture==Impl::Gesture::pan || m_impl->gesture==Impl::Gesture::orbit ||
+                m_impl->gesture==Impl::Gesture::overlap_select || m_impl->gesture==Impl::Gesture::overlap_pan;
+            pointerMove(&pointer);
+            if (guard && !m_impl->touch_dispatch_retired && m_impl->touch && camera_gesture) {
+                m_impl->touch->context.camera=m_impl->view->Camera()->WorldViewProjState();
+                m_impl->touch->context.navigation_generation=m_impl->navigation_generation;
+            }
+        }
+    } catch (const Standard_Failure& error) {
+        refuse(QStringLiteral("3D touch input failed: ")+exception_text(error));
+    } catch (const std::exception& error) {
+        refuse(QStringLiteral("3D touch input failed: ")+exception_text(error));
+    } catch (...) {
+        refuse(QStringLiteral("3D touch input failed: unknown failure"));
+    }
+}
+
 void NativeModelView::tabletEvent(QTabletEvent* event) {
     const QPointer<NativeModelView> guard(this);
     retireDisconnectedTablet();
@@ -1712,6 +1980,7 @@ void NativeModelView::tabletEvent(QTabletEvent* event) {
     // Accept actual tablet packets, including refused/stale packets, so Qt
     // does not synthesize a second mouse authoring gesture from them.
     event->accept();
+    if (m_impl->touch || m_impl->touch_dispatch_depth) return;
     if (!event->pointingDevice()) return;
     const auto device=event->pointingDevice();
     if (m_impl->tablet_dispatch_depth) {
@@ -1868,7 +2137,14 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
             try {
                 const auto observer=onTransformGestureStarted;
                 if (observer) observer(target);
-                return !guard.isNull() && (!m_impl->tablet_dispatch_depth || !m_impl->tablet_dispatch_retired);
+                if (!guard) return false;
+                if (m_impl->touch_dispatch_depth && (m_impl->touch_dispatch_retired || !m_impl->touch ||
+                    !m_impl->touch->device || !m_impl->selection_current(m_impl->touch->context))) {
+                    if (!m_impl->touch_dispatch_retired) cancelTouchInteraction();
+                    return false;
+                }
+                return !guard.isNull() && (!m_impl->tablet_dispatch_depth || !m_impl->tablet_dispatch_retired) &&
+                    (!m_impl->touch_dispatch_depth || !m_impl->touch_dispatch_retired);
             } catch (const std::exception& error) {
                 if (guard) {
                     guard->cancelInteraction();
@@ -2049,7 +2325,8 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
                 const auto capture=m_impl->selection_capture;
                 if (!capture || !m_impl->selection_current(*capture))
                     throw std::invalid_argument("The displayed 3D source, selection or camera changed. Start again.");
-                resetInteraction(false);
+                resetCompletedPointerInteraction(false);
+                if (!owner_guard) { event->accept(); return; }
                 m_impl->commit_snapshot=capture->source;
                 (void)m_impl->select_at(point,*capture,false,false,true);
                 if (owner_guard) {
@@ -2070,7 +2347,8 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         const bool context_click = m_impl->gesture == Impl::Gesture::orbit && !m_impl->left_moved;
         const auto global_position = event->globalPosition().toPoint();
         const auto capture=m_impl->selection_capture;
-        resetInteraction(!context_click);
+        resetCompletedPointerInteraction(!context_click);
+        if (!owner_guard) { event->accept(); return; }
         const auto callback = onContextMenuRequested;
         event->accept();
         if (context_click) {
@@ -2114,10 +2392,25 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         const auto translation_start = m_impl->translation_start;
         if (was_manipulation) m_impl->preview_manipulation(point);
         if (!owner_guard) { event->accept(); return; }
+        // Final preview failures notify observers synchronously. Revalidate
+        // touch ownership after those callbacks before retaining commit data.
+        if (m_impl->touch_dispatch_depth && (m_impl->touch_dispatch_retired || !m_impl->touch ||
+            !m_impl->touch->device || !m_impl->selection_current(m_impl->touch->context))) {
+            if (!m_impl->touch_dispatch_retired) cancelTouchInteraction();
+            event->accept();
+            return;
+        }
         const auto manipulation_id = m_impl->manipulator_entity_id;
         const auto manipulation_transform = m_impl->manipulation_transform;
         const auto gesture_source = m_impl->gesture_snapshot;
-        resetInteraction(!(was_additive || was_edit || was_click));
+        resetCompletedPointerInteraction(!(was_additive || was_edit || was_click));
+        if (!owner_guard) { event->accept(); return; }
+        if (m_impl->touch_dispatch_depth && (m_impl->touch_dispatch_retired || !m_impl->touch ||
+            !m_impl->touch->device || !m_impl->selection_current(m_impl->touch->context))) {
+            if (!m_impl->touch_dispatch_retired) cancelTouchInteraction();
+            event->accept();
+            return;
+        }
         // Reset even when an observer throws; the shell can read only this
         // actual press capture, never the newest requested snapshot.
 
@@ -2204,7 +2497,22 @@ bool NativeModelView::admitSceneInput(bool starting) {
         const auto observer = onSceneInputRequested;
         const bool accepted = !observer || observer(starting);
         if (!guard) return false;
-        if (!accepted) cancelInteraction();
+        if (m_impl->touch_dispatch_depth && (m_impl->touch_dispatch_retired || !m_impl->touch ||
+            !m_impl->touch->device || !m_impl->selection_current(m_impl->touch->context))) {
+            if (!m_impl->touch_dispatch_retired) cancelTouchInteraction();
+            return false;
+        }
+        if (!accepted) {
+            // A refused first-finger authoring action may still become camera
+            // navigation. Never restore a capture cancelled by the observer,
+            // and never keep a changed source, selection or camera proof.
+            if (starting && m_impl->touch_dispatch_depth && !m_impl->touch_dispatch_retired &&
+                m_impl->touch && m_impl->touch->device && m_impl->selection_current(m_impl->touch->context)) {
+                m_impl->touch->navigation=true;
+                resetInteraction(true,true);
+                if (guard && m_impl->touch && !m_impl->touch_dispatch_retired) m_impl->detach_manipulator();
+            } else cancelInteraction();
+        }
         else if (!m_impl->input_error.isEmpty()) {
             m_impl->input_error.clear();
             m_impl->refresh_status_label();

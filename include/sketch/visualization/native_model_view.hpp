@@ -15,6 +15,7 @@
 
 QT_BEGIN_NAMESPACE
 class QSinglePointEvent;
+class QTouchEvent;
 QT_END_NAMESPACE
 
 namespace sketch {
@@ -180,10 +181,14 @@ protected:
 private:
     [[nodiscard]] bool admitSceneInput(bool starting);
     void resetInteraction(bool restore_controls, bool keep_tablet_dispatch = false);
+    void resetCompletedPointerInteraction(bool restore_controls);
     [[nodiscard]] bool claimPointer(Qt::MouseButton button);
     [[nodiscard]] bool suppressMouseInput(const QMouseEvent* event) const;
     void retireDisconnectedTablet() noexcept;
     void cancelTabletInteraction() noexcept;
+    void retireDisconnectedTouch() noexcept;
+    void cancelTouchInteraction() noexcept;
+    void touchEvent(QTouchEvent* event);
     void pointerPress(QSinglePointEvent* event);
     void pointerDoubleClick(QSinglePointEvent* event);
     void pointerMove(QSinglePointEvent* event);

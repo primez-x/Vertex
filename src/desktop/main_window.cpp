@@ -65,6 +65,7 @@
 #include "sketch/project_import_worker.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/architectural_footprint_edit.hpp"
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/hosted_opening_resize.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
@@ -4770,6 +4771,60 @@ void retain_beam_endpoint_handles(CanvasEntity& entity, const Beam& beam, Revisi
         }
         entity.vertex_handles.push_back({role, point, revision});
     }
+}
+
+DocumentRoomFootprint architectural_footprint(const Entity& source) {
+    if (source.type == "slab") {
+        const auto boundary = read_required_boundary(source.properties, "boundary");
+        const auto holes = read_required_holes(source.properties);
+        if (!boundary || !holes) throw std::invalid_argument("The slab footprint is unavailable.");
+        return {*boundary, *holes};
+    }
+    DocumentRoomFootprint footprint;
+    std::string error;
+    if (source.type != "room" || !read_document_room_footprint(source, footprint, error))
+        throw std::invalid_argument("The room footprint is unavailable: " + error);
+    return footprint;
+}
+
+void retain_footprint_vertex_handles(CanvasEntity& entity, const Entity& source, Revision revision,
+    bool interactive, const ArchitecturalViewContext* view = nullptr) {
+    entity.vertex_handles.clear();
+    if (!interactive || !entity.selected || (view && !horizontal_plan_frame(view->frame)) ||
+        source.extensions.contains("physical_wall_room") ||
+        source.properties.contains("wall_measurement_source")) return;
+    const auto footprint = architectural_footprint(source);
+    const auto retained_point = [&](Vec2 point) {
+        if (view && view->crop) {
+            const auto& crop = *view->crop;
+            if (point.x < crop.min_horizontal_m || point.x > crop.max_horizontal_m ||
+                point.y < crop.min_vertical_m || point.y > crop.max_vertical_m) return false;
+        }
+        // Authoring grips belong to actual retained source vertices, never to
+        // new crop/depth intersections. Query the projected analytical paths
+        // so a hidden or completely clipped ring offers no invisible grip.
+        constexpr auto tolerance = default_geometry_tolerance_metres;
+        const Bounds2 vicinity{{point.x - tolerance, point.y - tolerance},
+                               {point.x + tolerance, point.y + tolerance}};
+        const auto intersects = [&](const Boundary& path) {
+            return !clip_boundary_to_bounds(path, vicinity, tolerance / 16.0).empty();
+        };
+        try {
+            if (intersects(entity.segments)) return true;
+            if (entity.stroke_segments && intersects(*entity.stroke_segments)) return true;
+            return std::any_of(entity.holes.begin(), entity.holes.end(), intersects);
+        } catch (const std::exception&) { return false; }
+    };
+    const auto retain_ring = [&](const Boundary& ring, const QString& prefix) {
+        for (std::size_t index = 0; index < ring.size(); ++index) {
+            const auto point = view ? project_plan_point(ring[index].start, view->frame) : ring[index].start;
+            if (retained_point(point))
+                entity.vertex_handles.push_back({prefix + QString::number(static_cast<qulonglong>(index)), point, revision});
+        }
+    };
+    retain_ring(footprint.boundary, QStringLiteral("footprint:outer:"));
+    for (std::size_t hole = 0; hole < footprint.holes.size(); ++hole)
+        retain_ring(footprint.holes[hole], QStringLiteral("footprint:hole:%1:").arg(static_cast<qulonglong>(hole)));
 }
 
 TopoDS_Shape document_roof_join_shape(const DocumentSnapshot& snapshot, const Entity& entity) {
@@ -19664,6 +19719,25 @@ public:
     static Command planEndpointCommand(const DocumentSnapshot& source, const QString& id,
         const QString& endpoint, Vec2 position) {
         const auto& wall = source.entities().at(id.toStdString());
+        if (wall.type == "slab" || wall.type == "room") {
+            const auto fields = endpoint.split(QLatin1Char(':'));
+            const auto index = [](const QString& token) -> std::size_t {
+                bool valid{};
+                const auto value = token.toULongLong(&valid);
+                if (!valid || QString::number(value) != token || value > std::numeric_limits<std::size_t>::max())
+                    throw std::invalid_argument("The footprint handle index is invalid.");
+                return static_cast<std::size_t>(value);
+            };
+            FootprintVertexEdit edit;
+            edit.proposed_position = position;
+            if (fields.size() == 3 && fields[0] == QStringLiteral("footprint") && fields[1] == QStringLiteral("outer"))
+                edit.vertex_index = index(fields[2]);
+            else if (fields.size() == 4 && fields[0] == QStringLiteral("footprint") && fields[1] == QStringLiteral("hole")) {
+                edit.hole_index = index(fields[2]);
+                edit.vertex_index = index(fields[3]);
+            } else throw std::invalid_argument("Choose a slab or room footprint vertex handle.");
+            return architectural_footprint_vertex_update_command(source, wall.id, edit, source.revision());
+        }
         if (wall.type == "beam") {
             if (endpoint != QStringLiteral("beam:start") && endpoint != QStringLiteral("beam:end"))
                 throw std::invalid_argument("Choose a beam endpoint handle.");
@@ -19715,6 +19789,15 @@ public:
     }
 
     static CanvasBoundaryPreviewMetrics endpointPreviewMetrics(const Entity& entity) {
+        if (entity.type == "slab" || entity.type == "room") {
+            const auto footprint = architectural_footprint(entity);
+            auto area = std::abs(signed_area(footprint.boundary));
+            for (const auto& hole : footprint.holes) area -= std::abs(signed_area(hole));
+            const auto outer_perimeter = perimeter(footprint.boundary);
+            if (!std::isfinite(area) || area <= 0.0 || !std::isfinite(outer_perimeter) || outer_perimeter <= 0.0)
+                throw std::invalid_argument("The footprint area or perimeter is unavailable.");
+            return {area, outer_perimeter};
+        }
         double length{};
         if (entity.type == "wall") {
             const auto baseline = read_required_segment(entity.properties, "baseline");
@@ -19819,14 +19902,16 @@ public:
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
             const auto& owner = source.entities().at(edit.boundary_id);
-            const bool endpoint_object = owner.type == "wall" || owner.type == "beam";
+            const bool endpoint_object = owner.type == "wall" || owner.type == "beam" ||
+                owner.type == "slab" || owner.type == "room";
             const bool measured=source.entities().at(edit.boundary_id).type=="measurement_linework";
             std::optional<Command> endpoint_command;
             const auto candidate_snapshot = [&] {
                 if (endpoint_object) {
                     endpoint_command = augmentAuthoredCommand(planEndpointCommand(source, entity_id, vertex_id, position), source);
                     const auto candidate = Document::preview_command(source, *endpoint_command);
-                    validate_architectural_geometry_changes(source, candidate, {edit.boundary_id});
+                    if (owner.type == "room") validate_architectural_geometry_changes(source, candidate);
+                    else validate_architectural_geometry_changes(source, candidate, {edit.boundary_id});
                     return candidate;
                 }
                 if (measured) return Document::preview_command(source,measuredStrokeGeometryCommand(source,edit));
@@ -19974,6 +20059,7 @@ public:
                 auto proposed=item;
                 bool world_paths = true;
                 std::optional<Beam> edited_beam;
+                bool edited_footprint{};
                 if (is_closed_boundary_entity(entity.type) &&
                     !explicit_area_appearances.contains(entity.id)) {
                     const auto presentation = effective_plan_area_presentation(entity,
@@ -20019,6 +20105,38 @@ public:
                     for (auto& handle : proposed.vertex_handles)
                         for (const auto& edge : after.segments)
                             if (handle.id.toStdString()==edge.start_vertex_id) handle.position=edge.segment.start;
+                } else if ((entity.type == "slab" || entity.type == "room") && entity != source.entities().at(entity.id)) {
+                    const auto footprint = architectural_footprint(entity);
+                    edited_footprint = true;
+                    proposed.stroke_segments.reset();
+                    proposed.resize_frame.reset();
+                    proposed.vertex_handles.clear();
+                    // Slab/room previews match the committed view builder:
+                    // custom horizontal plans retain actual solid crop faces
+                    // even when their far depth is infinite. Wall/beam plan
+                    // shortcuts must not change this object's projection.
+                    if (view_context && !analytical_plan_context(BuildingViewKind::plan, *view_context) &&
+                        (entity.type == "slab" || has_document_room_volume_fields(entity))) {
+                        const auto resolved = resolve_vertical_placement(candidate_snapshot, entity);
+                        std::string error;
+                        TopoDS_Shape shape;
+                        if (entity.type == "slab") {
+                            Slab slab;
+                            if (!read_document_slab(resolved, slab, error)) throw std::invalid_argument(error);
+                            shape = make_slab(slab);
+                        } else {
+                            RoomVolume room;
+                            if (!read_document_room(resolved, room, error)) throw std::invalid_argument(error);
+                            shape = make_room_volume(room);
+                        }
+                        proposed.segments = project_architectural_view_shape(shape,
+                            BuildingViewKind::plan, *view_context).value_or(Boundary{});
+                        proposed.holes.clear();
+                        world_paths = false;
+                    } else {
+                        proposed.segments = footprint.boundary;
+                        proposed.holes = footprint.holes;
+                    }
                 } else if (entity.type == "beam" && entity != source.entities().at(entity.id)) {
                     const auto object = decode_building_entity(effective_building_geometry_entity(candidate_snapshot, entity));
                     const auto& beam = std::get<Beam>(object);
@@ -20155,6 +20273,9 @@ public:
                 if (edited_beam && view_context)
                     retain_beam_endpoint_handles(proposed, *edited_beam, source.revision(),
                         source.is_editable() && !proposed.segments.empty(), &*view_context);
+                if (edited_footprint)
+                    retain_footprint_vertex_handles(proposed, entity, source.revision(),
+                        source.is_editable(), view_context ? &*view_context : nullptr);
                 // A previously captured owner needs an empty override when it
                 // leaves the view. Newly eligible owners contribute only once
                 // their candidate actually intersects the captured depth/crop.
@@ -20471,7 +20592,7 @@ public:
         m_plan_endpoint_preview.reset();
         m_plan_endpoint_capture.reset();
         const auto& type = source->entities().at(id.toStdString()).type;
-        if (type != "wall" && type != "beam") return;
+        if (type != "wall" && type != "beam" && type != "slab" && type != "room") return;
         const bool site = siteCanvas(canvas);
         m_plan_endpoint_capture = std::make_shared<PlanEndpointCapture>(PlanEndpointCapture{
             canvas, m_document, std::move(source), site ? m_site_edit_authority : m_vertex_preview_authority,
@@ -21013,12 +21134,15 @@ public:
                 const auto local=site_source_plan_point(position,siteEditFrame({id}));
                 const BoundaryGeometryEdit edit{id.toStdString(),BoundaryGeometryEditKind::move_vertex,vertex.toStdString(),local};
                 const auto& type = m_site_edit_source->entities().at(id.toStdString()).type;
-                const bool endpoint_object = type == "wall" || type == "beam";
+                const bool endpoint_object = type == "wall" || type == "beam" || type == "slab" || type == "room";
                 const auto command = endpoint_object ? augmentAuthoredCommand(planEndpointCommand(*m_site_edit_source, id, vertex, local), *m_site_edit_source)
                     : m_site_edit_source->entities().at(id.toStdString()).type=="measurement_linework"
                         ? measuredStrokeGeometryCommand(*m_site_edit_source,edit) : boundaryGeometryCommand(*m_site_edit_source,edit,true);
                 const auto candidate=Document::preview_command(*m_site_edit_source,command);
-                if (endpoint_object) validate_architectural_geometry_changes(*m_site_edit_source, candidate, {id.toStdString()});
+                if (endpoint_object) {
+                    if (type == "room") validate_architectural_geometry_changes(*m_site_edit_source, candidate);
+                    else validate_architectural_geometry_changes(*m_site_edit_source, candidate, {id.toStdString()});
+                }
                 auto proposed=sitePreviewGeometry(candidate,{},SiteEditTransform{});
                 const auto metrics = endpoint_object
                     ? std::optional{endpointPreviewMetrics(candidate.entities().at(id.toStdString()))} : std::nullopt;
@@ -37849,6 +37973,7 @@ private:
                 segments = plan->second.footprint;
             } else if (entity.type == "slab") {
                 const auto boundary = read_required_boundary(geometry_entity.properties, "boundary");
+                const auto holes = read_required_holes(geometry_entity.properties);
                 if (!boundary.has_value()) {
                     append_geometry_error(QStringLiteral("Slab %1: boundary is invalid or missing")
                                               .arg(id_from(id)));
@@ -37859,7 +37984,6 @@ private:
                 auto cached = caches.slab_validation.find(id);
                 if (cached == caches.slab_validation.end() || cached->second.first != key) {
                     QString validation_error;
-                    const auto holes = read_required_holes(geometry_entity.properties);
                     if (!holes.has_value()) {
                         validation_error = QStringLiteral("holes must be an array");
                     } else {
@@ -37890,6 +38014,7 @@ private:
                                               .arg(id_from(id), cached->second.second));
                     continue;
                 }
+                if (holes) room_holes = *holes;
             } else if (entity.type == "room") {
                 std::string room_error;
                 if (has_document_room_volume_fields(geometry_entity)) {
@@ -37950,7 +38075,7 @@ private:
                                        id_from(id) == options.selected_id};
             if (is_physical_wall_room(entity))
                 canvas_entity.holes = physical_rooms.at(id).holes;
-            if (entity.type == "room") canvas_entity.holes = std::move(room_holes);
+            if (entity.type == "room" || entity.type == "slab") canvas_entity.holes = std::move(room_holes);
             if (is_closed_boundary_entity(entity.type)) {
                 const auto presentation = effective_plan_area_presentation(
                     geometry_entity, appraisal_area_projection);
@@ -38006,6 +38131,9 @@ private:
                         canvas_entity.vertex_handles.push_back({QStringLiteral("wall:end"), baseline->end, snapshot.revision()});
                     }
             }
+            if (entity.type == "slab" || entity.type == "room")
+                retain_footprint_vertex_handles(canvas_entity, entity, snapshot.revision(),
+                    options.interactive && snapshot.is_editable());
             all_geometry.push_back(std::move(canvas_entity));
         }
         capture_diagnostic_stage("projection.geometry.end");
@@ -39559,6 +39687,10 @@ private:
                                 effective_building_geometry_entity(snapshot, source))), snapshot.revision(),
                                 kind == BuildingViewKind::plan && scene_options.interactive && snapshot.is_editable(), &view_context);
                         }
+                        if (retained.type == QStringLiteral("slab") || retained.type == QStringLiteral("room"))
+                            retain_footprint_vertex_handles(retained, snapshot.entities().at(retained.id.toStdString()),
+                                snapshot.revision(), kind == BuildingViewKind::plan && scene_options.interactive &&
+                                    snapshot.is_editable(), &view_context);
                         if (!retained.paper_stroke_width_on_screen)
                             retained.output_stroke_width_mm = view_context.presentation.projection_line_mm;
                         filtered.push_back(std::move(retained));
@@ -39801,9 +39933,12 @@ private:
                         }
                         const auto projection = cached_projection(id, [&] { return make_slab(projection_slab); });
                         if (!projection) continue;
-                        result.push_back(decorate_projection(CanvasEntity{
+                        CanvasEntity retained{
                             id_from(id), QStringLiteral("slab"), *projection, *thickness,
-                            id_from(id) == m_selected_id}));
+                            id_from(id) == m_selected_id};
+                        retain_footprint_vertex_handles(retained, entity, snapshot.revision(),
+                            kind == BuildingViewKind::plan && scene_options.interactive && snapshot.is_editable(), &view_context);
+                        result.push_back(decorate_projection(std::move(retained)));
                         continue;
                     }
                     if (entity.type == "room") {
@@ -39818,9 +39953,12 @@ private:
                         }
                         const auto projection = cached_projection(id, [&] { return make_room_volume(room); });
                         if (!projection) continue;
-                        result.push_back(decorate_projection(CanvasEntity{
+                        CanvasEntity retained{
                             id_from(id), QStringLiteral("room"), *projection, 0.0,
-                            id_from(id) == m_selected_id}));
+                            id_from(id) == m_selected_id};
+                        retain_footprint_vertex_handles(retained, entity, snapshot.revision(),
+                            kind == BuildingViewKind::plan && scene_options.interactive && snapshot.is_editable(), &view_context);
+                        result.push_back(decorate_projection(std::move(retained)));
                     }
                 } catch (const std::exception& error) {
                     if (kind == m_architectural_view_kind) {
@@ -39867,6 +40005,9 @@ private:
                         clip_plan_entity(retained, bounds);
                     }
                     if (retained.segments.empty()) continue;
+                    if (plan_room)
+                        retain_footprint_vertex_handles(retained, model->second, snapshot.revision(),
+                            scene_options.interactive && snapshot.is_editable(), &view_context);
                     result.push_back(decorate_projection(std::move(retained)));
                 }
             }

@@ -952,7 +952,8 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U154 — Pan and zoom with touch, if available**
   - Steps: Place two fingers on the plan, spread/pinch them to zoom, then move both together to pan. Start dragging a selected object with one finger and add a second finger: the object edit should cancel and navigation should take over. Lift one finger and move the other, then lift both and tap again to draw or select normally.
-  - Expected: Navigation does not unintentionally draw or select objects.
+    Repeat in 3D: select with one finger, choose Move object or use a transform control, and add a second finger during the movement. Pan and pinch with two fingers. Lift one finger, continue moving the other, then lift all fingers. Try Escape or changing focus during the interaction, then start a fresh mouse, pen or touch action.
+  - Expected: Navigation does not unintentionally draw or select objects. A second finger restores the object before navigation starts. Remaining fingers stay in navigation until all lift; a new gesture can select or move normally. Cancelled movements leave no object edit or stuck input owner.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1058,7 +1059,8 @@ drawing; switching modes does not change existing geometry.
 ## Other building objects and levels
 
 - [ ] **U170 — Create a floor slab**
-  - Expected: Its boundary, thickness and elevation are editable.
+  - Steps: Create a floor slab and select it in the plan. Drag an outer vertex, cancel with Escape, then accept a valid drag. Repeat in Site and a rotated saved plan. If the slab has a hole or curved edge, move a vertex on that ring. Try dragging a vertex across the opposite edge or across a hole. Undo, Redo, save and reopen.
+  - Expected: The chosen vertex and its two adjoining edges update. The live area deducts holes, and the perimeter describes the outer boundary. Curves keep their sweep, other vertices and holes retain their geometry, and thickness, elevation, layers and other properties stay unchanged. Invalid geometry changes nothing. Each accepted drag is one Undo step. A clipped or hidden vertex has no grip; crop intersections never become vertices.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1224,6 +1226,7 @@ drawing; switching modes does not change existing geometry.
   - Additional check: Enter an invalid width, verify **Apply** is disabled, then select **Cancel**. No geometry, schedule value or undo-history entry changes.
   - Level check: Bind the room's floor to a nonzero building level and reopen the editor. The elevation field identifies that it is local to the bound level, while the preview reports the resolved project base including any placement offset.
   - Saved 2D room check: Open a project containing a 2D room, select it in the plan, move it, rotate it, and resize it with a side handle. Open **Room dimensions**. Enter its measured height and base elevation, review the 3D preview, and apply. Undo should restore the 2D room; Redo should restore its measured volume. Cancel before applying should retain the original room, and other walls and roofs should remain visible in 3D throughout.
+  - Plan vertex check: Select an independent room in the plan and drag an outer vertex or a vertex on a hole. Check the live net area and outer perimeter, cancel once, then accept a valid edit and Undo it. Repeat for a retained 2D room and in Site or a rotated saved plan. Only the chosen vertex and adjoining edges change; holes and curved sweeps remain intact. A 2D room stays 2D until height and elevation are entered. A room derived from walls is edited through those walls, rather than independent room grips.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

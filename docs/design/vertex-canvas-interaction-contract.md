@@ -72,8 +72,13 @@ barrel pans. The initiating pen and button own the gesture. Losing that button,
 the device, focus or capture cancels the edit; other buttons cannot commit it.
 Live pen input accepts palm contacts without starting a second action. After
 release, a short duplicate-mouse guard distinguishes pen-generated input from
-independent mouse input, and a new touch sequence retains Qt's ordinary pointer
-fallback. Pressure and tilt do not alter authored dimensions.
+independent mouse input. Native touch retains the actual device and contact IDs:
+one finger uses selection or an armed Move/manipulator; a second finger restores
+the object before pan/pinch navigation starts. Navigation remains exclusive
+until every contact lifts. Own camera updates retain the original source,
+selection and display proof; they cannot recapture a changed document. Focus,
+capture, source/display changes, Escape or device cancellation retire the
+gesture. Pressure and tilt do not alter authored dimensions.
 
 Vertical wheel input zooms at the pointer in both plans and 3D. Angular wheel
 deltas take priority when a driver reports both forms; pixel-only touchpad
@@ -137,7 +142,8 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
 - Selected walls have endpoint grips in Measurement, Site and horizontal Architectural plans. Dragging one changes the physical baseline length and direction with the opposite endpoint fixed. Curves retain their signed sweep. The grip's larger hit area preserves the original press offset before snapping. The preview solves connected geometry, admits the completed physical hosts and retains the exact command for one released Undo step. Crop and depth limits remove grips for invisible endpoints; elevation and section views use Properties. Navigation, source or context changes invalidate the retained edit even if the view later returns to its earlier position.
 - Selected structural beams have endpoint grips in those same horizontal views. The chosen endpoint changes X/Y while both original endpoint elevations, the opposite endpoint and the actual cross-section/up direction stay fixed. The readout uses physical 3D span, and the native beam codec rejects a degenerate axis or unstable section frame. Preview and release retain the same complete source/context authority and exact admitted command as wall endpoint edits.
-- Direct endpoint grips for other architectural object types.
+- Selected independent slabs and rooms have source vertex grips on their outer and hole rings in those same horizontal views. The edit changes the outgoing start and preceding end while preserving signed sweeps, other vertices, all holes and unrelated properties. Plan-only rooms gain no inferred volume measurements; wall-derived rooms are edited through their source walls. Net area deducts holes and the displayed perimeter is the outer ring. Only source vertices supported by the retained projected geometry can offer grips; crop/depth intersections never become source vertices. Preview and release use the same captured authority and admitted command, with one Undo step.
+- Direct geometry grips for additional architectural object types remain in the production scope.
 - Windows hardware qualification of pen barrel mappings and touch navigation.
 
 ## Acceptance sequences

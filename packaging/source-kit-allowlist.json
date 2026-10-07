@@ -3123,6 +3123,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/architectural_footprint_edit.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/architectural_schedule.hpp"
     },
     {
@@ -4200,6 +4204,10 @@
     {
       "category": "source",
       "path": "src/core/architectural_document_adapter.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/architectural_footprint_edit.cpp"
     },
     {
       "category": "source",

@@ -129,6 +129,30 @@ and bundled help describe the new entry and Site tracing workflows.
 
 ### Current implementation checkpoint
 
+The latest source implementation adds direct outer/hole vertex editing for
+independent slabs and rooms. It retains curved sweeps, the original field
+representations, holes and other properties. Plan-only rooms remain analytical;
+measured solids receive the existing physical admission. Measurement, Site and
+horizontal Architectural plans share the captured preview/commit command, net
+area readout and outer perimeter. Grips require actual retained projected
+geometry and never attach to a crop intersection. Slab holes are retained in
+the Measurement scene as well as architectural projection. Independent source
+review found a custom-plan crop mismatch; the preview now uses the same solid
+projection as the committed slab/volume-room view, including infinite depth.
+
+Native 3D touch now routes actual contact/device input through the existing
+pointer controls. A second finger restores the object before pan/pinch, with
+navigation retained until all contacts lift. Independent source review found
+nested cancellation, pen/palm preclaim, restoration ordering, callback device
+loss and normal release-selection defects. Those paths are corrected: actual
+cancellation retires the original capture, normal completion retains it through
+picking, and device/proof changes prevent publication after callbacks. The
+corrected footprint and touch source batches received independent approval.
+Both new footprint files are included in the source-kit allowlist. These changes
+have not been compiled, tested, packaged, installed or observed at runtime; the
+installed candidate remains unchanged. No application build or test run was
+started for this code batch.
+
 The next code batch moves wall/opening, slab and room physical admission into
 the shared architectural transaction adapter. Ordinary wall dimension edits
 now check the completed host with every sibling opening and manufactured
