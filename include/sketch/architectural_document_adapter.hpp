@@ -56,6 +56,16 @@ struct RoomDimensionEdit {
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
     Revision expected_revision);
 
+// Admit changed physical wall/opening, slab and room descriptors against the
+// complete detached candidate. Hosted siblings and affected fused joins
+// participate even when hidden. Historical plan-only rooms remain plan-only.
+// Metadata-only edits and incomplete legacy transport descriptors do not force
+// solid generation. Explicit required IDs must have valid physical geometry,
+// including when their entered dimension is unchanged.
+void validate_architectural_geometry_changes(
+    const DocumentSnapshot& source, const DocumentSnapshot& candidate,
+    const std::vector<std::string>& required_ids = {});
+
 // Builds a detached preview using the same command that will be committed.
 [[nodiscard]] DocumentSnapshot preview_architectural_transaction(
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction);

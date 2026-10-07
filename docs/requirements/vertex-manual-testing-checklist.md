@@ -957,7 +957,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U157 — Change wall thickness and height**
-  - Expected: Plan and 3D update consistently.
+  - Steps: Draw a wall and place a door and a window on it. Double-click the wall and change its thickness and height. Check the plan and 3D, Undo, Redo, and save/reopen. Try reducing the height below the top of its window, then apply a valid height.
+  - Expected: Valid edits update plan and 3D together and retain the hosted objects. An invalid height gives an explanation and changes nothing; the subsequent valid edit still works. Undo restores the previous wall and openings in one step.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

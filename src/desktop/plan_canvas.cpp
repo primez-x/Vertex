@@ -214,12 +214,19 @@ LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
         label.font_family.compare(QStringLiteral("sans-serif"), Qt::CaseInsensitive) != 0)
         base_font.setFamily(label.font_family);
     const auto paper_pixels = label.paper_height_mm * dpi / 25.4;
+    const auto device_dpi = device ? device->logicalDpiY() : dpi;
+    const auto paper_points = (paper_pixels / device_dpi) * 72.0;
     const bool paper = std::isfinite(paper_pixels) && paper_pixels > 0.0 &&
-                       paper_pixels <= std::numeric_limits<int>::max();
+                       paper_pixels <= std::numeric_limits<int>::max() &&
+                       std::isfinite(paper_points) && paper_points > 0.0;
     if (paper) {
-        // Do not apply the legacy screen-readability clamp to physical text:
-        // a 600-DPI printer needs more pixels than the screen for the same mm.
-        base_font.setPixelSize(static_cast<int>(std::lround(std::max(1.0, paper_pixels))));
+        // Keep fractional physical size. Fitted sheets can supply a paper
+        // transform different from device DPI; convert their desired pixels
+        // back to points on the actual metrics/painting device.
+        base_font.setPointSizeF(paper_points);
+        // Full pixel-grid hinting changes advances with output density.
+        // Use scalable paper-text metrics for both layout and painting.
+        base_font.setHintingPreference(QFont::PreferNoHinting);
         base_font.setBold(label.bold);
         base_font.setItalic(label.italic);
     } else {

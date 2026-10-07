@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <initializer_list>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -769,6 +770,7 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
     }
     if (!command.entity_changes.empty()) {
         const auto preview=Document::preview_command(source,command);
+        validate_architectural_geometry_changes(source, preview);
         for (const auto& [id,entity] : preview.entities()) {
             (void)id;
             if (!canonical_stair(entity) && !canonical_hosted_railing(entity)) continue;
@@ -780,6 +782,177 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
 }
 
 }  // namespace
+
+void validate_architectural_geometry_changes(
+    const DocumentSnapshot& source, const DocumentSnapshot& candidate,
+    const std::vector<std::string>& required_ids) {
+    const auto& entities = candidate.entities();
+    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids;
+    const auto include = [&](const Entity& entity, bool required) {
+        const auto& p = entity.properties;
+        if (entity.type == "wall" && (required || p.contains("baseline"))) {
+            host_ids.insert(entity.id);
+            if (required) required_hosts.insert(entity.id);
+        } else if (entity.type == "opening" && (required || p.contains("wall_id"))) {
+            std::string host_id, error;
+            if (!read_document_wall_id(entity, host_id, error))
+                throw std::invalid_argument("Opening " + entity.id + ": " + error);
+            host_ids.insert(host_id);
+            if (required) required_hosts.insert(std::move(host_id));
+        } else if (entity.type == "slab" && (required || p.contains("boundary"))) {
+            slab_ids.insert(entity.id);
+        } else if (entity.type == "room" &&
+                   (required || ((p.contains("boundary") || p.contains("segments")) &&
+                       (p.contains("height_m") || p.contains("height")) &&
+                       (p.contains("elevation_m") || p.contains("elevation"))))) {
+            room_ids.insert(entity.id);
+        }
+    };
+    const auto changed = [](const Entity* before, const Entity& after,
+                            std::initializer_list<const char*> fields) {
+        if (!before || before->type != after.type) return true;
+        for (const auto* key : fields) {
+            const auto old = before->properties.find(key);
+            const auto current = after.properties.find(key);
+            if ((old == before->properties.end()) != (current == after.properties.end()) ||
+                (old != before->properties.end() && *old != *current)) return true;
+        }
+        return false;
+    };
+    for (const auto& [id, entity] : entities) {
+        const auto found = source.entities().find(id);
+        const auto* before = found == source.entities().end() ? nullptr : &found->second;
+        bool physical_change = false;
+        if (entity.type == "wall")
+            physical_change = changed(before, entity, {"baseline", "thickness_m", "thickness",
+                "height_m", "height", "elevation_m", "elevation", "slope_rise_m", "slope_rise",
+                "layers", "vertical_placement", "layer_id"});
+        else if (entity.type == "opening")
+            physical_change = changed(before, entity, {"wall_id", "offset_m", "offset", "width_m",
+                "width", "sill_m", "sill", "height_m", "height", "opening_kind",
+                "opening_assembly", "door_operation"});
+        else if (entity.type == "slab")
+            physical_change = changed(before, entity, {"boundary", "holes", "thickness_m", "thickness",
+                "elevation_m", "elevation", "layers", "element_kind", "vertical_placement", "layer_id"});
+        else if (entity.type == "room")
+            physical_change = changed(before, entity, {"boundary", "segments", "holes", "height_m",
+                "height", "elevation_m", "elevation", "vertical_placement", "layer_id"});
+        if (!physical_change) continue;
+        if (entity.type == "opening" && before && before->properties.contains("wall_id") &&
+            !entity.properties.contains("wall_id"))
+            throw std::invalid_argument("The edited opening lost its wall host: " + id);
+        include(entity, false);
+        if (before) include(*before, false);
+    }
+    for (const auto& [id, entity] : source.entities())
+        if (!entities.contains(id)) include(entity, false);
+    for (const auto& id : required_ids) {
+        const auto found = entities.find(id);
+        if (found == entities.end())
+            throw std::invalid_argument("The edited physical object is missing: " + id);
+        const auto& type = found->second.type;
+        if (type != "wall" && type != "opening" && type != "slab" && type != "room")
+            throw std::invalid_argument("The edited object has no supported physical descriptor: " + id);
+        include(found->second, true);
+    }
+
+    std::vector<WallJoin> affected_joins;
+    for (const auto& [id, entity] : entities) {
+        if (entity.type != "wall_join") continue;
+        const auto join = parse_wall_join(entity.properties, id);
+        const auto before = source.entities().find(id);
+        const bool edited = before == source.entities().end() || before->second.properties != entity.properties;
+        if (!edited && std::none_of(join.wall_ids.begin(), join.wall_ids.end(),
+            [&](const auto& member) { return host_ids.contains(member); })) continue;
+        affected_joins.push_back(join);
+        // A fused join is a physical relationship; all of its members must
+        // remain admitted even if only one member or its opening was edited.
+        host_ids.insert(join.wall_ids.begin(), join.wall_ids.end());
+        required_hosts.insert(join.wall_ids.begin(), join.wall_ids.end());
+    }
+
+    std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_host;
+    if (!host_ids.empty()) {
+        for (const auto& [id, entity] : entities) {
+            (void)id;
+            if (entity.type != "opening") continue;
+            const auto host = entity.properties.find("wall_id");
+            if (host != entity.properties.end() && host->is_string() &&
+                host_ids.contains(host->get_ref<const std::string&>()))
+                openings_by_host[host->get_ref<const std::string&>()].push_back(&entity);
+        }
+    }
+    std::map<std::string, Wall, std::less<>> admitted_join_walls;
+    for (const auto& host_id : host_ids) {
+        const auto host = entities.find(host_id);
+        const auto& openings = openings_by_host[host_id];
+        // Deleting a wall and its hosted graph is valid. A surviving opening
+        // must still resolve to a physical wall in the completed candidate.
+        if (host == entities.end()) {
+            if (required_hosts.contains(host_id) || !openings.empty())
+                throw std::invalid_argument("The edited opening has no host wall: " + host_id);
+            continue;
+        }
+        if (host->second.type != "wall")
+            throw std::invalid_argument("The edited opening host is not a wall: " + host_id);
+        const auto before = source.entities().find(host_id);
+        if (!required_hosts.contains(host_id) && !host->second.properties.contains("baseline") &&
+            (before == source.entities().end() || !before->second.properties.contains("baseline")))
+            continue; // Preserve the existing incomplete legacy transport contract.
+        Wall wall;
+        std::string error;
+        const auto effective = resolve_vertical_placement(candidate, host->second);
+        if (!read_document_wall(effective, openings, wall, error))
+            throw std::invalid_argument("Wall " + host_id + ": " +
+                (error.empty() ? "a physical baseline is required" : error));
+        (void)make_wall(wall);
+        for (const auto* opening : openings) {
+            std::optional<OpeningAssembly> assembly;
+            const auto explicit_assembly = opening->properties.find("opening_assembly");
+            const auto kind = opening->properties.find("opening_kind");
+            if (explicit_assembly != opening->properties.end())
+                assembly = parse_opening_assembly(*explicit_assembly);
+            else if (kind != opening->properties.end() && kind->is_string()) {
+                const auto parsed = parse_opening_assembly_kind(kind->get_ref<const std::string&>());
+                if (parsed) assembly = default_opening_assembly(*parsed);
+            }
+            if (!assembly) continue; // Bare cuts and opaque historical records have no manufactured frame.
+            const auto hosted = std::find_if(wall.openings.begin(), wall.openings.end(),
+                [&](const auto& item) { return item.id == opening->id; });
+            if (hosted == wall.openings.end())
+                throw std::invalid_argument("The edited opening lost its wall host: " + opening->id);
+            std::optional<DoorOperation> operation;
+            if (assembly->kind == OpeningAssemblyKind::door && opening->properties.contains("door_operation"))
+                operation = decode_door_operation(opening->properties.at("door_operation"));
+            (void)make_opening_assembly(wall, *hosted, *assembly, operation);
+        }
+        if (!affected_joins.empty()) admitted_join_walls.emplace(host_id, std::move(wall));
+    }
+    for (const auto& join : affected_joins) {
+        std::vector<Wall> members;
+        members.reserve(join.wall_ids.size());
+        for (const auto& member_id : join.wall_ids) members.push_back(admitted_join_walls.at(member_id));
+        (void)make_wall_join(join, members);
+    }
+    for (const auto& id : slab_ids) {
+        const auto found = entities.find(id);
+        if (found == entities.end()) continue;
+        Slab slab;
+        std::string error;
+        if (!read_document_slab(resolve_vertical_placement(candidate, found->second), slab, error))
+            throw std::invalid_argument("Slab " + id + ": " + error);
+        (void)make_slab(slab);
+    }
+    for (const auto& id : room_ids) {
+        const auto found = entities.find(id);
+        if (found == entities.end()) continue;
+        RoomVolume room;
+        std::string error;
+        if (!read_document_room(resolve_vertical_placement(candidate, found->second), room, error))
+            throw std::invalid_argument("Room " + id + ": " + error);
+        (void)make_room_volume(room);
+    }
+}
 
 ApplyEntityChanges architectural_join_create_command(const DocumentSnapshot& source,
     const std::string& join_id, const std::vector<std::string>& member_ids,

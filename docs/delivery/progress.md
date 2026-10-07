@@ -129,6 +129,31 @@ and bundled help describe the new entry and Site tracing workflows.
 
 ### Current implementation checkpoint
 
+The next code batch moves wall/opening, slab and room physical admission into
+the shared architectural transaction adapter. Ordinary wall dimension edits
+now check the completed host with every sibling opening and manufactured
+assembly before returning a command. Changed geometric fields trigger checks;
+metadata-only edits and incomplete legacy transport descriptors retain their
+existing path, including historical plan-only rooms. Recognized legacy doors
+and windows admit their default manufactured assemblies too. A changed wall
+also checks its fused join with all source members. Cascade deletion remains
+a completed-graph operation. Device
+measurements use the same validator, with their selected physical owner required
+even when the entered dimension is unchanged. Ordinary property editing also
+captures and rechecks the complete source/context authority before publication.
+Independent source review identified and resolved the default-frame and
+plan-only-room compatibility defects, then approved the corrected admission
+and affected-join paths. Compilation and runtime behavior for this batch remain
+unobserved.
+
+Paper-label layout now retains fractional physical font sizing on the actual
+metrics device and requests scalable paper-text metrics. Screen/output layout,
+picking and selection continue to use the shared helper; vector text drawing
+is preserved. Independent source review found no required regression fix. This
+corrects source-level quantization; it does not establish the cause or resolution
+of the previously observed 96/192-DPI glyph-bound failure. No build, test-suite
+run or candidate package was generated for these edits.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

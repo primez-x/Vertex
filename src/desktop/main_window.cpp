@@ -24293,83 +24293,6 @@ public:
         }
     }
 
-    void validateMeasurementGeometry(const DocumentSnapshot& source,
-                                     const DocumentSnapshot& candidate,
-                                     const std::string& measured_id) {
-        const auto& entities = candidate.entities();
-        const auto measured = entities.find(measured_id);
-        if (measured == entities.end())
-            throw std::invalid_argument("The measured object is missing from its completed geometry.");
-
-        std::set<std::string, std::less<>> host_ids;
-        const auto include_host = [&](const Entity& entity) {
-            if (entity.type == "wall") host_ids.insert(entity.id);
-            else if (entity.type == "opening") {
-                std::string host_id, error;
-                if (!read_document_wall_id(entity, host_id, error))
-                    throw std::invalid_argument(error);
-                host_ids.insert(std::move(host_id));
-            }
-        };
-        include_host(measured->second);
-        // A connected length solve can also move another wall or opening.
-        // Validate their completed hosts, including siblings on hidden layers.
-        for (const auto& [id, entity] : entities) {
-            if (entity.type != "wall" && entity.type != "opening") continue;
-            const auto before = source.entities().find(id);
-            if (before == source.entities().end() || before->second.properties != entity.properties) {
-                include_host(entity);
-                if (before != source.entities().end()) include_host(before->second);
-            }
-        }
-        for (const auto& [id, entity] : source.entities())
-            if ((entity.type == "wall" || entity.type == "opening") && !entities.contains(id))
-                include_host(entity);
-
-        std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_host;
-        if (!host_ids.empty())
-            for (const auto& [id, entity] : entities) {
-                (void)id;
-                if (entity.type != "opening") continue;
-                const auto host_id = read_string(entity.properties, "wall_id");
-                if (host_id && host_ids.contains(*host_id)) openings_by_host[*host_id].push_back(&entity);
-            }
-        for (const auto& host_id : host_ids) {
-            const auto host = entities.find(host_id);
-            if (host == entities.end() || host->second.type != "wall")
-                throw std::invalid_argument("The completed opening has no valid host wall: " + host_id);
-            const auto& openings = openings_by_host[host_id];
-            Wall wall;
-            std::string error;
-            if (!read_document_wall(resolve_vertical_placement(candidate, host->second), openings, wall, error))
-                throw std::invalid_argument(error);
-            (void)make_wall(wall);
-            for (const auto* opening : openings) {
-                if (!opening->properties.contains("opening_assembly")) continue;
-                const auto hosted = std::find_if(wall.openings.begin(), wall.openings.end(),
-                    [&](const auto& item) { return item.id == opening->id; });
-                if (hosted == wall.openings.end())
-                    throw std::invalid_argument("The completed opening lost its wall host.");
-                const auto assembly = parse_opening_assembly(opening->properties.at("opening_assembly"));
-                std::optional<DoorOperation> operation;
-                if (assembly.kind == OpeningAssemblyKind::door && opening->properties.contains("door_operation"))
-                    operation = decode_door_operation(opening->properties.at("door_operation"));
-                (void)make_opening_assembly(wall, *hosted, assembly, operation);
-            }
-        }
-        if (measured->second.type == "slab") {
-            const auto slab = resolve_vertical_placement(candidate, measured->second);
-            if (!previewSlab(slab, slab.properties))
-                throw std::invalid_argument(lastError().toStdString());
-        } else if (measured->second.type == "room") {
-            RoomVolume room;
-            std::string error;
-            if (!read_document_room(resolve_vertical_placement(candidate, measured->second), room, error))
-                throw std::invalid_argument(error);
-            (void)make_room_volume(room);
-        }
-    }
-
     bool importDistoMeasurement(const QString& payload, bool replace_existing = false) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -24448,7 +24371,7 @@ public:
             }
 
             const auto geometry = Document::preview_command(source, command);
-            validateMeasurementGeometry(source, geometry, selected->first);
+            validate_architectural_geometry_changes(source, geometry, {selected->first});
             // Geometry and observation are validated and published together. A
             // stale source or invalid reading cannot leave a half-applied edit.
             command = complete_disto_measurement_command(source, command,
@@ -31623,6 +31546,7 @@ private:
         if (is_architectural_entity(entity->type)) {
             try {
                 const auto source = authoringSnapshot();
+                const auto authority = captureSourceEditAuthority(source);
                 std::map<std::string, std::string> encoded;
                 for (const auto& [key, value] : properties.items()) {
                     encoded.emplace(key, value.dump());
@@ -31640,6 +31564,7 @@ private:
                     clearError();
                     return true;
                 }
+                if (!sourceEditAuthorityUnchanged(authority)) return false;
                 applyAuthoredCommand(command);
                 clearError();
                 refresh();
