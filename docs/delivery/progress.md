@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 measured geometry and assembly transforms
+
+Ordinary measured areas, measured linework, embedded geometric assembly
+profiles and remaining supported plan objects now capture their complete
+transform source at press and prepare their command in the worker. The
+existing complete builders retain connected geometry, measurement sources,
+constraints, annotations and authored room consequences. Candidate geometry,
+callouts and selection frames use the admitted result. Release consumes a
+single-use ticket before checking source, selection, view, viewport, live
+serial, exact intent and font/DPI; it publishes once without rebuilding or
+readmitting the command. Identity retains the original presentation and adds
+no history. Typed physical dimensions remain the resizing workflow for
+measured areas and physical objects.
+
+Wall endpoint magnets also exclude a neighbour's old shared corner and
+adjoining baseline while that corner follows the edit, allowing the smallest
+practical increments to move away from the original position. Unrelated
+visible contacts remain available. These changes are source implementation;
+compilation and interaction remain unverified. No build, test, probe, native
+job, launch, package or installation ran. Manual checks remain Not tested.
+Independent source review accepted the integrated change after correcting
+embedded profile ownership when a separate persisted boundary or assembly
+shares its ID. Canonical profile keys select embedded geometry; persisted
+empty-key bodies keep their own geometry, and legacy host-copy aliases retain
+their binding path.
+
 ### October 7 presentation transform editing
 
 Ordinary placed symbols, authored labels and reference images now have a

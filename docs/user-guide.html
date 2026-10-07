@@ -260,7 +260,9 @@
   Escape or Cancel leaves the drawing unchanged. The operation preserves object
   identities and appraisal totals and undoes in one step. Incompatible locked
   relationships or shared dependencies that would invalidate another area are
-  refused without changing either area.</p>
+  refused without changing either area. Releasing while the final preview is
+  pending waits for that proposal; it cannot apply an earlier angle. Returning
+  to the original angle adds no edit.</p>
   <p>An older curved exterior may need a reviewed source refresh before using
   the precise group transform. Its original saved outline and history remain
   intact until you explicitly apply that refresh.</p>
@@ -320,6 +322,8 @@
   on, endpoint drags use practical length increments for your zoom and units;
   curved walls snap their arc length. Nearby visible endpoints and centerlines
   take priority, so a round number never leaves a gap at an exact contact.
+  An adjoining wall's old shared corner is not a fixed snap target while that
+  corner moves with the edit.
   Hold <kbd>Shift</kbd> for fine placement, or turn Snap off. The live readout
   shows length and the contact cue while you drag.</p>
   <p>Select a wall, then drag inside its selection frame to move it. Connected

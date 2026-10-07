@@ -5260,6 +5260,33 @@ class MainWindow::Impl {
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
     };
+    struct OrdinaryGeometryTransformCapture {
+        QString id;
+        bool embedded{};
+        bool measured{};
+        std::optional<BuildingViewFrame> frame;
+        std::optional<Vec2> architectural_pivot;
+        std::shared_ptr<const std::vector<CanvasEntity>> scene,eligible,components;
+        std::shared_ptr<const std::vector<CanvasLabel>> labels;
+        std::shared_ptr<const std::vector<CanvasReference>> references;
+        std::shared_ptr<const std::set<std::string,std::less<>>> appraisal_area_ids;
+        std::shared_ptr<const std::map<QString,QRectF>> label_footprints;
+        std::shared_ptr<const std::vector<Bounds2>> component_bounds;
+        std::optional<ArchitecturalViewContext> view_context;
+        QFont font;
+        int dpi_x{},dpi_y{};
+    };
+    struct OrdinaryGeometryTransformIntent {
+        double scale{1.0},radians{},source_radians{};
+        Vec2 canvas_pivot,source_pivot;
+    };
+    struct OrdinaryGeometryTransformPreview {
+        std::shared_ptr<const OrdinaryGeometryTransformCapture> capture;
+        std::uint64_t serial{};
+        OrdinaryGeometryTransformIntent intent;
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source;
+        std::shared_ptr<PreparedCanvasEdit> prepared;
+    };
     struct SiteWallMovePreviewCommand {
         std::shared_ptr<const SiteTransformPreviewCapture> capture;
         std::uint64_t serial{};
@@ -5428,6 +5455,8 @@ class MainWindow::Impl {
         std::shared_ptr<const std::vector<CanvasReference>> move_references;
         std::shared_ptr<const PresentationTransformCapture> presentation_capture;
         std::optional<PresentationTransformIntent> presentation_intent;
+        std::shared_ptr<const OrdinaryGeometryTransformCapture> ordinary_transform_capture;
+        std::optional<OrdinaryGeometryTransformIntent> ordinary_transform_intent;
     };
 
 public:
@@ -6756,6 +6785,15 @@ public:
                                 const std::optional<PlanarTransform>& transform_override = std::nullopt,
                                 std::map<std::string,std::string,std::less<>>* clone_graph_ids = nullptr,
                                 bool detached_group = false) {
+        return detachedWallTransformCommand(source,original,m_metric_units,rotation_degrees,flip_horizontal,
+            flip_vertical,offset_x,offset_y,clone,transform_override,clone_graph_ids,detached_group);
+    }
+
+    static std::pair<Command, std::string> detachedWallTransformCommand(const DocumentSnapshot& source,
+        const Entity& original,bool metric_units,const QString& rotation_degrees,bool flip_horizontal,
+        bool flip_vertical,const QString& offset_x,const QString& offset_y,bool clone,
+        const std::optional<PlanarTransform>& transform_override=std::nullopt,
+        std::map<std::string,std::string,std::less<>>* clone_graph_ids=nullptr,bool detached_group=false) {
         auto graph = clipboard_entities_for_selection(source, original.id);
         std::vector<const Entity*> openings;
         for (const auto& entity : graph) if (entity.type == "opening") openings.push_back(&entity);
@@ -6768,9 +6806,9 @@ public:
         const auto degrees = rotation_degrees.trimmed().isEmpty() ? 0.0 : rotation_degrees.toDouble(&valid_angle);
         if (!valid_angle || !std::isfinite(degrees) || std::abs(degrees) > 360000.0)
             throw std::invalid_argument("Rotation must be finite and between -360000 and 360000 degrees.");
-        const auto offset = [this](const QString& value) {
+        const auto offset = [metric_units](const QString& value) {
             return value.trimmed().isEmpty() ? 0.0 :
-                parse_quantity(value.trimmed().toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
+                parse_quantity(value.trimmed().toStdString(), metric_units ? Unit::metre : Unit::foot).metres;
         };
         const Vec2 translation{offset(offset_x), offset(offset_y)};
         const auto radians = degrees * std::numbers::pi / 180.0;
@@ -7288,7 +7326,7 @@ public:
         return command;
     }
 
-    Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
+    static Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
         const QStringList& root_ids, const PlanarTransform& transform,
         std::vector<EntityChange> supplemental_changes = {}) {
         if(supplemental_changes.empty() && !root_ids.isEmpty() &&
@@ -7328,7 +7366,7 @@ public:
                 moved.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
                 supplemental.insert_or_assign(entity.id,std::move(moved));
             } else if (entity.type=="wall") {
-                const auto built=makeWallTransformCommand(source,entity,{},false,false,{}, {},false,transform,nullptr,true);
+                const auto built=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,transform,nullptr,true);
                 const auto* changes=std::get_if<ApplyEntityChanges>(&built.first);
                 if (!changes) throw std::invalid_argument("Source walls did not produce a detached transform.");
                 for (const auto& change : changes->entity_changes)
@@ -21302,9 +21340,14 @@ public:
                 (void)item_id;
                 const bool typed_annotation=site_input && site_input->move_frame &&
                     site_input->move_annotation_targets.contains(item.id);
-                const auto found=typed_annotation ? candidate.end() : candidate.find(item.id.toStdString());
+                // An embedded profile is a typed presentation alias, even
+                // when an independent persisted object has the same ID.
+                const auto embedded=!typed_annotation && item.type==QStringLiteral("assembly_instance") &&
+                    (!item.presentation_key.isEmpty() || !source.entities().contains(item.id.toStdString()))
+                    ? embeddedAssemblyChild(source,item.id.toStdString()) : std::nullopt;
+                const auto found=typed_annotation || embedded ? candidate.end() : candidate.find(item.id.toStdString());
                 if (found==candidate.end()) {
-                    if (const auto original=typed_annotation ? std::nullopt : embeddedAssemblyChild(source,item.id.toStdString())) {
+                    if (const auto original=embedded) {
                         const auto original_model=AssemblyModel::from_json(source.entities().at(
                             original->assembly_catalog_id).properties.at("model"));
                         if (!original_model.expand(original->instance.id).profiles.empty()) {
@@ -21755,8 +21798,11 @@ public:
                         ordinary_component_bounds.push_back(bounds->second);
                         continue;
                     }
-                    const auto before=source.entities().find(component.id.toStdString());
-                    const auto after=candidate.find(component.id.toStdString());
+                    const auto embedded=component.type==QStringLiteral("assembly_instance") &&
+                        (!component.presentation_key.isEmpty() || !source.entities().contains(component.id.toStdString()))
+                        ? embeddedAssemblyChild(source,component.id.toStdString()) : std::nullopt;
+                    const auto before=embedded ? source.entities().end() : source.entities().find(component.id.toStdString());
+                    const auto after=embedded ? candidate.end() : candidate.find(component.id.toStdString());
                     if (after!=candidate.end() && after->second.type=="assembly_instance" &&
                         (before==source.entities().end() || before->second!=after->second)) {
                         // The saved view may exclude this body after cropping,
@@ -21776,7 +21822,7 @@ public:
                             if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
                             continue;
                         }
-                        const auto original=embeddedAssemblyChild(source,component.id.toStdString());
+                        const auto original=embedded;
                         if (original && geometric_assembly_for_child(source,component.id.toStdString()) &&
                             candidate.at(original->assembly_catalog_id)!=source.entities().at(original->assembly_catalog_id)) {
                             const auto placed=geometric_assembly_for_child(candidate_snapshot,component.id.toStdString());
@@ -22224,6 +22270,39 @@ public:
         return result;
     }
 
+    static Command ordinaryGeometryTransformCommand(const DocumentSnapshot& source,
+        const OrdinaryGeometryTransformCapture& capture,const OrdinaryGeometryTransformIntent& intent) {
+        if (capture.measured && intent.scale!=1.0)
+            throw std::invalid_argument("Use source floor plan dimensions to resize closed areas and measured lines.");
+        if (intent.scale==1.0 && intent.radians==0.0)
+            return ApplyEntityChanges{source.revision(),{}, {},"Transform geometry"};
+        const PlanarTransform planar{intent.source_pivot,intent.source_radians,false,false,{}};
+        const auto c=std::cos(intent.source_radians),s=std::sin(intent.source_radians);
+        const ArchitecturalTransform gesture{
+            intent.source_pivot.x-intent.scale*(c*intent.source_pivot.x-s*intent.source_pivot.y),
+            intent.source_pivot.y-intent.scale*(s*intent.source_pivot.x+c*intent.source_pivot.y),
+            0.0,intent.source_radians,intent.scale};
+        Command command;
+        if (capture.embedded)
+            command=embeddedAssemblyTransformCommand(source,capture.id.toStdString(),gesture,false).first;
+        else if (capture.measured)
+            command=makeSelectionGeometryTransformCommand(source,{capture.id},planar);
+        else {
+            const auto& entity=source.entities().at(capture.id.toStdString());
+            if (!can_transform_architectural_entity_type(entity.type) || physicalPlanRotationFamily(entity.type))
+                throw std::invalid_argument("The captured object does not support this geometric transform.");
+            if (entity.type=="wall" && intent.scale==1.0)
+                command=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,planar).first;
+            else {
+                ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};operation.transform=gesture;
+                const auto transaction=ArchitecturalTransaction::create(new_id("architectural-tx"),
+                    std::to_string(source.revision()),{entity.id},{std::move(operation)},"Transform architectural object");
+                command=architecturalObjectTransformCommand(source,entity,transaction);
+            }
+        }
+        return augmentAuthoredCommand(command,source);
+    }
+
     void startVertexPreviewJob(PendingVertexPreview request) {
         const auto source=request.source;
         const auto retained=request.retained;
@@ -22260,11 +22339,67 @@ public:
         const auto prepared_move=request.model_edit_prepared;
         const auto presentation_capture=request.presentation_capture;
         const auto presentation_intent=request.presentation_intent;
+        const auto ordinary_capture=request.ordinary_transform_capture;
+        const auto ordinary_intent=request.ordinary_transform_intent;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,plan_move_model_plan_labels,move_references,component_sources,edit_source,prepared_move,presentation_capture,presentation_intent]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,plan_move_model_plan_labels,move_references,component_sources,edit_source,prepared_move,presentation_capture,presentation_intent,ordinary_capture,ordinary_intent]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
-                    if (presentation_capture && presentation_intent && prepared_move) {
+                    if (ordinary_capture && ordinary_intent && prepared_move) {
+                        const auto& intent=*ordinary_intent;
+                        const auto command=ordinaryGeometryTransformCommand(*source,*ordinary_capture,intent);
+                        if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(),{}};
+                        const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
+                        if (intent.scale==1.0 && intent.radians==0.0) {
+                            VertexPreviewProjection projection;
+                            projection.entities=*retained;projection.labels=*labels;
+                            projection.references=*ordinary_capture->references;
+                            *result=std::move(projection);
+                        } else {
+                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,*eligible,*labels,
+                                metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,
+                                label_font,nullptr,component_sources.get());
+                            if (*result && !cancellation.is_cancelled()) {
+                                retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,{id});
+                                for (auto& proposed:(**result).entities) {
+                                    if (proposed.id!=id || proposed.segments.empty()) continue;
+                                    const auto original=std::find_if(retained->begin(),retained->end(),[&](const auto& item) {
+                                        return item.id==proposed.id && item.presentation_key==proposed.presentation_key;
+                                    });
+                                    if (original==retained->end() || !original->resize_frame) continue;
+                                    const auto owner=candidate.entities().find(id.toStdString());
+                                    if (!ordinary_capture->embedded && !ordinary_capture->measured && owner!=candidate.entities().end()) {
+                                        proposed.resize_frame=physicalPlanResizeFrame(owner->second,
+                                            view_context ? &view_context->frame : nullptr);
+                                        continue;
+                                    }
+                                    auto frame=*original->resize_frame;
+                                    auto center=frame.center;
+                                    auto along=Vec2{center.x+std::cos(frame.rotation_radians),center.y+std::sin(frame.rotation_radians)};
+                                    if (ordinary_capture->frame) {
+                                        center=unproject_plan_point(center,*ordinary_capture->frame);
+                                        along=unproject_plan_point(along,*ordinary_capture->frame);
+                                    }
+                                    const auto transform=[&](Vec2 point) {
+                                        point=transform_point(point,PlanarTransform{intent.source_pivot,intent.source_radians,false,false,{}});
+                                        return Vec2{intent.source_pivot.x+intent.scale*(point.x-intent.source_pivot.x),
+                                            intent.source_pivot.y+intent.scale*(point.y-intent.source_pivot.y)};
+                                    };
+                                    center=transform(center);along=transform(along);
+                                    if (ordinary_capture->frame) {
+                                        center=project_plan_point(center,*ordinary_capture->frame);
+                                        along=project_plan_point(along,*ordinary_capture->frame);
+                                    }
+                                    frame.center=center;frame.rotation_radians=std::atan2(along.y-center.y,along.x-center.x);
+                                    frame.width_metres*=intent.scale;frame.depth_metres*=intent.scale;
+                                    if (frame.source_rotation_radians) *frame.source_rotation_radians=std::remainder(
+                                        *frame.source_rotation_radians+intent.source_radians,2.0*std::numbers::pi);
+                                    proposed.resize_frame=frame;
+                                }
+                            }
+                        }
+                        if (cancellation.is_cancelled()) result->reset();
+                    } else if (presentation_capture && presentation_intent && prepared_move) {
                         const auto& intent=*presentation_intent;
                         const auto wanted=presentation_capture->id.toStdString();
                         const Command command=intent.axes
@@ -22953,6 +23088,7 @@ public:
     void captureEntityTransformFromCanvas(PlanCanvas* canvas,const QString& id) {
         m_entity_transform_prepared.reset(); m_entity_transform_edit_source.reset();
         m_presentation_transform_preview.reset();m_presentation_transform_capture.reset();m_presentation_transform_intent.reset();
+        m_ordinary_transform_preview.reset();m_ordinary_transform_capture.reset();m_ordinary_transform_intent.reset();
         m_entity_transform_site_capture.reset();
         m_entity_transform_viewport.reset();
         if (siteCanvas(canvas)) {
@@ -23058,11 +23194,53 @@ public:
             if (found!=m_entity_transform_source->entities().end() && physicalPlanRotationFamily(found->second.type) &&
                 !geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()))
                 captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
+            else if (!m_presentation_transform_capture) {
+                const bool embedded=geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()).has_value();
+                const bool measured=!embedded && found!=m_entity_transform_source->entities().end() &&
+                    (is_closed_boundary_entity(found->second.type) || found->second.type=="measurement_linework");
+                if (!embedded && !measured && (found==m_entity_transform_source->entities().end() ||
+                    !can_transform_architectural_entity_type(found->second.type)))
+                    throw std::invalid_argument("This selection does not support direct resize or rotation handles.");
+                captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
+                auto capture=std::make_shared<OrdinaryGeometryTransformCapture>();
+                capture->id=id;capture->embedded=embedded;capture->measured=measured;
+                capture->frame=m_entity_transform_frame;
+                capture->scene=m_vertex_preview_scene;capture->eligible=m_vertex_preview_eligible;
+                capture->labels=m_vertex_preview_labels;capture->references=m_vertex_preview_references;
+                capture->components=m_vertex_preview_components;
+                capture->appraisal_area_ids=m_vertex_preview_appraisal_area_ids;
+                capture->label_footprints=m_vertex_preview_label_footprints;
+                capture->component_bounds=m_vertex_preview_component_bounds;
+                capture->view_context=m_vertex_preview_view_context;
+                capture->font=canvas->font();capture->dpi_x=canvas->logicalDpiX();capture->dpi_y=canvas->logicalDpiY();
+                if (!embedded && !measured) {
+                    for (const auto& item:*capture->scene) if (item.id==id && item.resize_frame) {
+                        capture->architectural_pivot=item.resize_frame->center;break;
+                    }
+                    if (!capture->architectural_pivot)
+                        throw std::invalid_argument("The selected object's transform frame is unavailable.");
+                    if (capture->frame) capture->architectural_pivot=unproject_plan_point(
+                        *capture->architectural_pivot,*capture->frame);
+                }
+                if (canvas==m_architecturalCanvas) {
+                    auto components=std::make_shared<std::vector<CanvasEntity>>();
+                    for (const auto& item:m_constraint_preview_source_geometry)
+                        if ((item.type==QStringLiteral("symbol") || item.type==QStringLiteral("assembly_instance")) &&
+                            !item.segments.empty()) components->push_back(item);
+                    capture->components=std::move(components);
+                }
+                if (std::none_of(capture->scene->begin(),capture->scene->end(),
+                    [&](const auto& item){return item.id==id && !item.segments.empty();}))
+                    throw std::invalid_argument("The selected geometry has no visible captured presentation.");
+                if (!m_entity_transform_edit_source) m_entity_transform_edit_source=captureCanvasEditSource();
+                m_ordinary_transform_capture=std::move(capture);
+            }
         }
     }
 
     std::optional<std::vector<CanvasEntity>> previewEntityAxisResizeFromCanvas(
         PlanCanvas* canvas,const QString& id,double scale_x,double scale_y,Vec2 canvas_anchor,std::uint64_t serial) {
+        m_ordinary_transform_preview.reset();m_ordinary_transform_intent.reset();
         if (!siteCanvas(canvas) && m_presentation_transform_capture) {
             PresentationTransformIntent intent;intent.axes=std::pair{scale_x,scale_y};intent.canvas_point=canvas_anchor;
             return previewPresentationTransformFromCanvas(canvas,id,intent,serial);
@@ -23365,93 +23543,42 @@ public:
                 return proposed;
             } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return std::vector<CanvasEntity>{}; }
         }
-        if (!canvas || !m_entity_transform_source) return std::vector<CanvasEntity>{};
-        const auto annotation_owners=annotation_selection_owners(*m_entity_transform_source,{id});
-        if(const auto owner=annotation_owners.find(id.toStdString());owner!=annotation_owners.end()) {
-            setError(QStringLiteral("The annotation has no captured transform presentation. Start again."));
-            return std::vector<CanvasEntity>{};
-        }
-        if (geometric_assembly_for_child(*m_entity_transform_source, id.toStdString())) {
-            m_entity_transform_ready = false; m_entity_transform_command.reset();
-            try {
-                if (!m_document->is_editable() || !entityTransformContextUnchanged() ||
-                    m_entity_transform_canvas != canvas || m_entity_transform_id != id ||
-                    !std::isfinite(scale) || scale <= 0 || !std::isfinite(radians))
-                    throw std::invalid_argument("The assembly transform source or view changed.");
-                auto pivot = canvas_pivot;
-                const auto frame = m_entity_transform_frame;
-                if (frame) { pivot = unproject_plan_point(pivot, *frame); radians *= -frame->direction.z; }
-                const auto c = std::cos(radians), s = std::sin(radians);
-                auto [command, target] = embeddedAssemblyTransformCommand(*m_entity_transform_source, id.toStdString(),
-                    {pivot.x-scale*(c*pivot.x-s*pivot.y), pivot.y-scale*(s*pivot.x+c*pivot.y), 0, radians, scale}, false);
-                (void)target;
-                const auto candidate = Document::preview_command(*m_entity_transform_source, command);
-                SnapshotPlanSceneOptions options; options.visibility = m_view_filter; options.selected_id = id;
-                options.active_context = organize_project(candidate).drawing_context(m_active_layer_id.toStdString());
-                options.label_font = canvas->font(); options.label_device = canvas;
-                PlanSceneCaches caches;
-                auto scene = projectSnapshotPlanScene(candidate, options, caches);
-                if (!scene.diagnostics.isEmpty()) throw std::invalid_argument(scene.diagnostics.toStdString());
-                std::vector<CanvasEntity> result;
-                for (auto entity : scene.geometry) if (entity.id == id) {
-                    if (frame) {
-                        entity.segments = project_plan_path(std::move(entity.segments), *frame);
-                        for (auto& hole : entity.holes) hole = project_plan_path(std::move(hole), *frame);
-                    }
-                    result.push_back(std::move(entity));
-                }
-                m_entity_transform_command = std::move(command); m_entity_transform_serial = serial;
-                m_entity_transform_scale = scale;
-                m_entity_transform_radians = frame ? radians * -frame->direction.z : radians;
-                m_entity_transform_ready = true;
-                return result;
-            } catch (const std::exception& error) {
-                setError(QStringLiteral("Transform: %1").arg(QString::fromUtf8(error.what())));
-                return std::vector<CanvasEntity>{};
-            }
-        }
-        const auto found=m_entity_transform_source->entities().find(id.toStdString());
-        if (found!=m_entity_transform_source->entities().end() && found->second.type=="reference_asset") {
-            setError(QStringLiteral("The reference has no captured transform presentation. Start again."));
-            return std::vector<CanvasEntity>{};
-        }
-        if (found==m_entity_transform_source->entities().end() ||
-            (!is_closed_boundary_entity(found->second.type) && found->second.type!="measurement_linework"))
-            return std::nullopt;
+        m_ordinary_transform_preview.reset();
         m_entity_transform_command.reset();
         m_entity_transform_ready=false;
         m_entity_transform_serial=serial;
         try {
-            if (std::abs(scale-1.0)>1e-9) return std::nullopt;
-            if (!m_document->is_editable() || !entityTransformContextUnchanged() || m_entity_transform_canvas!=canvas ||
-                m_entity_transform_id!=id || m_selected_ids.size()!=1 || m_selected_ids.front()!=id ||
-                !std::isfinite(scale) || !std::isfinite(radians) || !std::isfinite(canvas_pivot.x) || !std::isfinite(canvas_pivot.y))
-                throw std::invalid_argument("The project, selection or view changed during this transform. Try the transform again.");
-            captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
-            if (!m_vertex_preview_source || fullSnapshotDigest(*m_vertex_preview_source)!=fullSnapshotDigest(*m_entity_transform_source))
-                throw std::invalid_argument("The project changed during this transform. Try the transform again.");
-            auto pivot=canvas_pivot;
-            auto model_radians=radians;
-            if (const auto frame=m_entity_transform_frame) {
-                pivot=unproject_plan_point(pivot,*frame);
-                model_radians=radians*-frame->direction.z;
-            }
-            const PlanarTransform transform{pivot,model_radians,false,false,{}};
-            auto command=makeSelectionGeometryTransformCommand(*m_entity_transform_source,{id},transform);
-            auto candidate=std::make_shared<DocumentSnapshot>(Document::preview_command(*m_entity_transform_source,command));
+            const auto capture=m_ordinary_transform_capture;
+            if (!canvas || !capture || !m_entity_transform_source || !m_entity_transform_edit_source ||
+                !m_document->is_editable() || !entityTransformContextUnchanged() || m_entity_transform_canvas!=canvas ||
+                m_entity_transform_id!=id || capture->id!=id || m_selected_ids.size()!=1 || m_selected_ids.front()!=id ||
+                canvas->font()!=capture->font || canvas->logicalDpiX()!=capture->dpi_x || canvas->logicalDpiY()!=capture->dpi_y ||
+                !std::isfinite(scale) || scale<=0.0 || !std::isfinite(radians) ||
+                !std::isfinite(canvas_pivot.x) || !std::isfinite(canvas_pivot.y))
+                throw std::invalid_argument("The captured geometric transform source, selection or view changed. Start again.");
+            if (capture->measured && scale!=1.0)
+                throw std::invalid_argument("Use source floor plan dimensions to resize closed areas and measured lines.");
+            OrdinaryGeometryTransformIntent intent;
+            intent.scale=scale;intent.radians=radians;intent.canvas_pivot=canvas_pivot;
+            intent.source_pivot=capture->architectural_pivot.value_or(capture->frame
+                ? unproject_plan_point(canvas_pivot,*capture->frame) : canvas_pivot);
+            intent.source_radians=capture->frame ? model_plan_rotation_delta(radians,*capture->frame) : radians;
             if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
-            m_entity_transform_command=std::move(command);
             m_entity_transform_scale=scale;
             m_entity_transform_radians=radians;
-            PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,
-                m_vertex_preview_eligible,m_vertex_preview_labels,m_vertex_preview_appraisal_area_ids,
-                m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,{}, {}, {},
-                m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
-            request.authority=m_vertex_preview_authority;
-            request.label_font=canvas->font();
-            request.entities_move_candidate=std::move(candidate);
+            m_entity_transform_pivot=canvas_pivot;
+            m_ordinary_transform_intent=intent;
+            PendingVertexPreview request{canvas,serial,m_document,m_entity_transform_source,capture->scene,
+                capture->eligible,capture->labels,capture->appraisal_area_ids,capture->label_footprints,
+                capture->component_bounds,m_metric_units,id,{}, {},capture->view_context,
+                std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
+            request.authority=m_entity_transform_context;request.label_font=capture->font;
+            request.component_sources=capture->components;
             request.entity_transform_preview=true;
-            request.rigid_transform=transform;
+            request.ordinary_transform_capture=capture;request.ordinary_transform_intent=intent;
+            request.model_edit_source=m_entity_transform_edit_source;
+            request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
+            clearError();
             if (m_running_vertex_preview) {
                 (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
                 m_pending_vertex_preview=std::move(request);
@@ -23460,7 +23587,7 @@ public:
         } catch (const Standard_Failure& error) {
             const auto* message=error.GetMessageString();
             setError(message && *message ? QString::fromUtf8(message)
-                : QStringLiteral("The physical rotation preview could not be generated."));
+                : QStringLiteral("The geometric transform preview could not be generated."));
             return std::vector<CanvasEntity>{};
         } catch (const std::exception& error) {
             setError(QStringLiteral("Transform: %1").arg(QString::fromUtf8(error.what())));
@@ -23826,7 +23953,22 @@ public:
             } catch (...) {}
             if (!current) { m_presentation_transform_preview.reset();m_entity_transform_ready=false; }
         }
+        if (m_ordinary_transform_preview) {
+            bool current=false;
+            try {
+                const auto capture=m_ordinary_transform_capture;
+                const auto canvas=m_entity_transform_canvas;
+                current=canvas && capture && m_ordinary_transform_preview->capture==capture &&
+                    m_ordinary_transform_preview->edit_source==m_entity_transform_edit_source &&
+                    canvas->entityTransformPreviewSerial()==m_ordinary_transform_preview->serial &&
+                    entityTransformContextUnchanged() && canvas->font()==capture->font &&
+                    canvas->logicalDpiX()==capture->dpi_x && canvas->logicalDpiY()==capture->dpi_y;
+            } catch (...) {}
+            if (!current) { m_ordinary_transform_preview.reset();m_entity_transform_ready=false; }
+        }
         const auto reject=[&](const PendingVertexPreview& request) {
+            if (request.ordinary_transform_capture && request.serial==m_entity_transform_serial &&
+                request.ordinary_transform_capture==m_ordinary_transform_capture) m_ordinary_transform_preview.reset();
             if (request.presentation_capture && request.serial==m_entity_transform_serial &&
                 request.presentation_capture==m_presentation_transform_capture) m_presentation_transform_preview.reset();
             if (m_plan_move_preview && m_plan_move_preview->capture==request.plan_move_capture &&
@@ -23878,6 +24020,20 @@ public:
                     if (request.site_transform_capture!=m_entity_transform_site_capture ||
                         request.source!=m_entity_transform_source || request.canvas!=m_entity_transform_canvas ||
                         request.authority!=m_entity_transform_context) return false;
+                } else if (request.ordinary_transform_capture) {
+                    const auto capture=request.ordinary_transform_capture;
+                    if (capture!=m_ordinary_transform_capture || !request.ordinary_transform_intent ||
+                        !m_ordinary_transform_intent || request.source!=m_entity_transform_source ||
+                        request.canvas!=m_entity_transform_canvas || request.authority!=m_entity_transform_context ||
+                        request.entity_id!=m_entity_transform_id || request.model_edit_source!=m_entity_transform_edit_source ||
+                        !request.model_edit_source || request.canvas->font()!=capture->font ||
+                        request.canvas->logicalDpiX()!=capture->dpi_x || request.canvas->logicalDpiY()!=capture->dpi_y) return false;
+                    const auto& intent=*request.ordinary_transform_intent;
+                    const auto& latest=*m_ordinary_transform_intent;
+                    if (intent.scale!=latest.scale || intent.radians!=latest.radians || intent.source_radians!=latest.source_radians ||
+                        intent.canvas_pivot.x!=latest.canvas_pivot.x || intent.canvas_pivot.y!=latest.canvas_pivot.y ||
+                        intent.source_pivot.x!=latest.source_pivot.x || intent.source_pivot.y!=latest.source_pivot.y ||
+                        m_entity_transform_axis_resize || m_entity_transform_physical_rotation) return false;
                 } else if (request.presentation_capture) {
                     if (request.presentation_capture!=m_presentation_transform_capture || !request.presentation_intent ||
                         !m_presentation_transform_intent || request.source!=m_entity_transform_source ||
@@ -23923,9 +24079,11 @@ public:
             const bool request_current=current(request);
             if (!request_current || !completion.succeeded() ||
                 completion.receipt->source_revision != request.source->revision() || !*request.result) {
-                if (request_current && (request.presentation_capture || request.axis_resize_scales || request.site_wall_move || request.plan_move || request.physical_rotation_command) &&
+                if (request_current && (request.ordinary_transform_capture || request.presentation_capture || request.axis_resize_scales || request.site_wall_move || request.plan_move || request.physical_rotation_command) &&
                     completion.kind!=RegenerationCompletionKind::cancelled) {
-                    auto message=request.presentation_capture
+                    auto message=request.ordinary_transform_capture
+                        ? QStringLiteral("The transformed geometry could not be admitted or displayed.")
+                        : request.presentation_capture
                         ? QStringLiteral("The transformed presentation could not be admitted or displayed.")
                         : request.physical_rotation_command
                         ? QStringLiteral("The rotated object could not be projected in the current view.")
@@ -23944,7 +24102,7 @@ public:
                     if (request.plan_move) m_plan_move_error=message;
                     setError(QStringLiteral("%1: %2").arg((request.site_wall_move || request.plan_move)
                         ? QStringLiteral("Move") : request.physical_rotation_command
-                        ? QStringLiteral("Rotate") : request.presentation_capture
+                        ? QStringLiteral("Rotate") : (request.presentation_capture || request.ordinary_transform_capture)
                         ? QStringLiteral("Transform") : QStringLiteral("Resize"),message));
                 }
                 reject(request);
@@ -23958,7 +24116,7 @@ public:
                  (!request.model_edit_prepared->document &&
                   (!request.model_edit_prepared->workspace || !request.model_edit_prepared->mirror))))
                 { reject(request);continue; }
-            if (request.presentation_capture && (!request.model_edit_source || !request.model_edit_prepared ||
+            if ((request.presentation_capture || request.ordinary_transform_capture) && (!request.model_edit_source || !request.model_edit_prepared ||
                 (!request.model_edit_prepared->document &&
                  (!request.model_edit_prepared->workspace || !request.model_edit_prepared->mirror))))
                 { reject(request);continue; }
@@ -23978,6 +24136,15 @@ public:
                     request.vertex_id, request.position, **request.plan_endpoint_command,request.model_edit_prepared};
             }
             if (request.entity_transform_preview) {
+                if (request.ordinary_transform_capture) {
+                    if (!request.ordinary_transform_intent) { reject(request);continue; }
+                    m_ordinary_transform_preview=OrdinaryGeometryTransformPreview{request.ordinary_transform_capture,
+                        request.serial,*request.ordinary_transform_intent,request.model_edit_source,request.model_edit_prepared};
+                    m_entity_transform_ready=true;
+                    if (!request.canvas->completeEntityTransformPreview(request.serial,std::move(projection.entities),
+                        std::move(projection.labels),std::move(projection.references))) reject(request);
+                    continue;
+                }
                 if (request.presentation_capture) {
                     if (!request.presentation_intent) { reject(request);continue; }
                     // Completion can synchronously finish a release that was
@@ -24030,6 +24197,7 @@ public:
         }
         if (!m_running_vertex_preview && !m_pending_vertex_preview &&
             !m_entity_transform_prepared &&
+            !m_ordinary_transform_preview &&
             (!m_plan_endpoint_preview || !m_plan_endpoint_preview->capture->edit_source))
             m_vertex_preview_timer->stop();
     }
@@ -24604,8 +24772,39 @@ public:
         }
     }
 
+    bool commitOrdinaryGeometryTransformFromCanvas(const QString& id,double scale,double radians) {
+        const auto preview=std::move(m_ordinary_transform_preview);
+        m_ordinary_transform_preview.reset();m_entity_transform_ready=false;
+        const auto capture=m_ordinary_transform_capture;
+        const auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        if (!preview || !capture || preview->capture!=capture || !preview->prepared ||
+            preview->edit_source!=m_entity_transform_edit_source || !entityTransformContextUnchanged() ||
+            !m_document->is_editable() || !canvas || canvas!=m_entity_transform_canvas || capture->id!=id ||
+            m_entity_transform_id!=id || m_entity_transform_axis_resize || m_selected_ids.size()!=1 || m_selected_ids.front()!=id ||
+            canvas->entityTransformPreviewSerial()!=preview->serial || m_entity_transform_serial!=preview->serial ||
+            canvas->font()!=capture->font || canvas->logicalDpiX()!=capture->dpi_x || canvas->logicalDpiY()!=capture->dpi_y ||
+            preview->intent.scale!=scale || preview->intent.radians!=radians ||
+            !m_ordinary_transform_intent || m_ordinary_transform_intent->scale!=scale ||
+            m_ordinary_transform_intent->radians!=radians || m_entity_transform_scale!=scale || m_entity_transform_radians!=radians ||
+            m_ordinary_transform_intent->source_radians!=preview->intent.source_radians ||
+            m_ordinary_transform_intent->source_pivot.x!=preview->intent.source_pivot.x ||
+            m_ordinary_transform_intent->source_pivot.y!=preview->intent.source_pivot.y ||
+            preview->intent.canvas_pivot.x!=m_entity_transform_pivot.x || preview->intent.canvas_pivot.y!=m_entity_transform_pivot.y)
+            throw std::invalid_argument("The exact geometric transform preview or editing source changed. Start again.");
+        const bool no_op=scale==1.0 && radians==0.0;
+        if (!no_op) publishPreparedCanvasEdit(preview->prepared,preview->edit_source);
+        clearError();if (!no_op) refresh();return true;
+    }
+
     bool transformSelectionFromCanvas(const QString& requested_id, double relative_scale,
                                       double rotation_radians) {
+        if (m_ordinary_transform_capture) {
+            try { return commitOrdinaryGeometryTransformFromCanvas(requested_id,relative_scale,rotation_radians); }
+            catch (const std::exception& error) {
+                setError(QStringLiteral("Transform: %1").arg(QString::fromUtf8(error.what())));
+                refresh();return false;
+            }
+        }
         if (m_presentation_transform_capture) {
             try { return commitPresentationTransformFromCanvas(requested_id,relative_scale,rotation_radians); }
             catch (const std::exception& error) {
@@ -24654,16 +24853,6 @@ public:
                 m_entity_transform_id != requested_id)
                 throw std::invalid_argument("The transform source or editing context changed.");
             const auto wanted = requested_id.toStdString();
-            if (geometric_assembly_for_child(source, wanted)) {
-                const auto* active_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
-                if (!entityTransformContextUnchanged() || m_entity_transform_canvas != active_canvas ||
-                    m_entity_transform_id != requested_id || !m_entity_transform_ready || !m_entity_transform_command ||
-                    active_canvas->entityTransformPreviewSerial() != m_entity_transform_serial ||
-                    relative_scale != m_entity_transform_scale || rotation_radians != m_entity_transform_radians ||
-                    m_entity_transform_source->entities() != source.entities())
-                    throw std::invalid_argument("The exact assembly transform preview changed. Try the transform again.");
-                applyAuthoredCommand(*m_entity_transform_command); clearError(); refresh(); return true;
-            }
             const auto model=source.entities().find(wanted);
             if (model!=source.entities().end() && physicalPlanRotationFamily(model->second.type)) {
                 if (relative_scale!=1.0)
@@ -24681,21 +24870,6 @@ public:
                 if (rotation_radians==0.0) { clearError(); return true; }
                 clearError(); refresh(); return true;
             }
-            if (model!=source.entities().end() && (is_closed_boundary_entity(model->second.type) || model->second.type=="measurement_linework") &&
-                std::abs(relative_scale-1.0)<=1e-9) {
-                const auto* active_canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
-                if (!entityTransformContextUnchanged() || m_entity_transform_canvas!=active_canvas ||
-                    m_entity_transform_id!=requested_id || !m_entity_transform_ready || !m_entity_transform_command ||
-                    active_canvas->entityTransformPreviewSerial()!=m_entity_transform_serial ||
-                    relative_scale!=m_entity_transform_scale || rotation_radians!=m_entity_transform_radians ||
-                    m_entity_transform_source->entities()!=source.entities())
-                    throw std::invalid_argument("The exact area transform preview is unavailable or changed. Try the transform again.");
-                const auto command=*m_entity_transform_command;
-                applyDocumentCommand(command);
-                clearError();
-                refresh();
-                return true;
-            }
             const auto annotation_owners = annotation_selection_owners(source, {requested_id});
             if (annotation_owners.contains(wanted))
                 throw std::invalid_argument("The annotation transform has no captured admitted preview. Start again.");
@@ -24707,41 +24881,8 @@ public:
             if (found->second.type == "reference_asset") {
                 throw std::invalid_argument("The reference transform has no captured admitted preview. Start again.");
             }
-            const auto projected_plan_frame = m_entity_transform_frame;
-            // Upward plans reverse handedness; downward plans retain it.
-            if (projected_plan_frame) rotation_radians *= -projected_plan_frame->direction.z;
-            const auto degrees = QString::number(
-                rotation_radians * 180.0 / std::numbers::pi, 'g', 15);
-            const auto* active_canvas = m_workspace == Workspace::measurement
-                ? m_measurementCanvas : m_architecturalCanvas;
-            std::optional<Vec2> canvas_pivot;
-            for (const auto& item : active_canvas->entities()) {
-                if (item.id == requested_id && item.resize_frame) {
-                    canvas_pivot = item.resize_frame->center;
-                    break;
-                }
-            }
-            if (canvas_pivot && projected_plan_frame)
-                canvas_pivot = unproject_plan_point(*canvas_pivot, *projected_plan_frame);
-            const auto compensation = [&](Vec2 pivot, double scale) {
-                const auto c = std::cos(rotation_radians), s = std::sin(rotation_radians);
-                return Vec2{pivot.x-scale*(c*pivot.x-s*pivot.y),
-                            pivot.y-scale*(s*pivot.x+c*pivot.y)};
-            };
-            const auto metres = [](double value) {
-                // The quantity grammar accepts decimal measurements, not
-                // exponent notation. Quarter turns can leave tiny offsets.
-                return QString::number(value, 'f', 17) + QStringLiteral(" m");
-            };
-            if (can_transform_architectural_entity_type(found->second.type)) {
-                if (!canvas_pivot) throw std::invalid_argument("The selected object's transform frame is unavailable.");
-                const auto offset = compensation(*canvas_pivot, relative_scale);
-                return transformSelectedArchitecturalObject(
-                    degrees, metres(offset.x), metres(offset.y), {},
-                    QString::number(relative_scale, 'g', 15), false);
-            }
             throw std::invalid_argument(
-                "This selection does not support direct resize or rotation handles.");
+                "The selected geometry has no captured admitted transform preview. Start again.");
         } catch (const std::exception& error) {
             if (m_entity_transform_physical_rotation || m_entity_transform_axis_resize) {
                 m_entity_transform_prepared.reset(); m_entity_transform_edit_source.reset();
@@ -40432,6 +40573,7 @@ private:
                 clearSitePublication(); m_entity_transform_source.reset(); m_entity_transform_context.reset();
                 m_entity_transform_prepared.reset(); m_entity_transform_edit_source.reset();
                 m_presentation_transform_preview.reset();m_presentation_transform_capture.reset();m_presentation_transform_intent.reset();
+                m_ordinary_transform_preview.reset();m_ordinary_transform_capture.reset();m_ordinary_transform_intent.reset();
                 m_entity_transform_site_capture.reset();
                 setError(QString::fromUtf8(error.what()));
             }
@@ -40821,6 +40963,7 @@ private:
             m_entity_transform_context.reset();
             m_entity_transform_source.reset();
             m_presentation_transform_preview.reset();m_presentation_transform_capture.reset();m_presentation_transform_intent.reset();
+            m_ordinary_transform_preview.reset();m_ordinary_transform_capture.reset();m_ordinary_transform_intent.reset();
             m_entity_transform_frame.reset();
             m_entity_transform_command.reset();
             m_entity_transform_ready=false;
@@ -43076,6 +43219,7 @@ private:
         m_entity_transform_source.reset();
         m_entity_transform_prepared.reset(); m_entity_transform_edit_source.reset();
         m_presentation_transform_preview.reset();m_presentation_transform_capture.reset();m_presentation_transform_intent.reset();
+        m_ordinary_transform_preview.reset();m_ordinary_transform_capture.reset();m_ordinary_transform_intent.reset();
         m_entity_transform_document.reset();
         m_entity_transform_canvas.clear();
         m_entity_transform_context.reset();
@@ -51071,6 +51215,9 @@ private:
     std::shared_ptr<const PresentationTransformCapture> m_presentation_transform_capture;
     std::optional<PresentationTransformIntent> m_presentation_transform_intent;
     std::optional<PresentationTransformPreview> m_presentation_transform_preview;
+    std::shared_ptr<const OrdinaryGeometryTransformCapture> m_ordinary_transform_capture;
+    std::optional<OrdinaryGeometryTransformIntent> m_ordinary_transform_intent;
+    std::optional<OrdinaryGeometryTransformPreview> m_ordinary_transform_preview;
     std::shared_ptr<Document> m_entity_transform_document;
     QPointer<PlanCanvas> m_entity_transform_canvas;
     std::shared_ptr<const SourceEditAuthority> m_entity_transform_context;

@@ -4801,8 +4801,14 @@ PlanCanvas::SnapResult PlanCanvas::wallEndpointInputPoint(const CanvasEntity& en
         const auto screen = toScreen(target, rect());
         const auto local = retainedSnapCandidates(screen, radius, std::nullopt, true);
         double nearest = std::numeric_limits<double>::infinity();
+        const auto moving_contact = [&](Vec2 point) {
+            return std::isfinite(point.x) && std::isfinite(point.y) &&
+                distance(point, handle.source_position) <= default_geometry_tolerance_metres;
+        };
         const auto consider = [&](Vec2 point, SnapKind kind) {
-            if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+            // A joined neighbour's old corner follows this endpoint. Treating
+            // it as a fixed target traps fine movements inside the hit radius.
+            if (!std::isfinite(point.x) || !std::isfinite(point.y) || moving_contact(point)) return;
             const auto separation = QLineF(screen, toScreen(point, rect())).length();
             if (separation <= radius && separation < nearest) {
                 nearest = separation;
@@ -4821,7 +4827,7 @@ PlanCanvas::SnapResult PlanCanvas::wallEndpointInputPoint(const CanvasEntity& en
         }
         if (result.kind == SnapKind::endpoint) return result;
         const auto consider_baseline = [&](const CanvasEntity& owner, const Segment& baseline) {
-            if (owner.id == entity.id) return;
+            if (owner.id == entity.id || moving_contact(baseline.start) || moving_contact(baseline.end)) return;
             try {
                 const auto length = segment_length(baseline);
                 const auto station = std::clamp(project_host_station(baseline, target, length*.5), 0.0, length);
