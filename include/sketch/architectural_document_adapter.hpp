@@ -59,6 +59,25 @@ struct BeamEndpointEdit {
     const DocumentSnapshot& source, const std::string& entity_id,
     const BeamEndpointEdit& edit, Revision expected_revision);
 
+enum class RailingEndpoint { start, end };
+
+// Move one endpoint of a canonical independent straight railing in plan metres.
+// Retain Z, height, section, post spacing, placement and source metadata. The
+// opposite endpoint and requested endpoint agree with polar reconstruction to
+// 1e-7 metres plus 32 machine epsilons times the largest plan coordinate.
+// Targets within that tolerance of the current endpoint make no change.
+struct RailingEndpointEdit {
+    RailingEndpoint endpoint{RailingEndpoint::end};
+    Vec2 proposed_position{};
+};
+
+// Hosted flight/landing railings follow their stair and refuse this free edit.
+// Complete Document relationships and resolved native geometry admit the
+// detached candidate. Publication retains the caller's captured-source fence.
+[[nodiscard]] ApplyEntityChanges railing_endpoint_update_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    const RailingEndpointEdit& edit, Revision expected_revision);
+
 // Typed semantic edits retain the container's identity, extensions and unrelated
 // properties. Apply through Document for atomic admission and revision fencing.
 [[nodiscard]] ApplyEntityChanges assembly_type_update_command(
@@ -75,15 +94,17 @@ struct BeamEndpointEdit {
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
     Revision expected_revision);
 
-// Admit changed physical wall/opening, slab, room and canonical beam descriptors
-// against the complete detached candidate. Hosted siblings and affected fused joins
+// Admit changed physical wall/opening, slab, room, canonical beam and independent
+// straight-railing descriptors against the complete detached candidate.
+// Hosted siblings and affected fused joins
 // participate even when hidden. Changed plan-only room footprints receive
 // analytical admission without manufacturing missing volume fields.
 // Metadata-only edits and incomplete legacy transport descriptors do not force
 // solid generation. Explicit required IDs must have valid physical geometry,
 // including a full room volume when a room ID is explicitly required and when
 // its entered dimension is unchanged. Beam admission uses the canonical codec
-// and native builder with the completed candidate's resolved vertical placement.
+// and native builder with the completed candidate's resolved vertical placement;
+// railing admission uses the same resolved canonical building-object boundary.
 void validate_architectural_geometry_changes(
     const DocumentSnapshot& source, const DocumentSnapshot& candidate,
     const std::vector<std::string>& required_ids = {});

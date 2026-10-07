@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 independent railing endpoint authoring
+
+Independent canonical straight railings now have typed endpoint edits and genuine
+start/end grips in Measurement, horizontal Architectural saved/custom plans and
+Site. The existing polar descriptor retains elevation, section, post spacing,
+context, placement, identity and opaque metadata. Reconstruction keeps the
+opposite endpoint within the declared analytical/coordinate roundoff tolerance;
+changed length/heading aliases agree and only changed quantity receipts are
+invalidated. Hosted stair/landing railings keep their host ownership.
+
+The shared beam/railing grip projection withholds actual hidden endpoints rather
+than creating crop/depth intersection grips. Length metrics and final publication
+use the admitted source-bound preview command, including Site inversion. Beam
+previews now also regenerate when resolved level-relative geometry changes while
+their serialized coordinates stay unchanged. Independent source review accepted
+the command, projections and captured release path. These are source changes; no native
+builds, tests, probes, packages or installations ran. The installed candidate is
+unchanged and the new behavior is not runtime-qualified.
+
 ### October 7 shared editor source capture
 
 The shared modal/input context now retains an immutable authoring snapshot instead

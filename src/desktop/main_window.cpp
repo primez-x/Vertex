@@ -5000,13 +5000,12 @@ std::string building_plan_source_key(const DocumentSnapshot& snapshot, const Ent
     return key;
 }
 
-void retain_beam_endpoint_handles(CanvasEntity& entity, const Beam& beam, Revision revision,
+void retain_plan_endpoint_handles(CanvasEntity& entity,
+    const std::array<std::pair<Vec3, QString>, 2>& endpoints, Revision revision,
     bool interactive, const ArchitecturalViewContext* view = nullptr) {
     entity.vertex_handles.clear();
     if (!interactive || !entity.selected || (view && !horizontal_plan_frame(view->frame))) return;
-    for (const auto& [endpoint, role] : {
-            std::pair{beam.start, QStringLiteral("beam:start")},
-            std::pair{beam.end, QStringLiteral("beam:end")}}) {
+    for (const auto& [endpoint, role] : endpoints) {
         if (view && std::isfinite(view->depth.far_depth_m)) {
             const auto& depth = view->depth;
             const Vec3 plane_origin{
@@ -5028,6 +5027,23 @@ void retain_beam_endpoint_handles(CanvasEntity& entity, const Beam& beam, Revisi
                 point.y < crop.min_vertical_m || point.y > crop.max_vertical_m) continue;
         }
         entity.vertex_handles.push_back({role, point, revision});
+    }
+}
+
+void retain_building_endpoint_handles(CanvasEntity& entity, const BuildingObject& object,
+    Revision revision, bool interactive, const ArchitecturalViewContext* view = nullptr) {
+    if (const auto* beam = std::get_if<Beam>(&object)) {
+        retain_plan_endpoint_handles(entity, {{{beam->start, QStringLiteral("beam:start")},
+            {beam->end, QStringLiteral("beam:end")}}}, revision, interactive, view);
+    } else if (const auto* rail = std::get_if<Railing>(&object)) {
+        entity.vertex_handles.clear();
+        // Hosted railings inherit their endpoints from the stair or landing;
+        // displaying independent grips would offer an edit the host owns.
+        if (rail->host || rail->landing_host) return;
+        const Vec3 end{rail->base_position.x + rail->length * std::cos(rail->orientation_radians),
+            rail->base_position.y + rail->length * std::sin(rail->orientation_radians), rail->base_position.z};
+        retain_plan_endpoint_handles(entity, {{{rail->base_position, QStringLiteral("railing:start")},
+            {end, QStringLiteral("railing:end")}}}, revision, interactive, view);
     }
 }
 
@@ -20314,6 +20330,13 @@ public:
                 {endpoint == QStringLiteral("beam:start") ? BeamEndpoint::start : BeamEndpoint::end, position},
                 source.revision());
         }
+        if (wall.type == "railing") {
+            if (endpoint != QStringLiteral("railing:start") && endpoint != QStringLiteral("railing:end"))
+                throw std::invalid_argument("Choose an independent railing endpoint handle.");
+            return railing_endpoint_update_command(source, wall.id,
+                {endpoint == QStringLiteral("railing:start") ? RailingEndpoint::start : RailingEndpoint::end, position},
+                source.revision());
+        }
         if (wall.type != "wall" || (endpoint != QStringLiteral("wall:start") &&
             endpoint != QStringLiteral("wall:end")))
             throw std::invalid_argument("Choose a wall endpoint handle.");
@@ -20406,6 +20429,11 @@ public:
             length = std::hypot(end.at(0).get<double>() - start.at(0).get<double>(),
                 end.at(1).get<double>() - start.at(1).get<double>(),
                 end.at(2).get<double>() - start.at(2).get<double>());
+        } else if (entity.type == "railing") {
+            const auto rail = decode_railing_properties(entity.id, entity.properties);
+            if (rail.host || rail.landing_host)
+                throw std::invalid_argument("Hosted railing endpoints follow their stair or landing.");
+            length = rail.length;
         }
         if (!std::isfinite(length) || length <= 0.0)
             throw std::invalid_argument("The endpoint length is unavailable.");
@@ -20496,7 +20524,7 @@ public:
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
             const auto& owner = source.entities().at(edit.boundary_id);
-            const bool endpoint_object = owner.type == "wall" || owner.type == "beam" ||
+            const bool endpoint_object = owner.type == "wall" || owner.type == "beam" || owner.type == "railing" ||
                 owner.type == "slab" || owner.type == "room";
             const bool measured=source.entities().at(edit.boundary_id).type=="measurement_linework";
             std::optional<Command> endpoint_command;
@@ -20890,7 +20918,7 @@ public:
                 const auto& entity=found->second;
                 auto proposed=item;
                 bool world_paths = true;
-                std::optional<Beam> edited_beam;
+                std::optional<BuildingObject> edited_endpoint_object;
                 bool edited_footprint{};
                 if (is_closed_boundary_entity(entity.type) &&
                     !explicit_area_appearances.contains(entity.id)) {
@@ -20969,22 +20997,6 @@ public:
                         proposed.segments = footprint.boundary;
                         proposed.holes = footprint.holes;
                     }
-                } else if (entity.type == "beam" && entity != source.entities().at(entity.id)) {
-                    const auto object = decode_building_entity(effective_building_geometry_entity(candidate_snapshot, entity));
-                    const auto& beam = std::get<Beam>(object);
-                    edited_beam = beam;
-                    proposed.stroke_segments.reset();
-                    proposed.holes.clear();
-                    proposed.resize_frame.reset();
-                    if (view_context && !analytical_plan_context(BuildingViewKind::plan, *view_context)) {
-                        proposed.segments = project_architectural_view_shape(make_building_shape(object, candidate),
-                            BuildingViewKind::plan, *view_context).value_or(Boundary{});
-                        retain_beam_endpoint_handles(proposed, beam, source.revision(), source.is_editable(), &*view_context);
-                        world_paths = false;
-                    } else {
-                        proposed.segments = project_building_plan(object, candidate);
-                        retain_beam_endpoint_handles(proposed, beam, source.revision(), source.is_editable());
-                    }
                 } else if (entity.type == "assembly_instance") {
                     const auto binding=decode_document_assembly_instance(entity);
                     if (entity == source.entities().at(entity.id) &&
@@ -21025,7 +21037,7 @@ public:
                             BuildingViewKind::plan, *view_context).value_or(Boundary{});
                         world_paths = false;
                     } else proposed.segments = project_shape_view(shape, BuildingViewKind::plan);
-                } else if (entity.type == "column" || entity.type == "roof" ||
+                } else if (entity.type == "column" || entity.type == "roof" || entity.type == "beam" ||
                            entity.type == "stair" || entity.type == "railing") {
                     const auto resolved = effective_building_geometry_entity(candidate_snapshot, entity);
                     const auto original = source.entities().find(entity.id);
@@ -21038,6 +21050,8 @@ public:
                             continue;
                     }
                     const auto object = decode_building_entity(resolved);
+                    if (std::holds_alternative<Beam>(object) || std::holds_alternative<Railing>(object))
+                        edited_endpoint_object = object;
                     proposed.stroke_segments.reset();
                     proposed.holes.clear();
                     proposed.resize_frame.reset();
@@ -21172,9 +21186,9 @@ public:
                                                     {crop.max_horizontal_m, crop.max_vertical_m}});
                     }
                 }
-                if (edited_beam && view_context)
-                    retain_beam_endpoint_handles(proposed, *edited_beam, source.revision(),
-                        source.is_editable() && !proposed.segments.empty(), &*view_context);
+                if (edited_endpoint_object)
+                    retain_building_endpoint_handles(proposed, *edited_endpoint_object, source.revision(),
+                        source.is_editable() && !proposed.segments.empty(), view_context ? &*view_context : nullptr);
                 if (edited_footprint)
                     retain_footprint_vertex_handles(proposed, entity, source.revision(),
                         source.is_editable(), view_context ? &*view_context : nullptr);
@@ -21561,7 +21575,7 @@ public:
         m_plan_endpoint_preview.reset();
         m_plan_endpoint_capture.reset();
         const auto& type = source->entities().at(id.toStdString()).type;
-        if (type != "wall" && type != "beam" && type != "slab" && type != "room") return;
+        if (type != "wall" && type != "beam" && type != "railing" && type != "slab" && type != "room") return;
         const bool site = siteCanvas(canvas);
         m_plan_endpoint_capture = std::make_shared<PlanEndpointCapture>(PlanEndpointCapture{
             canvas, m_document, std::move(source), site ? m_site_edit_authority : m_vertex_preview_authority,
@@ -22230,7 +22244,8 @@ public:
                 const auto local=site_source_plan_point(position,siteEditFrame({id}));
                 const BoundaryGeometryEdit edit{id.toStdString(),BoundaryGeometryEditKind::move_vertex,vertex.toStdString(),local};
                 const auto& type = m_site_edit_source->entities().at(id.toStdString()).type;
-                const bool endpoint_object = type == "wall" || type == "beam" || type == "slab" || type == "room";
+                const bool endpoint_object = type == "wall" || type == "beam" || type == "railing" ||
+                    type == "slab" || type == "room";
                 const auto command = endpoint_object ? augmentAuthoredCommand(planEndpointCommand(*m_site_edit_source, id, vertex, local), *m_site_edit_source)
                     : m_site_edit_source->entities().at(id.toStdString()).type=="measurement_linework"
                         ? measuredStrokeGeometryCommand(*m_site_edit_source,edit) : boundaryGeometryCommand(*m_site_edit_source,edit,true);
@@ -39223,8 +39238,9 @@ private:
                     }
                     CanvasEntity retained{id_from(id), QString::fromStdString(entity.type),
                         cached->second.second, 0.0, id_from(id) == options.selected_id};
-                    if (entity.type == "beam" && retained.selected && options.interactive && snapshot.is_editable())
-                        retain_beam_endpoint_handles(retained, std::get<Beam>(decode_building_entity(resolved)),
+                    if ((entity.type == "beam" || entity.type == "railing") && retained.selected &&
+                        options.interactive && snapshot.is_editable())
+                        retain_building_endpoint_handles(retained, decode_building_entity(resolved),
                             snapshot.revision(), true);
                     all_geometry.push_back(std::move(retained));
                 } catch (const std::exception& error) {
@@ -40983,11 +40999,11 @@ private:
                             const auto source = snapshot.entities().find(retained.id.toStdString());
                             if (source != snapshot.entities().end()) retain_wall_snap_targets(retained, source->second);
                         }
-                        if (retained.type == QStringLiteral("beam") && retained.selected &&
+                        if ((retained.type == QStringLiteral("beam") || retained.type == QStringLiteral("railing")) && retained.selected &&
                             scene_options.interactive && snapshot.is_editable()) {
                             const auto& source = snapshot.entities().at(retained.id.toStdString());
-                            retain_beam_endpoint_handles(retained, std::get<Beam>(decode_building_entity(
-                                effective_building_geometry_entity(snapshot, source))), snapshot.revision(),
+                            retain_building_endpoint_handles(retained, decode_building_entity(
+                                effective_building_geometry_entity(snapshot, source)), snapshot.revision(),
                                 kind == BuildingViewKind::plan && scene_options.interactive && snapshot.is_editable(), &view_context);
                         }
                         if (retained.type == QStringLiteral("slab") || retained.type == QStringLiteral("room"))
@@ -41164,8 +41180,8 @@ private:
                         if (!projection) continue;
                         CanvasEntity retained{id_from(id), QString::fromStdString(entity.type),
                             *projection, 0.0, id_from(id) == m_selected_id};
-                        if (entity.type == "beam")
-                            retain_beam_endpoint_handles(retained, std::get<Beam>(decoded), snapshot.revision(),
+                        if (entity.type == "beam" || entity.type == "railing")
+                            retain_building_endpoint_handles(retained, decoded, snapshot.revision(),
                                 kind == BuildingViewKind::plan && scene_options.interactive && snapshot.is_editable(), &view_context);
                         result.push_back(decorate_projection(std::move(retained)));
                         continue;

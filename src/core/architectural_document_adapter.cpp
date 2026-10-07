@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -963,7 +964,7 @@ void validate_architectural_geometry_changes(
     const DocumentSnapshot& source, const DocumentSnapshot& candidate,
     const std::vector<std::string>& required_ids) {
     const auto& entities = candidate.entities();
-    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids, beam_ids;
+    std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids, beam_ids, railing_ids;
     const auto include = [&](const Entity& entity, bool required) {
         const auto& p = entity.properties;
         if (entity.type == "wall" && (required || p.contains("baseline"))) {
@@ -984,6 +985,9 @@ void validate_architectural_geometry_changes(
         } else if (entity.type == "beam" &&
                    (required || canonical_form(entity, "beam", 1, "straight_beam"))) {
             beam_ids.insert(entity.id);
+        } else if (entity.type == "railing" &&
+                   (required || canonical_form(entity, "railing", 1, "straight_railing"))) {
+            railing_ids.insert(entity.id);
         }
     };
     const auto changed = [](const Entity* before, const Entity& after,
@@ -1018,7 +1022,9 @@ void validate_architectural_geometry_changes(
                 "height", "elevation_m", "elevation", "vertical_placement", "layer_id",
                 "floor_id", "building_id", "property_id"});
         else if (entity.type == "beam" ||
-                 (before && canonical_form(*before, "beam", 1, "straight_beam")))
+                 (before && canonical_form(*before, "beam", 1, "straight_beam")) ||
+                 canonical_form(entity, "railing", 1, "straight_railing") ||
+                 (before && canonical_form(*before, "railing", 1, "straight_railing")))
             physical_change = building_property_geometry_changed(before, entity);
         if (!physical_change) continue;
         if (entity.type == "opening" && before && before->properties.contains("wall_id") &&
@@ -1034,7 +1040,8 @@ void validate_architectural_geometry_changes(
         if (found == entities.end())
             throw std::invalid_argument("The edited physical object is missing: " + id);
         const auto& type = found->second.type;
-        if (type != "wall" && type != "opening" && type != "slab" && type != "room" && type != "beam")
+        if (type != "wall" && type != "opening" && type != "slab" && type != "room" &&
+            type != "beam" && type != "railing")
             throw std::invalid_argument("The edited object has no supported physical descriptor: " + id);
         include(found->second, true);
     }
@@ -1148,6 +1155,17 @@ void validate_architectural_geometry_changes(
         const auto object = decode_building_entity(resolve_vertical_placement(candidate, found->second));
         if (!std::holds_alternative<Beam>(object))
             throw std::invalid_argument("The edited beam lost its physical descriptor: " + id);
+    }
+    for (const auto& id : railing_ids) {
+        const auto found = entities.find(id);
+        if (found == entities.end()) continue;
+        const auto object = decode_building_entity(resolve_vertical_placement(candidate, found->second));
+        const auto* railing = std::get_if<Railing>(&object);
+        if (!railing)
+            throw std::invalid_argument("The edited railing lost its physical descriptor: " + id);
+        // Independent decoding builds the native solid. A separate semantic
+        // host conversion still requires the complete current stair map.
+        if (railing->host || railing->landing_host) (void)make_building_shape(object, entities);
     }
 }
 
@@ -1346,6 +1364,98 @@ ApplyEntityChanges beam_endpoint_update_command(const DocumentSnapshot& source,
     coordinates.at(0) = edit.proposed_position.x;
     coordinates.at(1) = edit.proposed_position.y;
     ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Move beam endpoint"};
+    const auto candidate = Document::preview_command(source, Command{command});
+    validate_architectural_geometry_changes(source, candidate, {entity_id});
+    return command;
+}
+
+ApplyEntityChanges railing_endpoint_update_command(const DocumentSnapshot& source,
+    const std::string& entity_id, const RailingEndpointEdit& edit, Revision expected_revision) {
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
+    auto entity = semantic_entity(source, entity_id, "railing", expected_revision);
+    if (edit.endpoint != RailingEndpoint::start && edit.endpoint != RailingEndpoint::end)
+        throw std::invalid_argument("Railing endpoint role is invalid");
+    if (canonical_hosted_railing(entity))
+        throw std::invalid_argument("Hosted stair-flight and landing railing endpoints follow their stair; edit the host stair instead");
+    if (!canonical_form(entity, "railing", 1, "straight_railing"))
+        throw std::invalid_argument("Railing endpoint editing requires a canonical independent straight railing");
+    const auto railing = decode_railing_properties(entity.id, entity.properties);
+    const Vec2 start{railing.base_position.x, railing.base_position.y};
+    const Vec2 end{start.x + railing.length * std::cos(railing.orientation_radians),
+                   start.y + railing.length * std::sin(railing.orientation_radians)};
+    const auto bounded = [](Vec2 point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) &&
+            std::abs(point.x) <= 1e9 && std::abs(point.y) <= 1e9;
+    };
+    if (!bounded(edit.proposed_position) || !bounded(end))
+        throw std::invalid_argument("Railing endpoint coordinates must be finite and bounded");
+    const double coordinate_scale = std::max({1.0, std::abs(start.x), std::abs(start.y),
+        std::abs(end.x), std::abs(end.y), std::abs(edit.proposed_position.x),
+        std::abs(edit.proposed_position.y)});
+    const double tolerance = default_geometry_tolerance_metres +
+        32 * std::numeric_limits<double>::epsilon() * coordinate_scale;
+    const auto agrees = [tolerance](Vec2 a, Vec2 b) {
+        return std::hypot(a.x-b.x, a.y-b.y) <= tolerance;
+    };
+    if (agrees(edit.endpoint == RailingEndpoint::start ? start : end, edit.proposed_position))
+        throw std::invalid_argument("Railing endpoint target makes no document change within the analytical tolerance");
+    const Vec2 proposed_start = edit.endpoint == RailingEndpoint::start ? edit.proposed_position : start;
+    const Vec2 proposed_end = edit.endpoint == RailingEndpoint::end ? edit.proposed_position : end;
+    auto replacement = railing;
+    replacement.base_position.x = proposed_start.x;
+    replacement.base_position.y = proposed_start.y;
+    const double dx = proposed_end.x-proposed_start.x, dy = proposed_end.y-proposed_start.y;
+    replacement.length = std::hypot(dx,dy);
+    replacement.orientation_radians = std::atan2(dy,dx);
+    // Coordinate subtraction and polar reconstruction may introduce roundoff.
+    // Retain an unchanged authored length/heading and its receipt, including
+    // pure rotation or same-direction stretching at large plan coordinates.
+    // This uses only the roundoff allowance, without the analytical tolerance.
+    const double roundoff = 32 * std::numeric_limits<double>::epsilon() *
+        std::max(coordinate_scale, railing.length);
+    if (std::isfinite(replacement.length) && std::abs(replacement.length-railing.length) <= roundoff)
+        replacement.length = railing.length;
+    const Vec2 end_at_original_heading{
+        proposed_start.x + replacement.length * std::cos(railing.orientation_radians),
+        proposed_start.y + replacement.length * std::sin(railing.orientation_radians)};
+    if (std::hypot(end_at_original_heading.x-proposed_end.x,
+                   end_at_original_heading.y-proposed_end.y) <= roundoff)
+        replacement.orientation_radians = railing.orientation_radians;
+    validate_railing(replacement); // Includes nondegenerate length and bounded post work.
+
+    const Entity original = entity;
+    if (edit.endpoint == RailingEndpoint::start) {
+        auto& base = entity.properties.at("base_position_m");
+        if (start.x != proposed_start.x) base.at(0) = proposed_start.x;
+        if (start.y != proposed_start.y) base.at(1) = proposed_start.y;
+    }
+    const auto update_scalar = [&](const char* canonical, const char* alias, double value) {
+        // Existing aliases denote the same authored quantity. Refuse a
+        // conflicting retained value instead of silently replacing it.
+        const auto old_value = original.properties.at(canonical).get<double>();
+        if (entity.properties.contains(alias)) {
+            const auto& old_alias = original.properties.at(alias);
+            if (!old_alias.is_number() || old_alias.get<double>() != old_value)
+                throw std::invalid_argument(std::string("Railing endpoint edit aliases disagree: ") + alias);
+            if (old_value != value) entity.properties[alias] = value;
+        }
+        if (old_value != value) entity.properties[canonical] = value;
+    };
+    update_scalar("length_m", "length", replacement.length);
+    update_scalar("orientation_rad", "orientation_radians", replacement.orientation_radians);
+    invalidate_changed_receipts(original, entity);
+    // Re-read the exact patched payload. The existing v1 polar shape must
+    // represent both endpoints, without a new endpoint schema or host migration.
+    const auto encoded = decode_railing_properties(entity.id, entity.properties);
+    const Vec2 encoded_start{encoded.base_position.x, encoded.base_position.y};
+    const Vec2 encoded_end{encoded_start.x + encoded.length * std::cos(encoded.orientation_radians),
+                           encoded_start.y + encoded.length * std::sin(encoded.orientation_radians)};
+    if (!bounded(encoded_end) || !agrees(encoded_start,proposed_start) || !agrees(encoded_end,proposed_end))
+        throw std::invalid_argument("Railing endpoint reconstruction exceeds the analytical tolerance");
+    if (entity == original)
+        throw std::invalid_argument("Railing endpoint target makes no document change");
+    ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Move railing endpoint"};
     const auto candidate = Document::preview_command(source, Command{command});
     validate_architectural_geometry_changes(source, candidate, {entity_id});
     return command;
