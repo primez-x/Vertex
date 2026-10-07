@@ -309,6 +309,25 @@ provenance includes the authored layer stack. Independent source review approved
 the correction. No build, test, package or installed cutover was performed;
 numeric and application behavior remain unobserved.
 
+Recovered plan and native scenes now publish the same authoritative snapshot.
+Existing-object move, vertex, rotation, axis-resize and opening gestures retain
+their press source, complete editing context and inverse frame through preview
+and commit. Async completion preserves serial and source receipts and rejects
+acquisition failures rather than throwing through the timer. Idle drawing and
+selection remain outside checkpoint-counter gating. Annotation and reference
+transforms retain their overlay coordinate path in elevation and section views.
+
+Selection, property lookup, opening-host previews, selection pruning and the
+layer navigator now read the recovered source. Failed source acquisition keeps
+the prior selection or refuses the action through the ordinary error flow;
+failed refresh retires its edit publication and pending preview authority.
+Native readiness checks the exact latest preparation request after collecting
+work, independently of AIS publication, including a hidden pane. Unchanged
+native requests reuse complete immutable-source proof before the original
+content/hash fallback. Independent integrated source review approved the final
+corrections. This batch has not been compiled, exercised, measured, packaged or
+installed; the existing candidate remains unchanged.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

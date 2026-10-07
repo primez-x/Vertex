@@ -178,7 +178,7 @@ public:
 
     NativeModelView* owner{};
     QLabel* status_label{};
-    std::optional<DocumentSnapshot> snapshot;
+    std::shared_ptr<const DocumentSnapshot> snapshot;
     std::shared_ptr<const DocumentSnapshot> published_snapshot;
     std::shared_ptr<const DocumentSnapshot> gesture_snapshot;
     std::shared_ptr<const DocumentSnapshot> commit_snapshot;
@@ -643,7 +643,7 @@ public:
             native_ready = true;
             native_error.clear();
             operation_error.clear();
-            if (snapshot.has_value()) {
+            if (snapshot) {
                 collect_prepared_geometry();
                 if (!owner_guard) return;
             } else {
@@ -679,7 +679,7 @@ public:
     }
 
     bool supports_direct_transform(const std::string& id) const {
-        if (!snapshot.has_value() || !snapshot->is_editable() || id.empty()) return false;
+        if (!snapshot || !snapshot->is_editable() || id.empty()) return false;
         const auto found = snapshot->entities().find(id);
         if (found == snapshot->entities().end()) {
             // Catalog-owned geometric instances use derived root IDs. Their
@@ -1081,21 +1081,27 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
         m_impl->snapshot->document_id() == snapshot.document_id() &&
         m_impl->snapshot->revision() == snapshot.revision() &&
         m_impl->visible_ids == visible_ids &&
-        same_snapshot_content(*m_impl->snapshot, snapshot) &&
-        document_snapshot_digest(*m_impl->snapshot) == document_snapshot_digest(snapshot)) {
+        (m_impl->snapshot->shares_full_snapshot_with(snapshot) ||
+         (same_snapshot_content(*m_impl->snapshot, snapshot) &&
+          document_snapshot_digest(*m_impl->snapshot) == document_snapshot_digest(snapshot)))) {
         return;
     }
 
+    auto requested_source = std::make_shared<const DocumentSnapshot>(snapshot);
     cancelInteraction();
     m_impl->detach_manipulator();
     m_impl->visible_ids = std::move(visible_ids);
-    m_impl->snapshot = snapshot;
+    m_impl->snapshot = std::move(requested_source);
     const QPointer<NativeModelView> owner_guard(this);
     m_impl->rebuild_snapshot();
     if (!owner_guard) return;
     if (isVisible()) {
         m_impl->initialize_native_view();
     }
+}
+
+std::shared_ptr<const DocumentSnapshot> NativeModelView::preparationSourceSnapshot() const noexcept {
+    return m_impl->snapshot;
 }
 
 std::shared_ptr<const DocumentSnapshot> NativeModelView::publishedSnapshot() const noexcept {

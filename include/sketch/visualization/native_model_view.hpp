@@ -36,6 +36,10 @@ public:
     // stays visible; isReady()/exportViewImage reject pending or failed output.
     void setSnapshot(const DocumentSnapshot& snapshot,
                      std::optional<VisibleEntityIds> visible_ids = std::nullopt);
+    // Exact immutable source of the latest semantic preparation request,
+    // including when the native pane is hidden or has not initialized.
+    // Preparation readiness does not imply AIS presentation or input authority.
+    [[nodiscard]] std::shared_ptr<const DocumentSnapshot> preparationSourceSnapshot() const noexcept;
     // Exact immutable source of the successfully published AIS scene. A newer
     // queued request never substitutes its source for displayed geometry.
     [[nodiscard]] std::shared_ptr<const DocumentSnapshot> publishedSnapshot() const noexcept;
