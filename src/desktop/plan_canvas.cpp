@@ -168,13 +168,16 @@ bool same_entity_presentation(const CanvasEntity& left, const CanvasEntity& righ
 
 bool valid_reference_previews(const std::vector<CanvasReference>& proposed,
                               const std::vector<CanvasReference>& retained) {
+    if (proposed.empty()) return true;
+    QSet<QString> retained_ids;
+    for (const auto& reference : retained) retained_ids.insert(reference.id);
     std::set<QString> ids;
     for (const auto& reference : proposed) {
         if (!ids.insert(reference.id).second || reference.image.isNull() ||
             !std::isfinite(reference.position.x) || !std::isfinite(reference.position.y) ||
             !std::isfinite(reference.rotation_degrees) || !std::isfinite(reference.scale) || reference.scale <= 0 ||
             !std::isfinite(reference.metres_per_source_unit) || reference.metres_per_source_unit <= 0 ||
-            std::none_of(retained.begin(), retained.end(), [&](const auto& source) { return source.id == reference.id; }))
+            !retained_ids.contains(reference.id))
             return false;
     }
     return true;
@@ -2265,25 +2268,37 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     m_move_preview_request_in_progress = false;
     m_move_preview_pending = false;
     m_move_preview_exact = true;
-    m_move_entities_preview = result.value_or(std::vector<CanvasEntity>{});
+    m_move_entities_preview = result ? std::move(*result) : std::vector<CanvasEntity>{};
     m_move_labels_preview = std::move(labels);
     m_move_references_preview = std::move(references);
-    for (auto& proposed : m_move_references_preview)
-        proposed.selected = std::any_of(m_references.begin(), m_references.end(),
-            [&](const auto& retained) { return retained.id == proposed.id && retained.selected; });
-    m_move_preview_valid=result && valid_reference_previews(m_move_references_preview, m_references) && unambiguous_entity_presentations(m_move_entities_preview, m_entities) && std::all_of(m_move_ids.begin(),m_move_ids.end(),[&](const auto& id) {
-        return std::any_of(m_move_entities_preview.begin(),m_move_entities_preview.end(),
-            [&](const auto& entity) { return entity.id==id; }) ||
-            std::any_of(m_move_labels_preview.begin(),m_move_labels_preview.end(),
-                [&](const auto& label) { return label.id==id; }) ||
-            std::any_of(m_move_references_preview.empty() ? m_references.begin() : m_move_references_preview.begin(),
-                m_move_references_preview.empty() ? m_references.end() : m_move_references_preview.end(),
-                [&](const auto& reference) { return reference.id==id && reference.selected; });
-    });
+    if (!m_move_references_preview.empty()) {
+        QSet<QString> selected_references;
+        for (const auto& retained : m_references)
+            if (retained.selected) selected_references.insert(retained.id);
+        for (auto& proposed : m_move_references_preview)
+            proposed.selected = selected_references.contains(proposed.id);
+    }
+    QSet<QString> admitted_ids;
+    for (const auto& entity : m_move_entities_preview) admitted_ids.insert(entity.id);
+    for (const auto& label : m_move_labels_preview) admitted_ids.insert(label.id);
+    ensureRetainedSelection();
+    if (m_has_selected_reference)
+        for (const auto& reference : m_move_references_preview.empty() ? m_references : m_move_references_preview)
+            if (reference.selected) admitted_ids.insert(reference.id);
+    m_move_preview_valid = result && valid_reference_previews(m_move_references_preview, m_references) &&
+        unambiguous_entity_presentations(m_move_entities_preview, m_entities) &&
+        std::all_of(m_move_ids.begin(), m_move_ids.end(),
+            [&](const auto& id) { return admitted_ids.contains(id); });
     if (!m_move_preview_valid) { m_move_entities_preview.clear(); m_move_labels_preview.clear(); m_move_references_preview.clear(); }
-    for (auto& proposed : m_move_entities_preview)
-        for (const auto& retained : m_entities)
-            if (retained.id == proposed.id) proposed.selected = retained.selected;
+    // Preserve the retained root's selection without rescanning the entire
+    // drawing for every dependent body in a compound move proposal.
+    if (!m_move_entities_preview.empty()) {
+        QHash<QString, bool> retained_selection;
+        for (const auto& retained : m_entities) retained_selection.insert(retained.id, retained.selected);
+        for (auto& proposed : m_move_entities_preview)
+            if (const auto selected = retained_selection.constFind(proposed.id); selected != retained_selection.cend())
+                proposed.selected = selected.value();
+    }
     setCursor(m_move_preview_valid ? Qt::ClosedHandCursor : Qt::ForbiddenCursor);
     update();
     if (m_move_release_pending) {
@@ -6687,21 +6702,35 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
         std::any_of(result->begin(), result->end(), [&](const auto& entity) { return entity.id == m_transform_source_id; }) ||
         std::any_of(references.begin(), references.end(), [&](const auto& reference) { return reference.id == m_transform_source_id; }));
     m_transform_references_preview = m_transform_preview_valid ? std::move(references) : std::vector<CanvasReference>{};
-    for (auto& proposed : m_transform_references_preview)
-        proposed.selected = std::any_of(m_references.begin(), m_references.end(),
-            [&](const auto& retained) { return retained.id == proposed.id && retained.selected; });
+    if (!m_transform_references_preview.empty()) {
+        QSet<QString> selected_references;
+        for (const auto& retained : m_references)
+            if (retained.selected) selected_references.insert(retained.id);
+        for (auto& proposed : m_transform_references_preview)
+            proposed.selected = selected_references.contains(proposed.id);
+    }
     m_transform_entities_preview = m_transform_preview_valid
         ? std::move(*result) : std::vector<CanvasEntity>{};
     m_transform_labels_preview = m_transform_preview_valid
         ? std::move(labels) : std::vector<CanvasLabel>{};
     // Preview IDs may newly enter the view, but only an exact proposal rooted
     // in the selected source can expose them. Preserve retained selection.
-    for (auto& proposed : m_transform_entities_preview)
-        proposed.selected = std::any_of(m_entities.begin(), m_entities.end(),
-            [&](const auto& retained) { return retained.id == proposed.id && retained.selected; });
-    for (auto& proposed : m_transform_labels_preview)
-        proposed.selected = std::any_of(m_labels.begin(), m_labels.end(),
-            [&](const auto& retained) { return same_label_presentation(retained, proposed) && retained.selected; });
+    if (!m_transform_entities_preview.empty()) {
+        ensureRetainedSelection();
+        QSet<QString> selected_entities;
+        for (const auto index : m_selected_entity_indices) selected_entities.insert(m_entities[index].id);
+        for (auto& proposed : m_transform_entities_preview)
+            proposed.selected = selected_entities.contains(proposed.id);
+    }
+    if (!m_transform_labels_preview.empty()) {
+        QHash<QString, QSet<QString>> selected_labels;
+        for (const auto& retained : m_labels)
+            if (retained.selected) selected_labels[retained.id].insert(retained.callout_role);
+        for (auto& proposed : m_transform_labels_preview) {
+            const auto selected = selected_labels.constFind(proposed.id);
+            proposed.selected = selected != selected_labels.cend() && selected.value().contains(proposed.callout_role);
+        }
+    }
     setCursor(m_transform_preview_valid
         ? m_left_gesture == LeftGesture::selection_rotate ? Qt::CrossCursor : Qt::SizeFDiagCursor
         : Qt::ForbiddenCursor);
