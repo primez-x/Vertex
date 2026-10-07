@@ -10692,6 +10692,11 @@ public:
         const auto source_digest=fullSnapshotDigest(source);
         const auto selection=m_selected_ids;
         const auto selected=selectedEntity();
+        const auto source_axis=selected && selected->type=="wall" ?
+            read_required_segment(selected->properties,"baseline") : std::optional<Segment>{};
+        const auto source_length=source_axis ? segment_length(*source_axis) : 0.0;
+        const auto initial_distance=std::isfinite(source_length) && source_length>0 ?
+            format_length(source_length*0.5,context.metric_units) : QString{};
         std::optional<Command> candidate;
         std::optional<DocumentSnapshot> proposed;
         QDialog dialog(owner);styleDialog(dialog);
@@ -10699,10 +10704,16 @@ public:
         dialog.setWindowTitle(QStringLiteral("Insert wall point"));dialog.resize(600,560);
         auto* layout=new QVBoxLayout(&dialog);
         auto* form=new QFormLayout;
-        auto* fraction=new QLineEdit(QStringLiteral("0.5"),&dialog);
-        fraction->setObjectName(QStringLiteral("wallVertexFraction"));
-        fraction->setAccessibleName(QStringLiteral("Wall split fraction"));
-        form->addRow(QStringLiteral("Position (0..1)"),fraction);layout->addLayout(form);
+        auto* distance=new QLineEdit(initial_distance,&dialog);
+        distance->setObjectName(QStringLiteral("wallVertexDistance"));
+        distance->setAccessibleName(QStringLiteral("Distance along wall to inserted point"));
+        distance->setToolTip(QStringLiteral("Enter a length in feet and inches or metric units. On curved walls, distance follows the arc."));
+        auto* from=new QComboBox(&dialog);
+        from->setObjectName(QStringLiteral("wallVertexReference"));
+        from->setAccessibleName(QStringLiteral("Measure inserted point from wall endpoint"));
+        from->addItem(QStringLiteral("Start"));from->addItem(QStringLiteral("End"));
+        form->addRow(QStringLiteral("Distance along wall"),distance);
+        form->addRow(QStringLiteral("From"),from);layout->addLayout(form);
         auto* preview=new PlanCanvas(&dialog);
         preview->setObjectName(QStringLiteral("wallVertexInsertionPreview"));
         preview->setGridEnabled(false);preview->setOverviewMapEnabled(false);
@@ -10734,7 +10745,15 @@ public:
             try {
                 if(!selected || selected->type!="wall" || m_selected_ids.size()!=1) throw std::invalid_argument("Select one wall first.");
                 if(!context_valid()) throw std::invalid_argument("The editing context changed. Reopen this tool after finishing the drawing.");
-                const auto intent=selectedWallSplitIntent(source,selected->id,fraction->text());
+                const auto expression=distance->text().trimmed();
+                if(expression.isEmpty()) throw std::invalid_argument("Enter the distance to the new wall point.");
+                // Untouched display rounding must retain the exact midpoint.
+                const auto station=expression==initial_distance.trimmed() ? source_length*0.5 :
+                    parse_quantity(expression.toStdString(),context.metric_units?Unit::metre:Unit::foot).metres;
+                if(!std::isfinite(source_length) || !std::isfinite(station) || !(station>0 && station<source_length))
+                    throw std::invalid_argument("The distance must be greater than zero and less than the wall length.");
+                const auto fraction=from->currentIndex()==0 ? station/source_length : 1.0-station/source_length;
+                const auto intent=selectedWallSplitIntent(source,selected->id,QString::number(fraction,'g',17));
                 auto command=make_wall_split_command(source,intent);
                 auto result=Document::preview_command(source,command);
                 const auto before=projectSnapshotPlanScene(source,options,before_caches);
@@ -10785,7 +10804,8 @@ public:
             } catch(const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
             preview->setEntities(std::move(geometry));preview->setLabels(std::move(labels));preview->fitView();
         };
-        QObject::connect(fraction,&QLineEdit::textChanged,&dialog,update);
+        QObject::connect(distance,&QLineEdit::textChanged,&dialog,update);
+        QObject::connect(from,&QComboBox::currentIndexChanged,&dialog,[&]{update();});
         QTimer timer(&dialog);timer.setInterval(100);
         QObject::connect(&timer,&QTimer::timeout,&dialog,[&] {if(candidate && !context_valid())update();});timer.start();
         QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);

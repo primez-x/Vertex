@@ -2,6 +2,7 @@
 #include "sketch/wall_merge.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_tolerances.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/wall_semantics.hpp"
@@ -110,7 +111,7 @@ void unknown_refs(const Json& value,const WallSplitIntent& intent,const std::str
         unknown_refs(child,intent,owner,path+"/"+key);
     } else if(value.is_array())for(std::size_t i=0;i<value.size();++i)unknown_refs(value[i],intent,owner,path+"/"+std::to_string(i));
 }
-void remap_constraints(const Entities& source,Entities& result,const WallSplitIntent& intent) {
+void remap_constraints(const Entities& source,Entities& result,const WallSplitIntent& intent,bool tangent_completion) {
     for(const auto& [id,entity]:source)if(entity.type=="constraint") {
         const auto decoded=decode_constraint_entity(entity);
         if(!decoded.supported())reject("Wall split cannot preserve unsupported constraint "+id+": "+decoded.unsupported_reason);
@@ -119,7 +120,30 @@ void remap_constraints(const Entities& source,Entities& result,const WallSplitIn
         std::vector<WallEndpointBinding> bindings; Json persisted=Json::array();
         for(std::size_t i=0;i<relation.bindings.size();) {
             const auto b=relation.bindings[i];
-            if(relation.relation==ConstraintRelationKind::fixed_arc_length && b.owner_id==intent.wall_id) {
+            if(tangent_completion && relation.relation==ConstraintRelationKind::tangent && b.owner_id==intent.wall_id) {
+                if(i%2!=0 || i+1>=relation.bindings.size() || !b.segment_id.empty() ||
+                    relation.bindings[i+1].owner_id!=intent.wall_id || relation.bindings[i+1].role==b.role)
+                    reject("Wall split cannot preserve malformed tangent contact: "+id);
+                const auto before=resolve_constraint_tangent_segments(relation,source);
+                const auto target=b.role==WallEndpointRole::start?intent.wall_id:intent.second_wall_id;
+                const auto axis=baseline(result.at(target));
+                const auto old_point=b.role==WallEndpointRole::start?before.at(i/2).start:before.at(i/2).end;
+                const auto new_point=b.role==WallEndpointRole::start?axis.start:axis.end;
+                const auto old_direction=constraint_tangent_endpoint_direction(before.at(i/2),b.role);
+                const auto new_direction=constraint_tangent_endpoint_direction(axis,b.role);
+                if(old_point.x!=new_point.x || old_point.y!=new_point.y ||
+                    std::hypot(old_direction.x-new_direction.x,old_direction.y-new_direction.y)>constraint_angular_tolerance_radians)
+                    reject("Wall split changes the original analytical tangent contact: "+id);
+                // Contact and other must still describe opposite endpoints of
+                // one complete incident piece. The contact stays at the old
+                // outer endpoint; the other endpoint becomes the split seam.
+                for(std::size_t j=0;j<2;++j) {
+                    auto part=relation.bindings[i+j];auto metadata=raw.at(i+j);
+                    part.owner_id=target;metadata["owner_id"]=target;
+                    bindings.push_back(std::move(part));persisted.push_back(std::move(metadata));
+                }
+                i+=2;
+            } else if(relation.relation==ConstraintRelationKind::fixed_arc_length && b.owner_id==intent.wall_id) {
                 if(i+1>=relation.bindings.size() || relation.bindings[i+1].owner_id!=intent.wall_id ||
                     !b.segment_id.empty() || b.role==relation.bindings[i+1].role)
                     reject("Wall split cannot partition malformed arc binding: "+id);
@@ -388,7 +412,7 @@ static Entities replay_wall_split(const Entities& source,const WallSplitIntent& 
         }
         unknown_refs(unhandled.properties,intent,id,"/properties");unknown_refs(unhandled.extensions,intent,id,"/extensions");
     }
-    remap_constraints(source,result,intent);
+    remap_constraints(source,result,intent,intent.physical_room_completion || preparation_only);
     PersistentConstraint seam{intent.seam_constraint_id,ConstraintRelationKind::coincident,
         {{intent.wall_id,WallEndpointRole::end},{intent.second_wall_id,WallEndpointRole::start}},std::nullopt,std::nullopt};
     result.emplace(seam.id,encode_constraint_entity(seam));
@@ -439,9 +463,10 @@ Command make_wall_split_command(const DocumentSnapshot& source,const WallSplitIn
         captured.physical_room_completion=true;
     }
 #endif
-    (void)replayed_wall_split_entities(source.entities(),captured);
     ApplyBoundaryConstraintChanges command;command.expected_revision=source.revision();
     command.message="Insert wall vertex";command.wall_split=std::move(captured);
+    // Preview performs the complete exclusive replay and lifetime admission.
+    // Do not run the same physical/room reconstruction separately beforehand.
     const Command result{command};(void)Document::preview_command(source,result);return result;
 }
 }

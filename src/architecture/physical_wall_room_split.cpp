@@ -4,6 +4,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_tolerances.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/geometry_operations.hpp"
@@ -391,8 +392,8 @@ void refuse_used_ids(const Json& value,const std::set<std::string,std::less<>>& 
     } else if(value.is_array())for(const auto& child:value)refuse_used_ids(child,fresh,budget,depth+1);
 }
 // Point relations retain their actual original corner, rather than treating a
-// now-partitioned segment ID as authority to shorten a locked span. Only an arc
-// length relation describes a complete directed segment chain.
+// now-partitioned segment ID as authority to shorten a locked span. Arc length
+// retains the complete chain; tangent retains the child at its original contact.
 std::optional<Json> migrate_constraint_bindings(Entity& entity,const Entities& entities,
     const Plan& plan,const Children& children,Budget& budget) {
     const auto decoded=decode_constraint_entity(entity);
@@ -412,10 +413,6 @@ std::optional<Json> migrate_constraint_bindings(Entity& entity,const Entities& e
         return binding.owner_id==plan.id && children.chains.contains(binding.segment_id);
     };
     if(std::none_of(constraint.bindings.begin(),constraint.bindings.end(),affected))return std::nullopt;
-    // Tangent's contact/other pair requires one complete segment. Retargeting
-    // only its outer points would invent a different tangent binding dialect.
-    if(constraint.relation==ConstraintRelationKind::tangent)
-        reject("tangent constraint pins the complete changing room span: "+entity.id+"; review explicitly");
     const auto old_bindings=entity.properties.at("bindings");
     const auto child=[&](const std::string& id)->const IdentifiedSegment& {
         budget.step(children.boundary.segments.size());
@@ -441,7 +438,62 @@ std::optional<Json> migrate_constraint_bindings(Entity& entity,const Entities& e
         return piece;
     };
     Json bindings=Json::array();std::vector<bool> handled;
-    if(constraint.relation==ConstraintRelationKind::fixed_arc_length) {
+    if(constraint.relation==ConstraintRelationKind::tangent) {
+        // Resolve the original contact/other pairs with just their actual
+        // owners. The already-completed room must be replaced by its preceding
+        // boundary here; its shortened retained segment is not source proof.
+        Entities before;
+        for(const auto& binding:constraint.bindings) {
+            budget.step();
+            if(before.contains(binding.owner_id))continue;
+            if(binding.owner_id==plan.id) {
+                budget.step(plan.source.segments.size());
+                before.emplace(plan.id,encode_identified_boundary_entity(plan.source));
+            }
+            else {
+                const auto owner=entities.find(binding.owner_id);
+                if(owner==entities.end())reject("tangent constraint source owner is unavailable: "+entity.id);
+                budget.charge(owner->second.properties.dump().size()+owner->second.extensions.dump().size());
+                before.emplace(owner->first,owner->second);
+            }
+        }
+        const auto original=resolve_constraint_tangent_segments(constraint,before);
+        bindings=old_bindings;handled.resize(constraint.bindings.size());
+        for(const std::size_t i:{0U,2U}) {
+            const auto& contact=constraint.bindings[i];
+            if(!affected(contact))continue;
+            const auto& piece=incident(contact);const auto& old=original[i/2];
+            if((old.sweep_radians==0)!=(piece.segment.sweep_radians==0))
+                reject("tangent incident child changed analytical support kind: "+entity.id);
+            if(old.sweep_radians==0) {
+                const auto length=segment_length(old);
+                const auto dx=(old.end.x-old.start.x)/length,dy=(old.end.y-old.start.y)/length;
+                const auto offset=[&](Vec2 p){return std::abs((p.x-old.start.x)*dy-(p.y-old.start.y)*dx);};
+                if(offset(piece.segment.start)>tolerance || offset(piece.segment.end)>tolerance ||
+                    (piece.segment.end.x-piece.segment.start.x)*dx+(piece.segment.end.y-piece.segment.start.y)*dy<=0)
+                    reject("tangent incident child leaves the original directed line support: "+entity.id);
+            } else {
+                const auto old_center=center(old),next_center=center(piece.segment);
+                const auto old_radius=std::hypot(old.start.x-old_center.x,old.start.y-old_center.y);
+                const auto next_radius=std::hypot(piece.segment.start.x-next_center.x,piece.segment.start.y-next_center.y);
+                if(std::signbit(old.sweep_radians)!=std::signbit(piece.segment.sweep_radians) ||
+                    !close(old_center,next_center) || std::abs(old_radius-next_radius)>tolerance ||
+                    std::abs(piece.segment.sweep_radians)>std::abs(old.sweep_radians)+constraint_angular_tolerance_radians)
+                    reject("tangent incident child leaves the original directed circle support: "+entity.id);
+            }
+            const auto a=constraint_tangent_endpoint_direction(old,contact.role);
+            const auto b=constraint_tangent_endpoint_direction(piece.segment,contact.role);
+            const auto dot=a.x*b.x+a.y*b.y;
+            if(dot<=0 || std::abs(std::atan2(a.x*b.y-a.y*b.x,dot))>constraint_angular_tolerance_radians)
+                reject("tangent incident child changed the directed contact tangent: "+entity.id);
+            for(const auto j:{i,i+1}) {
+                const auto& endpoint=constraint.bindings[j];
+                bindings[j]["segment_id"]=piece.segment_id;
+                bindings[j]["vertex_id"]=endpoint.role==WallEndpointRole::start?piece.start_vertex_id:piece.end_vertex_id;
+                handled[j]=true;
+            }
+        }
+    } else if(constraint.relation==ConstraintRelationKind::fixed_arc_length) {
         for(std::size_t i=0;i<constraint.bindings.size();i+=2) {
             budget.step();const auto& first=constraint.bindings[i];const auto& second=constraint.bindings[i+1];
             if(!affected(first)) {
@@ -480,6 +532,8 @@ std::optional<Json> migrate_constraint_bindings(Entity& entity,const Entities& e
     if(!remapped.supported())reject("constraint migration lost supported semantics: "+entity.id);
     if(constraint.relation==ConstraintRelationKind::fixed_arc_length)
         (void)resolve_constraint_arc_length(*remapped.constraint,entities);
+    else if(constraint.relation==ConstraintRelationKind::tangent)
+        (void)resolve_constraint_tangent_segments(*remapped.constraint,entities);
     auto unchecked=entity.properties.at("bindings");
     for(std::size_t i=0;i<handled.size();++i)if(handled[i])
         for(const auto* key:{"owner_id","feature","role","segment_id","vertex_id"})unchecked[i].erase(key);

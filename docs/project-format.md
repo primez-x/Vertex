@@ -29,6 +29,11 @@ digest for a following explicit repair. Full-span dimensions continue across
 their new ordered segment chains; angle dimensions retain their original corner.
 Supported corner relations retain their original point coordinates and raw
 binding metadata; directed arc-length constraints expand over the child chain.
+Version-5 tangent contact/other pairs bind the incident child at the original
+contact, preserving its exact corner and directed analytical support. Both
+endpoints refer to that actual child; a contact tangent is not a whole-span
+length lock. Known binding metadata survives and opaque adjacent references
+retain their conservative admission.
 Physical wall-axis dimensions remain attached to the surviving first wall and
 measure that piece, rather than acquiring an implicit whole-span target.
 Automatic axis callouts follow that piece; manual text positions and presentation

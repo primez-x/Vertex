@@ -14,6 +14,22 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 tangent-preserving wall splits and distance entry
+
+The next source change retains v5 tangent contact/other pairs when their physical
+wall or clear-room edge is partitioned. Both endpoints bind the actual piece at
+the original contact, whose point and directed line/circle tangent must remain
+unchanged. Raw binding metadata survives and unrelated opaque references remain
+subject to admission. Historical version-1 split replay keeps its prior behavior.
+Independent source review accepted this bounded constraint change.
+
+Insert wall point now accepts a unit-aware distance from either endpoint, using
+arc distance for curved walls. An untouched default retains the exact midpoint
+instead of feeding rounded display text back into geometry. Command preparation
+also removes one duplicate complete replay; the Document preview still performs
+exclusive reconstruction and lifetime admission. These are source changes only;
+no builds, tests, probes, native jobs, packages or installations ran.
+
 ### October 7 room-preserving physical wall splits
 
 The companion split implementation continues initially current authored rooms
