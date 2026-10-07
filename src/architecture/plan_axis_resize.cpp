@@ -573,4 +573,66 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
     }
     return command;
 }
+
+ApplyEntityChanges roof_plan_corner_resize_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    std::size_t corner_index, Vec2 proposed_position, Revision expected_revision) {
+    if (source.revision() != expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision,"Roof corner resize source revision is stale");
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only,source.read_only_reason());
+    const auto found = source.entities().find(entity_id);
+    if (found == source.entities().end())
+        throw DocumentError(DocumentErrorCode::dangling_reference,"Roof corner resize target is missing");
+    const Entity& original = found->second;
+    const auto& properties = original.properties;
+    if (original.type != "roof" || !properties.is_object() ||
+        !properties.contains("form") || !properties.at("form").is_string() ||
+        (properties.at("form") != "sloped_roof_panel" &&
+         properties.at("form") != "gable_roof" && properties.at("form") != "hip_roof"))
+        throw DocumentError(DocumentErrorCode::invalid_entity,
+            "Roof corner resize requires a supported parametric roof");
+    if (corner_index >= 4)
+        throw std::invalid_argument("Roof corner index is outside the captured footprint");
+    if (!std::isfinite(proposed_position.x) || !std::isfinite(proposed_position.y))
+        throw std::invalid_argument("Roof corner target must be finite");
+
+    const double angle = plan_axis_resize_frame(original);
+    const auto bounds = plan_axis_resize_bounds(original);
+    const double width = bounds.maximum.x-bounds.minimum.x;
+    const double depth = bounds.maximum.y-bounds.minimum.y;
+    if (!std::isfinite(bounds.minimum.x) || !std::isfinite(bounds.minimum.y) ||
+        !std::isfinite(bounds.maximum.x) || !std::isfinite(bounds.maximum.y) ||
+        !std::isfinite(width) || !std::isfinite(depth) || width <= 0 || depth <= 0)
+        throw std::invalid_argument("Roof corner resize requires finite positive footprint dimensions");
+    const bool maximum_x = corner_index == 1 || corner_index == 2;
+    const bool maximum_y = corner_index >= 2;
+    const Vec2 corner{maximum_x ? bounds.maximum.x : bounds.minimum.x,
+                      maximum_y ? bounds.maximum.y : bounds.minimum.y};
+    const Vec2 opposite{maximum_x ? bounds.minimum.x : bounds.maximum.x,
+                        maximum_y ? bounds.minimum.y : bounds.maximum.y};
+    const double c = std::cos(angle), s = std::sin(angle);
+    const auto world = [c,s](Vec2 p) { return Vec2{c*p.x-s*p.y,s*p.x+c*p.y}; };
+    const auto original_corner = world(corner);
+    const auto anchor = world(opposite);
+    if (!std::isfinite(original_corner.x) || !std::isfinite(original_corner.y) ||
+        !std::isfinite(anchor.x) || !std::isfinite(anchor.y))
+        throw std::invalid_argument("Roof corner frame coordinates overflow");
+    // Avoid a rotate/unrotate roundoff resize and any codec normalization or
+    // receipt invalidation when the caller returns the exact original grip.
+    if (proposed_position.x == original_corner.x && proposed_position.y == original_corner.y)
+        return ApplyEntityChanges{expected_revision,{}, {},"Resize plan dimensions"};
+
+    // Project relative to the fixed world anchor to avoid subtracting two
+    // independently projected large coordinates. Signed extents reject a grip
+    // at or beyond either opposite edge instead of reflecting the roof.
+    const double dx = proposed_position.x-anchor.x, dy = proposed_position.y-anchor.y;
+    const double scale_x = (c*dx+s*dy)/(maximum_x ? width : -width);
+    const double scale_y = (-s*dx+c*dy)/(maximum_y ? depth : -depth);
+    if (!std::isfinite(scale_x) || !std::isfinite(scale_y))
+        throw std::invalid_argument("Roof corner resize factors overflow");
+    if (scale_x <= 0 || scale_y <= 0)
+        throw std::invalid_argument("Roof corner cannot cross either opposite footprint edge");
+    return plan_axis_resize_command(source,entity_id,scale_x,scale_y,anchor,angle);
+}
 } // namespace sketch

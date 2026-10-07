@@ -4986,7 +4986,9 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
                     ? QStringLiteral("%1 m²").arg(totals.area_square_metres,0,'f',2)
                     : QStringLiteral("%1 ft²").arg(totals.area_square_metres /
                         (metres_per_foot*metres_per_foot),0,'f',2);
-                text += QStringLiteral("\nArea %1  ·  Perimeter %2")
+                const bool roof_corner=m_vertex_move_handle->vertex_id.startsWith(QStringLiteral("roof:corner:"));
+                text += (roof_corner ? QStringLiteral("\nPlan area %1  ·  Perimeter %2")
+                                     : QStringLiteral("\nArea %1  ·  Perimeter %2"))
                     .arg(area,display_cursor_length(totals.perimeter_metres,m_metric_units));
             }
         }

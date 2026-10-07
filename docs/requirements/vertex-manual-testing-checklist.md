@@ -1111,17 +1111,23 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U176 — Create a shed roof**
+  - Corner resize: Select the roof and drag a round corner grip. Change width and depth separately during the same drag. Check that the opposite corner stays fixed and the live Plan area reflects the footprint. Repeat after rotating the roof, in a shifted or reflected saved plan, and in Site view. Cancel once with Escape; accept another edit, then Undo and Redo. Save and reopen. Try crossing an opposite edge and inspect an existing roof opening after a valid resize.
   - Expected: The slope runs in the chosen direction.
+  - Resize expected: The accepted roof matches its preview and retains pitch, overhang, thickness, level placement and valid openings. One accepted drag is one Undo step. Hidden or cropped corners have no grip. Invalid or cancelled edits change nothing; returning to the original corner adds no history.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U177 — Create a gable roof**
+  - Corner resize: Select the roof, rotate it, then drag each visible round corner grip. Repeat in a cropped or reflected saved plan and Site view. Check the fixed opposite corner, Plan area and ridge orientation. Cancel one edit; accept another, Undo/Redo, then save and reopen. Inspect roof openings and any joined roof afterward.
   - Expected: Both slopes and ridge match the intended form.
+  - Resize expected: The roof stays gabled and retains rise, overhang, thickness, levels and valid openings. The preview matches release; an invalid join or a crossed opposite edge leaves the original unchanged. Hidden corners have no grip.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U178 — Create a hip roof**
+  - Corner resize: Drag a visible round corner to change the footprint. Repeat after rotating the roof and in a cropped saved plan or Site view. Check the fixed opposite corner and Plan area. Try an invalid resize that puts an opening outside the roof, then cancel, accept, Undo/Redo and save/reopen a valid edit.
   - Expected: The roof form and slopes match the intended footprint.
+  - Resize expected: The roof keeps its hip form, rise, overhang, thickness and levels. Valid openings follow the admitted geometry. Invalid or cancelled proposals change nothing; one accepted drag is one Undo step.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

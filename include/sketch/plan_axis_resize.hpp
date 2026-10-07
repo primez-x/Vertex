@@ -2,6 +2,8 @@
 
 #include "sketch/document.hpp"
 
+#include <cstddef>
+
 namespace sketch {
 
 // Natural plan axes for physical dimensions: baseline/run/ridge direction is
@@ -33,5 +35,20 @@ namespace sketch {
     const DocumentSnapshot& source, const std::string& entity_id,
     double scale_x, double scale_y, Vec2 anchor,
     double frame_rotation_radians = 0.0);
+
+// Resize both plan dimensions of an authored sloped_roof_panel, gable_roof or
+// hip_roof by moving one generated-solid footprint corner in world XY metres.
+// Corners use plan_axis_resize_bounds in the original natural-axis frame:
+// 0=min X/min Y, 1=max X/min Y, 2=max X/max Y, 3=min X/max Y. The opposite
+// corner anchors the edit; crossing either of its axes is rejected. Roofs
+// retain their parametric family, orientation, overhang, rise and thickness;
+// this does not introduce free polygon or skew roof authoring.
+// Requires an editable source at expected_revision. The existing axis-resize
+// path admits the detached candidate, including native solids and roof joins.
+// An exact original world corner returns an empty revision-fenced command.
+// Publication must retain the caller's complete captured-source fence.
+[[nodiscard]] ApplyEntityChanges roof_plan_corner_resize_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    std::size_t corner_index, Vec2 proposed_position, Revision expected_revision);
 
 } // namespace sketch

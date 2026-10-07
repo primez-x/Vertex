@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 roof footprint corner editing
+
+Independent shed, gable and hip roofs now expose round grips at their actual
+generated-solid plan corners. One drag changes width and depth around the
+opposite corner through the existing physical roof resize command, preserving
+the parametric family, rise, overhang, thickness and levels. Native admission
+retains opening and join checks. Cropped or absent corners offer no grip;
+reflected plans retain canonical corner identities, and Site presentation
+applies once. Preview controls follow the final movement/rotation/resize frame.
+The transient readout explicitly labels horizontal footprint as Plan area.
+
+Roof corner release uses the existing captured-source endpoint worker and
+single-use prepared publication. Exact no-ops skip augmentation and history;
+crossing either opposite edge is refused. Assembly roofs remain edited through
+their assembly. Independent source review accepted the integrated lane after
+correcting a required-object validator that does not support roofs. These are
+source changes, not runtime acceptance. No build,
+test, probe, native job, launch, package or installation ran. Manual checks
+remain Not tested, and the installed candidate is unchanged.
+
 ### October 7 physical transforms and opening hover
 
 Physical plan rotation and side resizing now prepare a single-use document or

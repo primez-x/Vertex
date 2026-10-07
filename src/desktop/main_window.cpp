@@ -5125,6 +5125,36 @@ void retain_footprint_vertex_handles(CanvasEntity& entity, const Entity& source,
         retain_ring(footprint.holes[hole], QStringLiteral("footprint:hole:%1:").arg(static_cast<qulonglong>(hole)));
 }
 
+void retain_roof_plan_corner_handles(CanvasEntity& entity, Revision revision, bool interactive) {
+    entity.vertex_handles.clear();
+    if (!interactive || !entity.selected || !entity.resize_frame || entity.segments.empty()) return;
+    const auto& frame=*entity.resize_frame;
+    if (!std::isfinite(frame.center.x) || !std::isfinite(frame.center.y) ||
+        !std::isfinite(frame.rotation_radians) || !std::isfinite(frame.width_metres) ||
+        !std::isfinite(frame.depth_metres) || frame.width_metres<=0 || frame.depth_metres<=0 ||
+        (frame.source_rotation_direction!=1.0 && frame.source_rotation_direction!=-1.0)) return;
+    const auto c=std::cos(frame.rotation_radians),s=std::sin(frame.rotation_radians);
+    const std::array<Vec2,4> corners{{{-frame.width_metres*.5,-frame.depth_metres*.5},
+        {frame.width_metres*.5,-frame.depth_metres*.5},
+        {frame.width_metres*.5,frame.depth_metres*.5},
+        {-frame.width_metres*.5,frame.depth_metres*.5}}};
+    for (std::size_t index=0;index<corners.size();++index) {
+        const auto x=corners[index].x,y=corners[index].y*frame.source_rotation_direction;
+        const Vec2 point{frame.center.x+c*x-s*y,frame.center.y+s*x+c*y};
+        constexpr auto tolerance=default_geometry_tolerance_metres;
+        const Bounds2 vicinity{{point.x-tolerance,point.y-tolerance},{point.x+tolerance,point.y+tolerance}};
+        // Only genuine full-footprint corners that survive the actual crop,
+        // depth and joined geometry offer grips. Crop intersections never do.
+        bool visible{};
+        try {
+            visible=!clip_boundary_to_bounds(entity.segments,vicinity,tolerance/16.0).empty() ||
+                (entity.stroke_segments && !clip_boundary_to_bounds(*entity.stroke_segments,vicinity,tolerance/16.0).empty());
+        } catch (const std::exception&) { continue; }
+        if (visible) entity.vertex_handles.push_back({QStringLiteral("roof:corner:%1").arg(
+            static_cast<qulonglong>(index)),point,revision});
+    }
+}
+
 TopoDS_Shape document_roof_join_shape(const DocumentSnapshot& snapshot, const Entity& entity) {
     const auto join = parse_roof_join(entity.properties, entity.id);
     std::vector<TopoDS_Shape> roofs;
@@ -20551,7 +20581,7 @@ public:
     }
 
     static bool planEndpointObjectType(std::string_view type) {
-        return type == "wall" || type == "beam" || type == "railing" || type == "slab" || type == "room";
+        return type == "wall" || type == "beam" || type == "railing" || type == "slab" || type == "room" || type == "roof";
     }
 
     static bool planVertexObjectType(std::string_view type) {
@@ -20562,6 +20592,17 @@ public:
     static Command planEndpointCommand(const DocumentSnapshot& source, const QString& id,
         const QString& endpoint, Vec2 position) {
         const auto& wall = source.entities().at(id.toStdString());
+        if (wall.type=="roof") {
+            if (geometric_assembly_for_child(source,wall.id))
+                throw std::invalid_argument("Edit an assembly roof through its assembly's dimensions.");
+            const auto fields=endpoint.split(QLatin1Char(':'));
+            bool valid{};
+            const auto corner=fields.size()==3 ? fields[2].toULongLong(&valid) : 4;
+            if (fields.size()!=3 || fields[0]!=QStringLiteral("roof") || fields[1]!=QStringLiteral("corner") ||
+                !valid || corner>=4 || QString::number(corner)!=fields[2])
+                throw std::invalid_argument("Choose a roof plan corner grip.");
+            return roof_plan_corner_resize_command(source,wall.id,static_cast<std::size_t>(corner),position,source.revision());
+        }
         if (wall.type == "slab" || wall.type == "room") {
             const auto fields = endpoint.split(QLatin1Char(':'));
             const auto index = [](const QString& token) -> std::size_t {
@@ -20684,6 +20725,14 @@ public:
     }
 
     static CanvasBoundaryPreviewMetrics endpointPreviewMetrics(const Entity& entity) {
+        if (entity.type=="roof") {
+            const auto bounds=plan_axis_resize_bounds(entity);
+            const auto width=bounds.maximum.x-bounds.minimum.x,depth=bounds.maximum.y-bounds.minimum.y;
+            if (!std::isfinite(width) || !std::isfinite(depth) || width<=0 || depth<=0 ||
+                !std::isfinite(width*depth) || !std::isfinite(2*(width+depth)))
+                throw std::invalid_argument("The roof plan footprint is unavailable.");
+            return {width*depth,2*(width+depth)};
+        }
         if (entity.type == "slab" || entity.type == "room") {
             const auto footprint = architectural_footprint(entity);
             auto area = std::abs(signed_area(footprint.boundary));
@@ -20809,10 +20858,14 @@ public:
             std::optional<Command> vertex_command;
             const auto candidate_snapshot = [&] {
                 if (endpoint_object) {
-                    vertex_command = augmentAuthoredCommand(planEndpointCommand(source, entity_id, vertex_id, position), source);
+                    auto command=planEndpointCommand(source,entity_id,vertex_id,position);
+                    const auto* changes=std::get_if<ApplyEntityChanges>(&command);
+                    vertex_command=owner.type=="roof" && changes && changes->entity_changes.empty() && changes->asset_changes.empty()
+                        ? std::move(command) : augmentAuthoredCommand(command,source);
                     const auto candidate = prepared ? prepareCanvasEdit(source, *vertex_command, edit_source, *prepared)
                         : Document::preview_command(source, *vertex_command);
-                    if (owner.type == "room") validate_architectural_geometry_changes(source, candidate);
+                    if (owner.type == "room" || owner.type == "roof")
+                        validate_architectural_geometry_changes(source, candidate);
                     else validate_architectural_geometry_changes(source, candidate, {edit.boundary_id});
                     return candidate;
                 }
@@ -20833,6 +20886,10 @@ public:
             const auto& candidate=candidate_snapshot.entities();
             auto result = computeConstraintGeometryProjection(source, candidate_snapshot, retained, eligible,
                 labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context, label_font, site_input);
+            if (result && owner.type=="roof" && vertex_command)
+                if (const auto* changes=std::get_if<ApplyEntityChanges>(&*vertex_command);
+                    changes && changes->entity_changes.empty() && changes->asset_changes.empty())
+                    retainNoOpMovePresentations(*result,source,candidate_snapshot,retained,labels,{entity_id});
             if (result && !measured && !endpoint_object) {
                 const auto geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
                 result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
@@ -21559,6 +21616,11 @@ public:
                 if (edited_footprint)
                     retain_footprint_vertex_handles(proposed, entity, source.revision(),
                         source.is_editable(), view_context ? &*view_context : nullptr);
+                if (entity.type=="roof" && entity!=source.entities().at(entity.id) && !proposed.segments.empty() &&
+                    (!view_context || horizontal_plan_frame(view_context->frame))) {
+                    proposed.resize_frame=physicalPlanResizeFrame(entity,view_context ? &view_context->frame : nullptr);
+                    retain_roof_plan_corner_handles(proposed,source.revision(),source.is_editable());
+                }
                 // A previously captured owner needs an empty override when it
                 // leaves the view. Newly eligible owners contribute only once
                 // their candidate actually intersects the captured depth/crop.
@@ -22198,6 +22260,18 @@ public:
                         *label_footprints,*component_bounds,id,vertex,position,view_context,label_font,
                         endpoint_command ? endpoint_command.get() : nullptr,site_input.get(),edit_source,
                         endpoint_command ? prepared_move.get() : nullptr);
+                    if (*result && !cancellation.is_cancelled() &&
+                        (!view_context || horizontal_plan_frame(view_context->frame))) {
+                        // Movement, rotation and axis resizing may replace the
+                        // frame after projection. Rebind genuine roof corners
+                        // to that final frame before Site presentation applies.
+                        for (auto& item : (**result).entities) {
+                            const auto owner=source->entities().find(item.id.toStdString());
+                            if (owner!=source->entities().end() && owner->second.type=="roof" &&
+                                !geometric_assembly_for_child(*source,owner->first))
+                                retain_roof_plan_corner_handles(item,source->revision(),source->is_editable());
+                        }
+                    }
                     if (*result && site_input && !cancellation.is_cancelled()) {
                         auto& projection = **result;
                         // The worker owns immutable local geometry and frame
@@ -22416,6 +22490,11 @@ public:
             position = unproject_plan_point(position, m_vertex_preview_view_context->frame);
         if (position.x != preview->position.x || position.y != preview->position.y)
             throw std::invalid_argument("The endpoint release differs from its admitted preview.");
+        if (capture->source->entities().at(id.toStdString()).type=="roof")
+            if (const auto* changes=std::get_if<ApplyEntityChanges>(&preview->command);
+                changes && changes->entity_changes.empty() && changes->asset_changes.empty()) {
+                clearError();return true;
+            }
         // Physical endpoint publication consumes the worker's native-admitted
         // candidate; boundary and measured-linework gestures retain their lane.
         if (capture->edit_source) publishPreparedCanvasEdit(preview->prepared,capture->edit_source);
@@ -42082,6 +42161,9 @@ private:
                 } catch(const std::exception&) { /* Unsupported owners retain normal selection. */ }
             }
             if (presented) item = site_presented_canvas_entity(item,frames.at(item.id));
+            if (entity!=source.entities().end() && entity->second.type=="roof" &&
+                !geometric_assembly_for_child(source,entity->first))
+                retain_roof_plan_corner_handles(item,source.revision(),options.interactive && source.is_editable());
         }
         if (presented) {
             for (auto& item : scene.labels) item = site_presented_canvas_label(item,frames.at(item.id));
@@ -43429,6 +43511,9 @@ private:
                             }
                             canvas_entity.resize_frame = cached->second.second;
                             project_frame(canvas_entity);
+                            if (found->second.type=="roof")
+                                retain_roof_plan_corner_handles(canvas_entity,snapshot.revision(),
+                                    scene_options.interactive && snapshot.is_editable());
                             continue;
                         }
                     } else if (found->second.type == "measurement_linework") {
