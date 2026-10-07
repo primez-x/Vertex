@@ -502,6 +502,9 @@ public:
     Revision undo(Revision expected_revision);
     Revision redo(Revision expected_revision);
     void mark_saved(Revision revision);
+    // Preserve an explicitly unsaved state when adopting a detached view.
+    // This changes no authoring history and grants no save acknowledgement.
+    void clear_saved_revision() noexcept;
     // Latches a session-level read-only reason without changing document
     // history.  Used when an external ownership or integrity condition makes
     // further in-place edits unsafe; Save As can still be offered by a host

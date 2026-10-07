@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 hosted opening edit publication
+
+Door, window and doorway station moves and jamb-width edits now capture their
+document or recovery publication source at press. The existing whole-host,
+sibling, frame/assembly, dependent-copy and view projection path prepares a
+single-use admitted edit in the worker. Immediate release and a width release
+that waits for its final preview publish that exact candidate without native
+application or compatibility-document forking on the UI thread.
+
+Every proposal, rejection and cancelled capture clears its stored ticket.
+Source, selection, view, viewport, latest serial and exact width parameters or
+station/delta guard release; recovery also checks its full compatibility save
+state. Returning to the original station or exact width creates no history.
+Compatibility adoption now also preserves an explicitly absent saved marker,
+using a conservative document operation that clears only that marker rather
+than inheriting the workspace's save metadata. Independent source review
+accepted the opening publication and this nullable-marker repair.
+No builds, tests, probes, native jobs, launches, packages or installations ran;
+the source and its interaction remain unqualified at runtime.
+
 ### October 7 hosted library drag worker
 
 Hosted library drag proposals now capture the visible source, wall targets,

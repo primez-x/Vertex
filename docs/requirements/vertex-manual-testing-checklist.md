@@ -1016,6 +1016,7 @@ drawing; switching modes does not change existing geometry.
   - Plan check: Repeat in shifted, rotated and reflected horizontal plans. Crop around both jambs, then crop one out; narrow the depth until it cuts the opening. Both visible jambs offer handles when the full opening survives the depth limit. Partially clipped openings offer quick properties instead. Roll the wheel out and back during a jamb drag, then release: that cancelled drag must not change the door. Start a fresh drag and confirm one Undo restores it.
   - Expected: The opening and door update together.
   - Curved wall check: Repeat on a curved host with sufficient frame depth. The opposite jamb remains fixed; Arc W reports width along the wall, while the swing remains circular. An impossible leaf/frame fit rejects the edit without changing the project.
+  - Release check: Release immediately after changing the jamb position. The final admitted position must commit once, even if its preview was still pending. Return exactly to the original width; no Undo entry should be added. Repeat in a recovered project, then cancel a pending edit with Escape.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1028,6 +1029,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Select a door and drag inside its selection boundary, away from the jamb handles. Move it toward each wall end and back; watch Along wall and the wall cut. Repeat with a window and doorway, including on a curved wall. Hold Shift for a fine position.
   - Expected: The object slides along its host while width, height and sill stay unchanged. It stops at the wall ends, and the jamb handles follow it. An overlap refuses the proposal; moving back to a valid station recovers the same drag. Release makes one undoable edit. Undo, Redo and save/reopen preserve the corresponding wall cut and opening.
   - Also try: Repeat in Measurement, Site and shifted, rotated or reflected horizontal plans. Attach a host-copy assembly to the opening or its wall and check that it follows the preview. Escape, wheel navigation or a selection change during a pending drag must cancel it without changing the project.
+  - History check: Return exactly to the original station and release; no Undo entry should be added. Repeat a valid move in a recovered project and confirm its final preview, Undo and save/reopen agree.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

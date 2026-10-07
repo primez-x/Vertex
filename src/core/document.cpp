@@ -5314,6 +5314,10 @@ void Document::mark_saved(Revision revision) {
     saved_revision_ = revision;
 }
 
+void Document::clear_saved_revision() noexcept {
+    saved_revision_.reset();
+}
+
 void Document::mark_read_only(std::string reason) {
     if (reason.empty()) reason = "Document is read-only.";
     session_read_only_reason_ = reason;

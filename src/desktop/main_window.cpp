@@ -5291,6 +5291,8 @@ class MainWindow::Impl {
         std::uint64_t site_generation{};
         std::optional<double> move_offset;
         Vec2 move_canvas_delta;
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source;
+        std::shared_ptr<PreparedCanvasEdit> prepared;
     };
     struct VertexPreviewProjection {
         std::vector<CanvasEntity> entities;
@@ -21915,6 +21917,7 @@ public:
             auto preview=edit.preview();
             auto mirror=Document::fork(preview);
             if (const auto saved=capture->mirror->saved_revision_optional()) mirror.mark_saved(*saved);
+            else mirror.clear_saved_revision();
             prepared.workspace.emplace(std::move(edit));
             prepared.mirror.emplace(std::move(mirror));
             return preview;
@@ -22297,6 +22300,7 @@ public:
         m_opening_preview_site_input.reset();
         m_opening_preview_site_generation=0;
         m_opening_preview_command.reset(); m_opening_preview_release_pending=false;
+        m_opening_preview_prepared.reset();m_opening_preview_edit_source.reset();
         m_opening_preview_move=false; m_opening_preview_move_offset.reset();
         m_opening_preview_move_error.clear(); m_opening_preview_id.clear();
         m_opening_preview_latest_serial=0;
@@ -22332,6 +22336,7 @@ public:
         m_opening_preview_navigation_generation=canvas->navigationGeneration();
         m_opening_preview_had_focus=canvas->hasFocus();
         m_opening_preview_source=std::move(source);
+        m_opening_preview_edit_source=captureCanvasEditSource();
         m_opening_preview_authority=std::move(authority);
         m_opening_preview_retained=std::move(retained);
         m_opening_preview_document=m_document; m_opening_preview_canvas=canvas;
@@ -23428,16 +23433,18 @@ public:
         const auto metric_units=request.metric_units;
         const auto site_input=request.site_input;
         const auto move_offset=request.move_offset;
+        const auto edit_source=request.edit_source;
+        const auto prepared=request.prepared;
         m_opening_preview_sequence = m_opening_preview_queue.enqueue(
-            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units,site_input,move_offset]
+            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units,site_input,move_offset,edit_source,prepared]
             (const RegenerationCancellationToken& cancellation) {
                 if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(), {}};
                 if (move_offset) {
                     *result=computeHostedOpeningPreview(*source,*retained,id,
                         hosted_opening_offset_command(*source,id.toStdString(),*move_offset),
-                        view_context.get(),command.get(),metric_units,labels.get());
+                        view_context.get(),command.get(),metric_units,labels.get(),edit_source,prepared.get());
                 } else *result = computeOpeningWidthPreview(*source, *retained, id, scale, keep_start,
-                    view_context.get(), command.get(), metric_units, labels.get());
+                    view_context.get(), command.get(), metric_units, labels.get(),edit_source,prepared.get());
                 if (*result && site_input && !cancellation.is_cancelled()) {
                     std::erase_if(**result,[&](const auto& item){return !site_input->frames.contains(item.id);});
                     for (auto& item:**result) {
@@ -23470,6 +23477,7 @@ public:
         try {
             if (!openingPreviewCanvasCurrent(canvas) || !m_opening_preview_source ||
                 !m_opening_preview_authority || !m_opening_preview_retained ||
+                !m_opening_preview_edit_source ||
                 m_opening_preview_document!=m_document ||
                 !sourceEditAuthorityCurrent(*m_opening_preview_authority)) return false;
             if (m_opening_preview_site_input) {
@@ -23509,7 +23517,10 @@ public:
         request.metric_units=m_metric_units;
         request.site_input=m_opening_preview_site_input;
         request.site_generation=m_opening_preview_site_generation;
+        request.edit_source=m_opening_preview_edit_source;
+        request.prepared=std::make_shared<PreparedCanvasEdit>();
         m_opening_preview_command.reset();m_opening_preview_release_pending=false;
+        m_opening_preview_prepared.reset();
         m_opening_preview_latest_serial=serial;m_opening_preview_id=requested_id;
         m_opening_preview_scale=scale;m_opening_preview_keep_start=keep_start_jamb;
         if (m_running_opening_preview) {
@@ -23557,7 +23568,10 @@ public:
         request.site_generation=m_opening_preview_site_generation;
         request.move_offset=offset;
         request.move_canvas_delta=delta;
+        request.edit_source=m_opening_preview_edit_source;
+        request.prepared=std::make_shared<PreparedCanvasEdit>();
         m_opening_preview_command.reset(); m_opening_preview_move_error.clear();
+        m_opening_preview_prepared.reset();
         m_opening_preview_latest_serial=serial;
         m_opening_preview_move_offset=offset;
         m_opening_preview_move_delta=delta;
@@ -23573,7 +23587,7 @@ public:
             ids!=QStringList{m_opening_preview_id} || m_selected_ids!=ids ||
             !m_document->is_editable() || m_boundary_session || m_linework_drawing ||
             m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
-            !m_opening_preview_move_offset || !m_opening_preview_command ||
+            !m_opening_preview_move_offset || !m_opening_preview_command || !m_opening_preview_prepared ||
             m_opening_preview_latest_serial==std::numeric_limits<std::uint64_t>::max() ||
             canvas->entitiesMovePreviewSerial()!=m_opening_preview_latest_serial+1 ||
             delta.x!=m_opening_preview_move_delta.x || delta.y!=m_opening_preview_move_delta.y)
@@ -23582,11 +23596,11 @@ public:
             m_opening_preview_id.toStdString()));
         if (!opening) throw std::invalid_argument("The opening's captured station is unavailable.");
         const bool unchanged=opening->offset==*m_opening_preview_move_offset;
-        const auto command=*m_opening_preview_command;
+        const auto prepared=m_opening_preview_prepared;
+        const auto edit_source=m_opening_preview_edit_source;
         clearOpeningWidthCapture();
         if (unchanged) {clearError();return true;}
-        // The exact worker-admitted property edit is also the history entry.
-        applyAuthoredCommand(command);clearError();refresh();return true;
+        publishPreparedCanvasEdit(prepared,edit_source);clearError();refresh();return true;
     }
 
     void pollOpeningPreview() {
@@ -23597,6 +23611,7 @@ public:
                     request.source==m_opening_preview_source && request.canvas==m_opening_preview_canvas &&
                     request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
                     request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation &&
+                    request.edit_source==m_opening_preview_edit_source && request.prepared &&
                     request.entity_id==m_opening_preview_id && m_selected_ids==QStringList{request.entity_id} &&
                     request.move_offset.has_value()==m_opening_preview_move &&
                     !m_boundary_session && !m_linework_drawing && !m_pending_wall_start &&
@@ -23625,13 +23640,15 @@ public:
             const bool same_capture=request.source==m_opening_preview_source &&
                 request.authority==m_opening_preview_authority && request.canvas==m_opening_preview_canvas &&
                 request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
-                request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation;
+                request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation &&
+                request.edit_source==m_opening_preview_edit_source;
             if(request.canvas) {
                 if (request.move_offset) (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
                 else (void)request.canvas->completeOpeningWidthPreview(request.serial,std::nullopt);
             }
             if(same_capture && request.serial==m_opening_preview_latest_serial) {
                 m_opening_preview_command.reset();
+                m_opening_preview_prepared.reset();
                 if(m_opening_preview_release_pending) {
                     m_opening_preview_release_pending=false;
                     setError(QStringLiteral("The opening width proposal is invalid or its captured source changed. Start the jamb drag again."));
@@ -23648,7 +23665,8 @@ public:
             auto request=std::move(*m_running_opening_preview);m_running_opening_preview.reset();
             const bool request_current=current(request);
             if(!completion.succeeded() || !request_current || completion.receipt->source_revision!=request.source->revision() ||
-                !*request.result || !request.command || !*request.command || !request.labels) {
+                !*request.result || !request.command || !*request.command || !request.labels || !request.prepared ||
+                (!request.prepared->document && (!request.prepared->workspace || !request.prepared->mirror))) {
                 if (request_current && request.move_offset && completion.kind!=RegenerationCompletionKind::cancelled) {
                     auto message=QStringLiteral("The opening could not be moved in the current view.");
                     try {if (completion.error) std::rethrow_exception(completion.error);}
@@ -23662,22 +23680,28 @@ public:
                 }
                 reject(request);continue;
             }
-            if(request.serial==m_opening_preview_latest_serial) m_opening_preview_command=**request.command;
+            if(request.serial==m_opening_preview_latest_serial) {
+                m_opening_preview_command=**request.command;
+                m_opening_preview_prepared=request.prepared;
+            }
             if (request.move_offset) {
                 if (!request.canvas->completeEntitiesMovePreview(request.serial,
-                    std::move(*request.result),std::move(*request.labels))) m_opening_preview_command.reset();
+                    std::move(*request.result),std::move(*request.labels))) {
+                    m_opening_preview_command.reset();m_opening_preview_prepared.reset();
+                }
             } else if(m_opening_preview_release_pending && request.serial==m_opening_preview_latest_serial) {
                 try {
                     // The released canvas has retired the gesture. Only its
                     // exact admitted job may complete that one pending command.
                     if(!current(request)) throw std::invalid_argument("The opening source or interaction changed before commit.");
-                    m_opening_preview_release_pending=false;
-                    applyAuthoredCommand(**request.command);clearError();refresh();
+                    clearOpeningWidthCapture();
+                    if (request.scale==1.0) { clearError();continue; }
+                    publishPreparedCanvasEdit(request.prepared,request.edit_source);clearError();refresh();
                 } catch(const Standard_Failure& error) {
-                    m_opening_preview_release_pending=false;m_opening_preview_command.reset();
+                    clearOpeningWidthCapture();
                     setError(QStringLiteral("Resize opening: %1").arg(QString::fromUtf8(error.GetMessageString())));
                 } catch(const std::exception& error) {
-                    m_opening_preview_release_pending=false;m_opening_preview_command.reset();
+                    clearOpeningWidthCapture();
                     setError(QStringLiteral("Resize opening: %1").arg(QString::fromUtf8(error.what())));
                 }
             } else (void)request.canvas->completeOpeningWidthPreview(request.serial,
@@ -23693,11 +23717,12 @@ public:
         const DocumentSnapshot& source, const std::vector<CanvasEntity>& retained_scene,
         const QString& requested_id, double scale, bool keep_start_jamb,
         const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr,
-        bool metric_units=false, std::vector<CanvasLabel>* proposed_labels=nullptr) {
+        bool metric_units=false, std::vector<CanvasLabel>* proposed_labels=nullptr,
+        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr) {
         try {
             return computeHostedOpeningPreview(source,retained_scene,requested_id,
                 hosted_opening_width_resize_command(source,requested_id.toStdString(),scale,keep_start_jamb),
-                view_context,admitted_command,metric_units,proposed_labels);
+                view_context,admitted_command,metric_units,proposed_labels,edit_source,prepared);
         } catch(const Standard_Failure&) {return std::nullopt;}
           catch(const std::exception&) {return std::nullopt;}
     }
@@ -23706,13 +23731,15 @@ public:
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained_scene,
         const QString& requested_id,Command command,
         const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr,
-        bool metric_units=false,std::vector<CanvasLabel>* proposed_labels=nullptr) {
+        bool metric_units=false,std::vector<CanvasLabel>* proposed_labels=nullptr,
+        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr) {
         try {
             if (proposed_labels) proposed_labels->clear();
             // Width and station edits share the same complete-host projection.
             // Neither can display an affine copy of the old opening or wall cut.
             if(admitted_command) command=augmentAuthoredCommand(command,source);
-            const auto candidate=Document::preview_command(source,command);
+            const auto candidate=prepared ? prepareCanvasEdit(source,command,edit_source,*prepared)
+                : Document::preview_command(source,command);
             if(admitted_command) validate_architectural_geometry_changes(source,candidate,{requested_id.toStdString()});
             const auto& original=candidate.entities().at(requested_id.toStdString());
             const auto wall_id=original.properties.at("wall_id").get<std::string>();
@@ -23826,11 +23853,15 @@ public:
                 throw std::invalid_argument("The project changed during the drag. Select the opening again.");
             if(requested_id!=m_opening_preview_id || scale!=m_opening_preview_scale ||
                 keep_start_jamb!=m_opening_preview_keep_start ||
+                m_opening_preview_latest_serial==std::numeric_limits<std::uint64_t>::max() ||
                 canvas->openingWidthPreviewSerial()!=m_opening_preview_latest_serial+1)
                 throw std::invalid_argument("The exact opening width preview changed. Start again.");
             if(m_opening_preview_command) {
-                const auto admitted=*m_opening_preview_command;
-                applyAuthoredCommand(admitted);clearError();refresh();return true;
+                const auto prepared=m_opening_preview_prepared;
+                const auto edit_source=m_opening_preview_edit_source;
+                clearOpeningWidthCapture();
+                if (scale==1.0) { clearError();return true; }
+                publishPreparedCanvasEdit(prepared,edit_source);clearError();refresh();return true;
             }
             const auto matching=[&](const auto& request) {
                 return request && request->serial==m_opening_preview_latest_serial &&
@@ -23838,6 +23869,7 @@ public:
                     request->view_context==m_opening_preview_view_context && request->retained==m_opening_preview_retained &&
                     request->site_input==m_opening_preview_site_input && request->site_generation==m_opening_preview_site_generation &&
                     request->source==m_opening_preview_source && request->entity_id==requested_id &&
+                    request->edit_source==m_opening_preview_edit_source && request->prepared &&
                     request->scale==scale && request->keep_start==keep_start_jamb;
             };
             if(!matching(m_running_opening_preview) && !matching(m_pending_opening_preview))
@@ -35915,6 +35947,7 @@ private:
             auto candidate = Document::fork(edit.preview());
             if (const auto saved = m_document->snapshot().saved_revision_optional())
                 candidate.mark_saved(*saved);
+            else candidate.clear_saved_revision();
             (void)m_project_workspace->commit(edit);
             *m_document = std::move(candidate);
         });
@@ -39591,6 +39624,7 @@ private:
                             : m_opening_preview_move_error)
                         : QStringLiteral("The opening's project or view changed during the drag. Start again.");
                     m_opening_preview_command.reset();
+                    m_opening_preview_prepared.reset();
                     setError(QStringLiteral("Move opening: %1").arg(message));refresh();return;
                 }
                 if (m_wall_move_site_capture) {
@@ -50279,6 +50313,8 @@ private:
     std::uint64_t m_opening_preview_navigation_generation{};
     bool m_opening_preview_had_focus{};
     std::optional<Command> m_opening_preview_command;
+    std::shared_ptr<const CanvasEditSourceCapture> m_opening_preview_edit_source;
+    std::shared_ptr<PreparedCanvasEdit> m_opening_preview_prepared;
     QString m_opening_preview_id;
     double m_opening_preview_scale{};
     bool m_opening_preview_keep_start{};
