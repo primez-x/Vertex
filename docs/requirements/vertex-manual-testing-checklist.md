@@ -545,6 +545,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U082 — Toggle magnet/grid snap**
   - Steps: With Snap on, start a wall near a minor grid intersection at several zoom levels in Imperial and Metric. Place its next endpoint along a diagonal and inspect its length. Compare the preview with the committed point. Turn Snap off and place a point between increments. Hide Grid while leaving Snap on and repeat.
+  - Fine placement: Leave Snap on, hold Shift and place a point between length or grid increments. Release Shift and place the next point; practical magnets resume without changing Snap. In Area mode, hold Shift while clicking the original anchor; the area still closes.
   - Expected: Initial world-grid placement follows the displayed grid interval. An active edge snaps its length to useful increments relative to its own start, even on a diagonal. The preview and placed point agree. Snap off permits free placement; hiding the grid preserves the snap preference. Existing geometry is not rounded when the interval changes.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -745,10 +746,12 @@ drawing; switching modes does not change existing geometry.
   - Steps: Select a symbol. Drag its right/left side handle, then its top/bottom side handle. Double-click it and enter exact width and depth.
   - Expected: Each side handle changes only its corresponding dimension; the opposite edge stays fixed. Dimensions appear on the canvas, including on rotated symbols. Exact entries update the footprint and undo restores each edit.
   - Rotated plan check: Resize newly placed furniture in a rotated horizontal architectural plan. Drag each side handle separately; the opposite side stays fixed, and Properties shows the same physical width and depth as the canvas.
+  - Also try: Resize a flipped symbol with custom colors. Release as soon as the final preview appears, then Undo and Redo. Start another resize and press Escape; its size and artwork must remain unchanged. In a fresh drag, move a side handle away and back to its starting dimension before release; no extra Undo step should appear.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U116 — Resize a symbol proportionally**
+  - Steps: Select an asymmetric symbol and drag its corner size handle. Watch its artwork and dimensions, release, then double-click it to compare the saved size. Undo, Redo, save and reopen. Start another drag and press Escape; also return a drag to its original size before releasing.
   - Expected: Its proportions remain unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -820,6 +823,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U129 — Move and rotate a label**
+  - Steps: Add ordinary text from + Text, select it and move it. Drag its rotation grip, release and double-click to compare its saved angle. Use the corner handle to resize its text. Repeat in a rotated or reflected horizontal plan, then Undo, Redo, save and reopen. Cancel one drag with Escape and return another to its starting angle before releasing.
   - Expected: It stays readable and retains its position and angle.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -888,11 +892,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U141 — Resize a reference**
+  - Steps: Import and calibrate a plan image, select it and drag its corner handle. Watch the image preview, release and compare its saved scale. Undo, Redo, save and reopen. Cancel a second drag with Escape and return another to its original scale before releasing. Its image, calibration record, flips and unrelated drawing objects must remain intact.
   - Expected: Its size changes predictably and the resulting measurement scale is clear.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U142 — Rotate and flip a reference**
+  - Steps: Select a calibrated reference and drag its rotation grip to a common angle, then use Shift for a fine angle. Release and compare its saved angle. Flip it in properties, rotate it again and check both settings. Undo, Redo, save and reopen; cancel one rotation with Escape. Its calibration record and image must remain intact.
   - Expected: The image aligns as intended without moving unrelated geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

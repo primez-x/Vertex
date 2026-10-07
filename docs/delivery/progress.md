@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 presentation transform editing
+
+Ordinary placed symbols, authored labels and reference images now have a
+captured worker-prepared rotation/proportional-size path; symbols also prepare
+independent width/depth edits there. Detached core commands preserve raw
+annotation records, artwork, styles, flips and reference calibration. Axis
+dimensions retain catalog limits independently of the uniform placement-scale
+limit. Exact identity does not normalize old angles, upgrade old records or
+add history. Candidate artwork, frames, labels and reference overrides come
+from the admitted placement, and release consumes its ticket before source,
+selection, view, viewport, serial, parameter and font/DPI fences.
+
+Canvas transform completion now accepts a selected label without requiring
+line geometry and retains canonical entity/profile and label/callout selection.
+The existing transform callback's live serial is preserved. Authored model-plan
+labels keep their explicit view-oriented angle while their anchor follows the
+plan; symbols retain source-axis rotation and reflection. New drawing nodes
+also honor Shift for fine placement while explicit anchor closure remains
+available. Source is uncompiled and unexercised; no build, test, probe, native
+job, launch, package or installation ran. Independent source review accepted
+the integrated commands, preview and publication changes. Manual checks remain
+Not tested.
+
 ### October 7 Site mixed movement and wall endpoint magnets
 
 Site selection drags now capture typed annotation ownership, references and

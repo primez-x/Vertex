@@ -263,7 +263,7 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/constraint_integrity.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
   src/core/boundary_geometry_edit.cpp src/core/constraint_wall_edit.cpp src/core/wall_split.cpp src/core/wall_merge.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
-  src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp
+  src/core/annotation_entity_codec.cpp src/core/presentation_transform.cpp src/core/georeferencing_entity_codec.cpp
   src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp
   src/core/physical_wall_room_data.cpp src/core/stair_attachment_integrity.cpp
   src/core/assembly_document_adapter.cpp src/core/site_frame.cpp)

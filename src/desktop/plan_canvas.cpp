@@ -6078,7 +6078,10 @@ void PlanCanvas::setRawPointInput(bool enabled) {
 
 PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
     const auto raw = toModel(screen_point, rect());
-    if (m_raw_point_input || !m_snap_enabled) return {raw, SnapKind::none, {}, {}};
+    // The same fine-placement modifier applies to new nodes and existing grips.
+    // Closing the original anchor remains an explicit inputPoint operation.
+    if (m_raw_point_input || !m_snap_enabled || m_placement_modifiers.testFlag(Qt::ShiftModifier))
+        return {raw, SnapKind::none, {}, {}};
     if (m_panning || m_left_dragging || m_selection_dragging || m_overview_dragging ||
         m_touch_navigation) {
         return {snapped(raw), SnapKind::none, {}, {}};
@@ -7352,6 +7355,7 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
     m_transform_preview_exact = true;
     m_transform_preview_valid = result && valid_reference_previews(references, m_references) && unambiguous_entity_presentations(*result, m_entities) && (
         std::any_of(result->begin(), result->end(), [&](const auto& entity) { return entity.id == m_transform_source_id; }) ||
+        std::any_of(labels.begin(), labels.end(), [&](const auto& label) { return label.id == m_transform_source_id; }) ||
         std::any_of(references.begin(), references.end(), [&](const auto& reference) { return reference.id == m_transform_source_id; }));
     m_transform_references_preview = m_transform_preview_valid ? std::move(references) : std::vector<CanvasReference>{};
     if (!m_transform_references_preview.empty()) {
@@ -7369,21 +7373,19 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
     // Preview IDs may newly enter the view, but only an exact proposal rooted
     // in the selected source can expose them. Preserve retained selection.
     if (!m_transform_entities_preview.empty()) {
-        ensureRetainedSelection();
-        QSet<QString> selected_entities;
-        for (const auto index : m_selected_entity_indices) selected_entities.insert(m_entities[index].id);
-        for (auto& proposed : m_transform_entities_preview)
-            proposed.selected = selected_entities.contains(proposed.id);
+        const auto retained_selection=retained_entity_presentation_selection(m_entities);
+        for (auto& proposed : m_transform_entities_preview) {
+            const auto selected=retained_selection.constFind({proposed.id,proposed.presentation_key});
+            proposed.selected=selected!=retained_selection.cend() && selected.value();
+        }
     }
     if (m_transform_preview_valid)
         rebuildEntityPresentationIndex(m_transform_entities_preview_index, m_transform_entities_preview);
     if (!m_transform_labels_preview.empty()) {
-        QHash<QString, QSet<QString>> selected_labels;
-        for (const auto& retained : m_labels)
-            if (retained.selected) selected_labels[retained.id].insert(retained.callout_role);
+        const auto retained_selection=retained_label_presentation_selection(m_labels);
         for (auto& proposed : m_transform_labels_preview) {
-            const auto selected = selected_labels.constFind(proposed.id);
-            proposed.selected = selected != selected_labels.cend() && selected.value().contains(proposed.callout_role);
+            const auto selected=retained_selection.constFind({proposed.id,proposed.callout_role});
+            proposed.selected=selected!=retained_selection.cend() && selected.value();
         }
     }
     auto cursor = Qt::ForbiddenCursor;
