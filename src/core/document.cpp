@@ -4470,6 +4470,10 @@ bool DocumentSnapshot::shares_authoring_source_with(const DocumentSnapshot& othe
     return history_ && history_ == other.history_ && document_id_ == other.document_id_ &&
         revision_ == other.revision_ && named_revisions_ == other.named_revisions_;
 }
+bool DocumentSnapshot::shares_full_snapshot_with(const DocumentSnapshot& other) const noexcept {
+    return shares_authoring_source_with(other) && saved_revision_ == other.saved_revision_ &&
+        editable_ == other.editable_ && read_only_reason_ == other.read_only_reason_;
+}
 const std::map<std::string, Revision, std::less<>>& DocumentSnapshot::named_revisions() const noexcept {
     return named_revisions_;
 }

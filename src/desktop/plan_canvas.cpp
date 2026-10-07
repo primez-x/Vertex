@@ -778,6 +778,7 @@ void PlanCanvas::setCanvasBackground(QColor background) {
     if (!background.isValid()) return;
     if (m_canvas_background == background) return;
     m_canvas_background = std::move(background);
+    m_overview_geometry_cache = {};
     update();
 }
 
@@ -894,7 +895,14 @@ void PlanCanvas::clearPreview() {
     update();
 }
 
-std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds(bool include_drafts) const {
+std::optional<std::pair<Vec2, Vec2>> PlanCanvas::committedContentBounds() const {
+    QByteArray metrics_key;
+    QDataStream metrics(&metrics_key, QIODevice::WriteOnly);
+    metrics << font() << qint32(logicalDpiX()) << qint32(logicalDpiY())
+            << qint32(physicalDpiX()) << qint32(physicalDpiY())
+            << devicePixelRatioF() << qint32(devType()) << size();
+    if (m_content_bounds_cache.ready && m_content_bounds_cache.metrics_key == metrics_key)
+        return m_content_bounds_cache.bounds;
     Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
     Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
     bool has_content = false;
@@ -962,6 +970,31 @@ std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds(bool include_draf
             include(line.end);
         }
     }
+    m_content_bounds_cache.metrics_key = std::move(metrics_key);
+    m_content_bounds_cache.bounds = has_content ? std::make_optional(std::make_pair(minimum, maximum))
+                                               : std::nullopt;
+    m_content_bounds_cache.ready = true;
+    return m_content_bounds_cache.bounds;
+}
+
+std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds(bool include_drafts) const {
+    const auto committed = committedContentBounds();
+    if (!include_drafts) return committed;
+    // Start with the exact committed extrema, retaining the original min/max
+    // tie behavior, then append live draft contributions in their source order.
+    Vec2 minimum = committed ? committed->first :
+        Vec2{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
+    Vec2 maximum = committed ? committed->second :
+        Vec2{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
+    bool has_content = committed.has_value();
+    const auto include = [&](Vec2 point) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+        minimum.x = std::min(minimum.x, point.x);
+        minimum.y = std::min(minimum.y, point.y);
+        maximum.x = std::max(maximum.x, point.x);
+        maximum.y = std::max(maximum.y, point.y);
+        has_content = true;
+    };
     // Draft extents are navigation-only. Fitted output and fitView retain the
     // committed content contract, with no transient entities manufactured.
     if (include_drafts) {
@@ -1826,13 +1859,17 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
 
 void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     const auto map = overviewMapRect();
-    const auto bounds = contentBounds(true);
     if (map.isEmpty()) return;
+    const auto bounds = contentBounds(true);
     const auto light = m_canvas_background.lightnessF() > 0.5;
     painter.save();
     painter.setPen(QPen(light ? QColor(128, 147, 173) : QColor(120, 143, 174), 1.0));
     painter.setBrush(light ? QColor(255, 255, 255, 242) : QColor(17, 25, 38, 242));
     painter.drawRoundedRect(map, 8.0, 8.0);
+    // An opaque navigation body keeps the drawing legible and permits owned
+    // committed geometry to be replayed without translucent precomposition.
+    const QColor body_color = light ? QColor(255, 255, 255) : QColor(17, 25, 38);
+    painter.fillRect(map.adjusted(8.0, 22.0, -8.0, -8.0), body_color);
     painter.setPen(light ? QColor(50, 65, 84) : QColor(220, 232, 246));
     QFont map_font = painter.font();
     map_font.setPixelSize(10);
@@ -1866,15 +1903,36 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
         return QPointF(inner.center().x() + (point.x - world_center.x) * map_scale,
                        inner.center().y() - (point.y - world_center.y) * map_scale);
     };
+    const auto dpr = devicePixelRatioF();
+    const auto device_transform = painter.deviceTransform();
+    // Child-widget backing stores may add device-pixel offsets even while the
+    // logical transform is identity. Integral offsets preserve raster phase;
+    // fractional offsets, other scales and unsafe states paint directly. Check
+    // logical transforms separately: combinedTransform includes the device DPR.
+    const bool cache_safe = painter.isActive() && painter.device() == this &&
+        painter.worldTransform().isIdentity() && !painter.viewTransformEnabled() && !painter.hasClipping() &&
+        painter.opacity() == 1.0 && painter.compositionMode() == QPainter::CompositionMode_SourceOver &&
+        std::isfinite(dpr) && dpr > 0.0 && dpr <= 8.0 &&
+        device_transform.m11() == dpr && device_transform.m22() == dpr &&
+        device_transform.m12() == 0.0 && device_transform.m21() == 0.0 &&
+        device_transform.m13() == 0.0 && device_transform.m23() == 0.0 &&
+        device_transform.m33() == 1.0 &&
+        std::isfinite(device_transform.dx()) && std::isfinite(device_transform.dy()) &&
+        std::abs(device_transform.dx()) <= 1048576.0 &&
+        std::abs(device_transform.dy()) <= 1048576.0 &&
+        std::trunc(device_transform.dx()) == device_transform.dx() &&
+        std::trunc(device_transform.dy()) == device_transform.dy() &&
+        std::isfinite(map_scale) && map_scale > 0.0 &&
+        std::isfinite(world_center.x) && std::isfinite(world_center.y);
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setBrush(Qt::NoBrush);
-    painter.setClipRect(inner);
-    const auto draw_segment = [&](const Segment& segment) {
+    painter.setClipRect(inner, Qt::IntersectClip);
+    const auto draw_segment = [&](QPainter& target, const Segment& segment) {
         if (!std::isfinite(segment.start.x) || !std::isfinite(segment.start.y) ||
             !std::isfinite(segment.end.x) || !std::isfinite(segment.end.y)) return;
         if (segment.sweep_radians == 0.0) {
-            painter.drawLine(to_map(segment.start), to_map(segment.end));
+            target.drawLine(to_map(segment.start), to_map(segment.end));
         } else if (const auto arc = arc_info(segment)) {
             QPainterPath path;
             path.moveTo(to_map(segment.start));
@@ -1882,22 +1940,75 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
             for (int index = 1; index <= samples; ++index)
                 path.lineTo(to_map(arc_point(segment, *arc,
                                              static_cast<double>(index) / samples)));
-            painter.drawPath(path);
+            target.drawPath(path);
         }
     };
-    const auto draw_boundary = [&](const Boundary& boundary) {
-        for (const auto& segment : boundary) draw_segment(segment);
+    const auto draw_boundary = [&](QPainter& target, const Boundary& boundary) {
+        for (const auto& segment : boundary) draw_segment(target, segment);
     };
-    for (const auto& entity : m_entities) {
-        auto pen_color = color_for(entity, light);
-        pen_color.setAlpha(light ? 235 : 220);
-        QPen pen(pen_color, entity.selected ? 2.0 : 1.0,
-                 Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-        pen.setCosmetic(true);
-        painter.setPen(pen);
-        draw_boundary(entity.stroke_segments ? *entity.stroke_segments : entity.segments);
-        for (const auto& hole : entity.holes) draw_boundary(hole);
+    const auto draw_committed = [&](QPainter& target) {
+        for (const auto& entity : m_entities) {
+            auto pen_color = color_for(entity, light);
+            pen_color.setAlpha(light ? 235 : 220);
+            QPen pen(pen_color, entity.selected ? 2.0 : 1.0,
+                     Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            pen.setCosmetic(true);
+            target.setPen(pen);
+            draw_boundary(target, entity.stroke_segments ? *entity.stroke_segments : entity.segments);
+            for (const auto& hole : entity.holes) draw_boundary(target, hole);
+        }
+    };
+    bool reused_geometry = false;
+    if (cache_safe) {
+        const auto left = std::floor(inner.left() * dpr);
+        const auto top = std::floor(inner.top() * dpr);
+        const auto pixel_width = std::ceil(inner.right() * dpr) - left;
+        const auto pixel_height = std::ceil(inner.bottom() * dpr) - top;
+        // Bound allocation before narrowing or constructing the image.
+        if (std::isfinite(left) && std::isfinite(top) &&
+            std::isfinite(pixel_width) && std::isfinite(pixel_height) &&
+            pixel_width > 0.0 && pixel_height > 0.0 &&
+            pixel_width <= 4096.0 && pixel_height <= 4096.0 &&
+            pixel_width * pixel_height <= 4.0 * 1024.0 * 1024.0) {
+            // Under device mapping DPR*p + integral offset, this logical
+            // origin still lands on an integer device pixel. The offset does
+            // not change image-local phase or the cache's reusable contents.
+            const QPointF origin(left / dpr, top / dpr);
+            QByteArray key;
+            QDataStream signature(&key, QIODevice::WriteOnly);
+            signature << inner << world_center.x << world_center.y << map_scale
+                      << dpr << body_color << font() << qint32(logicalDpiX())
+                      << qint32(logicalDpiY()) << qint32(physicalDpiX())
+                      << qint32(physicalDpiY()) << quint32(painter.renderHints());
+            if (m_overview_geometry_cache.key != key || m_overview_geometry_cache.image.isNull()) {
+                QImage image(static_cast<int>(pixel_width), static_cast<int>(pixel_height),
+                             QImage::Format_ARGB32_Premultiplied);
+                if (!image.isNull()) {
+                    image.setDevicePixelRatio(dpr);
+                    image.fill(Qt::transparent);
+                    QPainter layer(&image);
+                    layer.setRenderHints(painter.renderHints());
+                    layer.translate(-origin);
+                    layer.setClipRect(inner, Qt::IntersectClip);
+                    layer.fillRect(inner, body_color);
+                    layer.setBrush(Qt::NoBrush);
+                    draw_committed(layer);
+                    layer.end();
+                    m_overview_geometry_cache = {std::move(key), std::move(image), origin};
+                } else {
+                    m_overview_geometry_cache = {};
+                }
+            }
+            if (!m_overview_geometry_cache.image.isNull()) {
+                painter.save();
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                painter.drawImage(m_overview_geometry_cache.origin, m_overview_geometry_cache.image);
+                painter.restore();
+                reused_geometry = true;
+            }
+        }
     }
+    if (!reused_geometry) draw_committed(painter);
     const auto draft_pen = [&](QColor color, Qt::PenStyle style = Qt::SolidLine) {
         QPen pen(color, 1.5, style, Qt::RoundCap, Qt::RoundJoin);
         pen.setCosmetic(true);
@@ -1905,13 +2016,13 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     };
     draft_pen(QColor(255, 220, 126, 185));
     for (std::size_t index = 1; index < m_boundary_preview.size(); ++index)
-        draw_segment({m_boundary_preview[index-1], m_boundary_preview[index], 0});
+        draw_segment(painter, {m_boundary_preview[index-1], m_boundary_preview[index], 0});
     if (m_boundary_draft_preview) {
         const auto& draft = *m_boundary_draft_preview;
-        draw_boundary(draft.segments);
+        draw_boundary(painter, draft.segments);
         if (draft.rubber_band) {
             draft_pen(QColor(255, 111, 173, 235), Qt::DashLine);
-            draw_segment(*draft.rubber_band);
+            draw_segment(painter, *draft.rubber_band);
         }
         const auto draw_marker = [&](std::optional<Vec2> point, QColor color) {
             if (!point || !std::isfinite(point->x) || !std::isfinite(point->y)) return;
@@ -1923,7 +2034,7 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     }
     if (m_wall_preview) {
         draft_pen(QColor(37, 99, 235, 225), Qt::DashLine);
-        draw_segment({m_wall_preview->start, m_wall_preview->end, 0});
+        draw_segment(painter, {m_wall_preview->start, m_wall_preview->end, 0});
     }
     const auto visible_width = width() / std::max(m_scale, minimum_scale);
     const auto visible_height = height() / std::max(m_scale, minimum_scale);
@@ -2264,6 +2375,14 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
 
 bool PlanCanvas::event(QEvent* event) {
     switch (event->type()) {
+    case QEvent::FontChange:
+    case QEvent::ApplicationFontChange:
+    case QEvent::StyleChange:
+    case QEvent::ScreenChangeInternal:
+    case QEvent::DevicePixelRatioChange:
+        m_content_bounds_cache = {};
+        m_overview_geometry_cache = {};
+        break;
     case QEvent::FocusOut:
         // Focus can move to a panel after release while an exact proposal or
         // queued admission still owns the gesture. Retire that authority, not
@@ -5849,6 +5968,8 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
 }
 
 void PlanCanvas::invalidateRetainedPresentation() {
+    m_content_bounds_cache = {};
+    m_overview_geometry_cache = {};
     m_retained_selection_ready = false;
     m_selection_bounds_cache = {};
     m_selection_frame_cache = {};
@@ -6891,9 +7012,10 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
     const auto dpr = devicePixelRatioF();
     // Only the widget's ordinary screen paint has a viewport in these logical
     // coordinates. Output, content recorders and transformed callers keep all
-    // original painting. combinedTransform also checks window/viewport mapping.
+    // original painting. A custom window/viewport mapping bypasses culling;
+    // the ordinary device DPR does not change these logical coordinates.
     const bool cull_screen = !output && !content_only && painter.device() == this &&
-        painter.worldTransform().isIdentity() && painter.combinedTransform().isIdentity() &&
+        painter.worldTransform().isIdentity() && !painter.viewTransformEnabled() &&
         finite_rect(viewport) && std::isfinite(dpr) && dpr > 0.0;
     const double cull_padding = cull_screen ? 3.0*std::max(1.0,1.0/dpr) : 0.0;
     for (std::size_t i = 0; i < labels.size(); ++i) {

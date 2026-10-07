@@ -655,6 +655,7 @@ private:
     [[nodiscard]] std::optional<Vec2> drawingOrigin() const;
     void handleTouchEvent(QTouchEvent& event);
     void resetTouchInput();
+    [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> committedContentBounds() const;
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds(bool include_drafts = false) const;
     [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> selectionFrame(const QRectF& viewport) const;
@@ -881,6 +882,18 @@ private:
     std::vector<CanvasLabel> m_floor_ghost_labels;
     double m_floor_ghost_opacity{0.25};
     Vec2 m_floor_ghost_offset{};
+    struct ContentBoundsCache {
+        QByteArray metrics_key;
+        bool ready{}; // Includes a committed source with no finite content.
+        std::optional<std::pair<Vec2, Vec2>> bounds;
+    };
+    mutable ContentBoundsCache m_content_bounds_cache;
+    struct OverviewGeometryCache {
+        QByteArray key;
+        QImage image;
+        QPointF origin;
+    };
+    mutable OverviewGeometryCache m_overview_geometry_cache;
     struct LabelPaintLayout {
         QFont font;
         QRectF bounds;

@@ -390,6 +390,11 @@ public:
     // This does not replace full snapshot equality for workspace publication.
     [[nodiscard]] bool shares_authoring_source_with(const DocumentSnapshot& other) const noexcept;
 
+    // Sufficient complete snapshot equality, including save/editability state.
+    // Independent immutable histories still need full comparison or a digest;
+    // matching document identity and revision alone never satisfy this proof.
+    [[nodiscard]] bool shares_full_snapshot_with(const DocumentSnapshot& other) const noexcept;
+
 private:
     friend class Document;
     friend class test::DetachedDocumentSnapshotFixture;

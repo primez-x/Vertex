@@ -258,6 +258,33 @@ Exact untouched inputs, quantity receipts, native admission and connected stair
 candidates remain on their existing paths. Independent source review approved
 the integrated changes. They have not been compiled or observed in the UI.
 
+Complete edit-authority checks now reuse the full snapshot digest only when the
+owned immutable history and every current snapshot field are the same. Save
+markers, editability, read-only reason and named revisions participate in that
+proof; detached or changed histories still receive a complete hash. One retained
+entry bounds ownership, and session resets clear it. Independent source review
+approved this reuse. No runtime or typing-speed result is claimed.
+
+Overview navigation now retains exact committed content bounds and one bounded,
+device-aligned image of the committed map strokes. Live drafts and the viewport
+indicator still update each frame. The inner map background is opaque; its
+existing frame and header remain unchanged. Ordinary high-DPI widget painting
+and integral backing-store offsets can reuse the image, while custom transforms,
+explicit clips and unsafe states retain direct painting. Screen-label culling
+also admits ordinary high-DPI logical coordinates. Independent source review
+approved the corrected integration. These changes have not been compiled,
+rendered, measured, packaged or installed. Implementation continues without
+additional builds or test runs at the user's direction.
+
+Wall measurement and boundary dimension panels now retain that same complete
+source authority. Apply dispatches from the captured object and refuses a changed
+project, selection, units or view. Recovered wall measurements use the captured
+workspace revision instead of the older base Document revision. Source lookup
+failures disable the retained panel, and errors stay in the ordinary edit flow.
+Untouched coordinates and single-command history retain their existing paths.
+Independent source review approved these changes; application behavior has not
+been observed and the installed candidate remains unchanged.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

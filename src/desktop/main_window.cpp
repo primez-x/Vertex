@@ -5190,12 +5190,12 @@ public:
     }
 
     PresentationOverride selectedWallDimensionPresentation(const DocumentSnapshot& source) const {
-        const auto selected=selectedEntity();
-        if (!selected || selected->type!="wall" || m_selected_ids.size()!=1)
+        const auto selected=source.entities().find(m_selected_id.toStdString());
+        if (selected==source.entities().end() || selected->second.type!="wall" || m_selected_ids.size()!=1)
             throw std::invalid_argument("Select one wall to edit its measurement.");
-        if (const auto value=wall_dimension_presentation(source.entities(),selected->id)) return *value;
+        if (const auto value=wall_dimension_presentation(source.entities(),selected->second.id)) return *value;
         PresentationOverride value;
-        value.target_kind="wall_dimension";value.target_id=selected->id;value.inherit_appearance=true;
+        value.target_kind="wall_dimension";value.target_id=selected->second.id;value.inherit_appearance=true;
         return value;
     }
 
@@ -31860,6 +31860,14 @@ private:
         m_authoring_digests[0] = std::move(cached);
         return m_authoring_digests[0]->digest;
     }
+    std::string fullSnapshotDigest(const DocumentSnapshot& source) const {
+        if (m_snapshot_digest && source.shares_full_snapshot_with(m_snapshot_digest->source))
+            return m_snapshot_digest->digest;
+        auto cached = std::make_unique<const CachedSnapshotDigest>(
+            CachedSnapshotDigest{source, document_snapshot_digest(source)});
+        m_snapshot_digest = std::move(cached);
+        return m_snapshot_digest->digest;
+    }
     bool matchesWorkspaceAuthoringSource(const DocumentSnapshot& source) const {
         const auto workspace_source = m_project_workspace->snapshot();
         // Shared immutable content is a sufficient equality proof. Detached
@@ -32323,6 +32331,7 @@ private:
         m_autosave_document_id.clear();
         ++m_autosave_session;
         for (auto& entry : m_authoring_digests) entry.reset();
+        m_snapshot_digest.reset();
         m_autosave_archive_id.clear();
         m_autosave_path.clear();
         m_autosave_sha256.clear();
@@ -32437,6 +32446,7 @@ private:
                 waitForSaveBarrier();
                 ++m_autosave_session;
                 for (auto& entry : m_authoring_digests) entry.reset();
+                m_snapshot_digest.reset();
                 m_autosave_scheduler = WorkspaceAutosaveScheduler{};
                 m_autosave_document_id = document_id;
                 // Legacy projects use the document revision as their
@@ -34768,26 +34778,34 @@ private:
         dimension_form->addRow(m_dimension_error);
         inspector_layout->addWidget(m_dimension_properties_group);
         QObject::connect(apply_dimension, &QPushButton::clicked, owner, [this] {
-            if (!m_dimension_edit_context || !modalContextUnchanged(*m_dimension_edit_context)) {
-                m_dimension_error->setText(QStringLiteral("The dimension editing context changed. Reselect the dimension before applying changes."));
-                m_dimension_error->show();
-                return;
+            try {
+                if (!m_dimension_edit_context || !m_dimension_edit_source)
+                    throw std::invalid_argument("The dimension editing context changed. Reselect the dimension before applying changes.");
+                const auto authority = *m_dimension_edit_context;
+                const auto source = *m_dimension_edit_source;
+                if (!sourceEditAuthorityCurrent(authority))
+                    throw std::invalid_argument("The project, selection or view changed. Reselect the dimension before applying changes.");
+                const auto selected=source.entities().find(authority.context.selected_id.toStdString());
+                if (selected==source.entities().end())
+                    throw std::invalid_argument("The dimension source is no longer available. Reselect the dimension.");
+                const auto accepted=selected->second.type=="wall"
+                    ? editSelectedWallDimension(m_dimension_x_edit->text(),m_dimension_y_edit->text(),
+                        m_dimension_height_edit->text(),m_dimension_color_edit->text(),
+                        m_dimension_bold_check->isChecked(),m_dimension_italic_check->isChecked(),
+                        m_dimension_visible_check->isChecked(),m_dimension_rotation_edit->text(),source.revision())
+                    : editBoundaryDimension(authority.context.selected_id,
+                        m_dimension_x_edit->text(), m_dimension_y_edit->text(), m_dimension_height_edit->text(),
+                        m_dimension_color_edit->text(), m_dimension_bold_check->isChecked(),
+                        m_dimension_italic_check->isChecked(), m_dimension_visible_check->isChecked(),
+                        m_dimension_rotation_edit->text());
+                if (!accepted) m_dimension_error->setText(lastError());
+                else return;
+            } catch (const std::exception& error) {
+                const auto message=QString::fromUtf8(error.what());
+                setError(message);
+                m_dimension_error->setText(message);
             }
-            const auto selected=selectedEntity();
-            const auto accepted=selected && selected->type=="wall"
-                ? editSelectedWallDimension(m_dimension_x_edit->text(),m_dimension_y_edit->text(),
-                    m_dimension_height_edit->text(),m_dimension_color_edit->text(),
-                    m_dimension_bold_check->isChecked(),m_dimension_italic_check->isChecked(),
-                    m_dimension_visible_check->isChecked(),m_dimension_rotation_edit->text(),m_dimension_edit_context->revision)
-                : editBoundaryDimension(m_dimension_edit_context->selected_id,
-                    m_dimension_x_edit->text(), m_dimension_y_edit->text(), m_dimension_height_edit->text(),
-                    m_dimension_color_edit->text(), m_dimension_bold_check->isChecked(),
-                    m_dimension_italic_check->isChecked(), m_dimension_visible_check->isChecked(),
-                    m_dimension_rotation_edit->text());
-            if (!accepted) {
-                m_dimension_error->setText(lastError());
-                m_dimension_error->show();
-            }
+            m_dimension_error->show();
         });
 
         auto* keypad = new QPushButton(QStringLiteral("Measure…"), canvas_status_controls);
@@ -40362,10 +40380,13 @@ private:
         try {
             inspector_source = authoringSnapshot();
         } catch (const std::exception& error) {
+            m_dimension_edit_context.reset();
+            m_dimension_edit_source.reset();
             m_roof_edit_context.reset();
             m_roof_edit_source.reset();
             m_building_edit_context.reset();
             m_building_edit_source.reset();
+            m_dimension_properties_group->setEnabled(false);
             m_roof_properties_group->setEnabled(false);
             m_building_properties_group->setEnabled(false);
             setError(QStringLiteral("Object source: %1").arg(QString::fromUtf8(error.what())));
@@ -40378,6 +40399,7 @@ private:
         const auto editable = inspector_snapshot.is_editable() && m_document->is_editable();
         if (m_inspector_heading) m_inspector_heading->setText(QStringLiteral("Properties"));
         m_dimension_edit_context.reset();
+        m_dimension_edit_source.reset();
         m_dimension_properties_group->hide();
         m_dimension_error->hide();
         const bool wall_measurement=entity && entity->type=="wall" && m_selected_ids.size()==1;
@@ -40405,7 +40427,8 @@ private:
                 m_dimension_bold_check->setChecked(presentation.style.bold);
                 m_dimension_italic_check->setChecked(presentation.style.italic);
                 m_dimension_visible_check->setChecked(presentation.visible);
-                m_dimension_edit_context=captureModalContext();
+                m_dimension_edit_source=inspector_snapshot;
+                m_dimension_edit_context=captureSourceEditAuthority(inspector_snapshot);
                 m_dimension_properties_group->setEnabled(editable && !m_boundary_session && !m_pending_wall_start);
                 m_dimension_properties_group->show();
             } catch(const std::exception& error) {
@@ -40432,7 +40455,8 @@ private:
                     m_dimension_bold_check->setChecked(presentation.bold);
                     m_dimension_italic_check->setChecked(presentation.italic);
                     m_dimension_visible_check->setChecked(presentation.visible);
-                    m_dimension_edit_context = captureModalContext();
+                    m_dimension_edit_source = inspector_snapshot;
+                    m_dimension_edit_context = captureSourceEditAuthority(inspector_snapshot);
                     m_dimension_properties_group->setEnabled(editable && !m_boundary_session && !m_pending_wall_start);
                     m_dimension_properties_group->show();
                 }
@@ -43629,7 +43653,7 @@ private:
     SourceEditAuthority captureSourceEditAuthority(const DocumentSnapshot& source) const {
         return {captureModalContext(), m_workspace, m_selected_ids, m_view_filter,
                 m_architectural_view_kind, m_active_named_view, m_active_named_view_owner,
-                document_snapshot_digest(source), workspaceAuthorityToken(), !m_recovery_ledger.empty()};
+                fullSnapshotDigest(source), workspaceAuthorityToken(), !m_recovery_ledger.empty()};
     }
 
     bool sourceEditAuthorityContextCurrent(const SourceEditAuthority& authority, bool require_editable=true) const {
@@ -43647,7 +43671,7 @@ private:
     bool sourceEditAuthorityCurrent(const SourceEditAuthority& authority,
                                     bool require_editable = true) const {
         return sourceEditAuthorityContextCurrent(authority, require_editable) &&
-            authority.source_digest==document_snapshot_digest(authoringSnapshot());
+            authority.source_digest==fullSnapshotDigest(authoringSnapshot());
     }
 
     bool sourceEditAuthorityUnchanged(const SourceEditAuthority& authority) {
@@ -45668,6 +45692,11 @@ private:
         std::string digest;
     };
     mutable std::unique_ptr<const CachedAuthoringDigest> m_authoring_digests[2];
+    struct CachedSnapshotDigest {
+        DocumentSnapshot source;
+        std::string digest;
+    };
+    mutable std::unique_ptr<const CachedSnapshotDigest> m_snapshot_digest;
     struct AutosaveInput {
         DocumentSnapshot source;
         ProjectWorkspaceSnapshot workspace;
@@ -45971,7 +46000,8 @@ private:
     QCheckBox* m_dimension_italic_check{};
     QCheckBox* m_dimension_visible_check{};
     QLabel* m_dimension_error{};
-    std::optional<ModalContext> m_dimension_edit_context;
+    std::optional<SourceEditAuthority> m_dimension_edit_context;
+    std::optional<DocumentSnapshot> m_dimension_edit_source;
     QGroupBox* m_calculation_group{};
     QGroupBox* m_profile_group{};
     QGroupBox* m_appraisal_summary_group{};
