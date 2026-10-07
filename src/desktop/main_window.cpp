@@ -5213,6 +5213,8 @@ class MainWindow::Impl {
         bool metric_units{false};
         std::shared_ptr<const SiteEndpointPreviewInput> site_input;
         std::uint64_t site_generation{};
+        std::optional<double> move_offset;
+        Vec2 move_canvas_delta;
     };
     struct VertexPreviewProjection {
         std::vector<CanvasEntity> entities;
@@ -20769,7 +20771,8 @@ public:
         return translated.Shape();
     }
 
-    static Boundary assemblyHostPlan(const DocumentSnapshot& snapshot, const std::string& host_id) {
+    static Boundary assemblyHostPlan(const DocumentSnapshot& snapshot,const std::string& host_id,
+        const std::map<std::string,WallPlanGeometry,std::less<>>& wall_plans) {
         const auto& source=snapshot.entities().at(host_id);
         const auto entity=source.type=="wall" || source.type=="slab" || source.type=="room" ||
             can_recognize_building_entity_type(source.type)
@@ -20782,11 +20785,13 @@ public:
             return project_shape_view(document_roof_join_shape(snapshot,entity),BuildingViewKind::plan);
         if (can_recognize_building_entity_type(entity.type))
             return project_building_plan(decode_building_entity(entity),snapshot.entities());
-        // Legacy analytical copies use the host's source segments, including
-        // a wall's baseline, rather than its thick picking/stroke footprint.
+        // Host copies inherit the same canonical segments as settled plan
+        // projection, including wall faces, joined ends and opening cuts.
         if (entity.type=="wall") {
             (void)makeAssemblyHostShape(snapshot,host_id);
-            return {read_required_segment(entity.properties,"baseline").value()};
+            const auto plan=wall_plans.find(host_id);
+            if (plan==wall_plans.end()) throw std::invalid_argument("The assembly wall host plan is unavailable.");
+            return plan->second.footprint;
         }
         if (entity.type=="slab" || entity.type=="room") {
             if (entity.type=="slab" || has_document_room_volume_fields(entity))
@@ -21050,7 +21055,7 @@ public:
                             proposed.segments=project_architectural_view_shape(shape,
                                 BuildingViewKind::plan,*view_context).value_or(Boundary{});
                         } else {
-                            const auto host=assemblyHostPlan(candidate_snapshot,placement.host_entity_id);
+                            const auto host=assemblyHostPlan(candidate_snapshot,placement.host_entity_id,candidate_plans);
                             if (host.empty()) throw std::invalid_argument("The admitted assembly host plan is empty.");
                             proposed.segments=assembly_placement_boundary(host,placement);
                             for (const auto& edge : proposed.segments)
@@ -22006,6 +22011,8 @@ public:
         m_opening_preview_site_input.reset();
         m_opening_preview_site_generation=0;
         m_opening_preview_command.reset(); m_opening_preview_release_pending=false;
+        m_opening_preview_move=false; m_opening_preview_move_offset.reset();
+        m_opening_preview_move_error.clear(); m_opening_preview_id.clear();
         m_opening_preview_latest_serial=0;
         m_opening_preview_canvas.clear(); m_opening_preview_document.reset();
     }
@@ -22015,15 +22022,13 @@ public:
         clearOpeningWidthCapture();
         const auto& entity=source->entities().at(id.toStdString());
         if (entity.type!="opening") return;
-        const auto host_id=entity.properties.at("wall_id").get<std::string>();
         const bool site=siteCanvas(canvas);
         const auto view=site ? std::optional<ArchitecturalViewContext>{}
             : boundaryVertexViewContext(canvas,*source);
-        auto retained=std::make_shared<std::vector<CanvasEntity>>();
         const auto& geometry=site ? m_site_edit_local_geometry : canvas->entities();
-        for (const auto& item:geometry)
-            if (item.id==id || item.id.toStdString()==host_id || item.type==QStringLiteral("wall"))
-                retained->push_back(item);
+        // Retain visible host-copy children as well as walls and the opening.
+        // Their geometry can depend on the wall cut without a changed entity.
+        auto retained=std::make_shared<std::vector<CanvasEntity>>(geometry);
         auto authority=site ? std::shared_ptr<const SourceEditAuthority>{}
             : std::make_shared<const SourceEditAuthority>(captureSourceEditAuthority(*source));
         if (site) {
@@ -22044,6 +22049,7 @@ public:
         m_opening_preview_authority=std::move(authority);
         m_opening_preview_retained=std::move(retained);
         m_opening_preview_document=m_document; m_opening_preview_canvas=canvas;
+        m_opening_preview_id=id;
     }
 
     bool planEndpointCaptureCurrent(const std::shared_ptr<const PlanEndpointCapture>& capture) const noexcept {
@@ -23007,11 +23013,16 @@ public:
         const auto labels=request.labels;
         const auto metric_units=request.metric_units;
         const auto site_input=request.site_input;
+        const auto move_offset=request.move_offset;
         m_opening_preview_sequence = m_opening_preview_queue.enqueue(
-            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units,site_input]
+            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units,site_input,move_offset]
             (const RegenerationCancellationToken& cancellation) {
                 if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(), {}};
-                *result = computeOpeningWidthPreview(*source, *retained, id, scale, keep_start,
+                if (move_offset) {
+                    *result=computeHostedOpeningPreview(*source,*retained,id,
+                        hosted_opening_offset_command(*source,id.toStdString(),*move_offset),
+                        view_context.get(),command.get(),metric_units,labels.get());
+                } else *result = computeOpeningWidthPreview(*source, *retained, id, scale, keep_start,
                     view_context.get(), command.get(), metric_units, labels.get());
                 if (*result && site_input && !cancellation.is_cancelled()) {
                     std::erase_if(**result,[&](const auto& item){return !site_input->frames.contains(item.id);});
@@ -23061,8 +23072,9 @@ public:
         bool keep_start_jamb, std::uint64_t revision) {
         if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
             m_selected_ids.front()!=requested_id || m_boundary_session || m_pending_wall_start ||
-            !m_pending_symbol_id.isEmpty() || m_linework_drawing ||
+            !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() || m_linework_drawing ||
             !m_opening_preview_source || !m_opening_preview_authority || m_opening_preview_canvas != canvas ||
+            m_opening_preview_move || requested_id!=m_opening_preview_id ||
             m_opening_preview_source->revision() != revision || !sourceEditAuthorityCurrent(*m_opening_preview_authority) ||
             !std::isfinite(scale) || scale<=0) return std::vector<CanvasEntity>{};
         // The jamb press owns source and view. Never renew either at a later
@@ -23094,6 +23106,75 @@ public:
         return std::nullopt;
     }
 
+    std::optional<std::vector<CanvasEntity>> previewOpeningMoveFromCanvas(
+        PlanCanvas* canvas,const QStringList& ids,Vec2 delta,std::uint64_t serial) {
+        const auto intent=canvas ? canvas->openingMovePreviewIntent() : std::nullopt;
+        if (!intent || !m_opening_preview_move || ids!=QStringList{intent->entity_id} ||
+            intent->entity_id!=m_opening_preview_id || m_selected_ids!=ids ||
+            !openingPreviewCaptureCurrent(canvas) || !m_document->is_editable() ||
+            m_boundary_session || m_linework_drawing || m_pending_wall_start ||
+            !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
+            intent->source_revision!=m_opening_preview_source->revision() ||
+            !std::isfinite(intent->offset_metres) || !std::isfinite(delta.x) || !std::isfinite(delta.y))
+            return std::vector<CanvasEntity>{};
+        auto offset=intent->offset_metres;
+        const auto& owner=m_opening_preview_source->entities().at(intent->entity_id.toStdString());
+        const auto opening=read_hosted_opening(owner);
+        if (!opening) return std::vector<CanvasEntity>{};
+        const auto& host=m_opening_preview_source->entities().at(owner.properties.at("wall_id").get<std::string>());
+        const auto baseline=read_required_segment(host.properties,"baseline");
+        if (!baseline) return std::vector<CanvasEntity>{};
+        const auto maximum=segment_length(*baseline)-opening->width;
+        // A rigid Site/saved-plan presentation can shift endpoint arithmetic
+        // by a few ulps. At the end stop, keep the command's station on the
+        // authoritative source baseline; never loosen the command's bounds.
+        if (offset!=opening->offset && maximum>=0.0 && offset>maximum &&
+            offset-maximum<=default_geometry_tolerance_metres) offset=maximum;
+        if (!canvas->markEntitiesMovePreviewPending(serial)) return std::vector<CanvasEntity>{};
+        PendingOpeningPreview request{canvas,serial,m_document,m_opening_preview_source,
+            intent->entity_id,1.0,true,m_opening_preview_retained,
+            std::make_shared<std::optional<std::vector<CanvasEntity>>>()};
+        request.authority=m_opening_preview_authority;
+        request.view_context=m_opening_preview_view_context;
+        request.command=std::make_shared<std::optional<Command>>();
+        request.labels=std::make_shared<std::vector<CanvasLabel>>();
+        request.metric_units=m_metric_units;
+        request.site_input=m_opening_preview_site_input;
+        request.site_generation=m_opening_preview_site_generation;
+        request.move_offset=offset;
+        request.move_canvas_delta=delta;
+        m_opening_preview_command.reset(); m_opening_preview_move_error.clear();
+        m_opening_preview_latest_serial=serial;
+        m_opening_preview_move_offset=offset;
+        m_opening_preview_move_delta=delta;
+        if (m_running_opening_preview) {
+            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
+            m_pending_opening_preview=std::move(request);
+        } else startOpeningPreviewJob(std::move(request));
+        return std::nullopt;
+    }
+
+    bool commitOpeningMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
+        if (!m_opening_preview_move || !openingPreviewCaptureCurrent(canvas) ||
+            ids!=QStringList{m_opening_preview_id} || m_selected_ids!=ids ||
+            !m_document->is_editable() || m_boundary_session || m_linework_drawing ||
+            m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
+            !m_opening_preview_move_offset || !m_opening_preview_command ||
+            m_opening_preview_latest_serial==std::numeric_limits<std::uint64_t>::max() ||
+            canvas->entitiesMovePreviewSerial()!=m_opening_preview_latest_serial+1 ||
+            delta.x!=m_opening_preview_move_delta.x || delta.y!=m_opening_preview_move_delta.y)
+            throw std::invalid_argument("The opening move or its displayed source changed. Start the drag again.");
+        const auto opening=read_hosted_opening(m_opening_preview_source->entities().at(
+            m_opening_preview_id.toStdString()));
+        if (!opening) throw std::invalid_argument("The opening's captured station is unavailable.");
+        const bool unchanged=opening->offset==*m_opening_preview_move_offset;
+        const auto command=*m_opening_preview_command;
+        clearOpeningWidthCapture();
+        if (unchanged) {clearError();return true;}
+        // The exact worker-admitted property edit is also the history entry.
+        applyAuthoredCommand(command);clearError();refresh();return true;
+    }
+
     void pollOpeningPreview() {
         const auto capture_current = [&](const PendingOpeningPreview& request) noexcept {
             try {
@@ -23102,6 +23183,8 @@ public:
                     request.source==m_opening_preview_source && request.canvas==m_opening_preview_canvas &&
                     request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
                     request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation &&
+                    request.entity_id==m_opening_preview_id && m_selected_ids==QStringList{request.entity_id} &&
+                    request.move_offset.has_value()==m_opening_preview_move &&
                     !m_boundary_session && !m_linework_drawing && !m_pending_wall_start &&
                     m_pending_symbol_id.isEmpty() && m_pending_opening_kind.isEmpty() &&
                     fullSnapshotDigest(*request.source)==request.authority->source_digest;
@@ -23110,7 +23193,13 @@ public:
         const auto current = [&](const PendingOpeningPreview& request) noexcept {
             try {
                 if(!capture_current(request)) return false;
-                const auto serial=request.canvas ? request.canvas->openingWidthPreviewSerial() : 0;
+                const auto serial=request.move_offset ? request.canvas->entitiesMovePreviewSerial()
+                    : request.canvas->openingWidthPreviewSerial();
+                if (request.move_offset) return serial==request.serial &&
+                    request.serial==m_opening_preview_latest_serial &&
+                    request.move_offset==m_opening_preview_move_offset &&
+                    request.move_canvas_delta.x==m_opening_preview_move_delta.x &&
+                    request.move_canvas_delta.y==m_opening_preview_move_delta.y;
                 const bool released=m_opening_preview_release_pending && request.serial==m_opening_preview_latest_serial &&
                     request.entity_id==m_opening_preview_id && request.scale==m_opening_preview_scale &&
                     request.keep_start==m_opening_preview_keep_start && serial==request.serial+1;
@@ -23123,7 +23212,10 @@ public:
                 request.authority==m_opening_preview_authority && request.canvas==m_opening_preview_canvas &&
                 request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
                 request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation;
-            if(request.canvas) (void)request.canvas->completeOpeningWidthPreview(request.serial,std::nullopt);
+            if(request.canvas) {
+                if (request.move_offset) (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
+                else (void)request.canvas->completeOpeningWidthPreview(request.serial,std::nullopt);
+            }
             if(same_capture && request.serial==m_opening_preview_latest_serial) {
                 m_opening_preview_command.reset();
                 if(m_opening_preview_release_pending) {
@@ -23140,10 +23232,27 @@ public:
         for(auto& completion:m_opening_preview_queue.take_completed()) {
             if(!m_running_opening_preview || completion.sequence!=m_opening_preview_sequence) continue;
             auto request=std::move(*m_running_opening_preview);m_running_opening_preview.reset();
-            if(!completion.succeeded() || !current(request) || completion.receipt->source_revision!=request.source->revision() ||
-                !*request.result || !request.command || !*request.command || !request.labels) {reject(request);continue;}
+            const bool request_current=current(request);
+            if(!completion.succeeded() || !request_current || completion.receipt->source_revision!=request.source->revision() ||
+                !*request.result || !request.command || !*request.command || !request.labels) {
+                if (request_current && request.move_offset && completion.kind!=RegenerationCompletionKind::cancelled) {
+                    auto message=QStringLiteral("The opening could not be moved in the current view.");
+                    try {if (completion.error) std::rethrow_exception(completion.error);}
+                    catch (const Standard_Failure& error) {
+                        const auto* detail=error.GetMessageString();
+                        if (detail && *detail) message=QString::fromUtf8(detail);
+                    } catch (const std::exception& error) {message=QString::fromUtf8(error.what());}
+                      catch (...) {}
+                    m_opening_preview_move_error=message;
+                    setError(QStringLiteral("Move opening: %1").arg(message));
+                }
+                reject(request);continue;
+            }
             if(request.serial==m_opening_preview_latest_serial) m_opening_preview_command=**request.command;
-            if(m_opening_preview_release_pending && request.serial==m_opening_preview_latest_serial) {
+            if (request.move_offset) {
+                if (!request.canvas->completeEntitiesMovePreview(request.serial,
+                    std::move(*request.result),std::move(*request.labels))) m_opening_preview_command.reset();
+            } else if(m_opening_preview_release_pending && request.serial==m_opening_preview_latest_serial) {
                 try {
                     // The released canvas has retired the gesture. Only its
                     // exact admitted job may complete that one pending command.
@@ -23172,10 +23281,22 @@ public:
         const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr,
         bool metric_units=false, std::vector<CanvasLabel>* proposed_labels=nullptr) {
         try {
+            return computeHostedOpeningPreview(source,retained_scene,requested_id,
+                hosted_opening_width_resize_command(source,requested_id.toStdString(),scale,keep_start_jamb),
+                view_context,admitted_command,metric_units,proposed_labels);
+        } catch(const Standard_Failure&) {return std::nullopt;}
+          catch(const std::exception&) {return std::nullopt;}
+    }
+
+    static std::optional<std::vector<CanvasEntity>> computeHostedOpeningPreview(
+        const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained_scene,
+        const QString& requested_id,Command command,
+        const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr,
+        bool metric_units=false,std::vector<CanvasLabel>* proposed_labels=nullptr) {
+        try {
             if (proposed_labels) proposed_labels->clear();
-            // This exact scalar command performs complete host, sibling/frame
-            // and fused-join admission before any candidate geometry is shown.
-            Command command=hosted_opening_width_resize_command(source,requested_id.toStdString(),scale,keep_start_jamb);
+            // Width and station edits share the same complete-host projection.
+            // Neither can display an affine copy of the old opening or wall cut.
             if(admitted_command) command=augmentAuthoredCommand(command,source);
             const auto candidate=Document::preview_command(source,command);
             if(admitted_command) validate_architectural_geometry_changes(source,candidate,{requested_id.toStdString()});
@@ -23268,6 +23389,22 @@ public:
                 for (auto& entity : overlays.entities) result.push_back(std::move(entity));
                 if (proposed_labels) *proposed_labels = std::move(overlays.labels);
             }
+            std::vector<CanvasEntity> host_copies;
+            for (const auto& retained:retained_scene) {
+                if (source.entities().contains(retained.id.toStdString())) continue;
+                if (const auto binding=embeddedAssemblyChild(source,retained.id.toStdString());
+                    binding && binding->instance.placement) host_copies.push_back(retained);
+            }
+            if (!host_copies.empty()) {
+                const auto dependents=computeConstraintGeometryProjection(source,candidate,
+                    host_copies,{}, {},metric_units,{}, {},{},
+                    view_context ? std::optional<ArchitecturalViewContext>{*view_context} : std::nullopt,QFont{});
+                if (!dependents) return std::nullopt;
+                std::set<std::pair<QString,QString>> presentations;
+                for (const auto& item:result) presentations.emplace(item.id,item.presentation_key);
+                for (const auto& item:dependents->entities)
+                    if (presentations.emplace(item.id,item.presentation_key).second) result.push_back(item);
+            }
             if(admitted_command) *admitted_command=std::move(command);
             return result;
         } catch(const Standard_Failure&) {return std::nullopt;}
@@ -23277,7 +23414,7 @@ public:
     bool resizeOpeningWidthFromCanvas(PlanCanvas* canvas, const QString& requested_id, double scale,
                                       bool keep_start_jamb, std::uint64_t revision) {
         try {
-            if (!m_document->is_editable() || m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
+            if (!m_document->is_editable() || m_opening_preview_move || m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
                 m_selected_ids.size() != 1 || m_selected_ids.front() != requested_id)
                 throw std::invalid_argument("Select one opening and finish the active drawing command before resizing.");
             if (!openingPreviewCaptureCurrent(canvas))
@@ -38708,6 +38845,7 @@ private:
         });
         canvas->setEntitiesMoveStarted([this,canvas](QStringList ids) {
             m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
+            clearOpeningWidthCapture();
             m_wall_move_site_capture.reset(); m_site_wall_move_preview.reset(); m_site_wall_move_error.clear();
             m_wall_move_source.reset();
             m_wall_move_authority.reset();
@@ -38720,6 +38858,15 @@ private:
                 m_wall_move_document=m_document;
                 m_wall_move_canvas=canvas;
                 m_wall_move_ids=std::move(ids);
+                if (m_wall_move_ids.size()==1) {
+                    const auto found=m_wall_move_source->entities().find(m_wall_move_ids.front().toStdString());
+                    if (found!=m_wall_move_source->entities().end() && found->second.type=="opening" &&
+                        (!siteCanvas(canvas) || !m_site_edit_annotation_targets.contains(m_wall_move_ids.front()))) {
+                        captureOpeningWidthEdit(canvas,m_wall_move_ids.front(),m_wall_move_source);
+                        m_opening_preview_move=true;
+                        return;
+                    }
+                }
                 if (siteCanvas(canvas) && !m_wall_move_ids.isEmpty() &&
                     std::all_of(m_wall_move_ids.begin(),m_wall_move_ids.end(),[&](const auto& id) {
                         const auto found=m_wall_move_source->entities().find(id.toStdString());
@@ -38736,12 +38883,13 @@ private:
                         canvas->devicePixelRatioF(),canvas->navigationGeneration(),canvas->hasFocus()});
                 }
             } catch (const std::exception& error) {
-                clearSitePublication(); m_wall_move_source.reset(); m_wall_move_authority.reset();
+                clearOpeningWidthCapture();clearSitePublication(); m_wall_move_source.reset(); m_wall_move_authority.reset();
                 setError(QString::fromUtf8(error.what()));
             }
         });
         canvas->setEntitiesMoveRequested([this,canvas](QStringList ids, Vec2 delta) {
             try {
+                if (m_opening_preview_move) return commitOpeningMoveFromCanvas(canvas,ids,delta);
                 if (siteCanvas(canvas)) {
                     if (m_wall_move_site_capture) return commitSiteWallMoveFromCanvas(canvas,ids,delta);
                     const auto command=siteTranslationCommand(ids,delta);
@@ -38753,6 +38901,15 @@ private:
         });
         canvas->setEntitiesMoveRejected([this,canvas](QStringList ids, Vec2 delta) {
             try {
+                if (m_opening_preview_move) {
+                    const auto message=openingPreviewCaptureCurrent(canvas)
+                        ? (m_opening_preview_move_error.isEmpty()
+                            ? QStringLiteral("The opening could not be previewed. The project was not changed.")
+                            : m_opening_preview_move_error)
+                        : QStringLiteral("The opening's project or view changed during the drag. Start again.");
+                    m_opening_preview_command.reset();
+                    setError(QStringLiteral("Move opening: %1").arg(message));refresh();return;
+                }
                 if (m_wall_move_site_capture) {
                     const auto message=siteWallMoveCaptureCurrent(m_wall_move_site_capture)
                         ? (m_site_wall_move_error.isEmpty()
@@ -38792,7 +38949,10 @@ private:
         });
         canvas->setEntitiesMovePreviewRequested(
             [this,canvas](QStringList ids, Vec2 delta, std::uint64_t serial) {
-                try { return previewWallMoveFromCanvas(canvas,ids,delta,serial); }
+                try {
+                    if (m_opening_preview_move) return previewOpeningMoveFromCanvas(canvas,ids,delta,serial);
+                    return previewWallMoveFromCanvas(canvas,ids,delta,serial);
+                }
                 catch (const std::exception& error) {
                     setError(QString::fromUtf8(error.what()));
                     return std::optional<std::vector<CanvasEntity>>{std::vector<CanvasEntity>{}};
@@ -38804,6 +38964,7 @@ private:
             });
         canvas->setEntityTransformStarted([this,canvas](QString id) {
             m_plan_endpoint_capture.reset(); m_plan_endpoint_preview.reset();
+            clearOpeningWidthCapture();
             m_entity_transform_site_capture.reset();
             m_entity_transform_source.reset(); m_entity_transform_context.reset();
             try { captureSiteEdit(canvas); captureEntityTransformFromCanvas(canvas,id); }
@@ -49502,6 +49663,10 @@ private:
     bool m_opening_preview_keep_start{};
     std::uint64_t m_opening_preview_latest_serial{};
     bool m_opening_preview_release_pending{};
+    bool m_opening_preview_move{};
+    std::optional<double> m_opening_preview_move_offset;
+    Vec2 m_opening_preview_move_delta;
+    QString m_opening_preview_move_error;
     std::shared_ptr<Document> m_opening_preview_document;
     WorkspaceRegenerationQueue m_vertex_preview_queue;
     QTimer* m_vertex_preview_timer{};

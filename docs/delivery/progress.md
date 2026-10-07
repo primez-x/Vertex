@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 hosted opening body movement
+
+Source now connects selected door, window and doorway body drags to an exact
+host-station command. The canvas captures the directed wall or arc, preserves
+the grab offset, uses practical unit/zoom increments with Shift fine input,
+clamps interactive movement to wall ends and displays the Along wall station
+in the existing width/height callout. Jamb handles retain width editing.
+
+The worker validates the complete host, siblings and native assemblies,
+regenerates the wall cut and opening and supplies the same admitted command
+for release. Width, height, sill, identity, metadata and unrelated input
+receipts remain; exact return to the original station creates no history.
+Source, selection, viewport and serial fences invalidate cancelled or stale
+proposals. Visible dependent host copies also regenerate, using the same
+candidate wall footprint as settled projection rather than a baseline.
+
+Independent source review found and resolved dependency-preview and endpoint
+rounding gaps. Source diffs were reviewed; no tests, builds, probes, native
+jobs, launches, packages or installations ran. Compilation, observed
+interaction and responsiveness remain unverified. The installed candidate
+is unchanged.
+
 ### October 7 broader Site model movement and area-label capture
 
 The captured Site move lane now covers real transformable architectural

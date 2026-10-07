@@ -1021,7 +1021,9 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U164 — Move a door along its wall**
-  - Expected: It remains hosted and the opening follows it.
+  - Steps: Select a door and drag inside its selection boundary, away from the jamb handles. Move it toward each wall end and back; watch Along wall and the wall cut. Repeat with a window and doorway, including on a curved wall. Hold Shift for a fine position.
+  - Expected: The object slides along its host while width, height and sill stay unchanged. It stops at the wall ends, and the jamb handles follow it. An overlap refuses the proposal; moving back to a valid station recovers the same drag. Release makes one undoable edit. Undo, Redo and save/reopen preserve the corresponding wall cut and opening.
+  - Also try: Repeat in Measurement, Site and shifted, rotated or reflected horizontal plans. Attach a host-copy assembly to the opening or its wall and check that it follows the preview. Escape, wheel navigation or a selection change during a pending drag must cancel it without changing the project.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

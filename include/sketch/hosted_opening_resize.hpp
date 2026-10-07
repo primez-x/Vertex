@@ -32,4 +32,19 @@ struct HostedOpeningResizeFrame {
     const DocumentSnapshot& source, const std::string& opening_id,
     double relative_width_scale, bool keep_start_jamb);
 
+// Slide one real opening along its unchanged host baseline. offset_metres is
+// the exact distance from the directed baseline start to the start jamb,
+// including arc length on curved hosts. Width, height, sill, host, manufactured
+// assembly, identity and unrelated metadata remain unchanged. Updates offset_m
+// and an existing offset alias; invalidates only changed quantity receipts.
+// Rejects non-finite/negative stations, cuts beyond the host, sibling overlaps
+// and invalid complete host/assembly geometry without clamping or modifying
+// source. Even an exact unchanged station validates source editability and
+// complete native geometry, then returns an empty command. Admission uses a
+// detached Document preview; the command is fenced to source.revision() and
+// applying it through Document is atomic and undoable.
+[[nodiscard]] ApplyEntityChanges hosted_opening_offset_command(
+    const DocumentSnapshot& source, const std::string& opening_id,
+    double offset_metres);
+
 } // namespace sketch

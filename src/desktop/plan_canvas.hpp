@@ -109,6 +109,14 @@ struct CanvasOpeningWidthControls {
     double offset_metres{};
 };
 
+// Absolute semantic station for one opening body move along its captured host.
+// The host consumes this during the ordinary exact move-preview callback.
+struct CanvasOpeningMoveIntent {
+    QString entity_id;
+    double offset_metres{};
+    std::uint64_t source_revision{};
+};
+
 struct CanvasEntity {
     QString id;
     QString type;
@@ -499,20 +507,27 @@ public:
     void setOverlapSelectionRequested(std::function<bool(bool, QStringList)> callback);
     // Ctrl-drag rectangle selection adds to the retained selection.
     void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
-    // Commits one model-space translation after the interactive preview ends.
+    // Commits one model-space move after the interactive preview ends. A hosted
+    // opening's delta is its constrained midpoint displacement; the host keeps
+    // the exact semantic command captured by the move-preview provider.
     // Returning false rejects the preview without leaving canvas-only geometry.
     void setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback);
     // Capture document authority when a selected frame takes the press.
     void setEntitiesMoveStarted(std::function<void(QStringList)> callback);
     void setEntitiesMoveRejected(std::function<void(QStringList, Vec2)> callback);
-    // Optional exact proposal for a group move. A disengaged result uses the
-    // ordinary translation preview; an engaged empty result rejects it. The
-    // host may mark this serial pending and complete it asynchronously.
+    // Optional exact proposal for a group move. A configured provider owns
+    // admission, including unavailable results. The host may mark this serial
+    // pending and complete it asynchronously.
     void setEntitiesMovePreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
         QStringList, Vec2, std::uint64_t)> callback);
     [[nodiscard]] std::uint64_t entitiesMovePreviewSerial() const noexcept { return m_move_preview_serial; }
     [[nodiscard]] bool entitiesMovePreviewPending() const noexcept { return m_move_preview_pending || m_move_release_pending; }
     [[nodiscard]] std::vector<CanvasEntity> entitiesMovePreview() const { return m_move_entities_preview; }
+    // Read/copy during the move-preview callback. Reset/release clears this;
+    // the host retains the admitted command for the eventual move commit.
+    [[nodiscard]] std::optional<CanvasOpeningMoveIntent> openingMovePreviewIntent() const {
+        return m_opening_move_preview_intent;
+    }
     bool markEntitiesMovePreviewPending(std::uint64_t serial);
     bool completeEntitiesMovePreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
@@ -749,6 +764,8 @@ private:
     [[nodiscard]] const CanvasReference& interactiveReference(const CanvasReference& reference) const;
     bool applyEntitiesMovePreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
+    void captureOpeningMove(QPointF point);
+    void updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers modifiers);
     void updateEntityTransformPreview();
     bool applyEntityTransformPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {});
@@ -1030,6 +1047,16 @@ private:
     bool m_move_preview_pending{};
     bool m_move_preview_request_in_progress{};
     bool m_move_release_pending{};
+    // Active also for a real opening with unavailable controls: such a gesture
+    // must reject instead of falling back to an invented translated opening.
+    bool m_opening_move_active{};
+    std::optional<CanvasOpeningWidthControls> m_opening_move_source;
+    std::optional<double> m_opening_move_press_station;
+    std::optional<double> m_opening_move_pointer_station;
+    std::optional<Vec2> m_opening_move_original_midpoint;
+    std::optional<CanvasOpeningMoveIntent> m_opening_move_preview_intent;
+    std::optional<QPointF> m_move_preview_pointer;
+    bool m_move_preview_fine{};
     bool m_selection_resize_enabled{};
     bool m_selection_rotate_enabled{};
     bool m_selection_axis_resize_enabled{};

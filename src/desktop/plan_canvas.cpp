@@ -909,7 +909,7 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 }
 
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
-    if ((m_gesture_button != Qt::NoButton || m_opening_width_handle || m_vertex_move_handle ||
+    if ((m_gesture_button != Qt::NoButton || m_opening_width_handle || m_vertex_move_handle || m_opening_move_active ||
          m_transform_frame_start) &&
         selectedIds() != entity_ids)
         resetGesture();
@@ -1248,6 +1248,9 @@ void PlanCanvas::setNavigationChanged(std::function<void(Vec2, double)> callback
 void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_scale) {
     if (m_view_center.x == previous_center.x && m_view_center.y == previous_center.y &&
         m_scale == previous_scale) return;
+    // Hosted station captures belong to the pressed view. Navigation must
+    // invalidate a drag or released pending admission before it can reappear.
+    if (m_opening_move_active) resetGesture();
     ++m_navigation_generation;
     m_pending_dimension_space_tap.reset();
     const auto callback = m_navigation_changed;
@@ -2280,6 +2283,132 @@ void PlanCanvas::setEntitiesMovePreviewRequested(
     m_entities_move_preview_requested = std::move(callback);
 }
 
+void PlanCanvas::captureOpeningMove(QPointF point) {
+    if (m_move_ids.size() != 1) return;
+    ensureRetainedSelection();
+    for (const auto index : m_selected_entity_indices) {
+        const auto& entity = m_entities[index];
+        if (entity.type == QStringLiteral("opening") || entity.type == QStringLiteral("window") ||
+            entity.type == QStringLiteral("door") || entity.type == QStringLiteral("doorway") ||
+            entity.opening_width_controls) {
+            m_opening_move_active = true;
+            break;
+        }
+    }
+    if (!m_opening_move_active) return;
+    const auto* entity = selectedOpening();
+    if (!entity || !entity->opening_width_controls->host_baseline) return;
+    const auto source = *entity->opening_width_controls;
+    try {
+        const auto& host = *source.host_baseline;
+        const auto length = segment_length(host);
+        if (!std::isfinite(length) || !std::isfinite(source.width_metres) ||
+            source.width_metres <= 1e-6 || !std::isfinite(source.offset_metres) ||
+            !std::isfinite(source.start_jamb.x) || !std::isfinite(source.start_jamb.y) ||
+            !std::isfinite(source.end_jamb.x) || !std::isfinite(source.end_jamb.y)) return;
+        // Share the document geometry's endpoint tolerance. Rigid/reflected
+        // presentation can change the computed host length by a few ulps.
+        (void)hosted_opening_span(host, source.offset_metres, source.width_metres);
+        const auto middle_station = source.offset_metres + source.width_metres * .5;
+        const auto midpoint = point_at_host_station(host, middle_station);
+        const auto station = project_host_station(host, toModel(point, rect()), middle_station);
+        if (!std::isfinite(station) || !std::isfinite(midpoint.x) || !std::isfinite(midpoint.y)) return;
+        m_opening_move_source = source;
+        m_opening_move_original_midpoint = midpoint;
+        m_opening_move_press_station = station;
+        m_opening_move_pointer_station = station;
+    } catch (const std::exception&) {
+        // The exact source is unavailable. Retain the semantic gesture so its
+        // preview/release rejects rather than manufacturing a free translation.
+    }
+}
+
+void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers modifiers) {
+    m_move_preview_pointer = point;
+    m_move_preview_fine = modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled || m_raw_point_input;
+    std::optional<Vec2> delta;
+    std::optional<CanvasOpeningMoveIntent> opening_intent;
+    if (!m_opening_move_active) {
+        delta = dragDelta(point);
+    } else if (m_opening_move_source && m_opening_move_press_station &&
+               m_opening_move_pointer_station && m_opening_move_original_midpoint) {
+        const auto& source = *m_opening_move_source;
+        const auto& host = *source.host_baseline;
+        try {
+            // Arc projection unwraps around the previous pointer station, not
+            // around the clamped opening, so crossing atan2's cut stays smooth.
+            const auto station = project_host_station(host, toModel(point, rect()),
+                *m_opening_move_pointer_station);
+            if (std::isfinite(station)) {
+                m_opening_move_pointer_station = station;
+                const auto displacement = station - *m_opening_move_press_station;
+                const auto maximum_offset = std::max(0.0, segment_length(host) - source.width_metres);
+                auto offset = source.offset_metres;
+                if (std::abs(displacement) > 1e-12) {
+                    offset += displacement;
+                    if (!std::isfinite(offset)) throw std::invalid_argument("Invalid opening station");
+                    // Saturated endpoints stay reachable even when the host's
+                    // available run is not an exact construction increment.
+                    if (!m_move_preview_fine && offset > 0.0 && offset < maximum_offset) {
+                        const auto step = drawingLengthIncrementMetres();
+                        if (!std::isfinite(step) || step <= 0.0)
+                            throw std::invalid_argument("Invalid opening station increment");
+                        offset = std::round(offset / step) * step;
+                    }
+                    offset = std::clamp(offset, 0.0, maximum_offset);
+                }
+                const auto midpoint = point_at_host_station(host, offset + source.width_metres * .5);
+                const auto proposed = midpoint - *m_opening_move_original_midpoint;
+                if (std::isfinite(offset) && std::isfinite(proposed.x) && std::isfinite(proposed.y)) {
+                    delta = proposed;
+                    opening_intent = CanvasOpeningMoveIntent{m_move_ids.front(), offset, source.source_revision};
+                }
+            }
+        } catch (const std::exception&) {
+            // A centre hit on an arc or an invalid analytical source invalidates
+            // the current proposal, including any older pending admission.
+        }
+    }
+    // Preserve an admitted/pending serial for an unchanged constrained station.
+    // This also avoids re-preparing when the pointer pushes beyond a host end.
+    if (m_opening_move_active && opening_intent && m_opening_move_preview_intent &&
+        delta && m_move_preview_delta &&
+        opening_intent->offset_metres == m_opening_move_preview_intent->offset_metres &&
+        delta->x == m_move_preview_delta->x && delta->y == m_move_preview_delta->y) return;
+    m_move_preview_delta = delta;
+    m_opening_move_preview_intent = opening_intent;
+    const auto serial = ++m_move_preview_serial;
+    m_move_entities_preview.clear();
+    m_move_entities_preview_index.clear();
+    m_move_labels_preview.clear(); m_move_references_preview.clear();
+    m_move_preview_pending = false;
+    m_move_preview_exact = m_opening_move_active;
+    m_move_preview_valid = false;
+    m_move_preview_request_in_progress = false;
+    if (!delta || (m_opening_move_active && !m_entities_move_preview_requested)) {
+        setCursor(Qt::ForbiddenCursor);
+        return;
+    }
+    if (m_entities_move_preview_requested) {
+        // A configured exact provider owns admission, including an unavailable
+        // result. Hosted openings always require this semantic provider.
+        m_move_preview_exact = true;
+        m_move_preview_request_in_progress = true;
+        std::optional<std::vector<CanvasEntity>> proposed;
+        bool provider_failed = false;
+        const QPointer<PlanCanvas> guard(this);
+        try {
+            proposed = m_entities_move_preview_requested(m_move_ids, *delta, serial);
+        } catch (const std::exception&) { provider_failed = true; }
+        if (!guard) return;
+        if (serial != m_move_preview_serial || !m_move_preview_request_in_progress) return;
+        m_move_preview_request_in_progress = false;
+        if (provider_failed) m_move_preview_pending = false;
+        if (!m_move_preview_pending)
+            (void)applyEntitiesMovePreview(serial, std::move(proposed));
+    }
+}
+
 bool PlanCanvas::markEntitiesMovePreviewPending(std::uint64_t serial) {
     if (serial != m_move_preview_serial || !m_move_preview_request_in_progress ||
         m_left_gesture != LeftGesture::object_move || !m_move_preview_delta) return false;
@@ -2928,6 +3057,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         (selected_hit || (frame && frame->contains(position)))) {
         m_left_gesture = LeftGesture::object_move;
         m_move_ids = retained_selection;
+        captureOpeningMove(position);
         if (m_entities_move_started) m_entities_move_started(m_move_ids);
     } else {
         m_left_gesture = LeftGesture::canvas_pan;
@@ -2976,36 +3106,9 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             setCursor(Qt::ClosedHandCursor);
         }
         if (m_left_dragging) {
-            m_move_preview_delta = dragDelta(position);
-            const auto serial = ++m_move_preview_serial;
-            m_move_entities_preview.clear();
-            m_move_entities_preview_index.clear();
-            m_move_labels_preview.clear(); m_move_references_preview.clear();
-            m_move_preview_pending = false;
-            m_move_preview_exact = false;
-            m_move_preview_valid = false;
-            if (m_entities_move_preview_requested) {
-                // A configured exact provider owns admission, including an
-                // unavailable result. Only the providerless path may use the
-                // legacy translated preview and commit without a proposal.
-                m_move_preview_exact = true;
-                m_move_preview_request_in_progress = true;
-                std::optional<std::vector<CanvasEntity>> proposed;
-                bool provider_failed = false;
-                try {
-                    proposed = m_entities_move_preview_requested(m_move_ids, *m_move_preview_delta, serial);
-                } catch (const std::exception&) { provider_failed = true; }
-                if (serial != m_move_preview_serial || !m_move_preview_request_in_progress) return;
-                m_move_preview_request_in_progress = false;
-                // A failed provider cannot authorize an empty reference-only
-                // proposal or leave its deferred request waiting indefinitely.
-                if (provider_failed) m_move_preview_pending = false;
-                // A marked pending request owns its later completion.
-                // Otherwise validate the callback return through the same
-                // path, including an unavailable proposal.
-                if (!m_move_preview_pending)
-                    (void)applyEntitiesMovePreview(serial, std::move(proposed));
-            }
+            const QPointer<PlanCanvas> guard(this);
+            updateEntitiesMovePreview(position, modifiers);
+            if (!guard) return;
             update();
         }
     } else if (m_left_gesture == LeftGesture::opening_width_resize) {
@@ -3172,7 +3275,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         // Consume the final location or fine-input change even if the platform
         // omitted a move event. An unchanged transform keeps its admitted serial.
         if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::canvas_pan ||
-            m_left_gesture == LeftGesture::object_move ||
+            (m_left_gesture == LeftGesture::object_move &&
+             (!m_opening_move_active || !m_move_preview_pointer || *m_move_preview_pointer != position ||
+              m_move_preview_fine != (modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled || m_raw_point_input))) ||
             ((m_left_gesture == LeftGesture::selection_axis_resize ||
               m_left_gesture == LeftGesture::selection_resize ||
               m_left_gesture == LeftGesture::selection_rotate) &&
@@ -3203,7 +3308,10 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             m_overlap_view_dpr==devicePixelRatioF() &&
             m_overlap_navigation_generation==m_navigation_generation &&
             m_pan_view_start.x==m_view_center.x && m_pan_view_start.y==m_view_center.y;
-        const auto delta = dragDelta(position);
+        // Hosted body moves commit the final constrained midpoint displacement;
+        // recomputing a free XY drag would lose the captured absolute station.
+        const auto delta = gesture == LeftGesture::object_move
+            ? m_move_preview_delta.value_or(Vec2{}) : dragDelta(position);
         if (gesture==LeftGesture::object_move && dragging && m_move_preview_pending) {
             // Keep the final exact proposal alive after button release. A
             // completion commits it on the UI thread; cancel/scene replacement
@@ -3367,6 +3475,14 @@ void PlanCanvas::resetGesture() {
     m_move_preview_pending = false;
     m_move_preview_request_in_progress = false;
     m_move_release_pending = false;
+    m_opening_move_active = false;
+    m_opening_move_source.reset();
+    m_opening_move_press_station.reset();
+    m_opening_move_pointer_station.reset();
+    m_opening_move_original_midpoint.reset();
+    m_opening_move_preview_intent.reset();
+    m_move_preview_pointer.reset();
+    m_move_preview_fine = false;
     m_transform_frame_start.reset();
     m_transform_resize_extent = 0.0;
     m_transform_scale_preview = 1.0;
@@ -4457,16 +4573,18 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
 
 void PlanCanvas::drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const {
     if (!selectionInteractionEnabled()) return;
-    const auto* entity = selectedOpening();
-    if (!entity || !m_opening_width_preview_requested || !m_opening_width_resize_requested) return;
-    const auto& controls = *entity->opening_width_controls;
+    const auto* retained = selectedOpening();
+    if (!retained || !m_opening_width_preview_requested || !m_opening_width_resize_requested) return;
+    const auto& entity = interactiveEntity(*retained);
+    if (!entity.opening_width_controls) return;
+    const auto& controls = *entity.opening_width_controls;
     auto start = controls.start_jamb;
     auto end = controls.end_jamb;
     if (m_opening_width_handle && m_opening_width_jamb_preview) {
         if (m_opening_width_handle->keep_start_jamb) end = *m_opening_width_jamb_preview;
         else start = *m_opening_width_jamb_preview;
     }
-    if (m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(entity->id)) {
+    if (m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(entity.id)) {
         start.x += m_move_preview_delta->x; start.y += m_move_preview_delta->y;
         end.x += m_move_preview_delta->x; end.y += m_move_preview_delta->y;
     }
@@ -4876,8 +4994,11 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         }
         const bool editing_opening = opening && m_opening_width_handle &&
                                      m_opening_width_handle->entity_id == id;
-        const bool invalid_opening = editing_opening && m_left_dragging &&
-                                     !m_opening_width_preview_valid && !m_opening_width_preview_pending;
+        const bool moving_opening=opening && m_opening_move_active && m_left_dragging &&
+            m_move_ids==QStringList{id};
+        const bool invalid_opening = (editing_opening && m_left_dragging &&
+                                     !m_opening_width_preview_valid && !m_opening_width_preview_pending) ||
+            (moving_opening && !m_move_preview_valid && !m_move_preview_pending);
         const auto dimension_width = opening ? opening->width_metres *
             (editing_opening ? m_opening_width_scale_preview : 1.0) : width;
         const auto dimension_depth = opening ? opening->height_metres : depth;
@@ -4887,6 +5008,11 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                        : opening ? QStringLiteral("W %1  ×  H %2") : QStringLiteral("W %1  ×  D %2"))
             .arg(drawingLengthText(dimension_width, m_metric_units),
                  drawingLengthText(dimension_depth, m_metric_units));
+        if (moving_opening && m_opening_move_preview_intent) {
+            text+=QStringLiteral("  ·  Along wall %1").arg(
+                drawingLengthText(m_opening_move_preview_intent->offset_metres,m_metric_units));
+            if (m_move_preview_pending) text+=QStringLiteral("  ·  Checking");
+        }
         if (invalid_opening) text += QStringLiteral("  ·  Invalid");
         if (transforming && m_transform_preview_exact) {
             if (m_transform_preview_pending) text += QStringLiteral("  ·  Checking");
@@ -5000,7 +5126,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             const auto axes = !entity.presentation_key.isEmpty() && selectedIds().size()==1
                 ? selectionAxes() : entitySelectionAxes(interactiveEntity(entity));
             if (axes)
-                draw(*axes,entity.id,false,entity.opening_width_controls);
+                draw(*axes,entity.id,false,m_move_preview_valid
+                    ? interactiveEntity(entity).opening_width_controls : entity.opening_width_controls);
         }
     }
     for (const auto& retained : m_references) {
@@ -6704,7 +6831,10 @@ Vec2 PlanCanvas::dragDelta(QPointF position) const {
 }
 
 void PlanCanvas::updatePointerCursor(QPointF point) {
-    if (m_panning ||
+    if (m_opening_move_active && m_left_dragging && m_move_preview_exact &&
+        !m_move_preview_valid && !m_move_preview_pending) {
+        setCursor(Qt::ForbiddenCursor);
+    } else if (m_panning ||
         ((m_left_gesture == LeftGesture::object_move ||
           m_left_gesture == LeftGesture::vertex_move) && m_left_dragging)) {
         setCursor(Qt::ClosedHandCursor);

@@ -51,9 +51,9 @@ struct OpeningHost {
 OpeningHost selected_host(const DocumentSnapshot& source, const std::string& opening_id) {
     const auto found = source.entities().find(opening_id);
     if (found == source.entities().end())
-        throw std::invalid_argument("Hosted opening resize target is missing");
+        throw std::invalid_argument("Hosted opening edit target is missing");
     if (found->second.type != "opening")
-        throw std::invalid_argument("Hosted opening resize requires an opening entity");
+        throw std::invalid_argument("Hosted opening edit requires an opening entity");
     std::string wall_id,error;
     if (!read_document_wall_id(found->second,wall_id,error)) throw std::invalid_argument(error);
     auto openings = hosted_openings(source,wall_id);
@@ -61,7 +61,7 @@ OpeningHost selected_host(const DocumentSnapshot& source, const std::string& ope
     const auto selected = std::find_if(wall.openings.begin(),wall.openings.end(),
         [&](const HostedOpening& opening) { return opening.id == opening_id; });
     if (selected == wall.openings.end())
-        throw std::invalid_argument("Hosted opening resize target is missing from its host");
+        throw std::invalid_argument("Hosted opening edit target is missing from its host");
     const auto index = static_cast<std::size_t>(selected-wall.openings.begin());
     return {std::move(wall),std::move(openings),index};
 }
@@ -132,6 +132,36 @@ ApplyEntityChanges hosted_opening_width_resize_command(const DocumentSnapshot& s
     if (candidate != original)
         command.entity_changes.push_back(EntityChange::upsert(std::move(candidate)));
     // Even a no-op must prove source editability and complete host geometry.
+    const auto preview = Document::preview_command(source,command);
+    validate_architectural_geometry_changes(source,preview,{opening_id});
+    return command;
+}
+
+ApplyEntityChanges hosted_opening_offset_command(const DocumentSnapshot& source,
+    const std::string& opening_id, double offset_metres) {
+    if (!std::isfinite(offset_metres) || offset_metres < 0)
+        throw std::invalid_argument("Hosted opening offset must be finite and nonnegative");
+    const auto host = selected_host(source,opening_id);
+    const auto& opening = host.wall.openings[host.selected_index];
+    const double end = offset_metres+opening.width;
+    if (!std::isfinite(end))
+        throw std::invalid_argument("Hosted opening end station exceeds the supported numeric range");
+    // Compare start stations so (length-width)+width cannot reject the exact
+    // end stop merely because the addition rounds upward by one ulp.
+    if (offset_metres != opening.offset && offset_metres > segment_length(host.wall.baseline)-opening.width)
+        throw std::invalid_argument("Hosted opening extends beyond its host baseline");
+
+    const auto& original = source.entities().at(opening_id);
+    Entity candidate = original;
+    if (offset_metres != opening.offset) {
+        set_dimension(candidate.properties,"offset_m","offset",offset_metres);
+        invalidate_changed_quantity_entries(original,candidate);
+    }
+    ApplyEntityChanges command{source.revision(),{}, {},"Move hosted opening along host"};
+    if (candidate != original)
+        command.entity_changes.push_back(EntityChange::upsert(std::move(candidate)));
+    // Required admission includes every sibling and manufactured assembly,
+    // also when the station is unchanged and no entity change is emitted.
     const auto preview = Document::preview_command(source,command);
     validate_architectural_geometry_changes(source,preview,{opening_id});
     return command;
