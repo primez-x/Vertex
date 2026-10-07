@@ -198,6 +198,13 @@
   right-click without dragging cancels a pending drawing or new symbol placement;
   already placed walls and symbols remain. With no pending action, it opens the
   relevant context menu.</p>
+  <p>A pen uses the same plan controls through the buttons reported by its
+  Windows driver. The tip uses left-click; a barrel mapped to right-click opens
+  context actions or cancels a pending step, and dragging it pans. A
+  middle-mapped barrel pans. The button and pen that started a drag keep
+  ownership until release; another button, mouse movement or palm contact
+  cannot complete that edit. A second finger during a one-finger touch edit
+  cancels the edit and starts pan/pinch navigation.</p>
   <p>To select underneath another item in a plan, hold <strong>Alt</strong> and
   click the overlapping items repeatedly. Each click selects the next eligible
   object at that point, using the current selection filter. Alt-clicking empty
@@ -534,6 +541,9 @@
   left to right, or crossing objects when dragged right to left. Selected plan-only
   items remain in the group. Double-clicking or right-clicking a selected group
   member keeps that group; select one object to use its move and transform controls.
+  <strong>Alt-click</strong> cycles distinct visible overlapping objects and
+  selects one target. Empty Alt-click keeps the selection, and Alt-drag pans.
+  Alt input cancels an armed Move before navigating or choosing another object.
   Escape cancels a pending selection rectangle or armed Move.</p>
   <p>Use <strong>Design phases and alternatives</strong> for existing, demolished, and
   proposed work. Use <strong>Sheets</strong> and <strong>Schedules</strong> to arrange

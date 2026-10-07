@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPicture>
 #include <QPainterPath>
+#include <QPointer>
 #include <QRectF>
 #include <QSharedPointer>
 #include <QString>
@@ -34,6 +35,7 @@ class QPainter;
 class QPaintDevice;
 class QSvgRenderer;
 class QTouchEvent;
+class QPointingDevice;
 
 namespace sketch::desktop {
 
@@ -661,6 +663,8 @@ private:
     void pointerRelease(QPointF position, Qt::MouseButton button,
                         Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void resetGesture();
+    void resetTabletInput();
+    void retireDisconnectedTablet();
     enum class SnapKind { none, grid, length, endpoint, on_wall, on_boundary, alignment, perpendicular };
     struct SnapResult {
         Vec2 point{};
@@ -1076,6 +1080,8 @@ private:
     };
     std::optional<TouchNavigation> m_touch_navigation_start;
     bool m_tablet_active{false};
+    Qt::MouseButton m_tablet_button{Qt::NoButton};
+    QPointer<const QPointingDevice> m_tablet_device;
 
     std::function<void(Vec2)> m_point_clicked;
     std::function<void(Vec2, double)> m_navigation_changed;

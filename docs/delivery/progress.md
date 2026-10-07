@@ -435,6 +435,33 @@ invalid-proposal retirement and Alt double-click placement guards; root correcte
 those paths. No application build, test, probe, package or installed change was
 made. Compilation, rendering, interaction and performance remain unobserved.
 
+Native 3D now has Alt overlap cycling through the actual detected owner sequence,
+deduplicating material and face presentations into semantic targets. A chosen
+target intentionally replaces a group; empty hits and Alt pan retain every
+logical member. Rapid Alt clicks cycle normally, with Ctrl retaining priority.
+Alt pan consumes the release displacement and cannot enter model editing.
+The native camera generation now fences fit, pan, orbit, zoom, resize and screen
+changes. Independent source review approved this integration. Compilation,
+native picking, visuals, DPI and responsiveness remain unobserved.
+
+Plan pen events now retain their actual Left/Right/Middle button and originating
+device instead of converting every press/release to Left. Extra buttons and
+other devices cannot replace or finish the gesture; live pen contact suppresses
+palm/touch takeover and duplicate mouse input. A dead device owner retires before
+the next tablet, mouse or touch admission, so disconnect does not leave other
+input blocked. Middle release applies its final pan position. Independent source
+review approved the changes after root corrected that dead-owner path. Hardware
+button reporting, mixed-device interaction and runtime behavior remain unobserved.
+
+The full-source digest cache now retains four immutable snapshots with bounded
+LRU promotion instead of one slot. Alternating captured, displayed and recovered
+sources can reuse their complete proof without repeatedly serializing history.
+Every hit still requires shares_full_snapshot_with, including saved/editability
+metadata and retained history; detached sources still compute their full digest.
+The existing project/session reset boundaries clear every slot. Root reviewed the
+source change; no performance result is claimed. None of these source changes
+started an application build, test, probe, package or installed cutover.
+
 The installed checkpoint includes editable appraisal room reporting, conditional
 measurement declarations, and hosted-object 3D gesture corrections. The current
 source batch adds geometric assemblies, joined-roof material ownership and

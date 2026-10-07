@@ -2413,7 +2413,7 @@ bool PlanCanvas::event(QEvent* event) {
         m_space_pan_armed = false;
         resetGesture();
         resetTouchInput();
-        m_tablet_active = false;
+        resetTabletInput();
         break;
     case QEvent::Leave:
         // Leave retires only the hover image. The placement command remains
@@ -2432,7 +2432,7 @@ bool PlanCanvas::event(QEvent* event) {
         resetGesture();
         m_space_pan_armed = false;
         resetTouchInput();
-        m_tablet_active = false;
+        resetTabletInput();
         break;
     case QEvent::TouchBegin:
     case QEvent::TouchUpdate:
@@ -2458,22 +2458,40 @@ bool PlanCanvas::event(QEvent* event) {
     }
     case QEvent::TabletPress: {
         auto* tablet = static_cast<QTabletEvent*>(event);
-        m_tablet_active = true;
-        pointerPress(tablet->position(), Qt::LeftButton, tablet->modifiers());
+        retireDisconnectedTablet();
+        const auto button=tablet->button();
+        if (!m_tablet_active && !m_touch_active && m_gesture_button==Qt::NoButton && tablet->pointingDevice() &&
+            (button==Qt::LeftButton || button==Qt::RightButton || button==Qt::MiddleButton)) {
+            // Tip and barrel buttons share the mouse contract. Extra buttons
+            // and another device cannot replace the button that owns a drag.
+            m_tablet_active=true;
+            m_tablet_button=button;
+            m_tablet_device=tablet->pointingDevice();
+            pointerPress(tablet->position(),button,tablet->modifiers());
+        }
         event->accept();
         return true;
     }
     case QEvent::TabletMove: {
         auto* tablet = static_cast<QTabletEvent*>(event);
-        pointerMove(tablet->position(), tablet->modifiers());
+        retireDisconnectedTablet();
+        if (!m_touch_active &&
+            ((m_tablet_active && m_tablet_device.data()==tablet->pointingDevice()) ||
+             (!m_tablet_active && m_gesture_button==Qt::NoButton)))
+            pointerMove(tablet->position(),tablet->modifiers());
         event->accept();
         return true;
     }
     case QEvent::TabletRelease: {
         auto* tablet = static_cast<QTabletEvent*>(event);
-        if (m_tablet_active) {
-            pointerRelease(tablet->position(), Qt::LeftButton, tablet->modifiers());
-            m_tablet_active = false;
+        retireDisconnectedTablet();
+        if (m_tablet_active && m_tablet_device.data()==tablet->pointingDevice() &&
+            tablet->button()==m_tablet_button) {
+            const auto button=m_tablet_button;
+            // Retire this device before a context/placement callback can run
+            // a nested event loop. Its late release cannot affect a new press.
+            resetTabletInput();
+            pointerRelease(tablet->position(),button,tablet->modifiers());
         }
         event->accept();
         return true;
@@ -2490,11 +2508,25 @@ void PlanCanvas::resetTouchInput() {
     m_touch_navigation_start.reset();
 }
 
+void PlanCanvas::resetTabletInput() {
+    m_tablet_active=false;
+    m_tablet_button=Qt::NoButton;
+    m_tablet_device.clear();
+}
+
+void PlanCanvas::retireDisconnectedTablet() {
+    if (!m_tablet_active || !m_tablet_device.isNull()) return;
+    resetGesture();
+    resetTabletInput();
+}
+
 void PlanCanvas::handleTouchEvent(QTouchEvent& event) {
+    retireDisconnectedTablet();
     const auto valid = [](QPointF point) {
         return std::isfinite(point.x()) && std::isfinite(point.y());
     };
     if (event.type() == QEvent::TouchBegin) {
+        if (m_tablet_active) return;
         resetGesture();
         resetTouchInput();
         setFocus();
@@ -2962,6 +2994,13 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         if (clicked && m_right_clicked) m_right_clicked(inputPoint(position), target);
         return;
     }
+    if (button == Qt::MiddleButton && m_panning) {
+        // Pen and mouse drivers may coalesce the whole drag into its release.
+        pointerMove(position,modifiers);
+        resetGesture();
+        updateCursor(position);
+        return;
+    }
     if (button == Qt::LeftButton) {
         // Consume the final location even if the platform omitted a move event.
         if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::canvas_pan ||
@@ -3204,6 +3243,11 @@ void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
 }
 
 void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
+    retireDisconnectedTablet();
+    if (event->source()!=Qt::MouseEventNotSynthesized || m_touch_active || m_tablet_active) {
+        event->accept();
+        return;
+    }
     // Rapid Alt clicks still cycle once per physical click: Qt replaces the
     // second press with this event. Its release uses the normal captured pick.
     // Ctrl retains priority and its existing first-toggle-only double click.
@@ -4750,7 +4794,8 @@ void PlanCanvas::paintEvent(QPaintEvent* event) {
 }
 
 void PlanCanvas::mousePressEvent(QMouseEvent* event) {
-    if (event->source() != Qt::MouseEventNotSynthesized) {
+    retireDisconnectedTablet();
+    if (event->source() != Qt::MouseEventNotSynthesized || m_touch_active || m_tablet_active) {
         event->accept();
         return;
     }
@@ -4760,7 +4805,8 @@ void PlanCanvas::mousePressEvent(QMouseEvent* event) {
 }
 
 void PlanCanvas::mouseMoveEvent(QMouseEvent* event) {
-    if (event->source() != Qt::MouseEventNotSynthesized) {
+    retireDisconnectedTablet();
+    if (event->source() != Qt::MouseEventNotSynthesized || m_touch_active || m_tablet_active) {
         event->accept();
         return;
     }
@@ -4770,7 +4816,8 @@ void PlanCanvas::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void PlanCanvas::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->source() != Qt::MouseEventNotSynthesized) {
+    retireDisconnectedTablet();
+    if (event->source() != Qt::MouseEventNotSynthesized || m_touch_active || m_tablet_active) {
         event->accept();
         return;
     }

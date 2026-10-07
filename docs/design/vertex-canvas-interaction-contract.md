@@ -21,8 +21,8 @@ classification and manual dimension placement before the outline is complete.
 | Left drag from unselected object | Pan; click first if the object should move | Pan; click first if the object should move | Select only |
 | Ctrl + left click | Toggle the hit object in the selection | Toggle the hit object in the selection | Toggle the visible object in the shared selection |
 | Ctrl + left drag | Add a directional marquee result to the selection | Add a directional marquee result to the selection | Add a directional marquee result to the shared selection |
-| Alt + left click | Cycle overlapping selectable objects at the pointer | Cycle overlapping selectable objects at the pointer | Pending native overlap-selection integration |
-| Alt + left drag | Pan without selecting or editing an object | Pan without selecting or editing an object | Pending native overlap-selection integration |
+| Alt + left click | Cycle overlapping selectable objects at the pointer | Cycle overlapping selectable objects at the pointer | Cycle distinct visible objects under the pointer |
+| Alt + left drag | Pan without selecting or editing an object | Pan without selecting or editing an object | Pan without changing the shared selection |
 | Left-to-right Ctrl marquee | Add fully enclosed objects | Add fully enclosed objects | Add fully enclosed selectable presentations |
 | Right-to-left Ctrl marquee | Add crossing or enclosed objects | Add crossing or enclosed objects | Add crossing or enclosed selectable presentations |
 | Middle drag | Pan from any hit location without changing geometry or a draft | Pan from any hit location without changing geometry | Pan |
@@ -49,11 +49,28 @@ be finished or cancelled before overlap selection starts. The press retains its
 displayed source and camera generation; navigation away and back cannot revive
 it. Alt-drag follows canvas pan and never moves a selected object.
 
+In 3D, Alt-click cycles the distinct semantic objects returned by the active
+visible-scene pick, skipping repeated faces or material presentations of the
+same object. Choosing a target replaces the group with that one object; empty
+Alt-click and Alt-drag preserve the group. Rapid Alt clicks each advance once,
+while Ctrl+Alt retains the normal Ctrl policy. Alt input cancels an armed Move
+before choosing a target or panning.
+
+Plan pen input follows the button reported by Windows and the pen driver: the
+tip uses left-click behavior, a right-mapped barrel uses cancel/context or pan,
+and a middle-mapped barrel pans. The initiating button and device retain
+ownership until release. Additional buttons, another pen, a mouse or palm touch
+cannot finish that drag. Focus/capture loss and a disconnected device retire it.
+Synthetic mouse events cannot duplicate a pen or touch action. One-finger input
+uses the plan pointer contract; a second finger cancels that edit and starts
+pan/pinch navigation until all fingers lift.
+
 ## Explicit 3D Move
 
 `Move object` is available from the 3D context menu for a selected transformable
 object. It arms one plain-left drag and commits one document transaction on
-release. Ctrl starts additive selection and cancels an armed Move. Middle drag
+release. Ctrl starts additive selection and cancels an armed Move; Alt cancels
+it before overlap selection or pan. Middle drag
 and Space + left drag pan; right drag orbits. Navigation never translates an
 object. Move and single-object manipulator controls are unavailable for a group,
 including a mixed group with only one member visible in 3D.
@@ -100,8 +117,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Rotation uses a positive counterclockwise model angle. The handle and frame retain the committed orientation and preview the resulting angle, snapping to absolute 45-degree increments (including 0°, 90°, 180° and 270°); Shift bypasses snapping for fine adjustment. The canvas callout displays the current angle while rotating. Release commits once, Escape restores the document, and editing controls never appear in output.
 - Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
 - Direct endpoint grips for additional architectural object types.
-- Pen barrel-button mapping, pinch zoom, and multi-touch navigation.
-- Native 3D overlap cycling for stacked selectable objects.
+- Windows hardware qualification of pen barrel mappings and touch navigation.
 - Shared painted-footprint hit testing for every filled and custom-stroke entity type.
 
 ## Acceptance sequences

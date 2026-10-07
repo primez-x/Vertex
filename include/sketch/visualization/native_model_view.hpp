@@ -112,6 +112,9 @@ public:
     // interrupt preparation or replace diagnostics.
     std::function<void(QString)> onEntitySelected;
     // Plain click: replacement (false); Ctrl click: toggle the hit (true).
+    // Stationary Alt click cycles distinct visible overlapping semantic hits
+    // and replaces selection (false); Ctrl takes priority over Alt. An empty
+    // Alt click emits nothing. Alt drag pans without changing selection.
     // A plain background click supplies an empty ID. Selected group members
     // retain the group for subsequent double-click/context editing.
     std::function<void(QString, bool)> onEntitySelectionClicked;
@@ -151,7 +154,8 @@ public:
     void setErrorCallback(std::function<void(QString)> callback);
     void setGeometryStatusChangedCallback(std::function<void(QString)> callback);
     // Arm one plain left drag of the supplied visible architectural entity.
-    // Ctrl+left selects additively; middle pans; right orbits or opens context actions.
+    // Ctrl+left selects additively; Alt+left cycles hits or pans on drag;
+    // middle pans; right orbits or opens context actions.
     [[nodiscard]] bool beginMove(const QString& entity_id);
     void cancelInteraction();
     [[nodiscard]] bool isMoveActive() const noexcept;

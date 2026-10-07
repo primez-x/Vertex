@@ -938,7 +938,9 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U153 — Draw with an active pen, if available**
+  - Steps: Use the pen tip to draw a wall, select an object and drag it. With a barrel button mapped to right-click, drag to pan, tap to cancel an unfinished wall or new symbol, and tap an existing object to open its menu. Try a middle-mapped button if supported. During a tip drag, press and release another pen button before releasing the tip. Try palm contact or moving the mouse during that pen drag, then use mouse and touch after lifting or disconnecting the pen.
   - Expected: Pen placement behaves predictably without duplicate clicks.
+    Barrel actions follow their mouse equivalents. Extra buttons or another device do not take over or finish the active pen drag. Mouse and touch remain usable after the pen is disconnected.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1203,6 +1205,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Select a supported wall, room, slab, column, beam, stair, railing or roof from the plan or navigator, then select a different object directly in 3D. Drag an axis handle, the vertical rotation ring and a scale handle in separate undoable edits. Open the object's right-click **Transform…** action and enter an exact value.
   - Expected: The same object is selected in every view and receives visible move, vertical-rotation and uniform-scale controls. Each released drag changes the shared semantic object once; plan, 3D and applicable elevation/section/schedule/calculation views refresh. Undo and redo restore each state. Exact numeric entry matches the handle behavior, while exported 3D imagery contains no editing controls.
   - Group check: Ctrl-click two visible objects, then Ctrl-click one again to remove it. Ctrl-drag left to right around fully enclosed objects, then right to left across another object. The rectangle is visible while dragging; both gestures add to the existing selection. Select a plan-only item as well: it stays selected even though it has no 3D highlight. Double-click or right-click a selected group member; the group stays selected, its count is shown, and single-object Move and transform handles are unavailable. Click empty 3D space to clear the group.
+  - Overlap check: Place intersecting or overlapping objects and Alt-click the same point repeatedly, including rapid clicks. Each click reaches the next distinct visible object without treating several faces of one object as separate choices. Alt-click empty space and Alt-drag over an object: the selection stays intact, and the drag pans. Arm Move, then Alt-drag: only the view moves. Change the camera while an Alt press is held, return it to its earlier position, then release: the old pick must not apply.
   - Cancellation and output check: Start a Ctrl selection rectangle and press Escape or change the view before release. No selection result is applied. Export a 3D image with several objects selected: no highlights or handles appear in the image, and all selected highlights return in the interactive view afterward. Change the project or selection while an object menu is open; its retained edit must refuse rather than operate on the replacement selection.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

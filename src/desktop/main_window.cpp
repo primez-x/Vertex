@@ -32765,12 +32765,24 @@ private:
         return m_authoring_digests[0]->digest;
     }
     std::string fullSnapshotDigest(const DocumentSnapshot& source) const {
-        if (m_snapshot_digest && source.shares_full_snapshot_with(m_snapshot_digest->source))
-            return m_snapshot_digest->digest;
+        // Comparisons alternate captured, published and recovered snapshots.
+        // A single slot reserializes them on every comparison. Retain a small
+        // bounded LRU, proving complete immutable equality before any reuse.
+        for (std::size_t index=0;index<m_snapshot_digests.size();++index) {
+            if (!m_snapshot_digests[index] ||
+                !source.shares_full_snapshot_with(m_snapshot_digests[index]->source)) continue;
+            auto cached=std::move(m_snapshot_digests[index]);
+            for (auto slot=index;slot>0;--slot)
+                m_snapshot_digests[slot]=std::move(m_snapshot_digests[slot-1]);
+            m_snapshot_digests[0]=std::move(cached);
+            return m_snapshot_digests[0]->digest;
+        }
         auto cached = std::make_unique<const CachedSnapshotDigest>(
             CachedSnapshotDigest{source, document_snapshot_digest(source)});
-        m_snapshot_digest = std::move(cached);
-        return m_snapshot_digest->digest;
+        for (auto slot=m_snapshot_digests.size()-1;slot>0;--slot)
+            m_snapshot_digests[slot]=std::move(m_snapshot_digests[slot-1]);
+        m_snapshot_digests[0]=std::move(cached);
+        return m_snapshot_digests[0]->digest;
     }
     bool matchesWorkspaceAuthoringSource(const DocumentSnapshot& source) const {
         const auto workspace_source = m_project_workspace->snapshot();
@@ -33235,7 +33247,7 @@ private:
         m_autosave_document_id.clear();
         ++m_autosave_session;
         for (auto& entry : m_authoring_digests) entry.reset();
-        m_snapshot_digest.reset();
+        for (auto& entry:m_snapshot_digests) entry.reset();
         m_autosave_archive_id.clear();
         m_autosave_path.clear();
         m_autosave_sha256.clear();
@@ -33350,7 +33362,7 @@ private:
                 waitForSaveBarrier();
                 ++m_autosave_session;
                 for (auto& entry : m_authoring_digests) entry.reset();
-                m_snapshot_digest.reset();
+                for (auto& entry:m_snapshot_digests) entry.reset();
                 m_autosave_scheduler = WorkspaceAutosaveScheduler{};
                 m_autosave_document_id = document_id;
                 // Legacy projects use the document revision as their
@@ -47165,7 +47177,7 @@ private:
         DocumentSnapshot source;
         std::string digest;
     };
-    mutable std::unique_ptr<const CachedSnapshotDigest> m_snapshot_digest;
+    mutable std::array<std::unique_ptr<const CachedSnapshotDigest>,4> m_snapshot_digests;
     struct AutosaveInput {
         DocumentSnapshot source;
         ProjectWorkspaceSnapshot workspace;

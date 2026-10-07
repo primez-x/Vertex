@@ -10,12 +10,14 @@
 #include "sketch/assembly_document_adapter.hpp"
 
 #include <AIS_InteractiveContext.hxx>
+#include <AIS_InteractiveObject.hxx>
 #include <AIS_Manipulator.hxx>
 #include <AIS_ManipulatorMode.hxx>
 #include <AIS_ManipulatorOwner.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <Graphic3d_Camera.hxx>
 #include <StdSelect_ViewerSelector3d.hxx>
+#include <SelectMgr_EntityOwner.hxx>
 #include <AIS_Shape.hxx>
 #include <AIS_ColoredShape.hxx>
 #include <BRep_Builder.hxx>
@@ -58,6 +60,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <exception>
 #include <initializer_list>
@@ -216,6 +219,7 @@ public:
     std::optional<std::string> selected_entity_id;
     std::optional<std::string> manipulator_entity_id;
     std::optional<gp_Trsf> manipulation_transform;
+    std::uint64_t navigation_generation{};
 
     struct SelectionCapture {
         std::shared_ptr<const DocumentSnapshot> source;
@@ -224,10 +228,11 @@ public:
         QSize native_size;
         qreal pixel_ratio{};
         QStringList selection;
+        std::uint64_t navigation_generation{};
     };
     std::optional<SelectionCapture> selection_capture;
 
-    enum class Gesture { none, select, additive_select, edit, pan, orbit, move, manipulate };
+    enum class Gesture { none, select, additive_select, overlap_select, overlap_pan, edit, pan, orbit, move, manipulate };
     Gesture gesture = Gesture::none;
     Qt::MouseButton initiating_button = Qt::NoButton;
     QPoint navigation_start;
@@ -261,6 +266,13 @@ public:
 
     qreal input_scale() const noexcept { return input_device_pixel_ratio(*owner); }
 
+    void navigation_changed() noexcept {
+        // Do not wrap: at exhaustion selection fails closed rather than letting
+        // an old capture become current again. Camera ownership is unchanged.
+        if (navigation_generation != std::numeric_limits<std::uint64_t>::max())
+            ++navigation_generation;
+    }
+
     void synchronize_native_size() {
         if (!native_ready || view.IsNull() || window.IsNull()) return;
         int native_width = 0;
@@ -279,6 +291,7 @@ public:
         // size. Recheck at paint/show boundaries so the first settled frame
         // updates both that extent and the camera aspect, without refitting or
         // losing the user's pan, zoom, orbit, selection, or manipulation state.
+        navigation_changed();
         view->MustBeResized();
     }
 
@@ -290,6 +303,7 @@ public:
         // WNT_Window reports the physical client size. Refresh both the
         // OpenGL viewport and the camera aspect immediately before fitting so
         // a late QWidget/DPI resize cannot leave FitAll using an old aspect.
+        navigation_changed();
         view->MustBeResized();
         int native_width = 0;
         int native_height = 0;
@@ -655,6 +669,7 @@ public:
             viewer->SetLightOn();
             view->SetBackgroundColor(Quantity_Color(0.09, 0.11, 0.14, Quantity_TOC_RGB));
             view->SetShadingModel(Graphic3d_TypeOfShadingModel_Phong);
+            navigation_changed();
             view->SetProj(V3d_XposYnegZpos, false);
             view->MustBeResized();
             native_ready = true;
@@ -919,15 +934,72 @@ public:
         }
     }
 
+    void refuse_overlap_input(const QString& message) noexcept {
+        const QPointer<NativeModelView> guard(owner);
+        try { owner->cancelInteraction(); } catch (...) {}
+        if (guard) { try { show_input_error(message); } catch (...) {} }
+    }
+
+    void begin_overlap_selection() noexcept {
+        const QPointer<NativeModelView> guard(owner);
+        try {
+            owner->cancelInteraction();
+            detach_manipulator();
+            view->Redraw();
+            selection_capture=capture_selection();
+            gesture_snapshot=published_snapshot;
+            initiating_button=Qt::LeftButton;
+            gesture=Gesture::overlap_select;
+        } catch (const Standard_Failure& error) {
+            if (guard) refuse_overlap_input(QStringLiteral("3D overlap selection failed: ")+exception_text(error));
+        } catch (const std::exception& error) {
+            if (guard) refuse_overlap_input(QStringLiteral("3D overlap selection failed: ")+exception_text(error));
+        } catch (...) {
+            if (guard) refuse_overlap_input(QStringLiteral("3D overlap selection failed: unknown failure"));
+        }
+    }
+
+    void pan_overlap_drag(const NativeInputPoint point, bool finishing=false) noexcept {
+        const QPointer<NativeModelView> guard(owner);
+        try {
+            if (gesture==Gesture::overlap_select) {
+                if (!selection_capture || !selection_current(*selection_capture))
+                    throw std::invalid_argument("The displayed 3D source, selection or camera changed. Start again.");
+                const auto press=input_point(left_press);
+                navigation_start=QPoint(press.x,press.y);
+                // Transfer only this owned Alt gesture to camera input. Never
+                // reset an ongoing pan when its navigation epoch advances.
+                selection_capture.reset();
+                gesture_snapshot.reset();
+                gesture=Gesture::overlap_pan;
+                navigation_changed();
+                view->Pan(0,0,1.0,true);
+                owner->setCursor(Qt::ClosedHandCursor);
+            }
+            const auto delta=QPoint(point.x,point.y)-navigation_start;
+            navigation_changed();
+            view->Pan(delta.x(),-delta.y(),1.0,false);
+            if (finishing) owner->resetInteraction(true);
+        } catch (const Standard_Failure& error) {
+            if (guard) refuse_overlap_input(QStringLiteral("3D Alt pan failed: ")+exception_text(error));
+        } catch (const std::exception& error) {
+            if (guard) refuse_overlap_input(QStringLiteral("3D Alt pan failed: ")+exception_text(error));
+        } catch (...) {
+            if (guard) refuse_overlap_input(QStringLiteral("3D Alt pan failed: unknown failure"));
+        }
+    }
+
     SelectionCapture capture_selection() const {
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
         return {published_snapshot,view->Camera()->WorldViewProjState(),owner->size(),
-                QSize(width,height),input_scale(),selected_entity_ids};
+                QSize(width,height),input_scale(),selected_entity_ids,navigation_generation};
     }
 
     bool selection_current(const SelectionCapture& capture) const {
-        if (!owner->isReady() || !capture.source || published_snapshot != capture.source ||
+        if (!owner->isVisible() || !owner->isReady() || !capture.source || published_snapshot != capture.source ||
+            capture.navigation_generation != navigation_generation ||
+            navigation_generation == std::numeric_limits<std::uint64_t>::max() ||
             view.IsNull() || view->Camera().IsNull() || owner->size() != capture.logical_size ||
             input_scale() != capture.pixel_ratio || selected_entity_ids != capture.selection ||
             view->Camera()->WorldViewProjState() != capture.camera) return false;
@@ -948,20 +1020,36 @@ public:
     }
 
     std::optional<QString> select_at(const NativeInputPoint point, const SelectionCapture& capture,
-                                     bool editing=false, bool toggle=false) {
+                                      bool editing=false, bool toggle=false, bool cycle=false) {
         const QPointer<NativeModelView> guard(owner);
         try {
             if (!selection_current(capture) || !owner->admitSceneInput(false) || !guard ||
                 !selection_current(capture)) return std::nullopt;
             context->MoveTo(point.x,point.y,view,false);
-            const auto id=context->HasDetected()
-                ? entity_id_for_presentation(context->DetectedInteractive()) : QString{};
-            if ((editing || toggle) && id.isEmpty()) return QString{};
+            QString id;
+            if (cycle && !toggle) {
+                // OCCT's detected sequence is ordered by the actual pick. A
+                // material/face owner may repeat the same semantic object.
+                QStringList targets;
+                std::set<QString> seen;
+                for (context->InitDetected();context->MoreDetected();context->NextDetected()) {
+                    const auto detected=context->DetectedCurrentOwner();
+                    if (detected.IsNull() || !detected->HasSelectable()) continue;
+                    const auto target=entity_id_for_presentation(
+                        occ::handle<AIS_InteractiveObject>::DownCast(detected->Selectable()));
+                    if (!target.isEmpty() && seen.insert(target).second) targets.append(target);
+                }
+                if (!targets.isEmpty()) {
+                    const auto primary=capture.selection.isEmpty() ? QString{} : capture.selection.back();
+                    id=targets.at((targets.indexOf(primary)+1)%targets.size());
+                }
+            } else if (context->HasDetected()) id=entity_id_for_presentation(context->DetectedInteractive());
+            if ((editing || toggle || cycle) && id.isEmpty()) return QString{};
             if (!selection_current(capture)) return std::nullopt;
             // Preserve selected groups on their first plain click, as Qt sends
             // that release before a possible double-click. Context uses this
             // same policy; its selected member never replaces the group.
-            const bool retained=!toggle && !id.isEmpty() && selected_entity_ids.contains(id);
+            const bool retained=!toggle && !cycle && !id.isEmpty() && selected_entity_ids.contains(id);
             if (!retained) {
                 auto next=toggle ? selected_entity_ids : QStringList{};
                 if (toggle && next.contains(id)) next.removeAll(id);
@@ -1440,6 +1528,9 @@ void NativeModelView::resetInteraction(bool restore_controls) {
 }
 
 bool NativeModelView::event(QEvent* event) {
+    if (m_impl && (event->type()==QEvent::ScreenChangeInternal ||
+                   event->type()==QEvent::DevicePixelRatioChange))
+        m_impl->navigation_changed();
     if (m_impl && (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
                    event->type() == QEvent::WindowDeactivate || event->type() == QEvent::FocusOut)) {
         cancelInteraction();
@@ -1479,6 +1570,7 @@ void NativeModelView::showEvent(QShowEvent* event) {
 }
 
 void NativeModelView::resizeEvent(QResizeEvent* event) {
+    m_impl->navigation_changed();
     QWidget::resizeEvent(event);
     m_impl->refresh_status_label();
     if (m_impl->native_ready && !m_impl->view.IsNull()) {
@@ -1553,6 +1645,11 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
             event->accept();
             return;
         }
+        if (event->modifiers().testFlag(Qt::AltModifier)) {
+            m_impl->begin_overlap_selection();
+            event->accept();
+            return;
+        }
         m_impl->initiating_button = Qt::LeftButton;
         const auto capture_transform = [this](const QString& target) {
             m_impl->gesture_snapshot = m_impl->published_snapshot;
@@ -1607,6 +1704,14 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
 }
 
 void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
+    // Qt replaces the second press with a double-click event. Modified Alt
+    // repeats still need their normal press/release cycle, with Ctrl priority.
+    if (event->button()==Qt::LeftButton && event->buttons()==Qt::LeftButton &&
+        event->modifiers().testFlag(Qt::AltModifier) &&
+        !event->modifiers().testFlag(Qt::ControlModifier)) {
+        mousePressEvent(event);
+        return;
+    }
     // The second press belongs to Edit, never to an armed Move. Delay the
     // request until release so a drag or cancellation cannot open an editor.
     const bool can_edit = isReady() && event->button() == Qt::LeftButton &&
@@ -1646,6 +1751,11 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
     if (m_impl->initiating_button != Qt::NoButton &&
         (logical_point - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
         m_impl->left_moved = true;
+    if (m_impl->gesture==Impl::Gesture::overlap_select || m_impl->gesture==Impl::Gesture::overlap_pan) {
+        if (m_impl->left_moved) m_impl->pan_overlap_drag(point);
+        event->accept();
+        return;
+    }
     if (m_impl->gesture==Impl::Gesture::additive_select) {
         const QPointer<NativeModelView> guard(this);
         if (!m_impl->selection_capture || !m_impl->selection_current(*m_impl->selection_capture) ||
@@ -1664,7 +1774,10 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (m_impl->gesture == Impl::Gesture::orbit) {
-        if (m_impl->left_moved) m_impl->view->Rotation(point.x, point.y);
+        if (m_impl->left_moved) {
+            m_impl->navigation_changed();
+            m_impl->view->Rotation(point.x, point.y);
+        }
         event->accept();
         return;
     }
@@ -1672,6 +1785,7 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
         const auto delta = QPoint(point.x, point.y) - m_impl->navigation_start;
         // V3d::Pan accepts view-plane displacement (positive y is up),
         // unlike picking/rotation/zoom mouse positions measured from the top.
+        m_impl->navigation_changed();
         m_impl->view->Pan(delta.x(), -delta.y(), 1.0, false);
         event->accept();
         return;
@@ -1715,6 +1829,32 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
     const auto point = m_impl->input_point(event->position());
     if ((event->position() - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
         m_impl->left_moved = true;
+    if (m_impl->gesture==Impl::Gesture::overlap_select || m_impl->gesture==Impl::Gesture::overlap_pan) {
+        if (m_impl->left_moved) {
+            // Also covers press/release beyond threshold with no move event.
+            m_impl->pan_overlap_drag(point,true);
+        } else {
+            try {
+                const auto capture=m_impl->selection_capture;
+                if (!capture || !m_impl->selection_current(*capture))
+                    throw std::invalid_argument("The displayed 3D source, selection or camera changed. Start again.");
+                resetInteraction(false);
+                m_impl->commit_snapshot=capture->source;
+                (void)m_impl->select_at(point,*capture,false,false,true);
+                if (owner_guard) {
+                    try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
+                }
+            } catch (const Standard_Failure& error) {
+                if (owner_guard) m_impl->refuse_overlap_input(QStringLiteral("3D overlap selection failed: ")+exception_text(error));
+            } catch (const std::exception& error) {
+                if (owner_guard) m_impl->refuse_overlap_input(QStringLiteral("3D overlap selection failed: ")+exception_text(error));
+            } catch (...) {
+                if (owner_guard) m_impl->refuse_overlap_input(QStringLiteral("3D overlap selection failed: unknown failure"));
+            }
+        }
+        event->accept();
+        return;
+    }
     if (m_impl->gesture == Impl::Gesture::orbit || m_impl->gesture == Impl::Gesture::pan) {
         const bool context_click = m_impl->gesture == Impl::Gesture::orbit && !m_impl->left_moved;
         const auto global_position = event->globalPosition().toPoint();
@@ -1891,6 +2031,7 @@ void NativeModelView::wheelEvent(QWheelEvent* event) {
         const auto point = m_impl->input_point(event->position());
         const auto movement = std::clamp(delta / 8, -120, 120);
         const auto native_movement = qRound(static_cast<qreal>(movement) * m_impl->input_scale());
+        m_impl->navigation_changed();
         m_impl->view->StartZoomAtPoint(point.x, point.y);
         m_impl->view->ZoomAtPoint(point.x, point.y, point.x, point.y + native_movement);
         event->accept();
