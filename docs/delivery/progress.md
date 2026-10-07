@@ -14,6 +14,24 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 shared corner preview and canvas label lookup
+
+Measured-line and identified-area corner drags now capture the same immutable
+gesture inputs as physical endpoints in Measurement, horizontal Architectural
+plans and Site. Site proposals run in the existing preview worker; their old
+timer-based synchronous lane is removed. Release applies the exact admitted
+command instead of solving the corner edit again. Measured command preparation
+returns the verified candidate directly, removing a detached document/history
+reconstruction. Pointer proposals reuse the press capture.
+
+Canvas label layout now builds presentation lookup and admission sets once per
+pass. It preserves preview precedence, blank overrides, style and first duplicate
+matches without scanning each preview for every retained label or each retained
+label for every preview addition. Output and floor ghosts retain their separate
+inputs. No builds, tests, native jobs, packages or installations ran; compilation,
+runtime behavior and responsiveness remain unverified. Independent source review
+accepted command equivalence, captured release, Site projection and label lookup.
+
 ### October 7 measured-edge dimension identity
 
 Each measured-stroke edge now carries its stable segment identity into the

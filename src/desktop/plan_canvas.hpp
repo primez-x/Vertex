@@ -701,7 +701,6 @@ private:
         const CanvasEntity& entity) const;
     [[nodiscard]] std::optional<CanvasSelectionFrame> selectionAxes() const;
     [[nodiscard]] std::optional<CanvasSelectionFrame> computeSelectionAxes() const;
-    [[nodiscard]] CanvasLabel presentedLabel(const CanvasLabel& label, bool output) const;
     [[nodiscard]] const std::vector<CanvasLabel>& positionedLabels(
         const QFont& base_font, const QPaintDevice* device, double scale,
         double dpi, bool output, bool content_only = false, Vec2 layout_origin = {},

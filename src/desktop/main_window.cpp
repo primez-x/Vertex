@@ -6931,15 +6931,18 @@ public:
     }
 
     static Command measuredStrokeGeometryCommand(const DocumentSnapshot& source,
-        const BoundaryGeometryEdit& edit, std::optional<Quantity> authored_length = std::nullopt) {
+        const BoundaryGeometryEdit& edit, std::optional<Quantity> authored_length = std::nullopt,
+        std::optional<DocumentSnapshot>* admitted_candidate = nullptr) {
         const auto found=source.entities().find(edit.boundary_id);
         if (found==source.entities().end() || found->second.type!="measurement_linework")
             throw std::invalid_argument("The selected measured stroke is unavailable.");
         const auto decoded=decode_measurement_linework_model(found->second.properties.at("model"));
         if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
         const auto edited=edited_measurement_linework(*decoded.model,edit,authored_length);
-        if(encode_measurement_linework_model(edited)==found->second.properties.at("model"))
+        if(encode_measurement_linework_model(edited)==found->second.properties.at("model")) {
+            if (admitted_candidate) *admitted_candidate=source;
             return ApplyEntityChanges{source.revision(),{}, {},"Edit measured stroke"};
+        }
         ConstraintAuthoringIntent intent;intent.message="Edit measured stroke and connected geometry";
         if(edit.kind==BoundaryGeometryEditKind::move_vertex)
             intent.measured_stroke_vertex_move=MeasuredStrokeVertexMoveIntent{edit,true};
@@ -6949,11 +6952,10 @@ public:
         }
         const auto preview=preview_constraint_authoring(source,intent);
         requireAcceptedConstraintPreview(preview);
-        auto document=Document::fork(source);apply_constraint_authoring(document,preview);
-        const auto candidate=document.snapshot();
-        const auto& proof=candidate.history().back().boundary_constraint_changes;
-        if(!proof)throw std::invalid_argument("Measured edit did not retain its typed geometry history.");
-        return *proof;
+        auto command=constraint_authoring_verified_command(source,preview,admitted_candidate);
+        if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command))
+            throw std::invalid_argument("Measured edit did not retain its typed geometry history.");
+        return command;
     }
 
     static Command measuredStrokeTransformCommand(const DocumentSnapshot& source,
@@ -20320,6 +20322,11 @@ public:
         return type == "wall" || type == "beam" || type == "railing" || type == "slab" || type == "room";
     }
 
+    static bool planVertexObjectType(std::string_view type) {
+        return planEndpointObjectType(type) || type == "measurement_linework" ||
+            can_recognize_boundary_entity_type(type);
+    }
+
     static Command planEndpointCommand(const DocumentSnapshot& source, const QString& id,
         const QString& endpoint, Vec2 position) {
         const auto& wall = source.entities().at(id.toStdString());
@@ -20545,21 +20552,28 @@ public:
             const auto& owner = source.entities().at(edit.boundary_id);
             const bool endpoint_object = planEndpointObjectType(owner.type);
             const bool measured=source.entities().at(edit.boundary_id).type=="measurement_linework";
-            std::optional<Command> endpoint_command;
+            std::optional<Command> vertex_command;
             const auto candidate_snapshot = [&] {
                 if (endpoint_object) {
-                    endpoint_command = augmentAuthoredCommand(planEndpointCommand(source, entity_id, vertex_id, position), source);
-                    const auto candidate = Document::preview_command(source, *endpoint_command);
+                    vertex_command = augmentAuthoredCommand(planEndpointCommand(source, entity_id, vertex_id, position), source);
+                    const auto candidate = Document::preview_command(source, *vertex_command);
                     if (owner.type == "room") validate_architectural_geometry_changes(source, candidate);
                     else validate_architectural_geometry_changes(source, candidate, {edit.boundary_id});
                     return candidate;
                 }
-                if (measured) return Document::preview_command(source,measuredStrokeGeometryCommand(source,edit));
+                if (measured) {
+                    std::optional<DocumentSnapshot> candidate;
+                    vertex_command=measuredStrokeGeometryCommand(source,edit,std::nullopt,&candidate);
+                    return *candidate;
+                }
                 ConstraintAuthoringIntent intent;
                 intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
+                intent.message="move boundary vertex and related objects";
                 const auto preview=preview_constraint_authoring(source,intent);
-                if (!preview.accepted()) throw std::invalid_argument("The vertex proposal could not be resolved.");
-                return preview_constraint_authoring_snapshot(source,preview);
+                requireAcceptedConstraintPreview(preview);
+                std::optional<DocumentSnapshot> candidate;
+                vertex_command=constraint_authoring_verified_command(source,preview,&candidate);
+                return *candidate;
             }();
             const auto& candidate=candidate_snapshot.entities();
             auto result = computeConstraintGeometryProjection(source, candidate_snapshot, retained, eligible,
@@ -20569,7 +20583,7 @@ public:
                 result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
             }
             if (result && endpoint_object) result->metrics = endpointPreviewMetrics(candidate.at(edit.boundary_id));
-            if (result && endpoint_command && admitted_command) *admitted_command = std::move(*endpoint_command);
+            if (result && vertex_command && admitted_command) *admitted_command = std::move(*vertex_command);
             return result;
         } catch (const Standard_Failure&) { return std::nullopt; }
           catch (const std::exception&) { return std::nullopt; }
@@ -21698,7 +21712,7 @@ public:
         m_plan_endpoint_preview.reset();
         m_plan_endpoint_capture.reset();
         const auto& type = source->entities().at(id.toStdString()).type;
-        if (!planEndpointObjectType(type)) return;
+        if (!planVertexObjectType(type)) return;
         const bool site = siteCanvas(canvas);
         auto authority = m_vertex_preview_authority;
         std::shared_ptr<const SiteEndpointPreviewInput> site_input;
@@ -21771,31 +21785,7 @@ public:
     bool moveBoundaryVertexFromCanvas(PlanCanvas* canvas, const QString& id,
         const QString& vertex, Vec2 position, std::uint64_t revision) {
         try {
-            if (m_plan_endpoint_capture && m_plan_endpoint_capture->entity_id == id)
-                return commitPlanEndpointFromCanvas(canvas, id, vertex, position, revision);
-            if (siteCanvas(canvas)) {
-                position=site_source_plan_point(position,siteEditFrame({id}));
-                return moveSelectedBoundaryVertex(vertex,position,static_cast<Revision>(revision));
-            }
-            // pointerRelease resets the canvas gesture before publishing. The
-            // immutable preview capture, rather than the current view selector,
-            // therefore owns the inverse used for this final target.
-            if (!m_vertex_preview_source || m_vertex_preview_canvas != canvas ||
-                m_vertex_preview_document != m_document ||
-                m_vertex_preview_source->revision() != revision || !m_vertex_preview_authority ||
-                !sourceEditAuthorityCurrent(*m_vertex_preview_authority) ||
-                id != m_vertex_preview_authority->context.selected_id || m_linework_drawing ||
-                m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
-                throw std::invalid_argument("The boundary view changed before the corner edit was committed.");
-            if (canvas == m_architecturalCanvas && !m_vertex_preview_view_context)
-                throw std::invalid_argument("The captured plan frame is unavailable.");
-            if (m_vertex_preview_view_context)
-                position = unproject_plan_point(position, m_vertex_preview_view_context->frame);
-            const BoundaryGeometryEdit edit{id.toStdString(), BoundaryGeometryEditKind::move_vertex,
-                vertex.trimmed().toStdString(), position};
-            if (m_vertex_preview_source->entities().at(id.toStdString()).type == "measurement_linework")
-                return applySelectedMeasuredStrokeGeometryEdit(edit, std::nullopt, static_cast<Revision>(revision));
-            return applySelectedBoundaryGeometryEdit(edit, static_cast<Revision>(revision));
+            return commitPlanEndpointFromCanvas(canvas, id, vertex, position, revision);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Boundary geometry: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -22356,19 +22346,15 @@ public:
     }
 
     std::optional<std::vector<CanvasEntity>> previewBoundaryVertexFromCanvas(
-        PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision,
-        std::optional<CanvasBoundaryPreviewMetrics>* metrics_out = nullptr) {
+        PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision) {
         const auto endpoint_capture = m_plan_endpoint_capture && m_plan_endpoint_capture->entity_id == id
             ? m_plan_endpoint_capture : nullptr;
-        if (endpoint_capture) {
-            m_plan_endpoint_preview.reset();
-            if (!planEndpointCaptureCurrent(endpoint_capture)) return std::vector<CanvasEntity>{};
-        }
-        if (siteCanvas(canvas) && endpoint_capture) {
+        m_plan_endpoint_preview.reset();
+        if (!planEndpointCaptureCurrent(endpoint_capture) || endpoint_capture->canvas != canvas ||
+            endpoint_capture->source->revision() != revision ||
+            !std::isfinite(position.x) || !std::isfinite(position.y)) return std::vector<CanvasEntity>{};
+        if (siteCanvas(canvas)) {
             try {
-                if (endpoint_capture->source->revision() != revision ||
-                    !std::isfinite(position.x) || !std::isfinite(position.y))
-                    throw std::invalid_argument("The captured Site Plan endpoint source is unavailable.");
                 const auto serial = canvas->boundaryVertexPreviewSerial();
                 if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
                 const auto& input = endpoint_capture->site_input;
@@ -22396,51 +22382,8 @@ public:
                 return std::vector<CanvasEntity>{};
             }
         }
-        if (siteCanvas(canvas) && !m_site_preview_dispatching) {
-            const auto serial=canvas->boundaryVertexPreviewSerial();
-            if (!sitePreviewContextCurrent() || !canvas->markBoundaryVertexPreviewPending(serial)) return std::vector<CanvasEntity>{};
-            const auto generation=m_site_edit_generation;
-            queueSitePreview([this,target=QPointer<PlanCanvas>(canvas),id,vertex,position,revision,serial,generation] {
-                if (!target || generation!=m_site_edit_generation) return;
-                std::optional<CanvasBoundaryPreviewMetrics> metrics;
-                auto result=previewBoundaryVertexFromCanvas(target,id,vertex,position,revision,&metrics);
-                (void)target->completeBoundaryVertexPreview(serial,std::move(result),m_site_preview_labels,metrics);
-            });
-            return std::nullopt;
-        }
-        if (siteCanvas(canvas)) {
-            try {
-                if (!m_site_edit_source || m_site_edit_source->revision()!=revision) throw std::invalid_argument("The Site Plan gesture source is unavailable.");
-                const auto local=site_source_plan_point(position,siteEditFrame({id}));
-                const BoundaryGeometryEdit edit{id.toStdString(),BoundaryGeometryEditKind::move_vertex,vertex.toStdString(),local};
-                const auto& type = m_site_edit_source->entities().at(id.toStdString()).type;
-                if (planEndpointObjectType(type))
-                    throw std::invalid_argument("The captured Site Plan endpoint gesture is unavailable. Start the drag again.");
-                const auto command = type == "measurement_linework"
-                    ? measuredStrokeGeometryCommand(*m_site_edit_source,edit) : boundaryGeometryCommand(*m_site_edit_source,edit,true);
-                const auto candidate=Document::preview_command(*m_site_edit_source,command);
-                auto proposed=sitePreviewGeometry(candidate,{},SiteEditTransform{});
-                if (metrics_out) *metrics_out = std::nullopt;
-                const auto serial=canvas->boundaryVertexPreviewSerial();
-                if(canvas->markBoundaryVertexPreviewPending(serial)) {
-                    (void)canvas->completeBoundaryVertexPreview(serial,proposed,m_site_preview_labels);
-                    return std::nullopt;
-                }
-                return proposed;
-            } catch (const Standard_Failure& error) {
-                const auto* message = error.GetMessageString();
-                setError(message && *message ? QString::fromUtf8(message)
-                    : QStringLiteral("The endpoint preview could not be generated."));
-                return std::vector<CanvasEntity>{};
-            } catch (const std::exception& error) {setError(QString::fromUtf8(error.what()));return std::vector<CanvasEntity>{};}
-        }
-        if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
-            m_selected_ids.front()!=id || m_boundary_session || m_linework_drawing || m_pending_wall_start ||
-            !m_pending_symbol_id.isEmpty() ||
-            !m_vertex_preview_source || !m_vertex_preview_authority || m_vertex_preview_canvas != canvas ||
-            m_vertex_preview_source->revision() != revision || !sourceEditAuthorityCurrent(*m_vertex_preview_authority) ||
-            !std::isfinite(position.x) || !std::isfinite(position.y)) return std::nullopt;
-        captureConstraintGeometryPreview(canvas,revision);
+        // The press captured the source and scene. Pointer proposals share
+        // those inputs instead of recapturing the published plan each time.
         const auto serial=canvas->boundaryVertexPreviewSerial();
         if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
         if (m_vertex_preview_view_context)
@@ -22451,10 +22394,8 @@ public:
             std::make_shared<std::optional<VertexPreviewProjection>>()};
         request.authority=m_vertex_preview_authority;
         request.label_font=canvas->font();
-        if (endpoint_capture) {
-            request.plan_endpoint_capture = endpoint_capture;
-            request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
-        }
+        request.plan_endpoint_capture = endpoint_capture;
+        request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
             m_pending_vertex_preview=std::move(request);

@@ -23,6 +23,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPair>
 #include <QSvgRenderer>
 #include <QPainterPathStroker>
 #include <QSet>
@@ -3614,36 +3615,6 @@ std::optional<CanvasSelectionFrame> PlanCanvas::computeSelectionAxes() const {
     return std::nullopt;
 }
 
-CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) const {
-    auto presented = label;
-    if (!output && m_transform_preview_valid) {
-        for (const auto& proposed : m_transform_labels_preview)
-            if (same_label_presentation(proposed, label)) { presented = proposed; break; }
-    }
-    if (!output && m_move_preview_valid) {
-        for (const auto& proposed : m_move_labels_preview)
-            if (same_label_presentation(proposed, label)) { presented = proposed; break; }
-    }
-    if (!output && m_boundary_vertex_preview_valid) {
-        const auto preview_label = std::find_if(m_boundary_vertex_labels_preview.begin(),
-            m_boundary_vertex_labels_preview.end(),
-            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
-        if (preview_label != m_boundary_vertex_labels_preview.end()) presented = *preview_label;
-    }
-    if (!output && m_opening_width_preview_valid) {
-        const auto preview_label = std::find_if(m_opening_width_labels_preview.begin(),
-            m_opening_width_labels_preview.end(),
-            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
-        if (preview_label != m_opening_width_labels_preview.end()) presented = *preview_label;
-    }
-    if (!output && label.selected && m_transform_frame_start && !m_transform_preview_exact && m_move_ids.contains(label.id) &&
-        (m_left_gesture == LeftGesture::selection_resize || m_left_gesture == LeftGesture::selection_rotate)) {
-        presented.rotation_radians += m_transform_rotation_preview;
-        presented.scale *= m_transform_scale_preview;
-    }
-    return presented;
-}
-
 const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     const QFont& base_font, const QPaintDevice* device, double scale,
     double dpi, bool output, bool content_only, Vec2 layout_origin, bool floor_ghost) const {
@@ -3665,30 +3636,43 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     }
     // A preview result must never become the settled-input fast path on release.
     cache.retained_key.clear();
-    auto retained_labels=floor_ghost ? m_floor_ghost_labels : m_labels;
-    if (interactive && m_transform_preview_valid) {
-        for (const auto& proposed : m_transform_labels_preview)
-            if (std::none_of(retained_labels.begin(), retained_labels.end(),
-                [&](const auto& label) { return same_label_presentation(label, proposed); }))
+    auto retained_labels = floor_ghost ? m_floor_ghost_labels : m_labels;
+    using LabelPresentationKey = QPair<QString, QString>;
+    QHash<LabelPresentationKey, const CanvasLabel*> preview_labels;
+    if (interactive && (m_transform_preview_valid || m_move_preview_valid ||
+                        m_boundary_vertex_preview_valid || m_opening_width_preview_valid)) {
+        QSet<LabelPresentationKey> retained_presentations;
+        retained_presentations.reserve(retained_labels.size());
+        for (const auto& label : retained_labels)
+            retained_presentations.insert({label.id, label.callout_role});
+        const auto append_preview_labels = [&](const std::vector<CanvasLabel>& preview, bool valid) {
+            if (!valid) return;
+            for (const auto& proposed : preview) {
+                const LabelPresentationKey presentation{proposed.id, proposed.callout_role};
+                if (retained_presentations.contains(presentation)) continue;
+                retained_presentations.insert(presentation);
                 retained_labels.push_back(proposed);
-    }
-    if (interactive && m_move_preview_valid) {
-        for (const auto& proposed : m_move_labels_preview)
-            if (std::none_of(retained_labels.begin(), retained_labels.end(),
-                [&](const auto& label) { return same_label_presentation(label, proposed); }))
-                retained_labels.push_back(proposed);
-    }
-    if (interactive && m_boundary_vertex_preview_valid) {
-        for (const auto& proposed:m_boundary_vertex_labels_preview)
-            if (std::none_of(retained_labels.begin(),retained_labels.end(),
-                [&](const auto& label){return same_label_presentation(label, proposed);}))
-                retained_labels.push_back(proposed);
-    }
-    if (interactive && m_opening_width_preview_valid) {
-        for (const auto& proposed : m_opening_width_labels_preview)
-            if (std::none_of(retained_labels.begin(), retained_labels.end(),
-                [&](const auto& label) { return same_label_presentation(label, proposed); }))
-                retained_labels.push_back(proposed);
+            }
+        };
+        append_preview_labels(m_transform_labels_preview, m_transform_preview_valid);
+        append_preview_labels(m_move_labels_preview, m_move_preview_valid);
+        append_preview_labels(m_boundary_vertex_labels_preview, m_boundary_vertex_preview_valid);
+        append_preview_labels(m_opening_width_labels_preview, m_opening_width_preview_valid);
+
+        // Highest precedence first preserves the first match within each preview,
+        // including blank replacements that withhold a retained label's text.
+        const auto index_preview_labels = [&](const std::vector<CanvasLabel>& preview, bool valid) {
+            if (!valid) return;
+            for (const auto& proposed : preview) {
+                const LabelPresentationKey presentation{proposed.id, proposed.callout_role};
+                if (!preview_labels.contains(presentation))
+                    preview_labels.insert(presentation, &proposed);
+            }
+        };
+        index_preview_labels(m_opening_width_labels_preview, m_opening_width_preview_valid);
+        index_preview_labels(m_boundary_vertex_labels_preview, m_boundary_vertex_preview_valid);
+        index_preview_labels(m_move_labels_preview, m_move_preview_valid);
+        index_preview_labels(m_transform_labels_preview, m_transform_preview_valid);
     }
     std::vector<CanvasLabel> labels;
     labels.reserve(retained_labels.size());
@@ -3700,7 +3684,18 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
               << device->devicePixelRatioF() << device->devType();
     const auto point_key = [&](Vec2 p) { signature << p.x << p.y; };
     for (const auto& retained : retained_labels) {
-        auto label = floor_ghost ? retained : presentedLabel(retained, output);
+        auto label = retained;
+        if (interactive) {
+            const auto preview_label = preview_labels.constFind({retained.id, retained.callout_role});
+            if (preview_label != preview_labels.cend()) label = **preview_label;
+            if (retained.selected && m_transform_frame_start && !m_transform_preview_exact &&
+                m_move_ids.contains(retained.id) &&
+                (m_left_gesture == LeftGesture::selection_resize ||
+                 m_left_gesture == LeftGesture::selection_rotate)) {
+                label.rotation_radians += m_transform_rotation_preview;
+                label.scale *= m_transform_scale_preview;
+            }
+        }
         if (interactive && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(label.id)) {
             const auto delta = *m_move_preview_delta;
             label.position = label.position + delta;
