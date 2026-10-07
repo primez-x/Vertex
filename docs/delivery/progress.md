@@ -285,6 +285,12 @@ scan. Font and screen-metric changes clear the index. Independent source review
 approved this implementation; picking behavior and performance remain
 unobserved, and no build or test was run.
 
+System font, style and screen-metric changes now retire every retained label
+layout lane together with selection frames, content bounds and overview data.
+An output recording cannot reuse metrics from a previous font merely because
+the serialized font values match. Root source review confirms the shared
+invalidation path; no rendering or runtime resolution is claimed.
+
 Wall measurement and boundary dimension panels now retain that same complete
 source authority. Apply dispatches from the captured object and refuses a changed
 project, selection, units or view. Recovered wall measurements use the captured

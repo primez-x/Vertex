@@ -2380,11 +2380,10 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::StyleChange:
     case QEvent::ScreenChangeInternal:
     case QEvent::DevicePixelRatioChange:
-        // Picking and paint share this screen metrics publication. System font
-        // or device changes can invalidate metrics even if QFont values match.
-        m_label_placement_cache[0] = {};
-        m_content_bounds_cache = {};
-        m_overview_geometry_cache = {};
+        // System metrics can change while serialized QFont values remain equal.
+        // Retire every label lane and its selection/bounds derivatives together;
+        // an output recording must not reuse metrics from the previous font.
+        invalidateRetainedPresentation();
         break;
     case QEvent::FocusOut:
         // Focus can move to a panel after release while an exact proposal or
