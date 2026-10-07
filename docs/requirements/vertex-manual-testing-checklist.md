@@ -1077,6 +1077,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U173 — Create and resize a column**
+  - Canvas move check: Select the column in a plan, then drag from inside its selection boundary. The proposed column follows the pointer; Escape restores it. Accept a move, check its plan and 3D location, then Undo and Redo. Repeat in a shifted or rotated Architectural plan, including a crop. Leaving the crop removes the preview from that view; it must not leave a ghost at its old position.
   - Expected: Plan and 3D reflect the selected section and height.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1088,6 +1089,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U175 — Create a flat roof**
+  - Canvas move check: Move an independent roof by dragging its selected plan boundary. The preview and final location agree in ordinary and rotated plans. Cancel and Undo restore the original; save/reopen retains the accepted location.
   - Expected: The roof footprint, elevation and material are editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1114,6 +1116,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U180 — Create stairs between levels**
+  - Canvas move check: Select a stair and drag it in a plan. A valid proposal follows the pointer and accepts as one move; Cancel restores it. Repeat in a saved plan. Hosted rails must follow their supported host geometry. A move that breaks a required landing or support is refused and retains the original stair and railing.
   - Expected: The stair dimensions and level connection are understandable and editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1124,6 +1127,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U182 — Add a landing and railing**
+  - Canvas move check: Select an independent railing and drag it in a plan, then cancel once and accept a valid move. Its geometry follows the proposal; Undo/Redo and save/reopen retain the correct location. A hosted stair railing follows its host's admitted placement and does not silently become an independent rail.
   - Expected: They appear in the intended locations and can be edited.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

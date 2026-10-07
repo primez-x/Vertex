@@ -20218,6 +20218,36 @@ public:
                         proposed.segments = project_building_plan(object, candidate);
                         retain_beam_endpoint_handles(proposed, beam, source.revision(), source.is_editable());
                     }
+                } else if (entity.type == "column" || entity.type == "roof" ||
+                           entity.type == "stair" || entity.type == "railing") {
+                    const auto resolved = effective_building_geometry_entity(candidate_snapshot, entity);
+                    const auto original = source.entities().find(entity.id);
+                    // A hosted railing or a level-relative object can change
+                    // geometry without changing its own serialized properties.
+                    if (original != source.entities().end()) {
+                        const auto before = effective_building_geometry_entity(source, original->second);
+                        if (resolved == before && (!hosted_stair_railing(resolved) ||
+                            building_plan_source_key(candidate_snapshot, resolved) == building_plan_source_key(source, before)))
+                            continue;
+                    }
+                    const auto object = decode_building_entity(resolved);
+                    proposed.stroke_segments.reset();
+                    proposed.holes.clear();
+                    proposed.resize_frame.reset();
+                    proposed.hit_segments.clear();
+                    proposed.snap_points.clear();
+                    proposed.snap_segments.clear();
+                    proposed.drawing_alignment_segments.clear();
+                    proposed.vertex_handles.clear();
+                    if (view_context && !analytical_plan_context(BuildingViewKind::plan, *view_context)) {
+                        // Match committed custom-plan projection, including
+                        // actual solid crop faces even with infinite far depth.
+                        proposed.segments = project_architectural_view_shape(make_building_shape(object, candidate),
+                            BuildingViewKind::plan, *view_context).value_or(Boundary{});
+                        world_paths = false;
+                    } else {
+                        proposed.segments = project_building_plan(object, candidate);
+                    }
                 } else if (const auto wall=changed_walls.find(entity.id);wall!=changed_walls.end()) {
                     for (auto& handle : proposed.vertex_handles) {
                         if (handle.id == QStringLiteral("wall:start")) handle.position = wall->second.baseline.start;

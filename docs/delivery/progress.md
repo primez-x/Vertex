@@ -104,6 +104,14 @@ of printed/exported scenes. A newly resolved vertex-proposal dimension is
 admitted only with its exact candidate dimension line. These are source changes
 reviewed by root; no compilation or interactive outcome is claimed.
 
+The next code correction supplies exact candidate plan geometry for moved
+columns, roofs, stairs and railings. Their translation commands were already
+available, but their candidate owners were omitted from canvas preview results.
+Projection now uses admitted physical geometry, level placement and hosted-rail
+source changes; custom plans retain their frame/depth/crop, including solid crop
+faces. Metadata and committed sources remain authoritative. Source was inspected
+by root; no runtime drag, build or test was executed for this correction.
+
 The next source batch retains an immutable architectural-view source instead
 of copying its complete entity map. Separate retained spatial indexes enumerate
 pointer-hit geometry and nearby actual snap endpoints/segments. Source-order
