@@ -5126,6 +5126,16 @@ class MainWindow::Impl {
 
     struct SourceEditAuthority;
 
+    struct SiteEndpointPreviewInput {
+        std::vector<CanvasEntity> geometry;
+        std::vector<CanvasLabel> labels;
+        std::map<QString, SitePresentationPlacement> frames;
+        std::set<std::string, std::less<>> appraisal_area_ids;
+        std::map<QString, QRectF> label_footprints;
+        std::vector<Bounds2> component_bounds;
+        QFont label_font;
+    };
+
     struct PlanEndpointCapture {
         QPointer<PlanCanvas> canvas;
         std::shared_ptr<Document> document;
@@ -5140,6 +5150,7 @@ class MainWindow::Impl {
         std::uint64_t site_generation{};
         bool site{};
         bool had_focus{};
+        std::shared_ptr<const SiteEndpointPreviewInput> site_input;
     };
     struct PlanEndpointPreviewCommand {
         std::shared_ptr<const PlanEndpointCapture> capture;
@@ -20301,6 +20312,10 @@ public:
         return *proof;
     }
 
+    static bool planEndpointObjectType(std::string_view type) {
+        return type == "wall" || type == "beam" || type == "railing" || type == "slab" || type == "room";
+    }
+
     static Command planEndpointCommand(const DocumentSnapshot& source, const QString& id,
         const QString& endpoint, Vec2 position) {
         const auto& wall = source.entities().at(id.toStdString());
@@ -20524,8 +20539,7 @@ public:
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
             const auto& owner = source.entities().at(edit.boundary_id);
-            const bool endpoint_object = owner.type == "wall" || owner.type == "beam" || owner.type == "railing" ||
-                owner.type == "slab" || owner.type == "room";
+            const bool endpoint_object = planEndpointObjectType(owner.type);
             const bool measured=source.entities().at(edit.boundary_id).type=="measurement_linework";
             std::optional<Command> endpoint_command;
             const auto candidate_snapshot = [&] {
@@ -21239,6 +21253,13 @@ public:
             // the same obstacle order when a proposal newly qualifies an area.
             std::stable_sort(candidate_labels.begin(),candidate_labels.end(),
                 [](const auto& first,const auto& second){return plan_label_instance_key(first)<plan_label_instance_key(second);});
+            const auto withhold_label = [&](const CanvasLabel& retained) {
+                auto hidden = retained;
+                hidden.text.clear();
+                // Preview labels are overrides. Omitting one would restore
+                // its committed text, including stale area assertions.
+                result.labels.push_back(std::move(hidden));
+            };
             for (const auto& label : candidate_labels) {
                 const auto found=candidate.find(label.id.toStdString());
                 if (found==candidate.end()) {
@@ -21260,7 +21281,7 @@ public:
                     const auto configured=wall_presentations.find(entity.id);
                     const auto presentation=configured==wall_presentations.end() ? std::optional<PresentationOverride>{}
                         : std::optional<PresentationOverride>{configured->second};
-                    if (presentation && !presentation->visible) continue;
+                    if (presentation && !presentation->visible) { withhold_label(label); continue; }
                     const auto exterior=wall_regions.find(entity.id);
                     auto proposed=wall_dimension_label(entity.id,wall.baseline,wall.thickness,metric_units,label.selected,presentation,
                         exterior==wall_regions.end() ? nullptr : &exterior->second);
@@ -21342,14 +21363,17 @@ public:
                         if (const auto value=area_values.find(entity.id);value!=area_values.end()) calculation=value->second;
                         if (is_physical_wall_room(entity)) {
                             const auto current=candidate_physical_rooms.find(entity.id);
-                            if (current==candidate_physical_rooms.end() || !current->second.current) continue;
+                            if (current==candidate_physical_rooms.end() || !current->second.current) {
+                                withhold_label(label);
+                                continue;
+                            }
                             calculation=format_dimension_area(current->second.area_square_metres,metric_units);
                         }
                         const auto fresh=area_callout_labels(entity,read_boundary(entity.properties),calculation,
                             label.selected,candidate_area_presentations);
                         const auto matching=std::find_if(fresh.begin(),fresh.end(),[&](const auto& item){
                             return item.callout_role==label.callout_role;});
-                        if (matching==fresh.end()) continue;
+                        if (matching==fresh.end()) { withhold_label(label); continue; }
                         proposed.text=matching->text;
                         proposed.plan_label_offset=matching->plan_label_offset;
                         proposed.text_height_metres=matching->text_height_metres;
@@ -21459,11 +21483,12 @@ public:
         const auto entities_move_candidate=request.entities_move_candidate;
         const auto rigid_transform=request.rigid_transform;
         const auto endpoint_command=request.plan_endpoint_command;
+        const auto site_input=request.plan_endpoint_capture ? request.plan_endpoint_capture->site_input : nullptr;
         const auto axis_scales=request.axis_resize_scales;
         const auto axis_angle=request.axis_resize_model_angle;
         const auto axis_command=request.axis_resize_command;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,axis_scales,axis_angle,axis_command]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (axis_scales && axis_command) {
@@ -21520,6 +21545,25 @@ public:
                     } else *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
                         *label_footprints,*component_bounds,id,vertex,position,view_context,label_font,
                         endpoint_command ? endpoint_command.get() : nullptr);
+                    if (*result && site_input && !cancellation.is_cancelled()) {
+                        auto& projection = **result;
+                        // The worker owns immutable local geometry and frame
+                        // values only; no canvas/controller state is accessed.
+                        std::erase_if(projection.entities, [&](const auto& item) {
+                            return !site_input->frames.contains(item.id);
+                        });
+                        for (auto& item : projection.entities) {
+                            if (cancellation.is_cancelled()) break;
+                            item = site_presented_canvas_entity(item, site_input->frames.at(item.id));
+                        }
+                        std::erase_if(projection.labels, [&](const auto& item) {
+                            return !site_input->frames.contains(item.id);
+                        });
+                        for (auto& item : projection.labels) {
+                            if (cancellation.is_cancelled()) break;
+                            item = site_presented_canvas_label(item, site_input->frames.at(item.id));
+                        }
+                    }
                 }
                 return RegenerationReceipt{source->revision(),{}};
             });
@@ -21586,12 +21630,26 @@ public:
         m_plan_endpoint_preview.reset();
         m_plan_endpoint_capture.reset();
         const auto& type = source->entities().at(id.toStdString()).type;
-        if (type != "wall" && type != "beam" && type != "railing" && type != "slab" && type != "room") return;
+        if (!planEndpointObjectType(type)) return;
         const bool site = siteCanvas(canvas);
+        auto authority = m_vertex_preview_authority;
+        std::shared_ptr<const SiteEndpointPreviewInput> site_input;
+        if (site) {
+            requireSiteEditCurrent();
+            authority = std::make_shared<const SourceEditAuthority>(*m_site_edit_authority);
+            auto input = std::make_shared<SiteEndpointPreviewInput>();
+            input->geometry = m_site_edit_local_geometry;
+            input->labels = m_site_edit_local_labels;
+            input->frames = m_site_edit_frames;
+            input->appraisal_area_ids = m_plan_appraisal_area_ids;
+            input->label_font = canvas->font();
+            site_input = std::move(input);
+        }
         m_plan_endpoint_capture = std::make_shared<PlanEndpointCapture>(PlanEndpointCapture{
-            canvas, m_document, std::move(source), site ? m_site_edit_authority : m_vertex_preview_authority,
+            canvas, m_document, std::move(source), std::move(authority),
             id, canvas->viewCenter(), canvas->viewScale(), canvas->size(), canvas->devicePixelRatioF(),
-            canvas->navigationGeneration(), site ? m_site_edit_generation : 0, site, canvas->hasFocus()});
+            canvas->navigationGeneration(), site ? m_site_edit_generation : 0, site, canvas->hasFocus(),
+            std::move(site_input)});
     }
 
     bool planEndpointCaptureCurrent(const std::shared_ptr<const PlanEndpointCapture>& capture) const noexcept {
@@ -21610,7 +21668,8 @@ public:
                 capture->canvas->navigationGeneration() != capture->navigation_generation) return false;
             if (capture->site) {
                 requireSiteEditCurrent();
-                return capture->site_generation == m_site_edit_generation && capture->source == m_site_edit_source;
+                return capture->site_input && capture->site_generation == m_site_edit_generation &&
+                    capture->source == m_site_edit_source;
             }
             return capture->canvas == m_vertex_preview_canvas && capture->source == m_vertex_preview_source &&
                 capture->authority == m_vertex_preview_authority;
@@ -22237,6 +22296,38 @@ public:
             m_plan_endpoint_preview.reset();
             if (!planEndpointCaptureCurrent(endpoint_capture)) return std::vector<CanvasEntity>{};
         }
+        if (siteCanvas(canvas) && endpoint_capture) {
+            try {
+                if (endpoint_capture->source->revision() != revision ||
+                    !std::isfinite(position.x) || !std::isfinite(position.y))
+                    throw std::invalid_argument("The captured Site Plan endpoint source is unavailable.");
+                const auto serial = canvas->boundaryVertexPreviewSerial();
+                if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
+                const auto& input = endpoint_capture->site_input;
+                const auto local = site_source_plan_point(position, input->frames.at(id));
+                const auto geometry = std::shared_ptr<const std::vector<CanvasEntity>>(input, &input->geometry);
+                PendingVertexPreview request{canvas, serial, m_document, endpoint_capture->source, geometry, geometry,
+                    std::shared_ptr<const std::vector<CanvasLabel>>(input, &input->labels),
+                    std::shared_ptr<const std::set<std::string, std::less<>>>(input, &input->appraisal_area_ids),
+                    std::shared_ptr<const std::map<QString, QRectF>>(input, &input->label_footprints),
+                    std::shared_ptr<const std::vector<Bounds2>>(input, &input->component_bounds),
+                    m_metric_units, id, vertex, local, std::nullopt,
+                    std::make_shared<std::optional<VertexPreviewProjection>>()};
+                request.authority = endpoint_capture->authority;
+                request.label_font = input->label_font;
+                request.plan_endpoint_capture = endpoint_capture;
+                request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
+                if (m_running_vertex_preview) {
+                    (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+                    m_pending_vertex_preview = std::move(request);
+                } else startVertexPreviewJob(std::move(request));
+                return std::nullopt;
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Site Plan endpoint: %1").arg(QString::fromUtf8(error.what())));
+                (void)canvas->completeBoundaryVertexPreview(canvas->boundaryVertexPreviewSerial(), std::nullopt);
+                return std::vector<CanvasEntity>{};
+            }
+        }
         if (siteCanvas(canvas) && !m_site_preview_dispatching) {
             const auto serial=canvas->boundaryVertexPreviewSerial();
             if (!sitePreviewContextCurrent() || !canvas->markBoundaryVertexPreviewPending(serial)) return std::vector<CanvasEntity>{};
@@ -22255,25 +22346,16 @@ public:
                 const auto local=site_source_plan_point(position,siteEditFrame({id}));
                 const BoundaryGeometryEdit edit{id.toStdString(),BoundaryGeometryEditKind::move_vertex,vertex.toStdString(),local};
                 const auto& type = m_site_edit_source->entities().at(id.toStdString()).type;
-                const bool endpoint_object = type == "wall" || type == "beam" || type == "railing" ||
-                    type == "slab" || type == "room";
-                const auto command = endpoint_object ? augmentAuthoredCommand(planEndpointCommand(*m_site_edit_source, id, vertex, local), *m_site_edit_source)
-                    : m_site_edit_source->entities().at(id.toStdString()).type=="measurement_linework"
-                        ? measuredStrokeGeometryCommand(*m_site_edit_source,edit) : boundaryGeometryCommand(*m_site_edit_source,edit,true);
+                if (planEndpointObjectType(type))
+                    throw std::invalid_argument("The captured Site Plan endpoint gesture is unavailable. Start the drag again.");
+                const auto command = type == "measurement_linework"
+                    ? measuredStrokeGeometryCommand(*m_site_edit_source,edit) : boundaryGeometryCommand(*m_site_edit_source,edit,true);
                 const auto candidate=Document::preview_command(*m_site_edit_source,command);
-                if (endpoint_object) {
-                    if (type == "room") validate_architectural_geometry_changes(*m_site_edit_source, candidate);
-                    else validate_architectural_geometry_changes(*m_site_edit_source, candidate, {id.toStdString()});
-                }
                 auto proposed=sitePreviewGeometry(candidate,{},SiteEditTransform{});
-                const auto metrics = endpoint_object
-                    ? std::optional{endpointPreviewMetrics(candidate.entities().at(id.toStdString()))} : std::nullopt;
-                if (metrics_out) *metrics_out = metrics;
+                if (metrics_out) *metrics_out = std::nullopt;
                 const auto serial=canvas->boundaryVertexPreviewSerial();
-                if (endpoint_object && endpoint_capture && planEndpointCaptureCurrent(endpoint_capture))
-                    m_plan_endpoint_preview = PlanEndpointPreviewCommand{endpoint_capture, serial, vertex, local, command};
                 if(canvas->markBoundaryVertexPreviewPending(serial)) {
-                    (void)canvas->completeBoundaryVertexPreview(serial,proposed,m_site_preview_labels,metrics);
+                    (void)canvas->completeBoundaryVertexPreview(serial,proposed,m_site_preview_labels);
                     return std::nullopt;
                 }
                 return proposed;
@@ -22326,12 +22408,16 @@ public:
         };
         const auto current=[&](const PendingVertexPreview& request) noexcept {
             try {
-                if (!request.canvas || request.document!=m_document || !request.authority ||
-                    request.source != m_vertex_preview_source || request.canvas != m_vertex_preview_canvas ||
+                if (!request.canvas || request.document!=m_document || !request.source || !request.authority ||
                     !sourceEditAuthorityCurrent(*request.authority) || m_boundary_session || m_linework_drawing ||
                     m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
                     fullSnapshotDigest(*request.source) != request.authority->source_digest) return false;
                 if (request.plan_endpoint_capture && !planEndpointCaptureCurrent(request.plan_endpoint_capture)) return false;
+                if (request.plan_endpoint_capture && request.plan_endpoint_capture->site) {
+                    if (request.source != request.plan_endpoint_capture->source ||
+                        request.canvas != request.plan_endpoint_capture->canvas ||
+                        request.authority != request.plan_endpoint_capture->authority) return false;
+                } else if (request.source != m_vertex_preview_source || request.canvas != m_vertex_preview_canvas) return false;
                 if (request.entity_transform_preview)
                     return request.serial==m_entity_transform_serial &&
                         request.canvas->entityTransformPreviewSerial()==request.serial &&

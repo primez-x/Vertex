@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 Site physical-endpoint preview worker
+
+Physical wall, beam, independent railing, room and slab endpoint proposals in
+Site Plan now run through the existing cancellable preview worker. A gesture
+captures its local scene, labels, presentation frames, appraisal mask and font
+once; pointer requests share those immutable inputs. The worker validates the
+exact command and geometry, then applies captured Site transforms once. The
+owner-thread completion checks the actual source, selection, view, navigation,
+focus and Site generations before publishing the admitted preview or command.
+Physical requests without that capture cannot fall back to synchronous work.
+
+Independent source review identified and corrected the Site authority's
+optional/shared-pointer interface mismatch. It also exposed retained-label
+fallback: stale physical rooms or removed callout roles now emit explicit blank
+overrides instead of leaving old quantity text visible during a proposal. The
+corrected source path was accepted. No native builds, tests, probes, packages or
+installations ran; responsiveness and interaction remain unobserved, and other
+Site preview families retain their existing execution lanes.
+
 ### October 7 practical Details and report length labels
 
 Non-ANSI boundary dimensions and perimeters in Details and the appraisal report
