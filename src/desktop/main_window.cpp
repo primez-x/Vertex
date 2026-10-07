@@ -4035,6 +4035,10 @@ std::vector<CanvasLabel> area_callout_labels(const Entity& entity,const Boundary
     return result;
 }
 
+QString measurement_edge_callout_role(const std::string& segment_id) {
+    return QStringLiteral("measurement_edge:")+QString::fromStdString(segment_id);
+}
+
 CanvasLabel wall_dimension_label(const std::string& id,const Segment& baseline,
     double thickness,bool metric,bool selected,const std::optional<PresentationOverride>& presentation,
     const QPainterPath* exterior=nullptr) {
@@ -20787,6 +20791,51 @@ public:
                 area_values.try_emplace(id,value);
             const auto wall_regions=wall_dimension_exterior_regions(candidate_snapshot);
             const auto wall_presentations=wall_dimension_presentations(candidate);
+            using MeasurementAnchor=std::array<double,5>;
+            const auto measurement_anchor=[](const Segment& edge) {
+                return MeasurementAnchor{edge.start.x,edge.start.y,edge.end.x,edge.end.y,edge.sweep_radians};
+            };
+            struct MeasurementPreviewGeometry {
+                MeasurementLineworkReplay replay;
+                std::map<std::string,Segment,std::less<>> original_edges;
+                std::map<std::string,Segment,std::less<>> candidate_edges;
+                std::map<MeasurementAnchor,std::optional<std::string>> original_anchor_ids;
+                bool right_side{};
+            };
+            std::map<std::string,MeasurementPreviewGeometry,std::less<>> measurement_geometry;
+            std::map<std::string,std::size_t,std::less<>> legacy_measurement_label_counts;
+            for (const auto& label:labels)
+                if (label.callout_role.isEmpty()) ++legacy_measurement_label_counts[label.id.toStdString()];
+            const auto measured_geometry=[&](const Entity& entity) -> const MeasurementPreviewGeometry& {
+                if (const auto cached=measurement_geometry.find(entity.id);cached!=measurement_geometry.end())
+                    return cached->second;
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                const auto original=decode_measurement_linework_model(source.entities().at(entity.id).properties.at("model"));
+                if (!decoded.supported() || !original.supported())
+                    throw std::invalid_argument("Measured stroke preview requires supported source and candidate models.");
+                MeasurementPreviewGeometry geometry;
+                geometry.replay=replay_measurement_linework(*decoded.model);
+                const auto original_replay=replay_measurement_linework(*original.model);
+                for (const auto& edge:original_replay.edges) {
+                    geometry.original_edges.emplace(edge.segment_id,edge.segment);
+                    auto anchor=edge.segment;
+                    if (view_context && horizontal_plan_frame(view_context->frame)) {
+                        anchor.start=project_plan_point(anchor.start,view_context->frame);
+                        anchor.end=project_plan_point(anchor.end,view_context->frame);
+                        const auto right=plan_view_right(view_context->frame),up=plan_view_up(view_context->frame);
+                        anchor.sweep_radians*=right.x*up.y-right.y*up.x;
+                    }
+                    const auto [found,unique]=geometry.original_anchor_ids.emplace(measurement_anchor(anchor),edge.segment_id);
+                    if (!unique) found->second.reset();
+                }
+                Boundary boundary;
+                for (const auto& edge:geometry.replay.edges) {
+                    geometry.candidate_edges.emplace(edge.segment_id,edge.segment);
+                    if (geometry.replay.closed) boundary.push_back(edge.segment);
+                }
+                geometry.right_side=geometry.replay.closed && signed_area(boundary)>0;
+                return measurement_geometry.emplace(entity.id,std::move(geometry)).first->second;
+            };
             // A worker-local paint device measures candidate text without
             // reading a QWidget from the background projection thread.
             QImage label_device(1, 1, QImage::Format_ARGB32);
@@ -21118,9 +21167,7 @@ public:
                             wall->second.thickness};
                 } else if (entity.type=="measurement_linework") {
                     if (entity == source.entities().at(entity.id)) continue;
-                    const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
-                    if (!decoded.supported()) return std::nullopt;
-                    const auto replay=replay_measurement_linework(*decoded.model);
+                    const auto& replay=measured_geometry(entity).replay;
                     proposed.segments.clear(); proposed.snap_points.clear(); proposed.snap_segments.clear();
                     proposed.vertex_handles.clear();
                     std::set<std::string,std::less<>> handled_vertices;
@@ -21263,6 +21310,11 @@ public:
             for (const auto& label : candidate_labels) {
                 const auto found=candidate.find(label.id.toStdString());
                 if (found==candidate.end()) {
+                    const auto original=source.entities().find(label.id.toStdString());
+                    if (original!=source.entities().end() && original->second.type=="measurement_linework") {
+                        withhold_label(label);
+                        continue;
+                    }
                     if (const auto moved=annotation_deltas.find(label.id.toStdString());moved!=annotation_deltas.end()) {
                         auto proposed=label;
                         proposed.position.x+=moved->second.x;
@@ -21292,33 +21344,49 @@ public:
                     }
                     result.labels.push_back(std::move(proposed));
                 } else if (entity.type=="measurement_linework") {
+                    const auto configured=wall_presentations.find(entity.id);
+                    const auto presentation=configured==wall_presentations.end() ? std::optional<PresentationOverride>{}
+                        : std::optional<PresentationOverride>{configured->second};
+                    if (presentation && !presentation->visible) { withhold_label(label); continue; }
                     if (entity == source.entities().at(entity.id)) continue;
-                    const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
-                    if (!decoded.supported()) return std::nullopt;
-                    const auto replay=replay_measurement_linework(*decoded.model);
-                    const auto original=decode_measurement_linework_model(source.entities().at(entity.id).properties.at("model"));
-                    const auto original_replay=replay_measurement_linework(*original.model);
-                    const auto index=std::find_if(original_replay.edges.begin(),original_replay.edges.end(),[&](const auto& edge) {
-                        if (!label.automatic_linear_placement) return false;
-                        const auto a=view_context ? project_plan_path(Boundary{edge.segment},view_context->frame).front() : edge.segment;
-                        const auto& b=label.automatic_linear_placement->anchor;
-                        return a.start.x==b.start.x && a.start.y==b.start.y && a.end.x==b.end.x && a.end.y==b.end.y && a.sweep_radians==b.sweep_radians;
-                    });
-                    if (index==original_replay.edges.end()) continue;
-                    const auto& edge=replay.edges.at(static_cast<std::size_t>(index-original_replay.edges.begin()));
-                    auto proposed=wall_dimension_label(entity.id,edge.segment,0.0,metric_units,label.selected,std::nullopt);
-                    proposed.text=format_boundary_length(segment_length(edge.segment),metric_units,ansi_boundary_dimensions(candidate_snapshot,entity));
-                    Boundary boundary; for (const auto& item : replay.edges) boundary.push_back(item.segment);
-                    if (replay.closed && signed_area(boundary)>0) {
-                        auto& placement=*proposed.automatic_linear_placement;
+                    const auto& geometry=measured_geometry(entity);
+                    std::string segment_id;
+                    if (label.callout_role.startsWith(QStringLiteral("measurement_edge:")))
+                        segment_id=label.callout_role.mid(QStringLiteral("measurement_edge:").size()).toStdString();
+                    else if (label.callout_role.isEmpty() && label.automatic_linear_placement &&
+                        legacy_measurement_label_counts.at(entity.id)==1) {
+                        const auto anchor=measurement_anchor(label.automatic_linear_placement->anchor);
+                        if (std::all_of(anchor.begin(),anchor.end(),[](double value){return std::isfinite(value);})) {
+                            const auto original=geometry.original_anchor_ids.find(anchor);
+                            if (original!=geometry.original_anchor_ids.end() && original->second) segment_id=*original->second;
+                        }
+                    }
+                    // Child identity survives reordering and coincident edges.
+                    // Legacy matching is admitted only for one exact, unique
+                    // captured anchor and one retained label presentation.
+                    const auto edge=geometry.candidate_edges.find(segment_id);
+                    if (!geometry.original_edges.contains(segment_id) || edge==geometry.candidate_edges.end()) {
+                        withhold_label(label);
+                        continue;
+                    }
+                    auto refreshed=wall_dimension_label(entity.id,edge->second,0.0,metric_units,label.selected,presentation);
+                    refreshed.text=format_boundary_length(segment_length(edge->second),metric_units,ansi_boundary_dimensions(candidate_snapshot,entity));
+                    if (geometry.right_side && refreshed.automatic_linear_placement) {
+                        auto& placement=*refreshed.automatic_linear_placement;
                         placement.outward_normal={-placement.outward_normal.x,-placement.outward_normal.y};
-                        const auto middle=point_at_segment(edge.segment,0.5).value();
-                        proposed.position={middle.x+placement.outward_normal.x*placement.clearance_metres,
+                        const auto middle=point_at_segment(edge->second,0.5).value();
+                        refreshed.position={middle.x+placement.outward_normal.x*placement.clearance_metres,
                             middle.y+placement.outward_normal.y*placement.clearance_metres};
                     }
-                    proposed.text_height_metres=label.text_height_metres;
-                    proposed.paper_height_mm=label.paper_height_mm;
-                    proposed.selection_type=label.selection_type;
+                    // Keep the captured role, selection and full view styling;
+                    // only candidate measurement and configured placement move.
+                    auto proposed=label;
+                    proposed.text=std::move(refreshed.text);
+                    proposed.position=refreshed.position;
+                    proposed.rotation_radians=refreshed.rotation_radians;
+                    proposed.automatic_linear_placement=refreshed.automatic_linear_placement;
+                    proposed.leader_start=refreshed.leader_start;
+                    proposed.wall_dimension_manual_rotation=refreshed.wall_dimension_manual_rotation;
                     if (view_context) {
                         std::vector<CanvasLabel> projected{std::move(proposed)};
                         project_plan_model_labels(projected,candidate_snapshot,view_context->frame);
@@ -39048,6 +39116,7 @@ private:
                         if (presentation && !presentation->visible) continue;
                         auto dimension = wall_dimension_label(id, edge.segment, 0.0,
                             options.metric_units, id_from(id) == options.selected_id, presentation);
+                        dimension.callout_role=measurement_edge_callout_role(edge.segment_id);
                         dimension.text = format_boundary_length(segment_length(edge.segment), options.metric_units,
                             ansi_boundary_dimensions(snapshot, entity));
                         if (right_side && dimension.automatic_linear_placement) {

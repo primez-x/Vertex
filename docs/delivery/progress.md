@@ -14,6 +14,17 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 measured-edge dimension identity
+
+Each measured-stroke edge now carries its stable segment identity into the
+canvas label presentation. Editing a multi-edge stroke no longer resolves all
+its dimensions to the first label belonging to the same owner. Candidate
+geometry and dimensions share one replay and edge lookup per stroke instead of
+replaying the complete stroke for every label. Reordered or coincident edges
+retain their own identities; hidden, removed or unresolved dimensions receive
+blank retained-key overrides. Captured styling and configured placement survive
+the proposal. These source changes have not been built or run.
+
 ### October 7 Site physical-endpoint preview worker
 
 Physical wall, beam, independent railing, room and slab endpoint proposals in
