@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v95
+# Vertex project formats v1 through v96
+
+## Atomic proposed roof envelope, opening and placement edits (v96)
+
+Native format 96 and JSON/assets extraction version 94 retain roof replacement
+record three under the same exclusive phase intent four authority. Record three
+has exactly record two's seven fields plus `roof_edits`. Its historical
+`roof_profiles` and `roof_opening_edits` arrays are empty; `roof_edits` is
+nonempty. Earlier records keep their original fields, interpretation and floors.
+
+Each combined roof intent is strict version one with exactly `version`,
+`roof_id`, `profile`, `openings` and `pose`. Components are null when absent,
+and at least one is supplied. All component owner IDs must match. Profile and
+opening components retain their existing exact quantity contracts. A pose
+component has exactly `version`, `roof_id`, `x`, `y`, `z` and
+`orientation_radians`. Coordinates are signed/zero exact length quantities;
+orientation is a finite angle scalar and has no length receipt.
+
+Every component stages its schema-owned changes against the same admitted
+original entity. The composed result owns disjoint profile, roster, pose and
+quantity receipt deltas. Only the complete resulting roof must fit its final
+envelope, allowing a shrink with opening removal or an expansion with a new
+opening in one operation. No intermediate entity or fabricated snapshot gains
+source authority. Complete final equality against independent typed replay
+rejects accompanying metadata, form or unsupported receipt changes.
+
+The actual full map admits source and final resolved roofs and affected active
+fused joins. A replacement derives the complete baseline cohort, requires
+exactly its actually changed seed roofs, and retains every original owner.
+Fresh copied/new child identities and additive presentation references retain
+record two's current/history protections. Equivalent inputs return the original
+without adding history. The format floor follows retained nested and composed
+proofs even after Undo. Roof form conversion, clone/delete alternatives and
+unsupported affected reference families require further typed contracts.
 
 ## Baseline-preserving roof-opening edits (v95)
 

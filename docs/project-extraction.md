@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 94 retains atomic proposed roof profile, opening and placement
+edits and requires native reader 96. Roof replacement record three preserves its
+complete combined intent, exact coordinate/profile/opening quantities, finite
+orientation, source-derived cohort mappings and new child IDs. Intermediate
+envelopes have no independent source authority. The floor follows direct and
+composed phase proofs throughout retained history; earlier records retain their
+previous floors.
+
 Exchange version 93 retains baseline-preserving roof-opening additions,
 dimension edits and removals and requires native reader 95. Roof replacement
 record two retains exact quantities and their actual parsing default units,

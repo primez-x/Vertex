@@ -330,13 +330,24 @@ PhaseRoofReplacementPlan inspect_phase_roof_replacement_plan(
 PhaseRoofReplacementResult replay_phase_roof_replacement(
     const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementPlan& plan,
     const PhaseRoofReplacementIdentityMap& identities, const std::vector<RoofProfileEditIntent>& profiles,
-    const std::vector<RoofOpeningEditIntent>& opening_edits) {
+    const std::vector<RoofOpeningEditIntent>& opening_edits, const std::vector<RoofEditIntent>& roof_edits) {
     try {
         const auto derived = inspect_phase_roof_replacement_plan(source, plan.seed_roof_ids, plan.registry_id, plan.alternative_id);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
-        if (profiles.empty() && opening_edits.empty()) reject("replacement requires explicit roof edits");
-        if (!profiles.empty() && !opening_edits.empty()) reject("mixed roof profile and opening replacement is unsupported");
+        if (profiles.empty() && opening_edits.empty() && roof_edits.empty()) reject("replacement requires explicit roof edits");
+        if ((!profiles.empty() && !opening_edits.empty()) ||
+            (!roof_edits.empty() && (!profiles.empty() || !opening_edits.empty())))
+            reject("replacement dialects cannot be mixed");
+        const bool combined = !roof_edits.empty();
+        const bool strict_children = combined || !opening_edits.empty();
+        if (combined) {
+            PhaseRoofReplacementAuthoring authoring;
+            authoring.registry_id = plan.registry_id; authoring.alternative_id = plan.alternative_id;
+            authoring.seed_roof_ids = plan.seed_roof_ids; authoring.identities = identities;
+            authoring.roof_edits = roof_edits;
+            (void)encode_phase_roof_replacement_authoring(authoring);
+        }
         const Ids seeds(plan.seed_roof_ids.begin(), plan.seed_roof_ids.end());
         Ids edit_targets;
         for (const auto& profile : profiles)
@@ -345,11 +356,14 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
         for (const auto& edit : opening_edits)
             if (!seeds.contains(edit.roof_id) || !edit_targets.insert(edit.roof_id).second)
                 reject("opening edits require unique explicit seed roofs");
-        if (edit_targets!=seeds) reject(opening_edits.empty() ? "roof seeds must exactly match the authored profile targets"
-            : "roof seeds must exactly match the authored opening targets");
-        const auto physical = opening_edits.empty() ? replay_roof_profile_entities(source, profiles)
+        for (const auto& edit : roof_edits)
+            if (!seeds.contains(edit.roof_id) || !edit_targets.insert(edit.roof_id).second)
+                reject("combined roof edits require unique explicit seed roofs");
+        if (edit_targets!=seeds) reject("roof seeds must exactly match the authored edit targets");
+        const auto physical = combined ? replay_roof_edit_entities(source, roof_edits)
+            : opening_edits.empty() ? replay_roof_profile_entities(source, profiles)
             : replay_roof_opening_entities(source, opening_edits);
-        if (opening_edits.empty() && physical == source) {
+        if (!strict_children && physical == source) {
             if (!identities.empty()) reject("source-equivalent roof profiles must not allocate identities");
             return {source, {}, {}};
         }
@@ -361,9 +375,9 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
         if (identities.size() != expected.size()) reject("requires complete exact entity/child mapping");
         auto occupied = occupied_strings(source);
-        if (!opening_edits.empty()) {
+        if (strict_children) {
             // Version one retains its historical reservation policy. The new
-            // opening dialect reserves the complete source entity envelope.
+            // opening and combined dialects reserve the complete source envelope.
             for (const auto* key : {"id", "type", "properties", "required", "extensions"}) occupied.values.insert(key);
             for (const auto& [id, entity] : source) { (void)id; occupied.values.insert(entity.type); }
         }
@@ -375,18 +389,19 @@ PhaseRoofReplacementResult replay_phase_roof_replacement(
         }
         // These identities were authored explicitly against the complete actual
         // source. They are not mapping keys and are retained verbatim in copies.
-        for (const auto& id : new_roof_opening_identity_ids(source, opening_edits)) {
+        const auto authored_openings = combined ? roof_edit_opening_intents(roof_edits) : opening_edits;
+        for (const auto& id : new_roof_opening_identity_ids(source, authored_openings)) {
             if (expected.contains(id) || identities.contains(id) || !fresh.insert(id).second)
                 reject("authored opening identity collides with replacement mapping: " + id);
         }
-        if (!opening_edits.empty() && fresh.size() > maximum_replacements)
+        if (strict_children && fresh.size() > maximum_replacements)
             reject("replacement fresh identity budget exceeded");
         Ids roofs, joins;
         for (const auto& id : plan.required_entity_ids) (source.at(id).type == "roof" ? roofs : joins).insert(id);
         admit_roofs_and_joins(physical, roofs, joins);
         PhaseRoofReplacementResult result{source, identities, {}};
         const auto remap_child = [&](const std::string& child) {
-            return opening_edits.empty() ? identities.at(child) : remap(child, identities);
+            return strict_children ? remap(child, identities) : identities.at(child);
         };
         for (const auto& id : plan.required_entity_ids) {
             auto copy = physical.at(id);
@@ -500,8 +515,78 @@ std::optional<PhaseRoofProfileReplacementRequest> phase_roof_opening_replacement
     return request;
 }
 
+std::optional<PhaseRoofProfileReplacementRequest> phase_roof_edit_replacement_request(
+    const PhaseRoofReplacementEntities& source, const std::vector<RoofEditIntent>& roof_edits) {
+    // Complete atomic replay admits the actual source and final cohorts before
+    // membership can confer replacement authority. No identities are allocated.
+    const auto physical = replay_roof_edit_entities(source, roof_edits);
+    const auto unchanged = [&](const std::string& id) {
+        return source.at(id) == physical.at(id) &&
+            source.at(id).properties.dump() == physical.at(id).properties.dump() &&
+            source.at(id).extensions.dump() == physical.at(id).extensions.dump();
+    };
+    if (std::all_of(roof_edits.begin(), roof_edits.end(), [&](const auto& edit) { return unchanged(edit.roof_id); }))
+        return std::nullopt;
+    for (const auto& edit : roof_edits)
+        if (unchanged(edit.roof_id)) reject("An unchanged roof cannot acquire replacement authority as an extra seed");
+    const auto scope = constraint_phase_scope(source);
+    std::optional<PhaseRoofProfileReplacementRequest> request;
+    std::size_t ordinary = 0;
+    for (const auto& edit : roof_edits) {
+        if (scope.inactive_owner_ids.contains(edit.roof_id)) reject("roof edit target is inactive: " + edit.roof_id);
+        const PhysicalWallPhaseState* membership = nullptr;
+        for (const auto& registry : scope.registries)
+            if (std::find(registry.registered_entity_ids.begin(), registry.registered_entity_ids.end(), edit.roof_id) != registry.registered_entity_ids.end()) {
+                if (membership) reject("roof edit target has overlapping registry membership");
+                membership = &registry;
+            }
+        if (!membership) { ++ordinary; continue; }
+        const auto model = ModelPhases::from_json(source.at(membership->registry_id).properties.at("model"));
+        const bool baseline = std::find(model.baseline_ids().begin(), model.baseline_ids().end(), edit.roof_id) != model.baseline_ids().end();
+        if (!baseline || !model.active_alternative()) { ++ordinary; continue; }
+        if (request && request->registry_id != membership->registry_id) reject("roof edits span different shared-baseline registries");
+        if (!request) request = PhaseRoofProfileReplacementRequest{membership->registry_id, *model.active_alternative(), {}};
+        request->seed_roof_ids.push_back(edit.roof_id);
+    }
+    if (request && ordinary) reject("roof edits mix shared-baseline and ordinary/proposed roof owners");
+    if (request) std::sort(request->seed_roof_ids.begin(), request->seed_roof_ids.end());
+    return request;
+}
+
 nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacementAuthoring& authoring) {
     identity(authoring.registry_id); identity(authoring.alternative_id);
+    if (!authoring.roof_edits.empty()) {
+        if (!authoring.roof_profiles.empty() || !authoring.roof_opening_edits.empty())
+            reject("combined roof authoring cannot mix historical replacement dialects");
+        if (authoring.seed_roof_ids.empty() || authoring.seed_roof_ids.size() > maximum_replacements ||
+            authoring.identities.empty() || authoring.identities.size() > maximum_replacements ||
+            authoring.roof_edits.size() > maximum_replacements)
+            reject("combined authoring requires bounded nonempty seeds, mapping and edits");
+        Ids seeds, targets, fresh;
+        for (const auto& id : authoring.seed_roof_ids) { identity(id); if (!seeds.insert(id).second) reject("duplicate authoring seed"); }
+        for (const auto& [old_id, new_id] : authoring.identities) {
+            identity(old_id); identity(new_id);
+            if (old_id == new_id || !fresh.insert(new_id).second) reject("authoring identities must be fresh and injective");
+        }
+        for (const auto& id : seeds) if (!authoring.identities.contains(id)) reject("authoring seed has no proposed identity");
+        Json result{{"version", 3}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+            {"seed_roof_ids", authoring.seed_roof_ids}, {"identities", authoring.identities},
+            {"roof_profiles", Json::array()}, {"roof_opening_edits", Json::array()}, {"roof_edits", Json::array()}};
+        auto bytes = result.dump().size();
+        if (bytes > maximum_authoring_bytes) reject("combined authoring byte budget exceeded");
+        auto& edits = result.at("roof_edits");
+        for (const auto& edit : authoring.roof_edits) {
+            if (!seeds.contains(edit.roof_id) || !targets.insert(edit.roof_id).second)
+                reject("authoring combined edits require unique seed targets");
+            auto encoded = encode_roof_edit_intent(edit);
+            const auto added_bytes = encoded.dump().size() + (edits.empty() ? 0 : 1);
+            if (added_bytes > maximum_authoring_bytes - bytes) reject("combined authoring byte budget exceeded");
+            bytes += added_bytes;
+            edits.push_back(std::move(encoded));
+        }
+        if (targets != seeds) reject("authoring seeds must exactly match combined edit targets");
+        return result;
+    }
     if (!authoring.roof_opening_edits.empty()) {
         if (!authoring.roof_profiles.empty()) reject("mixed roof profile and opening replacement is unsupported");
         if (authoring.seed_roof_ids.empty() || authoring.seed_roof_ids.size() > maximum_replacements ||
@@ -556,6 +641,26 @@ nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacemen
 
 PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nlohmann::json& value) {
     try {
+        if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version") == 3) {
+            if (value.size() != 8 || !value.contains("registry_id") || !value.contains("alternative_id") ||
+                !value.contains("seed_roof_ids") || !value.contains("identities") || !value.contains("roof_profiles") ||
+                !value.contains("roof_opening_edits") || !value.contains("roof_edits") || !value.at("identities").is_object() ||
+                !value.at("seed_roof_ids").is_array() || !value.at("roof_profiles").is_array() || !value.at("roof_profiles").empty() ||
+                !value.at("roof_opening_edits").is_array() || !value.at("roof_opening_edits").empty() ||
+                !value.at("roof_edits").is_array() || value.at("roof_edits").empty())
+                reject("combined authoring must contain exactly the eight version-three fields and only combined edits");
+            if (value.at("seed_roof_ids").size() > maximum_replacements || value.at("identities").size() > maximum_replacements ||
+                value.at("roof_edits").size() > maximum_replacements || value.dump().size() > maximum_authoring_bytes)
+                reject("combined authoring budget exceeded");
+            PhaseRoofReplacementAuthoring result;
+            result.registry_id = value.at("registry_id").get<std::string>();
+            result.alternative_id = value.at("alternative_id").get<std::string>();
+            result.seed_roof_ids = value.at("seed_roof_ids").get<std::vector<std::string>>();
+            result.identities = value.at("identities").get<PhaseRoofReplacementIdentityMap>();
+            for (const auto& edit : value.at("roof_edits")) result.roof_edits.push_back(decode_roof_edit_intent(edit));
+            (void)encode_phase_roof_replacement_authoring(result);
+            return result;
+        }
         if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version") == 2) {
             if (value.size() != 7 || !value.contains("registry_id") || !value.contains("alternative_id") ||
                 !value.contains("seed_roof_ids") || !value.contains("identities") || !value.contains("roof_profiles") ||
@@ -599,6 +704,7 @@ PhaseRoofReplacementEntities replay_phase_roof_replacement_authoring(
     const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementAuthoring& authoring) {
     (void)encode_phase_roof_replacement_authoring(authoring);
     const auto plan = inspect_phase_roof_replacement_plan(source, authoring.seed_roof_ids, authoring.registry_id, authoring.alternative_id);
-    return replay_phase_roof_replacement(source, plan, authoring.identities, authoring.roof_profiles, authoring.roof_opening_edits).entities;
+    return replay_phase_roof_replacement(source, plan, authoring.identities, authoring.roof_profiles,
+        authoring.roof_opening_edits, authoring.roof_edits).entities;
 }
 } // namespace sketch

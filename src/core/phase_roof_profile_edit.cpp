@@ -329,7 +329,7 @@ void validate_roof_profile_source_entity(const Entity& source) {
     (void)make_roof_shape(object);
 }
 
-Entity replay_roof_profile_entity(const Entity& source, const RoofProfileEditIntent& intent) {
+Entity stage_roof_profile_entity(const Entity& source, const RoofProfileEditIntent& intent) {
     (void)encode_roof_profile_edit_intent(intent);
     if (source.id != intent.roof_id) invalid("Roof profile target differs from its actual source identity");
     validate_roof_profile_source_entity(source);
@@ -352,6 +352,11 @@ Entity replay_roof_profile_entity(const Entity& source, const RoofProfileEditInt
         const double run = panel ? number(result.properties.at("run_m")) : number(result.properties.at("span_m")) * 0.5;
         result.properties["pitch_rad"] = std::atan2(number(result.properties.at("rise_m")), run);
     }
+    return result;
+}
+
+Entity replay_roof_profile_entity(const Entity& source, const RoofProfileEditIntent& intent) {
+    auto result=stage_roof_profile_entity(source,intent);
     validate_roof_profile_source_entity(result);
     return result;
 }
@@ -422,9 +427,11 @@ Entity normalize_equivalent_roof_inputs(const Entity& original,const Entity& can
     return normalized;
 }
 
-std::optional<RoofProfileEditIntent> capture_roof_profile_edit(const Entity& original, const Entity& candidate) {
-    const auto normalized=normalize_equivalent_roof_inputs(original,candidate);
-    if (exact(normalized,original)) return std::nullopt;
+std::optional<RoofProfileEditIntent> infer_roof_profile_edit(const Entity& original, const Entity& candidate) {
+    validate_roof_profile_source_entity(original);
+    validate_roof_profile_source_entity(candidate);
+    if (original.id!=candidate.id || original.type!=candidate.type || original.properties.at("form")!=candidate.properties.at("form"))
+        invalid("Roof profile input inference cannot change its owner or form");
     RoofProfileEditIntent intent;
     intent.roof_id=original.id;
     for (const auto& dimension:dimensions) {
@@ -432,7 +439,16 @@ std::optional<RoofProfileEditIntent> capture_roof_profile_edit(const Entity& ori
         const double before=number(original.properties.at(name)),after=number(candidate.properties.at(name));
         if (before!=after) intent.*(dimension.intent)=captured_quantity(original,candidate,"/"+std::string(name),after);
     }
-    const auto expected = any(intent) ? replay_roof_profile_entity(original, intent) : original;
+    if (!any(intent)) return std::nullopt;
+    (void)encode_roof_profile_edit_intent(intent);
+    return intent;
+}
+
+std::optional<RoofProfileEditIntent> capture_roof_profile_edit(const Entity& original, const Entity& candidate) {
+    const auto normalized=normalize_equivalent_roof_inputs(original,candidate);
+    if (exact(normalized,original)) return std::nullopt;
+    const auto intent=infer_roof_profile_edit(original,candidate);
+    const auto expected = intent ? replay_roof_profile_entity(original, *intent) : original;
     if (!exact(normalized, expected)) invalid("Roof profile candidate differs from independent typed replay");
     if (exact(expected, original)) return std::nullopt;
     return intent;

@@ -22616,25 +22616,15 @@ public:
                 const auto original = selectedEntity();
                 if (!original || original->id != candidate.id || original->type != candidate.type)
                     throw std::runtime_error("Select the original object before applying this edit.");
-                bool typed_roof_roster=false;
+                bool typed_roof_edit=false;
                 if (candidate.type=="roof" && original->properties.at("form")==candidate.properties.at("form")) {
-                    const auto length_key=original->properties.at("form")=="sloped_roof_panel" ? "run_m" : "length_m";
-                    bool unchanged_geometry=original->properties.at("orientation_rad").get<double>()==
-                        candidate.properties.at("orientation_rad").get<double>();
-                    for (const auto* field:{length_key,"span_m","rise_m","pitch_rad","overhang_m","thickness_m"})
-                        unchanged_geometry=unchanged_geometry && original->properties.at(field).get<double>()==candidate.properties.at(field).get<double>();
-                    for (std::size_t coordinate=0;coordinate<3;++coordinate)
-                        unchanged_geometry=unchanged_geometry && original->properties.at("base_position_m").at(coordinate).get<double>()==
-                            candidate.properties.at("base_position_m").at(coordinate).get<double>();
-                    if (unchanged_geometry) {
-                        // Keep the independently replayed roster, empty schema-two
-                        // wire and stable-child receipts intact through commit.
-                        const auto intent=capture_roof_opening_edit(*original,candidate);
-                        candidate=intent ? replay_roof_opening_entity(*original,*intent) : *original;
-                        typed_roof_roster=true;
-                    }
+                    // Preserve the complete independently replayed edit, including
+                    // source pitch, empty rosters and stable-child receipts.
+                    const auto intent=capture_roof_edit(*original,candidate);
+                    candidate=intent ? replay_roof_edit_entities(snapshot.entities(),{*intent}).at(original->id) : *original;
+                    typed_roof_edit=true;
                 }
-                if (!typed_roof_roster) {
+                if (!typed_roof_edit) {
                     const auto entries = merged_quantity_entries(&*original, candidate, canonical.properties);
                     // Geometry editors must preserve metadata they do not understand.
                     auto edited = std::move(candidate);
@@ -40454,7 +40444,7 @@ private:
                         .entity_changes={EntityChange::upsert(std::move(proposed))},
                         .message=message,
                     }};
-                    if (const auto applied=tryApplyAlternativeRoofProfileEdit(source,raw,authority)) {
+                    if (const auto applied=tryApplyAlternativeRoofEdit(source,raw,authority)) {
                         if (*applied) { clearError();refresh(); }
                         return *applied;
                     }
@@ -41238,7 +41228,7 @@ private:
         return complete_exterior_wall_measurement_command(source, authored_command);
     }
 
-    std::optional<Command> reviewAlternativeRoofProfileEdit(const Command& requested, bool* handled = nullptr) {
+    std::optional<Command> reviewAlternativeRoofEdit(const Command& requested, bool* handled = nullptr) {
         if (handled) *handled=false;
         const auto* raw=std::get_if<ApplyEntityChanges>(&requested);
         if (!raw) return requested;
@@ -41270,8 +41260,7 @@ private:
         const auto authority=captureSourceEditAuthority(source);
         if (raw->expected_revision!=source.revision() || !raw->asset_changes.empty() || raw->entity_changes.size()>2048)
             throw std::invalid_argument("Proposed roof edits require the unchanged source and a bounded roof-only edit.");
-        std::vector<RoofProfileEditIntent> profiles;
-        std::vector<RoofOpeningEditIntent> opening_edits;
+        std::vector<RoofEditIntent> roof_edits;
         std::set<std::string,std::less<>> targets;
         for (const auto& change:raw->entity_changes) {
             if (!changed(change)) {
@@ -41281,37 +41270,12 @@ private:
             }
             const auto original=change.kind==EntityChangeKind::upsert ? source.entities().find(change.entity.id) : source.entities().end();
             if (original==source.entities().end() || original->second.type!="roof" || !targets.insert(original->first).second)
-                throw std::invalid_argument("This alternative edit requires existing roof profiles; change joins or remove roofs separately.");
-            const auto before_roster=original->second.properties.value("roof_openings",json::array());
-            const auto after_roster=change.entity.properties.value("roof_openings",json::array());
-            bool roster_changed=before_roster.size()!=after_roster.size();
-            for (std::size_t index=0;!roster_changed && index<before_roster.size();++index) {
-                const auto& before=before_roster.at(index);
-                const auto& after=after_roster.at(index);
-                roster_changed=before.at("id")!=after.at("id");
-                for (const auto* field:{"x_m","y_m","width_m","depth_m"})
-                    roster_changed=roster_changed || before.at(field).get<double>()!=after.at(field).get<double>();
-            }
-            const auto before_input=original->second.extensions.find("roof_opening_input");
-            const auto after_input=change.entity.extensions.find("roof_opening_input");
-            const bool input_changed=(before_input==original->second.extensions.end())!=(after_input==change.entity.extensions.end()) ||
-                (before_input!=original->second.extensions.end() && after_input!=change.entity.extensions.end() &&
-                    before_input->dump()!=after_input->dump());
-            if (roster_changed || input_changed) {
-                const auto length_key=original->second.properties.at("form")=="sloped_roof_panel" ? "run_m" : "length_m";
-                for (const auto* field:{length_key,"span_m","rise_m","overhang_m","thickness_m"})
-                    if (original->second.properties.at(field).get<double>()!=change.entity.properties.at(field).get<double>())
-                        throw std::invalid_argument("Change roof profiles and roof openings in separate edits.");
-                if (const auto captured=capture_roof_opening_edit(original->second,change.entity)) opening_edits.push_back(*captured);
-            } else if (const auto captured=capture_roof_profile_edit(original->second,change.entity)) profiles.push_back(*captured);
+                throw std::invalid_argument("This alternative edit requires existing roofs; change joins or remove roofs separately.");
+            if (const auto captured=capture_roof_edit(original->second,change.entity)) roof_edits.push_back(*captured);
         }
-        if (profiles.empty() && opening_edits.empty()) return Command{ApplyEntityChanges{source.revision(),{}, {},raw->message}};
-        if (!profiles.empty() && !opening_edits.empty())
-            throw std::invalid_argument("Change roof profiles and roof openings in separate edits.");
-        std::sort(profiles.begin(),profiles.end(),[](const auto& a,const auto& b) { return a.roof_id<b.roof_id; });
-        std::sort(opening_edits.begin(),opening_edits.end(),[](const auto& a,const auto& b) { return a.roof_id<b.roof_id; });
-        const auto request=opening_edits.empty() ? phase_roof_profile_replacement_request(source.entities(),profiles) :
-            phase_roof_opening_replacement_request(source.entities(),opening_edits);
+        if (roof_edits.empty()) return Command{ApplyEntityChanges{source.revision(),{}, {},raw->message}};
+        std::sort(roof_edits.begin(),roof_edits.end(),[](const auto& a,const auto& b) { return a.roof_id<b.roof_id; });
+        const auto request=phase_roof_edit_replacement_request(source.entities(),roof_edits);
         if (!request) throw std::invalid_argument("The roof's active baseline membership changed before replacement.");
         const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
             request->registry_id,request->alternative_id);
@@ -41325,8 +41289,7 @@ private:
         replacement.registry_id=request->registry_id;
         replacement.alternative_id=request->alternative_id;
         replacement.seed_roof_ids=request->seed_roof_ids;
-        replacement.roof_profiles=std::move(profiles);
-        replacement.roof_opening_edits=std::move(opening_edits);
+        replacement.roof_edits=std::move(roof_edits);
         // Current and retained entity names are reserved before allocation;
         // replay and Document also check owned children, opaque retained names
         // and every declared replacement identity, including after Undo.
@@ -41354,11 +41317,11 @@ private:
         return Command{std::move(command)};
     }
 
-    std::optional<bool> tryApplyAlternativeRoofProfileEdit(const DocumentSnapshot& source,
+    std::optional<bool> tryApplyAlternativeRoofEdit(const DocumentSnapshot& source,
         const Command& raw,const SourceEditAuthority& authority) {
         if (fullSnapshotDigest(source)!=authority.source_digest || !sourceEditAuthorityUnchanged(authority)) return false;
         bool handled=false;
-        const auto reviewed=reviewAlternativeRoofProfileEdit(raw,&handled);
+        const auto reviewed=reviewAlternativeRoofEdit(raw,&handled);
         if (!handled) return std::nullopt;
         if (!reviewed || !sourceEditAuthorityUnchanged(authority)) return false;
         return applyAuthoredCommand(*reviewed);
@@ -41797,7 +41760,7 @@ private:
 
     bool applyAuthoredCommand(const Command& requested, bool opening_lifecycle_already_captured = false) {
         requireSiteCommandAdmission(requested);
-        const auto roof_profiled=reviewAlternativeRoofProfileEdit(requested);
+        const auto roof_profiled=reviewAlternativeRoofEdit(requested);
         if (!roof_profiled) return false;
         if (convertedEntityEditNoOp(requested,*roof_profiled)) return true;
         // Only the immediately fenced typed lifecycle path or the already reviewed
@@ -41839,7 +41802,7 @@ private:
     }
 
     bool applyDocumentCommand(const Command& command) {
-        const auto roof_profiled=reviewAlternativeRoofProfileEdit(command);
+        const auto roof_profiled=reviewAlternativeRoofEdit(command);
         if (!roof_profiled) return false;
         if (convertedEntityEditNoOp(command,*roof_profiled)) return true;
         const auto rehosted=reviewOpeningRehostEdit(*roof_profiled);

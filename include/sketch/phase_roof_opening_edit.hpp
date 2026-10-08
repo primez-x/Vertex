@@ -41,6 +41,14 @@ struct RoofOpeningEditIntent {
     const std::map<std::string, Entity, std::less<>>& source,
     const std::vector<RoofOpeningEditIntent>& intents);
 
+// Source-admitted staging defers the final envelope fit so a composite roof
+// resize/cut edit can be admitted once. It confers no candidate/source authority.
+[[nodiscard]] Entity stage_roof_opening_entity(const Entity& actual_source, const RoofOpeningEditIntent& intent);
+[[nodiscard]] std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(
+    const Entity& original, const Entity& candidate);
+[[nodiscard]] Entity normalize_equivalent_roof_opening_inputs(
+    const Entity& original, const Entity& candidate);
+
 // Captures actual roster changes only. Changed/new fields require exact child
 // input receipts, including their actual parsing default unit. The complete
 // candidate must equal independent replay after equal scalar normalization.

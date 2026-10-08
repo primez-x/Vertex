@@ -410,7 +410,7 @@ RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& valu
     (void)encode_roof_opening_edit_intent(result);
     return result;
 }
-Entity replay_roof_opening_entity(const Entity& source, const RoofOpeningEditIntent& intent) {
+Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditIntent& intent) {
     (void)encode_roof_opening_edit_intent(intent);
     if (source.id != intent.roof_id) invalid("Roof opening edit target differs from actual source identity");
     admit(source);
@@ -453,6 +453,10 @@ Entity replay_roof_opening_entity(const Entity& source, const RoofOpeningEditInt
     result.properties["version"] = 2;
     result.properties["roof_openings"] = after;
     indexed_receipts(source, result, intent, before, after);
+    return result;
+}
+Entity replay_roof_opening_entity(const Entity& source, const RoofOpeningEditIntent& intent) {
+    auto result=stage_roof_opening_entity(source,intent);
     admit(result);
     return result;
 }
@@ -500,15 +504,35 @@ Entities replay_roof_opening_entities(const Entities& source, const std::vector<
         (void)make_roof_shape(decode_roof_entity(resolve_vertical_placement(result, result.at(intent.roof_id))));
     return result;
 }
-std::optional<RoofOpeningEditIntent> capture_roof_opening_edit(const Entity& original, const Entity& candidate) {
+Entity normalize_equivalent_roof_opening_inputs(const Entity& original, const Entity& candidate) {
+    admit(original);
+    admit(candidate);
+    auto normalized=normalize_equivalent_roof_inputs(original,candidate);
+    const auto before=roster(original),after=roster(candidate);
+    const auto old_positions=positions(before);
+    for (std::size_t index=0;index<after.size();++index) {
+        const auto id=after.at(index).at("id").get<std::string>();
+        const auto old=old_positions.find(id);
+        if (old==old_positions.end()) continue;
+        for (const auto& d:dimensions) {
+            const double metres=number(after.at(index).at(d.scalar));
+            if (number(before.at(old->second).at(d.scalar))!=metres) continue;
+            normalized.properties["roof_openings"][index][d.scalar]=before.at(old->second).at(d.scalar);
+            normalize_unchanged_child_receipt(normalized,original,id,d,metres);
+        }
+    }
+    return normalized;
+}
+std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& original, const Entity& candidate) {
     admit(original);
     if (exact(original, candidate)) return std::nullopt;
     admit(candidate);
+    if (original.id!=candidate.id || original.type!=candidate.type || original.properties.at("form")!=candidate.properties.at("form"))
+        invalid("Roof opening input inference cannot change its owner or form");
     const auto before = roster(original), after = roster(candidate);
     const auto old_positions = positions(before), new_positions = positions(after);
     RoofOpeningEditIntent intent;
     intent.roof_id = original.id;
-    auto normalized = normalize_equivalent_roof_inputs(original,candidate);
     for (const auto& row : before) {
         const auto id = row.at("id").get<std::string>();
         if (!new_positions.contains(id)) intent.removed_opening_ids.push_back(id);
@@ -522,16 +546,21 @@ std::optional<RoofOpeningEditIntent> capture_roof_opening_edit(const Entity& ori
         for (const auto& d : dimensions) {
             const double metres = number(row.at(d.scalar));
             if (old != old_positions.end() && number(before.at(old->second).at(d.scalar)) == metres) {
-                normalized.properties["roof_openings"][i][d.scalar] = before.at(old->second).at(d.scalar);
-                normalize_unchanged_child_receipt(normalized, original, id, d, metres);
                 continue;
             }
             upsert.*(d.member) = captured_input(candidate, id, d, metres);
         }
         if (any(upsert)) intent.upserts.push_back(std::move(upsert));
     }
-    const auto expected = intent.upserts.empty() && intent.removed_opening_ids.empty()
-        ? original : replay_roof_opening_entity(original, intent);
+    if (intent.upserts.empty() && intent.removed_opening_ids.empty()) return std::nullopt;
+    (void)encode_roof_opening_edit_intent(intent);
+    return intent;
+}
+std::optional<RoofOpeningEditIntent> capture_roof_opening_edit(const Entity& original, const Entity& candidate) {
+    const auto normalized=normalize_equivalent_roof_opening_inputs(original,candidate);
+    if (exact(normalized,original)) return std::nullopt;
+    const auto intent=infer_roof_opening_edit(original,candidate);
+    const auto expected=intent ? replay_roof_opening_entity(original,*intent) : original;
     if (!exact(normalized, expected)) invalid("Roof opening candidate differs from independent typed replay");
     if (exact(expected, original)) return std::nullopt;
     return intent;

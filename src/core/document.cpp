@@ -2646,11 +2646,14 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
-            complete_roof_envelope_reservation=complete_roof_envelope_reservation || !replacement.roof_opening_edits.empty();
+            complete_roof_envelope_reservation=complete_roof_envelope_reservation ||
+                !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty();
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);roof_fresh.insert(id);
             }
-            for (const auto& id:new_roof_opening_identity_ids(source,replacement.roof_opening_edits)) {
+            const auto opening_edits=replacement.roof_edits.empty() ? replacement.roof_opening_edits :
+                roof_edit_opening_intents(replacement.roof_edits);
+            for (const auto& id:new_roof_opening_identity_ids(source,opening_edits)) {
                 if (!fresh.insert(id).second)
                     throw std::invalid_argument("A new roof opening overlaps another fresh replacement identity: "+id);
                 roof_fresh.insert(id);
@@ -2709,7 +2712,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 if (!intent.roof_replacement.is_null()) {
                     const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
                     require_unused(roof.identities);
-                    for (const auto& edit:roof.roof_opening_edits)
+                    const auto opening_edits=roof.roof_edits.empty() ? roof.roof_opening_edits : roof_edit_opening_intents(roof.roof_edits);
+                    for (const auto& edit:opening_edits)
                         for (const auto& upsert:edit.upserts)
                             if (fresh.contains(upsert.opening_id))
                                 throw std::invalid_argument("Roof opening identity was already reserved by retained intent: "+upsert.opening_id);

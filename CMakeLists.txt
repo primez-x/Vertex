@@ -823,6 +823,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_hosted_opening_edit.cpp src/core/phase_hosted_opening_capture.cpp
     src/core/phase_hosted_opening_rehost.cpp src/core/phase_hosted_opening_family_edit.cpp
     src/core/phase_opening_demolition.cpp src/core/phase_roof_profile_edit.cpp src/core/phase_roof_opening_edit.cpp
+    src/core/phase_roof_pose_edit.cpp src/core/phase_roof_edit.cpp
     src/core/phase_roof_replacement.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
   # Proposed profile replay must use the same hosted-assembly and fused-join

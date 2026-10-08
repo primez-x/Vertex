@@ -30,6 +30,16 @@ void validate_roof_profile_source_entity(const Entity& source);
 // all opaque data remain untouched; callers still require full typed replay.
 [[nodiscard]] Entity normalize_equivalent_roof_inputs(const Entity& source,const Entity& candidate);
 
+// Composite staging reads the actual original and exact typed inputs, then
+// defers final geometry admission to a complete independent roof edit replay.
+// Its result is never a replacement source or arbitrary candidate authority.
+[[nodiscard]] Entity stage_roof_profile_entity(const Entity& actual_source, const RoofProfileEditIntent& intent);
+
+// Infers only profile inputs; companion fields acquire no authority here.
+// The caller must compare the complete candidate with independent typed replay.
+[[nodiscard]] std::optional<RoofProfileEditIntent> infer_roof_profile_edit(
+    const Entity& original, const Entity& candidate);
+
 // Same-form scalar edit; pitch is derived from resulting rise/run or half-span.
 // Pose/context/material/opening roster and opaque owner data remain exact.
 // Equal dimensions return the exact source without synthesizing pitch/receipts.

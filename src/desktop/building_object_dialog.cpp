@@ -2,7 +2,7 @@
 
 #include "sketch/quantity.hpp"
 #include "sketch/building_plan_projection.hpp"
-#include "sketch/phase_roof_opening_edit.hpp"
+#include "sketch/phase_roof_edit.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -386,13 +386,13 @@ public:
                 if (found == entities.end()) throw std::invalid_argument("The selected stair host is unavailable.");
                 (void)make_building_shape(*object, entities);
             }
-            const bool opening_only_roof = roof_geometry_unchanged(*object);
-            if (opening_only_roof) {
-                // Start from the actual source, including its numeric wire forms
-                // and opaque metadata. The table's typed inputs own only the roster.
+            const auto roof_edit = same_form_roof_edit(*object);
+            if (roof_edit) {
+                // Every component binds the actual original. Admission happens
+                // after their independent deltas form one complete final roof.
                 candidate_entity = *original_entity;
-                if (!roof_opening_intent.upserts.empty() || !roof_opening_intent.removed_opening_ids.empty())
-                    candidate_entity = replay_roof_opening_entity(*original_entity, roof_opening_intent);
+                if (roof_edit->profile || roof_edit->openings || roof_edit->pose)
+                    candidate_entity = replay_roof_edit_entity(*original_entity, *roof_edit);
             } else if (original_entity.has_value()) {
                 const auto canonical = encode_building_entity(*object,
                                                               original_entity->extensions);
@@ -448,7 +448,7 @@ public:
                 apply_quantity_entries(candidate_entity->properties,
                                        candidate_entity->properties);
             }
-            if (!opening_only_roof && candidate_entity->type == "roof" && roof_openings_changed) {
+            if (!roof_edit && candidate_entity->type == "roof" && roof_openings_changed) {
                 auto envelope = json::object();
                 if (original_entity && original_entity->extensions.contains("roof_opening_input")) {
                     envelope = original_entity->extensions.at("roof_opening_input");
@@ -1563,25 +1563,66 @@ private:
         }, *original_object);
     }
 
-    bool roof_geometry_unchanged(const BuildingObject& candidate) const {
-        if (!original_entity || original_entity->type != "roof") return false;
-        return std::visit([this](const auto& roof) {
+    std::optional<RoofEditIntent> same_form_roof_edit(const BuildingObject& candidate) const {
+        if (!original_entity || original_entity->type != "roof") return std::nullopt;
+        return std::visit([this](const auto& roof) -> std::optional<RoofEditIntent> {
             using Roof = std::decay_t<decltype(roof)>;
             if constexpr (std::is_same_v<Roof, SlopedRoofPanel> || std::is_same_v<Roof, GableRoof> ||
                           std::is_same_v<Roof, HipRoof>) {
                 const auto* source = original_as<Roof>();
-                if (!source || roof.id != source->id ||
-                    roof.base_position.x != source->base_position.x ||
-                    roof.base_position.y != source->base_position.y ||
-                    roof.base_position.z != source->base_position.z ||
-                    roof.orientation_radians != source->orientation_radians ||
-                    roof.span != source->span || roof.rise != source->rise ||
-                    roof.pitch_radians != source->pitch_radians ||
-                    roof.overhang != source->overhang || roof.thickness != source->thickness) return false;
-                if constexpr (std::is_same_v<Roof, SlopedRoofPanel>) return roof.run == source->run;
-                else return roof.length == source->length;
+                if (!source) return std::nullopt;
+                if (roof.id != source->id || roof.id != original_entity->id)
+                    throw std::invalid_argument("The roof edit differs from its original owner.");
+
+                // A changed scalar must come from the parser's actual exact
+                // input. Untouched/equivalent values keep their original wire
+                // representation and receipts through empty component fields.
+                const auto changed_quantity = [this](const char* pointer, double before, double after)
+                    -> std::optional<Quantity> {
+                    if (before == after) return std::nullopt;
+                    const auto parsed = parsed_quantities.find(pointer);
+                    if (parsed == parsed_quantities.end() || parsed->second.metres != after)
+                        throw std::invalid_argument("The edited roof dimension lacks its matching exact input.");
+                    return parsed->second;
+                };
+                RoofEditIntent result;
+                result.roof_id = original_entity->id;
+                RoofProfileEditIntent profile;
+                profile.roof_id = result.roof_id;
+                if constexpr (std::is_same_v<Roof, SlopedRoofPanel>)
+                    profile.length = changed_quantity("/run_m", source->run, roof.run);
+                else
+                    profile.length = changed_quantity("/length_m", source->length, roof.length);
+                profile.span = changed_quantity("/span_m", source->span, roof.span);
+                profile.rise = changed_quantity("/rise_m", source->rise, roof.rise);
+                profile.overhang = changed_quantity("/overhang_m", source->overhang, roof.overhang);
+                profile.thickness = changed_quantity("/thickness_m", source->thickness, roof.thickness);
+                if (profile.length || profile.span || profile.rise || profile.overhang || profile.thickness)
+                    result.profile = std::move(profile);
+
+                RoofPoseEditIntent pose;
+                pose.roof_id = result.roof_id;
+                pose.x = changed_quantity("/base_position_m/0", source->base_position.x, roof.base_position.x);
+                pose.y = changed_quantity("/base_position_m/1", source->base_position.y, roof.base_position.y);
+                pose.z = changed_quantity("/base_position_m/2", source->base_position.z, roof.base_position.z);
+                if (roof.orientation_radians != source->orientation_radians) {
+                    if (!dirty.contains("buildingObjectOrientationDegrees") || !std::isfinite(roof.orientation_radians))
+                        throw std::invalid_argument("The edited roof orientation lacks its finite angle input.");
+                    // read_angle supplies radians from the finite UI scalar;
+                    // orientation has no length-quantity receipt.
+                    pose.orientation_radians = roof.orientation_radians;
+                }
+                if (pose.x || pose.y || pose.z || pose.orientation_radians)
+                    result.pose = std::move(pose);
+
+                if (!roof_opening_intent.upserts.empty() || !roof_opening_intent.removed_opening_ids.empty()) {
+                    if (roof_opening_intent.roof_id != result.roof_id)
+                        throw std::invalid_argument("The roof opening inputs differ from their original owner.");
+                    result.openings = roof_opening_intent;
+                }
+                return result;
             } else {
-                return false;
+                return std::nullopt;
             }
         }, candidate);
     }

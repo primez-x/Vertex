@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 atomic roof authoring implementation
+
+Source now composes a roof's size, openings and position in one same-form edit.
+The dialog obtains every changed length/coordinate from the actual parsed input
+and the roster from actual original child identities. Orientation uses an
+explicit finite angle. Every typed component reads the same admitted original;
+its schema-owned delta merges before complete final native admission. Resizing
+and relocating/removing cuts no longer require each transient envelope to fit.
+No arbitrary candidate, altered source or transaction supplies authority.
+
+Complete capture independently accounts for profile, roster, pose, receipts and
+all retained opaque data. Commit keeps that replayed candidate and stops exact
+no-ops. Active baseline edits derive a separate complete joined cohort using
+replacement record three. Original roofs/joins and other alternatives remain
+retained. Source/final resolved roofs and affected joins are admitted against
+full maps; current/history child identity reservations include composed opening
+inputs. Native 96/extraction 94 retain direct, nested and composed proofs.
+
+Root integrated controller, history and format changes. Independent source
+review found ordinary/proposed dialog commits omitted full-map resolved roof and
+affected-join admission; commit now uses the same complete-map typed replay
+before publication. The reviewer approved the corrected bounded source slice.
+Runtime behavior and compilation remain unverified. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations run. The installed candidate
+remains unchanged. Roof form conversion, clone/delete alternatives, transform
+producers without exact typed coordinate intent, unsupported affected reference
+families and broader non-wall phase lifecycle remain implementation gaps.
+
 ### October 8 baseline-preserving roof-opening implementation
 
 Typed source now supports roof-opening additions, exact coordinate/size edits
@@ -40,10 +68,9 @@ candidate and exits before constructing a command for source-equivalent input.
 The reviewer approved these corrections. The source remains uncompiled and
 unexercised; no build, test, probe, script, native job,
 launch, package or installation runs. The installed candidate is unchanged.
-Atomic mixed roof profile/opening edits, roof pose/form and clone/delete
-alternatives, unsupported affected references and other non-wall families remain
-implementation gaps. Source work on typed roof pose and atomic combined edits
-continues separately.
+The later atomic roof record above extends this opening-only contract with
+combined profile/opening/pose changes. Form and clone/delete alternatives,
+unsupported affected references and other non-wall families remain gaps.
 
 ### October 8 baseline-preserving roof profile implementation
 
