@@ -38,9 +38,13 @@ struct DxfProjectImportResult {
     bool complete() const noexcept { return diagnostics.empty(); }
 };
 
-// Maps the current native project snapshot into the supported DXF R2013
-// drawing model. The result remains in memory; use export_dxf_ascii separately
-// when a caller is ready to serialize it to a local path.
+// Maps the snapshot's saved active design into the supported DXF R2013 drawing
+// model. Retained inactive owners, their hosted openings and bound annotations
+// are omitted with fidelity diagnostics; wall cuts and native hosted IDs use
+// the same active graph. The complete source snapshot remains unchanged. DXF
+// does not preserve phase registries or alternatives. Without a phase registry,
+// the existing whole-project mapping applies. The result remains in memory;
+// use export_dxf_ascii separately when ready to serialize it to a local path.
 [[nodiscard]] DxfProjectExportResult export_project_dxf(
     const DocumentSnapshot& document,
     const DxfExchangeLimits& limits = {});

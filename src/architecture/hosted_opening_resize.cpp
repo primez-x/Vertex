@@ -1,6 +1,7 @@
 #include "sketch/hosted_opening_resize.hpp"
 
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/project_organization.hpp"
@@ -15,11 +16,10 @@ namespace {
 using Json = nlohmann::json;
 
 std::vector<const Entity*> hosted_openings(const DocumentSnapshot& source,
-                                          const std::string& wall_id) {
+    const std::string& wall_id, const ConstraintPhaseScope& scope) {
     std::vector<const Entity*> result;
     for (const auto& [id,entity] : source.entities()) {
-        (void)id;
-        if (entity.type != "opening") continue;
+        if (entity.type != "opening" || scope.inactive_owner_ids.contains(id)) continue;
         const auto reference = entity.properties.find("wall_id");
         if (reference == entity.properties.end() || !reference->is_string() ||
             reference->get_ref<const std::string&>() != wall_id) continue;
@@ -52,6 +52,9 @@ struct OpeningHost {
 };
 
 OpeningHost selected_host(const DocumentSnapshot& source, const std::string& opening_id) {
+    const auto scope = constraint_phase_scope(source.entities());
+    if (scope.inactive_owner_ids.contains(opening_id))
+        throw std::invalid_argument("Hosted opening edit target is inactive in the saved design");
     const auto found = source.entities().find(opening_id);
     if (found == source.entities().end())
         throw std::invalid_argument("Hosted opening edit target is missing");
@@ -59,7 +62,9 @@ OpeningHost selected_host(const DocumentSnapshot& source, const std::string& ope
         throw std::invalid_argument("Hosted opening edit requires an opening entity");
     std::string wall_id,error;
     if (!read_document_wall_id(found->second,wall_id,error)) throw std::invalid_argument(error);
-    auto openings = hosted_openings(source,wall_id);
+    if (scope.inactive_owner_ids.contains(wall_id))
+        throw std::invalid_argument("Hosted opening host wall is inactive in the saved design");
+    auto openings = hosted_openings(source,wall_id,scope);
     auto wall = decode_host(source,wall_id,openings);
     const auto selected = std::find_if(wall.openings.begin(),wall.openings.end(),
         [&](const HostedOpening& opening) { return opening.id == opening_id; });
@@ -163,7 +168,7 @@ ApplyEntityChanges hosted_opening_offset_command(const DocumentSnapshot& source,
     ApplyEntityChanges command{source.revision(),{}, {},"Move hosted opening along host"};
     if (candidate != original)
         command.entity_changes.push_back(EntityChange::upsert(std::move(candidate)));
-    // Required admission includes every sibling and manufactured assembly,
+    // Required admission includes every active sibling and manufactured assembly,
     // also when the station is unchanged and no entity change is emitted.
     const auto preview = Document::preview_command(source,command);
     validate_architectural_geometry_changes(source,preview,{opening_id});

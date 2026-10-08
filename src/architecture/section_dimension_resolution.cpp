@@ -2,6 +2,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
 
@@ -35,10 +36,28 @@ const Entity& entity(const DocumentSnapshot& source, const std::string& id,
     return found->second;
 }
 
-Wall resolved_wall(const DocumentSnapshot& source, const Entity& input) {
+void require_active_source(const DocumentSnapshot& source, const std::string& id,
+                           const ConstraintPhaseScope& scope) {
+    if (scope.inactive_owner_ids.contains(id))
+        throw std::invalid_argument("source object is inactive in the saved design: " + id);
+    if (scope.inactive_owner_ids.empty()) return;
+    const auto found = source.entities().find(id);
+    if (found == source.entities().end()) return;
+    const auto& input = found->second;
+    if (input.type == "opening") {
+        std::string host_id, error;
+        if (!read_document_wall_id(input, host_id, error)) throw std::invalid_argument(error);
+        if (scope.inactive_owner_ids.contains(host_id))
+            throw std::invalid_argument("source opening host is inactive in the saved design: " + host_id);
+    }
+}
+
+Wall resolved_wall(const DocumentSnapshot& source, const Entity& input,
+                   const ConstraintPhaseScope& scope) {
+    require_active_source(source, input.id, scope);
     std::vector<const Entity*> openings;
     for (const auto& [id, candidate] : source.entities()) {
-        if (candidate.type != "opening") continue;
+        if (candidate.type != "opening" || scope.inactive_owner_ids.contains(id)) continue;
         std::string host_id, error;
         if (read_document_wall_id(candidate, host_id, error) && host_id == input.id)
             openings.push_back(&candidate);
@@ -76,13 +95,15 @@ Vec2 point_at(const Segment& segment, double fraction) {
     return {arc.center.x + arc.radius * std::cos(angle), arc.center.y + arc.radius * std::sin(angle)};
 }
 
-TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input) {
-    if (input.type == "wall") return make_wall(resolved_wall(source, input));
+TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input,
+                         const ConstraintPhaseScope& scope) {
+    require_active_source(source, input.id, scope);
+    if (input.type == "wall") return make_wall(resolved_wall(source, input, scope));
     if (input.type == "opening") {
         std::string host_id, error;
         if (!read_document_wall_id(input, host_id, error)) throw std::invalid_argument(error);
-        const auto host = resolved_wall(source, entity(source, host_id, "wall"));
-        // Validate the complete host and all of its hosted cuts, regardless of
+        const auto host = resolved_wall(source, entity(source, host_id, "wall"), scope);
+        // Validate the complete host and all of its active hosted cuts, regardless of
         // which IDs or display visibility appear in the coordinated view.
         (void)make_wall(host);
         const auto opening = std::find_if(host.openings.begin(), host.openings.end(),
@@ -104,7 +125,7 @@ TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input) {
     if (input.type == "wall_join") {
         const auto join = parse_wall_join(input.properties, input.id);
         std::vector<Wall> walls;
-        for (const auto& id : join.wall_ids) walls.push_back(resolved_wall(source, entity(source, id, "wall")));
+        for (const auto& id : join.wall_ids) walls.push_back(resolved_wall(source, entity(source, id, "wall"), scope));
         return make_wall_join(join, walls);
     }
     if (input.type == "roof_join") {
@@ -281,6 +302,8 @@ SectionDimensionResolution resolve_section_dimension(const DocumentSnapshot& sou
         (void)SheetViewModel::create({view}, {});
         auto candidate = view; candidate.overlays = {overlay};
         (void)SheetViewModel::create({std::move(candidate)}, {});
+        const auto scope = constraint_phase_scope(source.entities());
+        if (!overlay.object_id.empty()) require_active_source(source, overlay.object_id, scope);
         if (!overlay.dimension_binding) {
             const auto measured = std::hypot(overlay.end_m[0] - overlay.start_m[0],
                 overlay.end_m[1] - overlay.start_m[1]);
@@ -288,13 +311,14 @@ SectionDimensionResolution resolve_section_dimension(const DocumentSnapshot& sou
                 overlay.start_m, overlay.end_m, measured, false}, {}};
         }
         const auto& binding = *overlay.dimension_binding;
+        require_active_source(source, binding.object_id, scope);
         const auto& input = entity(source, binding.object_id);
         std::optional<Boundary> analytical_boundary;
         TopoDS_Shape shape;
         if (input.type == "room" && !has_document_room_volume_fields(input) && horizontal_plan_frame(view))
             analytical_boundary = plan_room_boundary(input, view);
         else
-            shape = in_view_frame(source_shape(source, input), view);
+            shape = in_view_frame(source_shape(source, input, scope), view);
         // A full source extent in view coordinates is independent of both
         // display clipping and the renderer's supported projected curves.
         const auto bounds = analytical_boundary ? boundary_bounds(*analytical_boundary) : silhouette_bounds(shape);

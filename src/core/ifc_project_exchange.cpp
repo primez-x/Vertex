@@ -2,6 +2,7 @@
 #include "sketch/physical_wall_room.hpp"
 
 #include "sketch/boundary_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -565,6 +566,7 @@ struct ExportContext {
     std::map<std::string,SitePresentationPlacement,std::less<>> site_placements;
     std::map<std::string,AssemblyExpansion,std::less<>> assembly_expansions;
     std::map<std::string,std::vector<const Entity*>,std::less<>> hosted_openings;
+    std::set<std::string,std::less<>> inactive_design_ids;
     const Entity* authored_entity{};
     std::size_t ordinal{};
     std::map<std::string, int, std::less<>> product_ids;
@@ -740,7 +742,7 @@ void export_spatial_hierarchy(const DocumentSnapshot& document, ExportContext& c
     const auto organization=organize_project(document);
     for (const auto kind : {"property","building","floor"})
         for (const auto& [id,e]:document.entities()) {
-            if (e.type!=kind) continue;
+            if (e.type!=kind || context.inactive_design_ids.contains(id)) continue;
             try {
                 const auto& p=context.site_placements.at(id);
                 const auto name=e.properties.value("name",id);
@@ -999,6 +1001,7 @@ void export_native_join(const DocumentSnapshot& document, const Entity& entity,
         Json sources = Json::array(), openings = Json::array();
         for (const auto& id : ids) {
             const auto& source = document.entities().at(id);
+            require(!context.inactive_design_ids.contains(id));
             require(source.type == (walls ? "wall" : "roof"));
             const auto& placement = context.site_placements.at(id);
             require(placement.source_frame == context.presentation.source_frame &&
@@ -1325,6 +1328,7 @@ void export_native_stair_or_railing(const DocumentSnapshot& document, const Enti
             require(h.is_object() && h.contains("stair_id") && h.at("stair_id").is_string());
             const auto found = document.entities().find(h.at("stair_id").get<std::string>());
             require(found != document.entities().end() && found->second.type == "stair");
+            require(!context.inactive_design_ids.contains(found->first));
             host = resolve_vertical_placement(document, found->second);
         }
         const auto work = stair_railing_work(entity, host ? &*host : nullptr);
@@ -1428,6 +1432,7 @@ void export_fill(const DocumentSnapshot& document, const Entity& entity, int voi
     if (!entity.properties.contains("opening_assembly")) return;
     const auto host = resolve_vertical_placement(document,
         document.entities().at(entity.properties.at("wall_id").get<std::string>()));
+    require(!context.inactive_design_ids.contains(host.id));
     const auto wall = native_wall(host);
     const auto opening = native_opening(entity);
     const auto profile = parse_opening_assembly(entity.properties.at("opening_assembly"));
@@ -1467,6 +1472,7 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
     Entity host = entity;
     if (entity.type == "opening") host = resolve_vertical_placement(document,
         document.entities().at(entity.properties.at("wall_id").get<std::string>()));
+    require(!context.inactive_design_ids.contains(host.id));
     const auto axis = read_baseline(host);
     if (!axis) return false;
     if (std::abs(axis->sweep_radians) <= kTolerance && !host.properties.contains("top_plane") &&
@@ -2784,12 +2790,56 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
                                           const IfcExchangeLimits& limits) {
     validate_limits(limits);
     IfcProjectExportResult result;
-    const bool authored_spatial=std::any_of(document.entities().begin(),document.entities().end(),[](const auto& item){
-        return item.second.type=="property";
+    ConstraintPhaseScope scope;
+    try {
+        // Saved registry choices are evaluated against the complete immutable
+        // source; filtering a Document would lose membership and proof evidence.
+        scope = constraint_phase_scope(document.entities());
+    } catch (const std::exception&) {
+        add_diagnostic(result.diagnostics, {}, "PROJECT", "active_design_scope_not_representable");
+        return result;
+    }
+    for (const auto& [id, entity] : document.entities()) {
+        if (!entity.properties.is_object()) continue;
+        if (entity.type == "opening") {
+            const auto host_id = entity.properties.find("wall_id");
+            if (host_id == entity.properties.end() || !host_id->is_string()) continue;
+            const auto host = document.entities().find(host_id->get_ref<const std::string&>());
+            if (host != document.entities().end() && host->second.type == "wall" &&
+                scope.inactive_owner_ids.contains(host->first)) scope.inactive_owner_ids.insert(id);
+        } else if (entity.type == "railing") {
+            const auto host = entity.properties.find("host");
+            if (host == entity.properties.end() || !host->is_object()) continue;
+            const auto stair_id = host->find("stair_id");
+            if (stair_id == host->end() || !stair_id->is_string()) continue;
+            const auto stair = document.entities().find(stair_id->get_ref<const std::string&>());
+            if (stair != document.entities().end() && stair->second.type == "stair" &&
+                scope.inactive_owner_ids.contains(stair->first)) scope.inactive_owner_ids.insert(id);
+        }
+    }
+    for (const auto& [id, entity] : document.entities()) {
+        if (entity.type == "model_phases") {
+            // This exchange represents one saved design. Do not transport an
+            // alternative registry as a carrier that could activate other owners.
+            scope.inactive_owner_ids.insert(id);
+        } else if (entity.type == "wall_join" || entity.type == "roof_join") {
+            const auto members = entity.properties.find(entity.type == "wall_join" ? "wall_ids" : "roof_ids");
+            if (members != entity.properties.end() && members->is_array() &&
+                std::any_of(members->begin(), members->end(), [&](const Json& member) {
+                    return member.is_string() && scope.inactive_owner_ids.contains(member.get_ref<const std::string&>());
+                })) scope.inactive_owner_ids.insert(id);
+        }
+    }
+    const bool authored_spatial=std::any_of(document.entities().begin(),document.entities().end(),[&](const auto& item){
+        return item.second.type=="property" && !scope.inactive_owner_ids.contains(item.first);
     });
     ExportContext context(limits,authored_spatial);
+    context.inactive_design_ids = std::move(scope.inactive_owner_ids);
     for (const auto& [id, entity] : document.entities()) {
-        (void)id;
+        if (context.inactive_design_ids.contains(id)) {
+            add_diagnostic(result.diagnostics, id, entity.type, "inactive_design_evidence_not_representable");
+            continue;
+        }
         if (entity.type == "opening" && entity.properties.is_object()) {
             const auto host = entity.properties.find("wall_id");
             if (host != entity.properties.end() && host->is_string())
@@ -2801,7 +2851,7 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
     // Annotation owners are containers of independently scoped children, not
     // physical model owners. IFC currently retains their exact inert source only.
     for (const auto& [id,e]:document.entities())
-        if (e.type != "annotation_state") site_ids.push_back(id);
+        if (e.type != "annotation_state" && !context.inactive_design_ids.contains(id)) site_ids.push_back(id);
     try { context.site_placements=resolve_site_presentations(document,site_ids); }
     catch (const std::exception&) {
         add_diagnostic(result.diagnostics,{},"PROJECT","site_frame_batch_not_exported");
@@ -2816,8 +2866,8 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
 #endif
     export_spatial_hierarchy(document,context,result.diagnostics);
     std::set<std::string,std::less<>> unsupported_join_members;
-    for (const auto& [id,e]:document.entities()) if (e.type=="wall_join" || e.type=="roof_join") {
-        (void)id;
+    for (const auto& [id,e]:document.entities()) if (!context.inactive_design_ids.contains(id) &&
+        (e.type=="wall_join" || e.type=="roof_join")) {
         const auto members=e.properties.find(e.type=="wall_join" ? "wall_ids" : "roof_ids");
         if (members!=e.properties.end() && members->is_array())
             for (const auto& member:*members) if (member.is_string()) unsupported_join_members.insert(member.get<std::string>());
@@ -2833,11 +2883,11 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
     // absent and their complete source members remain inert references.
     std::vector<const Entity*> export_order;
     for (const auto& [id, entity] : document.entities()) {
-        (void)id;
+        if (context.inactive_design_ids.contains(id)) continue;
         if (entity.type == "wall_join" || entity.type == "roof_join") export_order.push_back(&entity);
     }
     for (const auto& [id, entity] : document.entities()) {
-        (void)id;
+        if (context.inactive_design_ids.contains(id)) continue;
         if (entity.type != "wall_join" && entity.type != "roof_join") export_order.push_back(&entity);
     }
     for (const auto* source_entity : export_order) {

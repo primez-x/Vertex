@@ -263,8 +263,8 @@ void validate_active_wall_physical_dependencies(
     const auto scope = constraint_phase_scope(entities);
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
     for (const auto& [id, entity] : entities) {
-        (void)id;
-        if (entity.type != "opening" || !entity.properties.is_object()) continue;
+        if (entity.type != "opening" || scope.inactive_owner_ids.contains(id) ||
+            !entity.properties.is_object()) continue;
         const auto host = entity.properties.find("wall_id");
         if (host != entity.properties.end() && host->is_string())
             openings[host->get_ref<const std::string&>()].push_back(&entity);

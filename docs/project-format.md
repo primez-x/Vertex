@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v89
+# Vertex project formats v1 through v90
+
+## Saved-active opening demolition (v90)
+
+Native format 90 and JSON/assets extraction version 88 add phase intent three
+within exclusive envelope 34. Versions one and two retain their exact keys and
+replay. The new intent adds only `opening_demolition`: a strict version-one
+record with `registry_id`, `alternative_id` and sorted, unique `opening_ids`.
+It shares the captured revision, complete snapshot, authoring-history and entity
+digests, saved revision and independently evaluated saved phase choices. Its
+semantic intent cannot contain geometry, relationship or replacement operations.
+
+Replay independently derives active baseline membership and changes only the
+named alternative's demolition list. Opening owners, host walls, dimensions,
+other dependents, proposals, other alternatives and unknown registry content
+remain exact. Mixed baseline/nonbaseline selections and cross-registry batches
+refuse. Source and candidate active hosts both pass the common cut, assembly and
+join admission before publication. No filtered or synthesized snapshot grants
+authority. A canonical command establishes saved-active validation even when
+the source's earlier history used legacy all-object validation; historical
+commands retain their own policies.
+
+The active physical cut inventory applies to plan geometry, 3D preparation,
+coordinate dimensions, opening edits, IFC/DXF output and material quantities.
+Inactive opening records and bindings stay in the project for baseline and other
+alternative views. Individual retained descriptors still receive structural
+admission; inactive sibling cuts do not participate in active-host fit/overlap.
+Exporters explicitly report omitted phase evidence rather than claim phase
+round-trip fidelity. Reader floors include retained direct and wrapped intents
+after Undo. This source has not been compiled or qualified in the installed app.
 
 ## Proposed door and window profile edits (v89)
 

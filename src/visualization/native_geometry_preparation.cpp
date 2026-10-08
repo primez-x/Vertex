@@ -5,6 +5,7 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
@@ -305,12 +306,56 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     auto& pending = result.pending;
     auto& solids = result.solids;
     const auto& entities = snapshot.entities();
+    std::set<std::string, std::less<>> inactive_owner_ids;
+    try {
+        // Saved registry choices establish physical activity. Keep the complete
+        // captured map for authority, relationships and assembly dependencies.
+        inactive_owner_ids = constraint_phase_scope(entities).inactive_owner_ids;
+    } catch (const std::exception& error) {
+        append_unique(errors, "native phase scope: " + std::string(error.what()));
+        return result;
+    }
+    if (!inactive_owner_ids.empty()) {
+        for (const auto& [id, entity] : entities) {
+            if (cancelled && cancelled()) return std::nullopt;
+            if (inactive_owner_ids.contains(id)) continue;
+            try {
+                bool inactive_dependency = false;
+                if (entity.type == "opening") {
+                    std::string host_id;
+                    std::string diagnostic;
+                    if (read_document_wall_id(entity, host_id, diagnostic))
+                        inactive_dependency = inactive_owner_ids.contains(host_id);
+                } else if (entity.type == "wall_join") {
+                    const auto join = parse_wall_join(entity.properties, id);
+                    inactive_dependency = std::any_of(join.wall_ids.begin(), join.wall_ids.end(),
+                        [&](const auto& member) { return inactive_owner_ids.contains(member); });
+                } else if (entity.type == "roof_join") {
+                    const auto join = parse_roof_join(entity.properties, id);
+                    inactive_dependency = std::any_of(join.roof_ids.begin(), join.roof_ids.end(),
+                        [&](const auto& member) { return inactive_owner_ids.contains(member); });
+                } else if (entity.type == "railing") {
+                    const auto object = decode_building_entity(entity);
+                    if (const auto* rail = std::get_if<Railing>(&object)) {
+                        inactive_dependency =
+                            (rail->host && inactive_owner_ids.contains(rail->host->stair_id)) ||
+                            (rail->landing_host && inactive_owner_ids.contains(rail->landing_host->stair_id));
+                    }
+                }
+                if (inactive_dependency) inactive_owner_ids.insert(id);
+            } catch (const std::exception&) {
+                // Active malformed relationships retain the normal diagnostic
+                // path below; they cannot establish inactive-owner authority.
+            }
+        }
+    }
     // One captured batch shares organization, host/join and frame caches.
     // Hidden semantic owners are included because this preparation validates
     // them too; an invalid/cross-frame join must never reach local fusion.
     std::vector<std::string> site_owner_ids;
     for (const auto& [id,entity]:entities) {
         if (cancelled && cancelled()) return std::nullopt;
+        if (inactive_owner_ids.contains(id)) continue;
         if (entity.type=="wall" || entity.type=="slab" || entity.type=="room" ||
             entity.type=="terrain_surface" || entity.type=="opening" || entity.type=="wall_join" ||
             entity.type=="roof_join" || entity.type=="assembly_instance" ||
@@ -349,13 +394,14 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     // A fused join replaces its sources only while the join and every
     // member are visible. Re-derive on each mask transition; source entities
     // and document history remain authoritative and unchanged.
-    const auto join_presentation_ids = derived_join_presentation_entities(
-        snapshot, visible_ids ? *visible_ids : visible_project_entities(snapshot, {}));
+    auto active_visible_ids = visible_ids ? *visible_ids : visible_project_entities(snapshot, {});
+    for (const auto& id : inactive_owner_ids) active_visible_ids.erase(id);
+    const auto join_presentation_ids = derived_join_presentation_entities(snapshot, active_visible_ids);
 
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_wall;
     for (const auto& [id, entity] : entities) {
         if (cancelled && cancelled()) return std::nullopt;
-        if (entity.type != "opening") {
+        if (entity.type != "opening" || inactive_owner_ids.contains(id)) {
             continue;
         }
         std::string wall_id;
@@ -371,6 +417,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
 
     for (const auto& [id, entity] : entities) {
         if (cancelled && cancelled()) return std::nullopt;
+        if (inactive_owner_ids.contains(id)) continue;
         // Suppress visible members owned by a fused join. Hidden members
         // still pass through geometry validation below even when their
         // presentation will be hidden.
@@ -707,6 +754,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     const auto publish_assembly = [&](const std::string& id, const std::string& catalog_id,
                                       const AssemblyExpansion& expansion,
                                       const std::optional<std::string>& document_entity_id) {
+        if (inactive_owner_ids.contains(id)) return true;
         const auto source=entities.find(id);
         const auto placement = source==entities.end()
             ? SitePresentationPlacement{} : site_placements.at(id);
@@ -895,6 +943,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 }
                 // Genuine V1-V3 declarations retain their host-copy behavior.
                 if (!instance.placement) continue;
+                if (inactive_owner_ids.contains(instance.placement->host_entity_id)) continue;
                 const auto host = entities.find(instance.placement->host_entity_id);
                 if (host == entities.end()) {
                     append_unique(errors, "assembly instance '" + child_id +

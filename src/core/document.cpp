@@ -43,6 +43,7 @@
 #include "sketch/joint_translation_replay.hpp"
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -892,6 +893,13 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                            "asset map key does not match its stable id");
         }
     }
+    std::optional<ConstraintPhaseScope> active_scope;
+    if (active_phase_constraints) {
+        try { active_scope = constraint_phase_scope(entities); }
+        catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity, error.what());
+        }
+    }
     for (const auto& [id, entity] : entities) {
         std::vector<EntityReference> references;
         collect_references(entity, references);
@@ -1328,6 +1336,24 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                             if (!read_document_wall(target->second, openings, wall, diagnostic))
                                 document_error(DocumentErrorCode::invalid_entity,
                                     "Invalid relationship wall " + member + ": " + diagnostic);
+                            if (active_scope && !active_scope->inactive_owner_ids.contains(member)) {
+                                // Decode every retained descriptor against the
+                                // complete graph before collecting saved-active
+                                // cuts. Inactive cuts have no current host fit or
+                                // aggregate overlap, but remain admitted records.
+                                std::erase_if(wall.openings, [&](const auto& opening) {
+                                    if (!active_scope->inactive_owner_ids.contains(opening.id)) return false;
+                                    if (opening.id.empty() ||
+                                        opening.width <= default_geometry_tolerance_metres ||
+                                        opening.height <= default_geometry_tolerance_metres ||
+                                        opening.offset < 0.0 || opening.sill < 0.0 ||
+                                        !std::isfinite(opening.offset + opening.width) ||
+                                        !std::isfinite(opening.sill + opening.height))
+                                        document_error(DocumentErrorCode::invalid_entity,
+                                            "Invalid retained opening descriptor: " + opening.id);
+                                    return true;
+                                });
+                            }
                             validate_wall_semantics(wall);
                             wall_path.push_back(wall.baseline);
                         }
@@ -2464,7 +2490,8 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
 static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryConstraintChanges& command) {
     const auto proofs=phase_constraint_authoring_proofs(command);
     return std::none_of(proofs.begin(),proofs.end(),[](const auto& intent) {
-        return intent.contains("wall_replacement") && !intent.at("wall_replacement").is_null();
+        return (intent.contains("wall_replacement") && !intent.at("wall_replacement").is_null()) ||
+            (intent.contains("opening_demolition") && !intent.at("opening_demolition").is_null());
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2473,6 +2500,12 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (!intent.wall_replacement.is_null()) validate_phase_wall_replacement_originals(source,candidate,intent);
+        if (!intent.opening_demolition.is_null()) {
+            const auto replay = replay_phase_opening_demolition_entities(source,
+                decode_phase_opening_demolition_intent(intent.opening_demolition));
+            if (entity_map_digest(replay) != entity_map_digest(candidate))
+                throw std::invalid_argument("Opening demolition cannot change retained owners or borrow other edit authority");
+        }
     }
 #endif
 }
@@ -4404,8 +4437,9 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             validate_phase_constraint_authoring_mode(command);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
             auto result=replay_phase_constraint_authoring(source,command.phase_constraint_authoring_intent);
-            const auto intent=decode_phase_constraint_authoring_intent(command.phase_constraint_authoring_intent);
-            validate_active_design_preserved_dependents(source,result,intent.wall_replacement.is_null());
+            validate_active_design_preserved_dependents(source,result,
+                phase_constraint_authoring_preserves_registries(command));
+            validate_phase_constraint_composed_originals(source,result,command);
             validate_boundary_identity_transition(history,source,result);
             (void)validate_state(result,source_assets,true);
             return result;
@@ -4562,6 +4596,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             const auto replay=has_room_review_batch_completion(command) ?
                 replay_physical_wall_room_review_batch(reviewed_source,room_review_intents(command),active_policy) :
                 replay_physical_wall_room_review(reviewed_source,command.room_review_intent,active_policy);
+            if (!phase_constraint_authoring_proofs(command).empty())
+                validate_phase_constraint_composed_originals(source,replay.entities,command);
             validate_boundary_identity_transition(history,source,replay.entities);
             if (active_policy) {
                 validate_active_design_preserved_dependents(source,replay.entities,false);

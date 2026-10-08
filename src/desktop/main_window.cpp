@@ -34,6 +34,7 @@
 #include "sketch/phase_wall_replacement_request.hpp"
 #include "sketch/phase_wall_canvas_proposal.hpp"
 #include "sketch/phase_hosted_opening_capture.hpp"
+#include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
@@ -3709,6 +3710,34 @@ QString phase_alternative_label(const RemodelingAlternative& alternative) {
     return name.isEmpty() ? QString::fromStdString(alternative.id) : name;
 }
 
+bool saved_design_reference_inactive(const DocumentSnapshot& source,
+    const ConstraintPhaseScope& scope, const std::string& id) {
+    if (scope.inactive_owner_ids.empty()) return false;
+    if (scope.inactive_owner_ids.contains(id)) return true;
+    const auto found = source.entities().find(id);
+    if (found == source.entities().end()) return false;
+    if (can_recognize_boundary_dimension_entity_type(found->second.type)) {
+        try {
+            const auto decoded = decode_boundary_dimension_entity(found->second);
+            return decoded.dimension && scope.inactive_owner_ids.contains(decoded.dimension->boundary_id);
+        } catch (const std::exception&) {
+            // Unsupported or malformed data retains its existing diagnostic
+            // path; an arbitrary string never establishes phase ownership.
+            return false;
+        }
+    }
+    if (found->second.type != "opening") return false;
+    const auto host = read_string(found->second.properties, "wall_id");
+    return host && scope.inactive_owner_ids.contains(*host);
+}
+
+bool saved_design_overlay_active(const DocumentSnapshot& source,
+    const ConstraintPhaseScope& scope, const SectionOverlay& overlay) {
+    return (overlay.object_id.empty() || !saved_design_reference_inactive(source, scope, overlay.object_id)) &&
+        (!overlay.dimension_binding ||
+            !saved_design_reference_inactive(source, scope, overlay.dimension_binding->object_id));
+}
+
 std::set<std::string, std::less<>> visible_project_entities_with_phase(
     const DocumentSnapshot& snapshot, const ProjectViewFilter& filter) {
     auto visible = visible_project_entities(snapshot, filter);
@@ -3781,6 +3810,8 @@ std::set<std::string, std::less<>> visible_project_entities_with_phase(
                 }
         }
     }
+    const auto scope = constraint_phase_scope(snapshot.entities());
+    std::erase_if(visible, [&](const auto& id) { return saved_design_reference_inactive(snapshot, scope, id); });
     return visible;
 }
 
@@ -4507,10 +4538,13 @@ double project_plan_angle(double angle, const BuildingViewFrame& frame) {
 
 Wall opening_plan_host(const DocumentSnapshot& source,const Entity& opening) {
     const auto wall_id=opening.properties.at("wall_id").get<std::string>();
+    const auto scope=constraint_phase_scope(source.entities());
+    if (scope.inactive_owner_ids.contains(opening.id) || scope.inactive_owner_ids.contains(wall_id))
+        throw std::invalid_argument("Opening controls require an active opening and wall in the saved design.");
     std::vector<const Entity*> siblings;
     for(const auto& [id,entity]:source.entities()) {
-        (void)id;
-        if(entity.type=="opening" && read_string(entity.properties,"wall_id").value_or("")==wall_id)
+        if(!scope.inactive_owner_ids.contains(id) && entity.type=="opening" &&
+            read_string(entity.properties,"wall_id").value_or("")==wall_id)
             siblings.push_back(&entity);
     }
     Wall wall;std::string error;
@@ -4728,9 +4762,17 @@ CoordinatedOverlayProjection project_view_overlays(const DocumentSnapshot& snaps
     resolved.object_ids = context.object_ids;
     resolved.restrict_to_objects = context.restrict_to_objects;
     resolved.overlays = context.overlays;
+    const auto phase_scope = constraint_phase_scope(snapshot.entities());
     for (const auto& overlay : context.overlays) {
         if (!section_overlay_visible(overlay, context.presentation.detail)) continue;
         const auto id = QString::fromStdString(context.view_id + "/overlay/" + overlay.id);
+        if (!saved_design_overlay_active(snapshot, phase_scope, overlay)) {
+            if (retain_unresolved) {
+                result.entities.push_back(CanvasEntity{id, QStringLiteral("section_overlay"), {}, 0.0});
+                result.labels.push_back(CanvasLabel{id, {}, QString{}});
+            }
+            continue;
+        }
         if (overlay.kind == SectionOverlayKind::text) {
             CanvasLabel label{id, {overlay.start_m[0], overlay.start_m[1]},
                 QString::fromStdString(overlay.text)};
@@ -30610,6 +30652,20 @@ public:
         try {
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto authority = captureSourceEditAuthority(source);
+            std::vector<std::string> selected_ids;
+            selected_ids.reserve(m_selected_ids.size());
+            for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
+            if (const auto demolition = phase_opening_demolition_command(source, selected_ids)) {
+                if (!sourceEditAuthorityUnchanged(authority))
+                    throw std::invalid_argument("The selected opening or active design changed before demolition.");
+                if (!applyAuthoredCommand(Command{*demolition})) return false;
+                m_selected_id.clear();
+                m_selected_ids.clear();
+                clearError();
+                refresh();
+                return true;
+            }
             std::map<std::string, Entity, std::less<>> embedded_catalogs;
             QStringList ordinary_ids;
             std::set<std::string, std::less<>> removed_children;
@@ -30665,6 +30721,11 @@ public:
             clearError();
             refresh();
             return true;
+        } catch (const Standard_Failure& error) {
+            const auto* detail = error.GetMessageString();
+            setError(QStringLiteral("Delete: %1").arg(detail && *detail ? QString::fromUtf8(detail)
+                : QStringLiteral("The wall or opening geometry could not be admitted.")));
+            return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Delete: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -32120,30 +32181,11 @@ public:
             validate_opening_assembly(assembly);
             auto properties = entity->properties;
             properties["opening_assembly"] = opening_assembly_json(assembly);
-            auto proposed = *entity;
-            proposed.properties = properties;
-            const auto source = authoringSnapshot();
-            const auto authority = captureSourceEditAuthority(source);
             HostedOpeningProfileEditIntent authored;
             authored.opening_id = entity->id;
             authored.wall_id = entity->properties.at("wall_id").get<std::string>();
             authored.assembly = assembly;
-            const Command raw{ApplyEntityChanges{revision, {EntityChange::upsert(proposed)}, {}, "edit opening assembly"}};
-            if (const auto applied = tryApplyAlternativeOpeningProfileEdit(source, raw, authority, authored)) {
-                if (*applied) { clearError(); refresh(); }
-                return *applied;
-            }
-            if (!previewOpening(*entity, properties)) {
-                return false;
-            }
-            auto candidate = *entity;
-            candidate.properties = std::move(properties);
-            if (!applyDocumentCommand(ApplyEntityChanges{
-                revision, {EntityChange::upsert(std::move(candidate))}, {},
-                "edit opening assembly"})) return false;
-            clearError();
-            refresh();
-            return true;
+            return editSelectedProperties(std::move(properties), "edit opening assembly", std::nullopt, authored);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Opening assembly: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -33311,13 +33353,15 @@ public:
                     [&](const auto& view) { return view.id == id; });
                 return found == model.views().end() ? nullptr : &*found;
             };
+            const auto phase_scope = constraint_phase_scope(snapshot.entities());
             for (const auto& viewport : sheet.viewports) {
                 const auto* view = find_view(viewport.view_id);
                 if (view == nullptr) continue;
                 if (view->presentation.appearance && !view->presentation.appearance->visible) continue;
                 for (const auto& overlay : view->overlays) {
                     if (overlay.kind != SectionOverlayKind::dimension ||
-                        !section_overlay_visible(overlay, view->presentation.detail)) continue;
+                        !section_overlay_visible(overlay, view->presentation.detail) ||
+                        !saved_design_overlay_active(snapshot, phase_scope, overlay)) continue;
                     const auto measured = resolve_section_dimension(snapshot, dimension_view(*view), overlay);
                     if (!measured.dimension) {
                         setError(QStringLiteral("Sheet output blocked: dimension %1: %2")
@@ -40369,6 +40413,24 @@ private:
                         if (*applied) { clearError(); refresh(); }
                         return *applied;
                     }
+                    if (authored_opening_profile) {
+                        const auto captured = capture_hosted_opening_profile_edit(*entity,
+                            Entity{entity->id, entity->type, properties, entity->required, entity->extensions},
+                            authored_opening_profile);
+                        if (!captured) { clearError(); return true; }
+                        // A property transaction invalidates old scalar receipts.
+                        // Typed dimensions retain the actual entered expression
+                        // and admit the full active host before raw publication.
+                        const auto staged = replay_hosted_opening_profile_entities(source.entities(), {*captured});
+                        const auto command = augmentAuthoredCommand(Command{ApplyEntityChanges{
+                            .expected_revision = source.revision(),
+                            .entity_changes = {EntityChange::upsert(staged.at(entity->id))},
+                            .message = message,
+                        }}, source);
+                        (void)Document::preview_command(source, command);
+                        if (!sourceEditAuthorityUnchanged(authority) || !applyAuthoredCommand(command)) return false;
+                        clearError(); refresh(); return true;
+                    }
                 }
                 std::map<std::string, std::string> encoded;
                 for (const auto& [key, value] : properties.items()) {
@@ -40403,6 +40465,11 @@ private:
                 clearError();
                 refresh();
                 return true;
+            } catch (const Standard_Failure& error) {
+                const auto* detail = error.GetMessageString();
+                setError(QStringLiteral("%1: %2").arg(QString::fromUtf8(message),
+                    detail && *detail ? QString::fromUtf8(detail) : QStringLiteral("The opening or wall cannot fit this geometry.")));
+                return false;
             } catch (const std::exception& error) {
                 setError(QStringLiteral("%1: %2").arg(QString::fromUtf8(message),
                                                         QString::fromUtf8(error.what())));
@@ -40416,6 +40483,30 @@ private:
         }
         refresh();
         return true;
+    }
+
+    bool editSelectedOpeningPlacement(const QString& expression, bool station) {
+        const auto entity = selectedEntity();
+        if (!entity || entity->type != "opening" || m_selected_ids.size() != 1) {
+            setError(QStringLiteral("Select one hosted door or window before editing its placement."));
+            return false;
+        }
+        try {
+            const auto quantity = parse_quantity(expression.toStdString(), m_metric_units ? Unit::metre : Unit::foot);
+            if (!std::isfinite(quantity.metres) || quantity.metres < 0)
+                throw std::invalid_argument("Opening position and sill height must be finite and zero or greater.");
+            HostedOpeningProfileEditIntent intent;
+            intent.opening_id = entity->id;
+            intent.wall_id = entity->properties.at("wall_id").get<std::string>();
+            if (station) intent.offset = quantity;
+            else intent.sill = quantity;
+            const auto candidate = replay_hosted_opening_profile_entity(*entity, intent);
+            return editSelectedProperties(candidate.properties,
+                station ? "edit opening position" : "edit opening sill height", std::nullopt, intent);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Opening placement: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
     }
 
     bool previewWall(const Entity& wall_entity,
@@ -40461,6 +40552,9 @@ private:
             }
             const auto snapshot = authoringSnapshot();
             const auto& entities = snapshot.entities();
+            const auto scope = constraint_phase_scope(entities);
+            if (scope.inactive_owner_ids.contains(opening_entity.id) || scope.inactive_owner_ids.contains(*wall_id))
+                throw std::invalid_argument("Choose an active opening and wall in the saved design.");
             const auto wall = entities.find(*wall_id);
             if (wall == entities.end() || wall->second.type != "wall") {
                 setError(QStringLiteral("Opening preview rejected: host wall does not exist."));
@@ -40468,7 +40562,7 @@ private:
             }
             std::vector<HostedOpening> openings;
             for (const auto& [id, entity] : snapshot.entities()) {
-                if (entity.type != "opening") {
+                if (scope.inactive_owner_ids.contains(id) || entity.type != "opening") {
                     continue;
                 }
                 const auto existing_wall_id = read_string(entity.properties, "wall_id");
@@ -40507,7 +40601,8 @@ private:
                 candidate.properties = candidate_properties;
                 std::vector<const Entity*> siblings;
                 for (const auto& [id, entity] : entities)
-                    if (entity.type == "opening" && read_string(entity.properties, "wall_id").value_or("") == *wall_id &&
+                    if (!scope.inactive_owner_ids.contains(id) && entity.type == "opening" &&
+                        read_string(entity.properties, "wall_id").value_or("") == *wall_id &&
                         id != candidate.id) siblings.push_back(&entity);
                 siblings.push_back(&candidate);
                 Wall checked;
@@ -44015,6 +44110,18 @@ private:
         m_height_edit->setObjectName(QStringLiteral("inspectorHeight"));
         m_height_edit->setMinimumWidth(0);
         form->addRow(QStringLiteral("Height"), m_height_edit);
+        m_opening_offset_edit = new QLineEdit(inspector_body);
+        m_opening_offset_edit->setObjectName(QStringLiteral("inspectorOpeningPosition"));
+        m_opening_offset_edit->setMinimumWidth(0);
+        m_opening_offset_edit->setToolTip(QStringLiteral("Distance along the wall from its start to this opening's first jamb"));
+        form->addRow(QStringLiteral("Position on wall"), m_opening_offset_edit);
+        form->setRowVisible(m_opening_offset_edit, false);
+        m_opening_sill_edit = new QLineEdit(inspector_body);
+        m_opening_sill_edit->setObjectName(QStringLiteral("inspectorOpeningSill"));
+        m_opening_sill_edit->setMinimumWidth(0);
+        m_opening_sill_edit->setToolTip(QStringLiteral("Opening bottom above the host wall's base elevation"));
+        form->addRow(QStringLiteral("Sill height"), m_opening_sill_edit);
+        form->setRowVisible(m_opening_sill_edit, false);
         m_elevation_edit = new QLineEdit(inspector_body);
         m_elevation_edit->setObjectName(QStringLiteral("inspectorElevation"));
         m_elevation_edit->setToolTip(QStringLiteral("Base elevation in the current input units"));
@@ -44459,6 +44566,10 @@ private:
                              if (m_refreshing || !m_length_edit->isModified()) return;
                              m_length_edit->setModified(false);
                              const auto entity = selectedEntity();
+                             if (entity && entity->type == "opening" &&
+                                 (!m_opening_property_context || !sourceEditAuthorityUnchanged(*m_opening_property_context))) {
+                                 refreshInspector(); return;
+                             }
                              if (entity && entity->type == "wall") showConstraintEditor(m_length_edit->text());
                              else editSelectedLength(m_length_edit->text());
                          });
@@ -44466,8 +44577,26 @@ private:
                          [this] {
                              if (m_refreshing || !m_height_edit->isModified()) return;
                              m_height_edit->setModified(false);
+                             const auto entity = selectedEntity();
+                             if (entity && entity->type == "opening" &&
+                                 (!m_opening_property_context || !sourceEditAuthorityUnchanged(*m_opening_property_context))) {
+                                 refreshInspector(); return;
+                             }
                              (void)editSelectedHeight(m_height_edit->text());
                          });
+        for (const auto& [field, station] : {
+                std::pair{m_opening_offset_edit, true}, std::pair{m_opening_sill_edit, false}}) {
+            QObject::connect(field, &QLineEdit::editingFinished, owner, [this, field, station] {
+                if (m_refreshing || !field->isModified()) return;
+                field->setModified(false);
+                if (!m_opening_property_context || !sourceEditAuthorityUnchanged(*m_opening_property_context)) {
+                    setError(QStringLiteral("The selected opening changed. Reopen its properties before editing placement."));
+                    refreshInspector();
+                    return;
+                }
+                (void)editSelectedOpeningPlacement(field->text(), station);
+            });
+        }
         QObject::connect(m_elevation_edit, &QLineEdit::editingFinished, owner,
                          [this] {
                              if (m_refreshing || !m_elevation_edit->isModified()) return;
@@ -45719,7 +45848,9 @@ private:
         capture_diagnostic_stage("projection.physical_rooms.end");
         auto& openings_by_wall = result.openings_by_wall;
         std::map<std::string, std::vector<const Entity*>, std::less<>> opening_entities_by_wall;
+        const auto phase_scope = constraint_phase_scope(snapshot.entities());
         for (const auto& [id, entity] : snapshot.entities()) {
+            if (saved_design_reference_inactive(snapshot, phase_scope, id)) continue;
             if (entity.type == "reference_grid") {
                 try {
                     if (!entity.properties.contains("model"))
@@ -45878,6 +46009,7 @@ private:
             opening_entities_by_wall[*wall_id].push_back(&entity);
         }
         for (const auto& [id, entity] : snapshot.entities()) {
+            if (saved_design_reference_inactive(snapshot, phase_scope, id)) continue;
             if (entity.type == "opening") {
                 try {
                     const auto host = snapshot.entities().find(entity.properties.at("wall_id").get<std::string>());
@@ -48733,8 +48865,9 @@ private:
                         }
                         if (architectural_hidden_ids.contains(*wall_id)) continue;
                         std::vector<const Entity*> siblings;
+                        const auto phase_scope = constraint_phase_scope(snapshot.entities());
                         for (const auto& [sibling_id, sibling] : snapshot.entities()) {
-                            if (sibling.type == "opening" &&
+                            if (!phase_scope.inactive_owner_ids.contains(sibling_id) && sibling.type == "opening" &&
                                 read_string(sibling.properties, "wall_id") == wall_id) {
                                 siblings.push_back(&sibling);
                             }
@@ -50969,6 +51102,13 @@ private:
     }
 
     void refreshInspector() {
+        m_opening_property_context.reset();
+        for (auto* field : {m_opening_offset_edit, m_opening_sill_edit}) {
+            QSignalBlocker blocker(field);
+            m_geometry_form->setRowVisible(field, false);
+            field->setEnabled(false);
+            field->clear();
+        }
         refreshAreaClassPalette();
         refreshAppraisalDetails();
         std::optional<DocumentSnapshot> inspector_source;
@@ -50992,6 +51132,20 @@ private:
         const auto entity = m_selected_id.isEmpty() || selected == inspector_snapshot.entities().end()
             ? std::optional<EntityValue>{} : std::optional<EntityValue>{selected->second};
         const auto editable = inspector_snapshot.is_editable() && m_document->is_editable();
+        if (entity && entity->type == "opening" && m_selected_ids.size() == 1) {
+            if (const auto opening = read_hosted_opening(*entity)) {
+                const auto fill = [&](QLineEdit* field, double value) {
+                    QSignalBlocker blocker(field);
+                    field->setText(format_length(value, m_metric_units));
+                    field->setModified(false);
+                    field->setEnabled(editable);
+                    m_geometry_form->setRowVisible(field, true);
+                };
+                fill(m_opening_offset_edit, opening->offset);
+                fill(m_opening_sill_edit, opening->sill);
+                m_opening_property_context = captureSourceEditAuthority(inspector_snapshot);
+            }
+        }
         if (m_inspector_heading) m_inspector_heading->setText(QStringLiteral("Properties"));
         m_dimension_edit_context.reset();
         m_dimension_edit_source.reset();
@@ -51637,7 +51791,7 @@ private:
         if (is_closed_boundary_entity(entity->type) || entity->type == "slab") {
             length = perimeter(boundary);
         } else if (entity->type == "opening") {
-            length = read_number(entity->properties, "width_m", 0.0);
+            length = read_number(entity->properties, "width_m", read_number(entity->properties, "width", 0.0));
         } else if (!boundary.empty()) {
             length = segment_length(boundary.front());
         }
@@ -51734,7 +51888,7 @@ private:
                     ? format_length(*value, m_metric_units) : QString{});
             } else {
                 m_height_edit->setText(format_length(
-                    read_number(entity->properties, "height_m", 0.0), m_metric_units));
+                    read_number(entity->properties, "height_m", read_number(entity->properties, "height", 0.0)), m_metric_units));
             }
         }
         {
@@ -57019,6 +57173,8 @@ private:
         const auto source = selectedEntity();
         if(!source || source->type != "opening") return;
         try {
+            const auto snapshot = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(snapshot);
             const auto prior = source->properties.value("door_operation",json{});
             const auto operation = prior.is_null() ? DoorOperation{} : decode_door_operation(prior);
             QDialog dialog(owner);
@@ -57060,7 +57216,8 @@ private:
             layout->addWidget(buttons);
             QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
             QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-            if(dialog.exec()!=QDialog::Accepted || !modalContextUnchanged(context)) return;
+            if(dialog.exec()!=QDialog::Accepted || !modalContextUnchanged(context) ||
+                !sourceEditAuthorityUnchanged(authority)) return;
             auto candidate = *source;
             if(hinge->currentIndex()==0) candidate.properties.erase("door_operation");
             else {
@@ -57074,16 +57231,9 @@ private:
                 candidate.properties["door_operation"] = encode_door_operation(edited);
             }
             if(candidate.properties==source->properties) return;
-            const auto snapshot = authoringSnapshot();
-            const auto authority = captureSourceEditAuthority(snapshot);
-            const Command raw{ApplyEntityChanges{context.revision, {EntityChange::upsert(candidate)}, {}, "edit door operation"}};
-            if (const auto applied = tryApplyAlternativeOpeningProfileEdit(snapshot, raw, authority)) {
-                if (*applied) { clearError(); refresh(); }
-                return;
-            }
-            if (!previewOpening(candidate, candidate.properties)) return;
-            if (!applyDocumentCommand(raw)) return;
-            clearError(); refresh();
+            const auto intent = capture_hosted_opening_profile_edit(*source, candidate);
+            if (!intent) { clearError(); return; }
+            (void)editSelectedProperties(candidate.properties, "edit door operation", std::nullopt, intent);
         } catch(const std::exception& error) { setError(QString::fromUtf8(error.what())); }
     }
 
@@ -57096,9 +57246,12 @@ private:
                 setError(QStringLiteral("Select a wall before creating a %1 opening.").arg(kind));
                 return;
             }
+            const auto phase_scope = constraint_phase_scope(snapshot.entities());
+            if (phase_scope.inactive_owner_ids.contains(wall->first))
+                throw std::invalid_argument("Choose an active wall in the saved design before placing an opening.");
             std::vector<const Entity*> openings;
             for (const auto& [id, entity] : snapshot.entities()) {
-                if (entity.type != "opening") continue;
+                if (phase_scope.inactive_owner_ids.contains(id) || entity.type != "opening") continue;
                 const auto host_id = read_string(entity.properties, "wall_id");
                 if (host_id && *host_id == wall->first) openings.push_back(&entity);
             }
@@ -57814,6 +57967,9 @@ private:
     QComboBox* m_unitsCombo{};
     QLineEdit* m_length_edit{};
     QLineEdit* m_height_edit{};
+    QLineEdit* m_opening_offset_edit{};
+    QLineEdit* m_opening_sill_edit{};
+    std::optional<SourceEditAuthority> m_opening_property_context;
     QLineEdit* m_elevation_edit{};
     QLineEdit* m_slope_rise_edit{};
     QLineEdit* m_thickness_edit{};

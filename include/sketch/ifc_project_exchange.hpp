@@ -45,7 +45,13 @@ struct IfcProjectImportResult {
     bool complete() const noexcept { return diagnostics.empty(); }
 };
 
-// Maps the immutable native snapshot into a bounded IFC4 STEP subset. Linear
+// Maps the immutable native snapshot's actual saved active design into a bounded
+// IFC4 STEP subset. Phase scope uses the complete source and every registry's
+// saved alternative. Inactive products, their hosted openings/railings, and joins
+// with inactive members are omitted with fidelity diagnostics, as are phase
+// registries and their alternative evidence. Unavailable or malformed phase
+// scope returns no STEP and an active_design_scope_not_representable diagnostic.
+// Snapshots without phase registries retain the legacy export behavior. Linear
 // boundaries remain analytical polylines; straight constant-height walls and
 // closed footprints with an explicit thickness become swept solids in a default
 // project/site/building/storey hierarchy. Native wall layer stacks use IFC types

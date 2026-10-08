@@ -301,7 +301,7 @@ std::map<std::string, Entity, std::less<>> replay_hosted_opening_profile_entitie
     }
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
     for (const auto& [id, entity] : result) {
-        if (entity.type != "opening") continue;
+        if (entity.type != "opening" || scope.inactive_owner_ids.contains(id)) continue;
         const auto host_reference = entity.properties.find("wall_id");
         if (host_reference == entity.properties.end() || !host_reference->is_string() ||
             !hosts.contains(host_reference->get_ref<const std::string&>())) continue;

@@ -1,8 +1,10 @@
 #include "sketch/document_wall_plan.hpp"
 
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/wall_plan_network.hpp"
 
+#include <algorithm>
 #include <array>
 
 namespace sketch {
@@ -24,22 +26,28 @@ nlohmann::json contact_domain(const Entity& entity) {
 std::map<std::string, WallPlanGeometry, std::less<>> document_wall_plan_geometry(
     const std::map<std::string, Entity, std::less<>>& entities,
     const std::map<std::string, Wall, std::less<>>& overrides) {
+    const auto scope = constraint_phase_scope(entities);
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
     for (const auto& [id, entity] : entities) {
-        (void)id;
-        if (entity.type != "opening") continue;
+        if (entity.type != "opening" || scope.inactive_owner_ids.contains(id)) continue;
         std::string host, error;
         if (read_document_wall_id(entity, host, error)) openings[host].push_back(&entity);
     }
     std::map<std::string, Wall, std::less<>> walls;
     for (const auto& [id, entity] : entities) {
-        if (entity.type != "wall") continue;
+        if (entity.type != "wall" || scope.inactive_owner_ids.contains(id)) continue;
         try {
             Wall wall;
             std::string error;
-            if (const auto replacement = overrides.find(id); replacement != overrides.end())
+            if (const auto replacement = overrides.find(id); replacement != overrides.end()) {
                 wall = replacement->second;
-            else if (!read_document_wall(entity, openings[id], wall, error)) continue;
+                if (wall.id != id) continue;
+                // Overrides retain candidate dimensions, but their retained
+                // inactive cuts cannot become active through a derived copy.
+                std::erase_if(wall.openings, [&](const auto& opening) {
+                    return scope.inactive_owner_ids.contains(opening.id);
+                });
+            } else if (!read_document_wall(entity, openings[id], wall, error)) continue;
             validate_wall_semantics(wall);
             walls.emplace(id, std::move(wall));
         } catch (const std::exception&) {

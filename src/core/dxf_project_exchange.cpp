@@ -4,6 +4,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
@@ -263,17 +264,19 @@ std::optional<Boundary> native_slab_hole(const Json& value) {
     return read_boundary_value(value);
 }
 
-std::vector<const Entity*> host_openings(const DocumentSnapshot& document, std::string_view id) {
+std::vector<const Entity*> host_openings(const DocumentSnapshot& document, std::string_view id,
+                                       const ConstraintPhaseScope& scope) {
     std::vector<const Entity*> openings;
     for (const auto& [key, entity] : document.entities()) {
-        (void)key;
+        if (scope.inactive_owner_ids.contains(key)) continue;
         if (entity.type == "opening" && entity.properties.is_object() &&
             entity.properties.value("wall_id", std::string{}) == id) openings.push_back(&entity);
     }
     return openings;
 }
 
-Boundary architectural_plan(const DocumentSnapshot& document, const Entity& entity) {
+Boundary architectural_plan(const DocumentSnapshot& document, const Entity& entity,
+                            const ConstraintPhaseScope& scope) {
     const Entity* host = &entity;
     if (entity.type == "opening") {
         const auto id = entity.properties.at("wall_id").get<std::string>();
@@ -284,7 +287,7 @@ Boundary architectural_plan(const DocumentSnapshot& document, const Entity& enti
     }
     Wall wall;
     std::string error;
-    if (!read_document_wall(*host, host_openings(document, host->id), wall, error))
+    if (!read_document_wall(*host, host_openings(document, host->id, scope), wall, error))
         throw std::invalid_argument(error);
     validate_hosted_opening_plan_source(wall);
 #ifdef SKETCH_DXF_NATIVE_GEOMETRY
@@ -326,10 +329,13 @@ Boundary architectural_plan(const DocumentSnapshot& document, const Entity& enti
 
 DxfBlock architectural_block(const DocumentSnapshot& document, const Entity& entity,
                               std::string name, std::string layer,
-                              std::vector<DxfProjectDiagnostic>& diagnostics) {
+                              std::vector<DxfProjectDiagnostic>& diagnostics,
+                              const ConstraintPhaseScope& scope = {}) {
     DxfDrawing plan;
     std::vector<DxfProjectDiagnostic> plan_diagnostics;
-    auto geometry = architectural_plan(document, entity);
+    // Export supplies the complete saved-design scope. Import regenerates its
+    // detached, phase-free graph with the empty scope and original V1 contract.
+    auto geometry = architectural_plan(document, entity, scope);
     if (geometry.size() > 4096) throw std::invalid_argument("native plan primitive limit");
     // Canonical direction and order make the independently regenerated native
     // plan stable across identity remapping and repeated transport round trips.
@@ -356,9 +362,10 @@ DxfBlock architectural_block(const DocumentSnapshot& document, const Entity& ent
             std::move(plan.polylines), {}, {}};
 }
 
-Json native_payload(const DocumentSnapshot& document, const Entity& entity) {
+Json native_payload(const DocumentSnapshot& document, const Entity& entity,
+                    const ConstraintPhaseScope& scope) {
     Json ids = Json::array();
-    if (entity.type == "wall") for (const auto* opening : host_openings(document, entity.id))
+    if (entity.type == "wall") for (const auto* opening : host_openings(document, entity.id, scope))
         ids.push_back(opening->id);
     Json result = {{"version", 1}, {"id", entity.id}, {"type", entity.type},
             {"properties", entity.properties}, {"extensions", entity.extensions},
@@ -386,17 +393,17 @@ Json bounded_native_json(std::string_view bytes) {
 }
 
 void export_architectural_entity(const DocumentSnapshot& document, const Entity& entity,
-                                DxfProjectExportResult& result) {
+                                DxfProjectExportResult& result, const ConstraintPhaseScope& scope) {
     try {
         // Reject unbounded metadata before potentially expensive solid/section
         // work. Geometry cannot make an unbounded source into active metadata.
-        const auto payload = native_payload(document, entity).dump();
+        const auto payload = native_payload(document, entity, scope).dump();
         if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
         (void)bounded_native_json(payload);
         const auto layer = layer_for(document, entity, result.diagnostics);
         auto block = architectural_block(document, entity,
             "VERTEX_PLAN_" + std::to_string(result.drawing.blocks.size() + 1),
-            entity.type == "opening" && layer == "0" ? "Openings" : layer, result.diagnostics);
+            entity.type == "opening" && layer == "0" ? "Openings" : layer, result.diagnostics, scope);
         block.vertex_entity_json = payload;
 #ifndef SKETCH_DXF_NATIVE_GEOMETRY
         if (entity.type == "opening" && entity.properties.contains("opening_assembly")) {
@@ -420,10 +427,42 @@ void export_architectural_entity(const DocumentSnapshot& document, const Entity&
     }
 }
 
+bool annotation_has_inactive_owner(const Entity& entity, const ConstraintPhaseScope& scope) {
+    if (scope.inactive_owner_ids.empty()) return false;
+    // These are the top-level entity reference fields admitted by Document's
+    // collect_references contract. Text, arbitrary nested JSON and extensions
+    // are source content, never evidence of an analytical owner relationship.
+    const auto inactive = [&](const Json& value) {
+        return value.is_string() && scope.inactive_owner_ids.contains(value.get_ref<const std::string&>());
+    };
+    for (const auto* key : {"assembly_catalog_id", "property_id", "building_id", "floor_id",
+                           "layer_id", "boundary_id", "wall_id", "opening_id", "room_id",
+                           "slab_id", "roof_id", "stair_id", "sheet_id", "view_id",
+                           "constraint_id", "label_id", "column_id", "beam_id", "railing_id",
+                           "parent_id", "host_id", "target_id", "entity_id", "source_entity_id"}) {
+        const auto single = entity.properties.find(key);
+        if (single != entity.properties.end() && inactive(*single)) return true;
+        const auto collection = entity.properties.find(std::string(key) + "s");
+        if (collection != entity.properties.end() && collection->is_array() &&
+            std::any_of(collection->begin(), collection->end(), inactive)) return true;
+    }
+    for (const auto* key : {"refs", "references"}) {
+        const auto collection = entity.properties.find(key);
+        if (collection != entity.properties.end() && collection->is_array() &&
+            std::any_of(collection->begin(), collection->end(), inactive)) return true;
+    }
+    return false;
+}
+
 void export_native_entity(const DocumentSnapshot& document, const Entity& entity,
-                          DxfProjectExportResult& result) {
+                          DxfProjectExportResult& result, const ConstraintPhaseScope& scope) {
     if (entity.type == "wall" || entity.type == "opening") {
-        export_architectural_entity(document, entity, result);
+        export_architectural_entity(document, entity, result, scope);
+        return;
+    }
+    if ((entity.type == kAnnotationEntityType || entity.type == "label") &&
+        annotation_has_inactive_owner(entity, scope)) {
+        diagnostic(result.diagnostics, entity.id, entity.type, "inactive_design_owner_not_exported");
         return;
     }
     const auto layer = layer_for(document, entity, result.diagnostics);
@@ -539,6 +578,10 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             const auto decoded = decode_boundary_dimension_entity(entity);
             if (!decoded.supported()) {
                 diagnostic(result.diagnostics, entity.id, entity.type, "dimension_semantics_unsupported");
+                return;
+            }
+            if (scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) {
+                diagnostic(result.diagnostics, entity.id, entity.type, "inactive_design_owner_not_exported");
                 return;
             }
             // DxfDimension is deliberately limited to a linear measurement.
@@ -1200,10 +1243,33 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
                                           const DxfExchangeLimits& limits) {
     DxfProjectExportResult result;
     result.drawing.insertion_units = 6; // SI metres are authoritative in the project model.
+    ConstraintPhaseScope scope;
+    try {
+        // Evaluate every registry against the complete source before deriving
+        // output. A filtered Document would lose retained membership evidence.
+        scope = constraint_phase_scope(document.entities());
+    } catch (const std::exception&) {
+        diagnostic(result.diagnostics, {}, "PROJECT", "active_design_scope_not_representable");
+        return result;
+    }
+    // Hosted objects cannot be visible without their actual active wall, even
+    // when the opening itself has no registry membership.
+    for (const auto& [id, entity] : document.entities()) {
+        if (entity.type != "opening" || !entity.properties.is_object()) continue;
+        const auto host_id = entity.properties.find("wall_id");
+        if (host_id == entity.properties.end() || !host_id->is_string()) continue;
+        const auto host = document.entities().find(host_id->get_ref<const std::string&>());
+        if (host != document.entities().end() && host->second.type == "wall" &&
+            scope.inactive_owner_ids.contains(host->first)) scope.inactive_owner_ids.insert(id);
+    }
 #ifdef SKETCH_PHYSICAL_ROOMS
     const auto physical_rooms = physical_wall_room_checks(document);
 #endif
     for (const auto& [id, entity] : document.entities()) {
+        if (scope.inactive_owner_ids.contains(id)) {
+            diagnostic(result.diagnostics, id, entity.type, "inactive_design_evidence_not_representable");
+            continue;
+        }
         if (entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) {
 #ifdef SKETCH_PHYSICAL_ROOMS
             const auto found = physical_rooms.find(id);
@@ -1221,7 +1287,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
 #endif
             continue;
         }
-        export_native_entity(document, entity, result);
+        export_native_entity(document, entity, result, scope);
     }
     // Validate the complete mapped drawing before returning it. The caller can
     // still inspect diagnostics; an invalid mapped record is never serialized.

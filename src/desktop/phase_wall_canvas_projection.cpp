@@ -472,16 +472,13 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     // Only the actual saved active semantic roster participates in junctions;
     // duplicate retired originals must not create false caps or T/X seams.
     const auto stage_scope=constraint_phase_scope(stage);
-    const auto source_scope=constraint_phase_scope(source.entities());
-    Entities active_plan_entities,source_plan_entities;
     std::set<std::string,std::less<>> semantic_visible;
     for (const auto& [id,entity]:stage) if (!stage_scope.inactive_owner_ids.contains(id)) {
-        active_plan_entities.emplace(id,entity);semantic_visible.insert(id);
+        (void)entity;
+        semantic_visible.insert(id);
     }
-    for (const auto& [id,entity]:source.entities()) if (!source_scope.inactive_owner_ids.contains(id))
-        source_plan_entities.emplace(id,entity);
-    const auto plans=document_wall_plan_geometry(active_plan_entities,walls);
-    const auto old_plans=document_wall_plan_geometry(source_plan_entities);
+    const auto plans=document_wall_plan_geometry(stage,walls);
+    const auto old_plans=document_wall_plan_geometry(source.entities());
     const auto presentations=wall_presentations(source.entities());
     const auto regions=exterior_regions(stage);
     const bool horizontal_plan=!view_context || horizontal(view_context->frame);

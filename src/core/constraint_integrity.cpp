@@ -61,7 +61,8 @@ OpeningIndex index_openings(const Entities& entities) {
 }
 
 Wall read_wall(const std::string& owner, const Entities& entities,
-               const OpeningIndex& openings_by_wall) {
+               const OpeningIndex& openings_by_wall,
+               const ConstraintPhaseScope* scope) {
     const auto found = entities.find(owner);
     if (found == entities.end() || found->second.type != "wall")
         invalid("Constraint owner is not an existing wall: " + owner);
@@ -83,10 +84,25 @@ Wall read_wall(const std::string& owner, const Entities& entities,
         wall.openings.reserve(hosted->second.size());
         for (const auto& indexed : hosted->second) {
             const auto& p = indexed.entity->properties;
-            wall.openings.push_back({indexed.id, number(p.at("offset_m"), "Opening offset"),
+            const HostedOpening opening{indexed.id, number(p.at("offset_m"), "Opening offset"),
                 number(p.at("width_m"), "Opening width"),
                 number(p.at("sill_m"), "Opening sill"),
-                number(p.at("height_m"), "Opening height")});
+                number(p.at("height_m"), "Opening height")};
+            if (scope && !scope->inactive_owner_ids.contains(owner) &&
+                scope->inactive_owner_ids.contains(indexed.id)) {
+                // Retained records still establish descriptor authority, but a
+                // parked cut cannot participate in the active host's fit or
+                // overlap. Keep the complete entity/index maps for all bindings.
+                if (indexed.entity->id != indexed.id || opening.id.empty() ||
+                    opening.width <= default_geometry_tolerance_metres ||
+                    opening.height <= default_geometry_tolerance_metres ||
+                    opening.offset < 0.0 || opening.sill < 0.0 ||
+                    !std::isfinite(opening.offset + opening.width) ||
+                    !std::isfinite(opening.sill + opening.height))
+                    invalid("Invalid retained opening descriptor: " + indexed.id);
+                continue;
+            }
+            wall.openings.push_back(opening);
         }
     }
     validate_wall_semantics(wall);
@@ -141,7 +157,8 @@ void admit_constraint_owner_identity(const std::string& id,const Entities& entit
 // endpoint envelopes still bind actual owners and stable endpoint identities;
 // unfamiliar feature/role semantics remain covered by the read-only diagnostic.
 void admit_unsupported_constraint_bindings(const Entity& entity,const Entities& entities,
-    const OpeningIndex& openings_by_wall,const std::set<std::string,std::less<>>& opaque_strokes) {
+    const OpeningIndex& openings_by_wall,const std::set<std::string,std::less<>>& opaque_strokes,
+    const ConstraintPhaseScope* scope) {
     for (const auto& binding : entity.properties.at("bindings")) {
         const auto id = binding.at("owner_id").get<std::string>();
         admit_constraint_owner_identity(id,entities);
@@ -153,7 +170,7 @@ void admit_unsupported_constraint_bindings(const Entity& entity,const Entities& 
             if (!binding.value("segment_id",std::string{}).empty() ||
                 !binding.value("vertex_id",std::string{}).empty())
                 invalid("Constraint baseline binding cannot contain boundary IDs");
-            (void)read_wall(id,entities,openings_by_wall);
+            (void)read_wall(id,entities,openings_by_wall,scope);
         } else if (feature == "boundary_segment" && !opaque_strokes.contains(id)) {
             const auto boundary = resolve_constraint_segment_owner(owner);
             const auto segment_id = binding.value("segment_id",std::string{});
@@ -194,17 +211,17 @@ std::optional<std::string> constraint_integrity(const Entities& entities,
                 auto found = owners.find(owner_id);
                 if (found == owners.end()) {
                     found = owners.emplace(owner_id,
-                        read_wall(owner_id, entities, openings_by_wall)).first;
+                        read_wall(owner_id, entities, openings_by_wall,scope)).first;
                 }
             }
             if (!decoded.constraint) {
-                if (scope) admit_unsupported_constraint_bindings(entity,entities,openings_by_wall,opaque_strokes);
+                if (scope) admit_unsupported_constraint_bindings(entity,entities,openings_by_wall,opaque_strokes,scope);
                 if (entity.properties.contains("entity_ids")) {
                     for (const auto& value : entity.properties.at("entity_ids")) {
                         const auto owner = entities.find(value.get<std::string>());
                         if (owner == entities.end()) invalid("Constraint owner does not exist");
                         if (owner->second.type == "wall")
-                            (void)read_wall(owner->first, entities, openings_by_wall);
+                            (void)read_wall(owner->first, entities, openings_by_wall,scope);
                         else if (!opaque_strokes.contains(owner->first))
                             (void)resolve_constraint_segment_owner(owner->second);
                     }
@@ -237,7 +254,7 @@ std::optional<std::string> constraint_integrity(const Entities& entities,
                 auto found = owners.find(binding.owner_id);
                 if (found == owners.end())
                     found = owners.emplace(binding.owner_id,
-                        read_wall(binding.owner_id, entities, openings_by_wall)).first;
+                        read_wall(binding.owner_id, entities, openings_by_wall,scope)).first;
                 points.push_back(binding.role == WallEndpointRole::start
                     ? found->second.baseline.start : found->second.baseline.end);
             }

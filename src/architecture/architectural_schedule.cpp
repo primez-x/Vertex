@@ -3,6 +3,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
 
@@ -1105,11 +1106,15 @@ void append_roof_join_rows(const DocumentSnapshot& document,
 
 DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection,
                                    const std::set<std::string, std::less<>>* visible_entity_ids) {
+    // Physical cuts follow the complete document's saved phase choices;
+    // presentation visibility only controls which schedule rows are emitted.
+    const auto phase_scope = constraint_phase_scope(document.entities());
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
     for (const auto& [id, entity] : document.entities()) {
-        if (entity.type != "opening") continue;
+        if (entity.type != "opening" || phase_scope.inactive_owner_ids.contains(id)) continue;
         std::string host, error;
-        if (read_document_wall_id(entity, host, error)) openings[host].push_back(&entity);
+        if (read_document_wall_id(entity, host, error) &&
+            !phase_scope.inactive_owner_ids.contains(host)) openings[host].push_back(&entity);
     }
     for (auto& row : projection.snapshot.rows) {
         if (row.kind != ScheduleRowKind::material) continue;

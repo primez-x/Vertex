@@ -14,6 +14,54 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 opening placement and active demolition
+
+The floating properties panel adds opening position along its wall and sill
+height. Width, height, position, sill, assembly and swing edits retain entered
+measurement expressions on ordinary and already-proposed openings. Their
+captured source and selection are checked before publication; refreshing hidden
+fields blocks editing signals before changing focus or visibility.
+
+Delete on existing baseline doors/windows in an active alternative now updates
+that alternative's demolition list in one command. Original openings, walls,
+dependents, other alternatives and unrelated registry content remain preserved.
+The actual source and candidate hosts are admitted with all active cuts and
+assemblies. Mixed baseline/nonbaseline selections and cross-registry demolition
+remain explicit refusals rather than partial deletion. Returning to baseline
+restores those retained openings without reconstructing them.
+
+The source-bound demolition intent has its own strict dialect under canonical
+command 34. It independently reconstructs only the named registry patch and
+establishes saved-active validation for projects whose previous commands used
+legacy all-object policy. Native 90/extraction 88 retain the proof through Undo
+and composed histories; earlier command policies and wire dialects remain exact.
+
+Saved-active scope now controls physical cuts in shared wall admission, plan
+junctions, opening grips, property previews, 2D scenes, native 3D preparation,
+coordinated dimensions, IFC/DXF output and material quantities. Inactive cuts cannot remain in a visible
+wall after their own symbol disappears. Bound inactive view overlays are hidden
+in canvas and sheet presentation while their stored records remain unchanged.
+Plan preview uses complete source/staged maps so phase authority never depends
+on a filtered inventory. DXF exports the saved active graph with explicit
+diagnostics for omitted inactive design evidence; its legacy/native import
+regeneration retains the phase-free contract.
+
+Independent source review identified IFC, material-quantity and active-host
+validator collectors that still included inactive openings. Their complete-map
+collectors now use saved-active scope while retaining individual descriptor and
+reference admission. A second review found a room-wrapper suffix that could
+change retained owners after a valid demolition child. Root added the same exact
+replay guard used by direct, selection and DISTO admission, and corrected the
+direct command's registry-preserve guard for the new demolition dialect.
+Independent source review approved that correction and the scoped integration;
+root reviewed the final interfaces, format floors and publication paths.
+
+This is source implementation only. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations run; the installed candidate remains
+unchanged. Compilation, interaction, Undo/reopen and export round trips remain
+unverified. Rehosting, opening-family conversion, compound multi-registry edits
+and broader shared object/profile changes remain implementation gaps.
+
 ### October 8 proposed hosted opening edits
 
 Source implementation adds typed existing-opening offset, width, sill, height,

@@ -5,6 +5,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/joint_translation_replay.hpp"
+#include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/wall_measurement.hpp"
 
@@ -291,7 +292,9 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     if (value.source_saved_revision && *value.source_saved_revision>value.expected_revision)
         invalid("Phase constraint saved revision exceeds its source revision");
     selections(value.phase_selections);
-    Json result={{"version",value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    if (!value.wall_replacement.is_null() && !value.opening_demolition.is_null())
+        invalid("Opening demolition cannot borrow wall replacement authority");
+    Json result={{"version",!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
@@ -301,6 +304,16 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         if (encode_phase_wall_replacement_authoring(replacement).dump()!=value.wall_replacement.dump())
             invalid("Wall replacement decisions are not canonical");
         result["wall_replacement"]=value.wall_replacement;
+    }
+    if (!value.opening_demolition.is_null()) {
+        const auto demolition = decode_phase_opening_demolition_intent(value.opening_demolition);
+        if (encode_phase_opening_demolition_intent(demolition).dump() != value.opening_demolition.dump())
+            invalid("Opening demolition decisions are not canonical");
+        ConstraintAuthoringIntent empty;
+        empty.message = value.intent.message;
+        if (encode_intent(value.intent) != encode_intent(empty))
+            invalid("Opening demolition cannot borrow geometry or relationship authority");
+        result["opening_demolition"] = value.opening_demolition;
     }
     // dump validates UTF-8 as well as the complete byte resource bound.
     resource_shape(result);
@@ -312,11 +325,14 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     resource_shape(value);
     if (value.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
     const bool replacement=value.is_object() && value.contains("version") && value.at("version")==2;
+    const bool demolition=value.is_object() && value.contains("version") && value.at("version")==3;
     if (replacement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
+    else if (demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","opening_demolition"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -329,6 +345,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         result.wall_replacement=value.at("wall_replacement");
         if (result.wall_replacement.is_null()) invalid("Version two requires wall replacement decisions");
         (void)decode_phase_wall_replacement_authoring(result.wall_replacement);
+    }
+    if (demolition) {
+        result.opening_demolition = value.at("opening_demolition");
+        if (result.opening_demolition.is_null()) invalid("Version three requires opening demolition decisions");
+        (void)decode_phase_opening_demolition_intent(result.opening_demolition);
     }
     if (encode_phase_constraint_authoring_intent(result)!=value) invalid("Phase constraint proof is not canonical");
     return result;
@@ -347,6 +368,9 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
     if (decoded.source_entities_digest!=entity_map_digest(source) ||
         decoded.phase_selections!=phase_constraint_authoring_selections(source))
         invalid("Phase constraint proof does not describe the actual source entities and saved choices");
+    if (!decoded.opening_demolition.is_null())
+        return replay_phase_opening_demolition_entities(source,
+            decode_phase_opening_demolition_intent(decoded.opening_demolition));
     return decoded.wall_replacement.is_null() ? reconstruct_active_phase_constraint_authoring(source,decoded.intent)
         : replay_phase_wall_replacement_authoring(source,decoded);
 }

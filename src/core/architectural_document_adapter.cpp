@@ -2,6 +2,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
@@ -1115,8 +1116,19 @@ void validate_architectural_geometry_changes(
     const DocumentSnapshot& source, const DocumentSnapshot& candidate,
     const std::vector<std::string>& required_ids) {
     const auto& entities = candidate.entities();
+    const auto source_scope = constraint_phase_scope(source.entities());
+    const auto candidate_scope = constraint_phase_scope(entities);
     std::set<std::string, std::less<>> host_ids, required_hosts, slab_ids, room_ids, full_room_ids, beam_ids, railing_ids;
-    const auto include = [&](const Entity& entity, bool required) {
+    const auto include = [&](const Entity& entity, bool required, bool candidate_target) {
+        if (candidate_target) {
+            if (candidate_scope.inactive_owner_ids.contains(entity.id))
+                throw std::invalid_argument("The edited physical object is inactive in the saved design: " + entity.id);
+        } else if (source_scope.inactive_owner_ids.contains(entity.id) ||
+                   candidate_scope.inactive_owner_ids.contains(entity.id)) {
+            // Retained or deleted parked originals are not requirements of the
+            // completed active design. Registry-only parking is not an edit.
+            return;
+        }
         const auto& p = entity.properties;
         if (entity.type == "wall" && (required || p.contains("baseline"))) {
             host_ids.insert(entity.id);
@@ -1125,6 +1137,11 @@ void validate_architectural_geometry_changes(
             std::string host_id, error;
             if (!read_document_wall_id(entity, host_id, error))
                 throw std::invalid_argument("Opening " + entity.id + ": " + error);
+            if (candidate_scope.inactive_owner_ids.contains(host_id)) {
+                if (candidate_target)
+                    throw std::invalid_argument("The edited opening host is inactive in the saved design: " + host_id);
+                return;
+            }
             host_ids.insert(host_id);
             if (required) required_hosts.insert(std::move(host_id));
         } else if (entity.type == "slab" && (required || p.contains("boundary"))) {
@@ -1181,11 +1198,11 @@ void validate_architectural_geometry_changes(
         if (entity.type == "opening" && before && before->properties.contains("wall_id") &&
             !entity.properties.contains("wall_id"))
             throw std::invalid_argument("The edited opening lost its wall host: " + id);
-        include(entity, false);
-        if (before) include(*before, false);
+        include(entity, false, true);
+        if (before) include(*before, false, false);
     }
     for (const auto& [id, entity] : source.entities())
-        if (!entities.contains(id)) include(entity, false);
+        if (!entities.contains(id)) include(entity, false, false);
     for (const auto& id : required_ids) {
         const auto found = entities.find(id);
         if (found == entities.end())
@@ -1194,15 +1211,28 @@ void validate_architectural_geometry_changes(
         if (type != "wall" && type != "opening" && type != "slab" && type != "room" &&
             type != "beam" && type != "railing")
             throw std::invalid_argument("The edited object has no supported physical descriptor: " + id);
-        include(found->second, true);
+        include(found->second, true, true);
     }
 
     std::vector<WallJoin> affected_joins;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "wall_join") continue;
-        const auto join = parse_wall_join(entity.properties, id);
         const auto before = source.entities().find(id);
         const bool edited = before == source.entities().end() || before->second.properties != entity.properties;
+        if (candidate_scope.inactive_owner_ids.contains(id)) {
+            if (edited)
+                throw std::invalid_argument("The edited wall join is inactive in the saved design: " + id);
+            continue;
+        }
+        const auto join = parse_wall_join(entity.properties, id);
+        // Match shared physical admission: a retained relationship containing
+        // any parked/demolished wall is inactive as a whole.
+        if (std::any_of(join.wall_ids.begin(), join.wall_ids.end(),
+            [&](const auto& member) { return candidate_scope.inactive_owner_ids.contains(member); })) {
+            if (edited)
+                throw std::invalid_argument("The edited wall join has an inactive member in the saved design: " + id);
+            continue;
+        }
         if (!edited && std::none_of(join.wall_ids.begin(), join.wall_ids.end(),
             [&](const auto& member) { return host_ids.contains(member); })) continue;
         affected_joins.push_back(join);
@@ -1215,8 +1245,7 @@ void validate_architectural_geometry_changes(
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_host;
     if (!host_ids.empty()) {
         for (const auto& [id, entity] : entities) {
-            (void)id;
-            if (entity.type != "opening") continue;
+            if (entity.type != "opening" || candidate_scope.inactive_owner_ids.contains(id)) continue;
             const auto host = entity.properties.find("wall_id");
             if (host != entity.properties.end() && host->is_string() &&
                 host_ids.contains(host->get_ref<const std::string&>()))

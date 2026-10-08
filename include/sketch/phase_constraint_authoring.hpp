@@ -18,6 +18,9 @@ struct PhaseConstraintAuthoringIntent {
     // completion, independently replayed before publication. Null keeps the
     // version-one semantics and exact wire keys.
     nlohmann::json wall_replacement=nullptr;
+    // Dialect three only: registry-only opening demolition. It cannot borrow
+    // wall replacements, geometry edits, relationships or arbitrary payloads.
+    nlohmann::json opening_demolition=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
