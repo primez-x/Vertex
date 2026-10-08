@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v66
+# Vertex project formats v1 through v67
+
+## Independent measured copies (v67)
+
+Native format 67 and JSON/assets extraction version 65 retain
+`extensions.measurement_linework_copy_scope: {"version":1}` on copied
+`measurement_linework` owners. This optional semantic flag has exactly one
+integer field. Wrong owner types, additional fields and other versions are
+refused. The marker owns the reader floor in every retained revision, including
+undone, deleted and abandoned owners; a lowered native marker is refused.
+
+If a measured area's retained exterior or group-member lineage references any
+marked owner, its source graph contains exactly every referenced owner and all
+canonical edges of each owner. Source contexts, phase visibility, segment
+identities, intervals, geometry and complete group topology still have to
+match. The flag supplies no arbitrary scope identifier or source authority.
+Unmarked lineage retains the historical layer graph, excluding marked copies.
+With no markers, older commands and their replay semantics remain unchanged.
+Coincident copies can therefore retain independent provenance without changing
+the original owners or relying on their continued existence.
+
+Each source-check call permits 16 resident cohort graphs, 256 reconstructions,
+65,536 canonical source segments and 16,000,000 possible segment pairs.
+Evictions and failed builds consume work. Existing graph and topology limits
+also apply. These limits bound added graph reconstruction, not every earlier
+lineage-decoding operation. Exhausted work refuses the affected check.
 
 ## Qualified measured lines and saved wall dimensions in rigid groups (v66)
 

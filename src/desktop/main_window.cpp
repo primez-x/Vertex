@@ -340,6 +340,7 @@ using json = nlohmann::json;
 
 constexpr std::size_t kMaximumClipboardBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kMaximumClipboardEntities = 128;
+constexpr std::size_t kMaximumNumericSelectionGraphEntities = 4096;
 constexpr std::string_view kClipboardFormat = "sketch.document.clipboard";
 
 class DxfLayerDestinationDelegate final : public QStyledItemDelegate {
@@ -1076,7 +1077,8 @@ void upgrade_annotation_transform_version(Entity& owner, const AnnotationState& 
 }
 
 std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& snapshot,
-                                                      std::string_view selected_id) {
+                                                      std::string_view selected_id,
+                                                      std::size_t maximum_entities = kMaximumClipboardEntities) {
     std::string root_id(selected_id);
     bool annotation_child = false;
     if (!snapshot.entities().contains(root_id)) {
@@ -1136,7 +1138,7 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
             }
         }
     }
-    if (result.size() > kMaximumClipboardEntities) return {};
+    if (result.size() > maximum_entities) return {};
     return result;
 }
 
@@ -6846,17 +6848,20 @@ public:
                                 const QString& offset_y, bool clone,
                                 const std::optional<PlanarTransform>& transform_override = std::nullopt,
                                 std::map<std::string,std::string,std::less<>>* clone_graph_ids = nullptr,
-                                bool detached_group = false) {
+                                bool detached_group = false,
+                                std::size_t maximum_entities = kMaximumClipboardEntities) {
         return detachedWallTransformCommand(source,original,m_metric_units,rotation_degrees,flip_horizontal,
-            flip_vertical,offset_x,offset_y,clone,transform_override,clone_graph_ids,detached_group);
+            flip_vertical,offset_x,offset_y,clone,transform_override,clone_graph_ids,detached_group,maximum_entities);
     }
 
     static std::pair<Command, std::string> detachedWallTransformCommand(const DocumentSnapshot& source,
         const Entity& original,bool metric_units,const QString& rotation_degrees,bool flip_horizontal,
         bool flip_vertical,const QString& offset_x,const QString& offset_y,bool clone,
         const std::optional<PlanarTransform>& transform_override=std::nullopt,
-        std::map<std::string,std::string,std::less<>>* clone_graph_ids=nullptr,bool detached_group=false) {
-        auto graph = clipboard_entities_for_selection(source, original.id);
+        std::map<std::string,std::string,std::less<>>* clone_graph_ids=nullptr,bool detached_group=false,
+        std::size_t maximum_entities=kMaximumClipboardEntities) {
+        auto graph = clipboard_entities_for_selection(source, original.id,maximum_entities);
+        if (graph.empty()) throw std::invalid_argument("The complete wall dependency graph is unavailable or exceeds the entity limit.");
         std::vector<const Entity*> openings;
         for (const auto& entity : graph) if (entity.type == "opening") openings.push_back(&entity);
         Wall wall;
@@ -7399,7 +7404,13 @@ public:
             if (!is_closed_boundary_entity(found->second.type) && found->second.type!="wall" && found->second.type!="measurement_linework")
                 throw std::invalid_argument("Select closed areas and their physical walls for a shared rigid transform.");
             if (found->second.type=="measurement_linework") selected_roots.push_back(found->second);
-            else for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
+            else {
+                const auto graph=clipboard_entities_for_selection(source,found->first,kMaximumNumericSelectionGraphEntities);
+                if (graph.empty()) throw std::invalid_argument("A selected geometry dependency graph exceeds the numeric selection limit.");
+                for (const auto& entity : graph) selected_roots.push_back(entity);
+            }
+            if (selected_roots.size()>kMaximumNumericSelectionGraphEntities)
+                throw std::invalid_argument("The complete numeric selection dependency graph exceeds the entity limit.");
         }
         if (!std::isfinite(transform.pivot.x) || !std::isfinite(transform.pivot.y) ||
             !std::isfinite(transform.rotation_radians) || !std::isfinite(transform.offset.x) ||
@@ -7411,7 +7422,7 @@ public:
         if(supplemental_changes.empty() &&
            std::all_of(root_ids.begin(),root_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
             return measuredStrokeTransformCommand(source,root_ids,transform);
-        auto graph=independentAreaCopyGraph(source,std::move(selected_roots),true,true);
+        auto graph=independentAreaCopyGraph(source,std::move(selected_roots),true,true,kMaximumNumericSelectionGraphEntities);
         includeMeasuredAreaSources(source,graph);
         std::vector<BoundaryTransformation> transformations;
         std::vector<WallGeometryMoveTarget> wall_targets;
@@ -7441,7 +7452,7 @@ public:
                 if (!baseline) throw std::invalid_argument("A selected wall has no canonical baseline.");
                 const auto proposed = transform_segment(*baseline,transform);
                 wall_targets.push_back({entity.id,proposed.start,proposed.end,transform});
-                const auto built=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,transform,nullptr,true);
+                const auto built=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,transform,nullptr,true,kMaximumNumericSelectionGraphEntities);
                 const auto* changes=std::get_if<ApplyEntityChanges>(&built.first);
                 if (!changes) throw std::invalid_argument("Source walls did not produce a detached transform.");
                 // An unchanged axis can still mirror its saved callout.
@@ -8040,12 +8051,13 @@ public:
         std::set<std::string,std::less<>> copied_ids;
         std::set<std::string,std::less<>> copied_geometry_ids;
         std::set<std::string,std::less<>> copied_wall_ids;
-        bool contains_copied_measurement = false;
+        bool contains_independent_copy = false;
         for (const auto& change : command.entity_changes)
             if (change.kind == EntityChangeKind::upsert && !source.entities().contains(change.entity.id)) {
                 copied_ids.insert(change.entity.id);
-                if (is_closed_boundary_entity(change.entity.type) || change.entity.type == "measurement_linework")
-                    contains_copied_measurement = true;
+                if (is_closed_boundary_entity(change.entity.type) || change.entity.type == "measurement_linework" ||
+                    change.entity.type == "wall")
+                    contains_independent_copy = true;
                 if (is_closed_boundary_entity(change.entity.type) || change.entity.type == "measurement_linework" ||
                     can_transform_architectural_entity_type(change.entity.type) ||
                     change.entity.type == "opening" || can_recognize_boundary_dimension_entity_type(change.entity.type))
@@ -8058,7 +8070,7 @@ public:
                 }
             }
         for (const auto& change : command.entity_changes) {
-            if (contains_copied_measurement && change.kind == EntityChangeKind::upsert) {
+            if (contains_independent_copy && change.kind == EntityChangeKind::upsert) {
                 const auto& entity = change.entity;
                 if (entity.type == "opening" && !copied_wall_ids.contains(read_string(entity.properties,"wall_id").value_or("")))
                     throw std::invalid_argument("A copied opening must include its independently copied wall.");
@@ -8073,7 +8085,7 @@ public:
                         if (!copied_geometry_ids.contains(record.at("target_id").get<std::string>()))
                             throw std::invalid_argument("Copied appearance must belong to an independently copied object.");
             }
-            if (contains_copied_measurement && change.kind == EntityChangeKind::upsert && change.entity.type == "constraint") {
+            if (contains_independent_copy && change.kind == EntityChangeKind::upsert && change.entity.type == "constraint") {
                 const auto decoded = decode_constraint_entity(change.entity);
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                 for (const auto& binding : decoded.constraint->bindings)
@@ -8186,11 +8198,19 @@ public:
         return command;
     }
 
-    std::pair<Command,std::string> makeIndependentAreaCloneCommand(
-        const DocumentSnapshot& source, const Entity& original, const PlanarTransform& transform) {
-        const auto graph = independentAreaCopyGraph(source,clipboard_entities_for_selection(source,original.id));
-        std::map<std::string,std::string,std::less<>> identities;
+    ApplyEntityChanges makeIndependentSelectionCloneCommand(
+        const DocumentSnapshot& source, std::vector<Entity> seeds, const PlanarTransform& transform,
+        const ApplyEntityChanges& presentation,
+        std::map<std::string,std::string,std::less<>>& identities,
+        std::map<std::pair<std::string,std::string>,std::string>& child_identities,
+        std::size_t maximum_entities = kMaximumClipboardEntities) {
+        const auto graph = independentAreaCopyGraph(source,std::move(seeds),true,true,maximum_entities);
         for (const auto& entity : graph) identities.emplace(entity.id,new_id(entity.type));
+        for (const auto& entity : graph) if (entity.type == kAnnotationEntityType) {
+            const auto state = decode_annotation_entity(entity);
+            for (const auto& child : state.labels) child_identities.emplace(std::make_pair(entity.id,child.id),new_id("label"));
+            for (const auto& child : state.symbols) child_identities.emplace(std::make_pair(entity.id,child.id),new_id("symbol"));
+        }
         for (const auto& entity : graph) if (entity.type == "measurement_linework") {
             const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
             if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
@@ -8207,12 +8227,13 @@ public:
             const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
             clone.properties["model"] = encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
             remap_entity_references(clone,identities);
+            clone.extensions["measurement_linework_copy_scope"] = {{"version",1}};
             copied.insert_or_assign(clone.id,std::move(clone));
         }
         for (const auto& entity : graph) {
             if (!is_closed_boundary_entity(entity.type) && entity.type != "wall") continue;
             const auto built = entity.type == "wall"
-                ? makeWallTransformCommand(source,entity,{},false,false,{}, {},true,transform,&identities)
+                ? makeWallTransformCommand(source,entity,{},false,false,{}, {},true,transform,&identities,false,maximum_entities)
                 : makeBoundaryTransformCommand(source,entity,{},false,false,{}, {},true,std::nullopt,transform,false,&identities);
             const auto* changes = std::get_if<ApplyEntityChanges>(&built.first);
             if (!changes) throw std::invalid_argument("The area copy did not produce a detached geometry command.");
@@ -8244,9 +8265,57 @@ public:
                 metadata.id = constraint.id;
                 remap_entity_references(metadata,identities);
                 copied.insert_or_assign(constraint.id,encode_constraint_entity(constraint,&metadata));
+            } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                // Include measured-line and physical-wall dimensions as well
+                // as boundary dimensions. Every placement moves exactly once.
+                auto metadata = entity;
+                metadata.id = identities.at(entity.id);
+                remap_entity_references(metadata,identities);
+                const auto decoded = decode_boundary_dimension_entity(metadata);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto dimension = *decoded.dimension;
+                dimension.text_position = transform_point(dimension.text_position,transform);
+                copied.insert_or_assign(metadata.id,encode_boundary_dimension_entity(dimension,&metadata));
             } else if (entity.type == kAnnotationEntityType) {
                 auto annotation = entity;
+                // The editor already adapted these child records to the view
+                // basis. Preserve its final wire values before allocating IDs;
+                // dependency appearance remains on this owner's subset.
+                for (const auto& change : presentation.entity_changes) {
+                    if (change.kind != EntityChangeKind::upsert || change.entity.id != entity.id) continue;
+                    for (const auto* collection : {"labels","symbols"})
+                        for (auto& child : annotation.properties.at("state").at(collection)) {
+                            const auto& records = change.entity.properties.at("state").at(collection);
+                            const auto found = std::find_if(records.begin(),records.end(),[&](const auto& record) {
+                                return record.at("id") == child.at("id");
+                            });
+                            if (found == records.end()) throw std::invalid_argument("A copied annotation lost its adapted child record.");
+                            child = *found;
+                        }
+                    annotation.properties.at("state")["version"] = change.entity.properties.at("state").at("version");
+                }
                 annotation.id = identities.at(entity.id);
+                // Child identities have an owner-qualified namespace. Never
+                // let a colliding body or another owner's child rename them.
+                auto& state = annotation.properties.at("state");
+                for (const auto* collection : {"labels","symbols"})
+                    for (auto& child : state.at(collection))
+                        child["id"] = child_identities.at({entity.id,child.at("id").get<std::string>()});
+                auto& overrides = state.at("overrides");
+                overrides.erase(std::remove_if(overrides.begin(),overrides.end(),[&](json& record) {
+                    const auto target = record.at("target_id").get<std::string>();
+                    const auto child = child_identities.find({entity.id,target});
+                    const auto body = source.entities().find(target);
+                    // Object appearance resolves supported persisted bodies
+                    // before annotation artwork in the source scene contract.
+                    const bool body_appearance = record.at("target_kind")=="object" &&
+                        body!=source.entities().end() && supportsObjectAppearance(body->second.type);
+                    if (record.at("target_kind")=="object" && !body_appearance && child!=child_identities.end()) {
+                        record["target_id"] = child->second;
+                        return false;
+                    }
+                    return !identities.contains(target);
+                }),overrides.end());
                 remap_entity_references(annotation,identities);
                 const PlanarTransform linear{{},transform.rotation_radians,transform.flip_horizontal,transform.flip_vertical,{}};
                 for (auto& record : annotation.properties.at("state").at("overrides")) {
@@ -8264,14 +8333,33 @@ public:
                 }
                 validate_annotation_entity(annotation);
                 copied.insert_or_assign(annotation.id,std::move(annotation));
+            } else if (entity.type == "reference_asset") {
+                auto reference = entity;
+                for (const auto& change : presentation.entity_changes)
+                    if (change.kind == EntityChangeKind::upsert && change.entity.id == entity.id) reference = change.entity;
+                reference.id = identities.at(entity.id);
+                // Asset identities are deliberately outside the entity map:
+                // calibrated copies retain the captured shared local bytes.
+                remap_entity_references(reference,identities);
+                copied.insert_or_assign(reference.id,std::move(reference));
             }
         }
-        ApplyEntityChanges command{source.revision(),{}, {},"Clone area with independent deductions and source walls"};
+        ApplyEntityChanges command{source.revision(),{}, {},"Copy transformed selection with independent dependencies"};
         for (const auto& entity : graph)
-            if (const auto found = copied.find(identities.at(entity.id)); found != copied.end())
+            if (const auto found = copied.find(identities.at(entity.id)); found != copied.end()) {
                 revokeCopiedAppraisalObservation(entity,found->second);
+            } else throw std::invalid_argument("A required selection copy dependency is unsupported: " + entity.type);
         for (auto& [id,entity] : copied) command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
-        return {validateIndependentAreaCopy(source,std::move(command)),identities.at(original.id)};
+        return validateIndependentAreaCopy(source,std::move(command));
+    }
+
+    std::pair<Command,std::string> makeIndependentAreaCloneCommand(
+        const DocumentSnapshot& source, const Entity& original, const PlanarTransform& transform) {
+        std::map<std::string,std::string,std::less<>> identities;
+        std::map<std::pair<std::string,std::string>,std::string> child_identities;
+        auto command = makeIndependentSelectionCloneCommand(source,clipboard_entities_for_selection(source,original.id),
+            transform,ApplyEntityChanges{source.revision(),{}, {},"Copy area"},identities,child_identities);
+        return {std::move(command),identities.at(original.id)};
     }
 
     std::pair<Command, std::string> makeBoundaryTransformCommand(
@@ -8408,8 +8496,11 @@ public:
             ids.segment_ids.reserve(transformed.segments.size());
             ids.vertex_ids.reserve(transformed.segments.size());
             for (std::size_t index = 0; index < transformed.segments.size(); ++index) {
-                ids.segment_ids.push_back(new_id("segment"));
-                ids.vertex_ids.push_back(new_id("vertex"));
+                const auto& edge = transformed.segments[index];
+                ids.segment_ids.push_back(clone_graph_ids && clone_graph_ids->contains(edge.segment_id)
+                    ? clone_graph_ids->at(edge.segment_id) : new_id("segment"));
+                ids.vertex_ids.push_back(clone_graph_ids && clone_graph_ids->contains(edge.start_vertex_id)
+                    ? clone_graph_ids->at(edge.start_vertex_id) : new_id("vertex"));
             }
             const auto clone_id = clone_graph_ids && clone_graph_ids->contains(original.id)
                 ? clone_graph_ids->at(original.id) : new_id("boundary");
@@ -11077,6 +11168,8 @@ public:
             return true;
         };
         std::optional<std::pair<Command, std::string>> candidate_command;
+        std::map<std::string,std::string,std::less<>> candidate_copy_ids;
+        std::map<std::pair<std::string,std::string>,std::string> candidate_copy_children;
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("boundaryTransformDialog"));
@@ -11109,12 +11202,9 @@ public:
         flip_vertical->setObjectName(QStringLiteral("boundaryFlipVertical"));
         layout->addWidget(flip_horizontal);
         layout->addWidget(flip_vertical);
-        QCheckBox* clone = nullptr;
-        if (!group) {
-            clone = new QCheckBox(QStringLiteral("Create a copy"), &dialog);
-            clone->setObjectName(QStringLiteral("boundaryClone"));
-            layout->addWidget(clone);
-        }
+        auto* clone = new QCheckBox(QStringLiteral("Create a copy"), &dialog);
+        clone->setObjectName(QStringLiteral("boundaryClone"));
+        layout->addWidget(clone);
         PlanCanvas* preview = nullptr;
         if (supported_selection) {
             preview = new PlanCanvas(&dialog);
@@ -11149,6 +11239,8 @@ public:
         const auto update_preview = [&] {
             if (!supported_selection) return;
             candidate_command.reset();
+            candidate_copy_ids.clear();
+            candidate_copy_children.clear();
             freedom->clear();
             try {
                 if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
@@ -11258,13 +11350,54 @@ public:
                             }
                         }
                     }
+                    if (clone->isChecked()) {
+                        std::vector<Entity> seeds;
+                        std::set<std::string,std::less<>> seed_ids;
+                        for (const auto& id : geometry_selection) {
+                            const auto graph=clipboard_entities_for_selection(source,id.toStdString(),kMaximumNumericSelectionGraphEntities);
+                            if (graph.empty()) throw std::invalid_argument("A selected copy dependency graph exceeds the numeric selection limit.");
+                            for (const auto& entity : graph) {
+                                if (seed_ids.insert(entity.id).second) seeds.push_back(entity);
+                                if (seeds.size()>kMaximumNumericSelectionGraphEntities)
+                                    throw std::invalid_argument("The complete numeric copy dependency graph exceeds the entity limit.");
+                            }
+                        }
+                        std::map<std::string,std::set<std::string,std::less<>>,std::less<>> children;
+                        for (const auto& target : annotation_targets) children[target.owner_id].insert(target.child_id);
+                        for (const auto& [owner,selected_children] : children)
+                            seeds.push_back(annotation_child_subset(source.entities().at(owner),selected_children,true));
+                        for (const auto& id : reference_targets) seeds.push_back(source.entities().at(id));
+                        auto copied = makeIndependentSelectionCloneCommand(source,std::move(seeds),transform,
+                            presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities);
+                        const auto target = render_targets.find(primary_render_id);
+                        const auto primary = target == render_targets.end() ? candidate_copy_ids.at(primary_render_id.toStdString()) :
+                            candidate_copy_children.at({target->second.owner_id,target->second.child_id});
+                        return {std::move(copied),primary};
+                    }
                     return {geometry_selection.isEmpty() ? Command{std::move(presentation)} :
                         makeSelectionGeometryTransformCommand(source,geometry_selection,transform,std::move(presentation.entity_changes)),primary_render_id.toStdString()};
                 }();
+                const auto copy_intent = group && clone->isChecked() ?
+                    std::optional<ApplyEntityChanges>{std::get<ApplyEntityChanges>(candidate.first)} : std::nullopt;
                 candidate.first = augmentAuthoredCommand(candidate.first, source);
+                if (group && clone->isChecked()) {
+                    auto* copied = std::get_if<ApplyEntityChanges>(&candidate.first);
+                    if (!copied) throw std::invalid_argument("A complete selection copy requires one entity command.");
+                    requireIndependentCopyRegistrations(source,*copy_intent,*copied);
+                    candidate.first = validateIndependentAreaCopy(source,*copied);
+                    requireIndependentCopyRegistrations(source,*copy_intent,std::get<ApplyEntityChanges>(candidate.first));
+                }
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
                 const auto proposed = changes && changes->entity_changes.empty() ? source :
                     Document::preview_command(source, candidate.first);
+                if (group && clone->isChecked()) {
+                    for (const auto& [id,copied_id] : candidate_copy_ids) {
+                        (void)copied_id;
+                        const auto original_entity=source.entities().find(id);
+                        if (original_entity!=source.entities().end() && proposed.entities().at(id)!=original_entity->second)
+                            throw std::invalid_argument("Copying the complete selection would modify an original dependency.");
+                    }
+                }
                 std::vector<CanvasEntity> geometry;
                 std::vector<CanvasLabel> labels;
                 std::vector<CanvasReference> references;
@@ -11286,7 +11419,9 @@ public:
                             boundary, 0, selected});
                         return;
                     }
-                    const auto graph = clipboard_entities_for_selection(snapshot, root);
+                    const auto graph = clipboard_entities_for_selection(snapshot, root,
+                        group ? kMaximumNumericSelectionGraphEntities : kMaximumClipboardEntities);
+                    if (graph.empty()) throw std::invalid_argument("A preview wall dependency graph is unavailable or exceeds the entity limit.");
                     std::vector<const Entity*> openings;
                     for (const auto& entity : graph) if (entity.type == "opening") openings.push_back(&entity);
                     Wall wall;
@@ -11329,7 +11464,8 @@ public:
                         if (seed_ids.insert(entity.id).second) seeds.push_back(entity);
                     };
                     for (const auto& root : roots)
-                        for (const auto& entity : clipboard_entities_for_selection(snapshot, root.toStdString())) add_seed(entity);
+                        for (const auto& entity : clipboard_entities_for_selection(snapshot, root.toStdString(),
+                            group ? kMaximumNumericSelectionGraphEntities : kMaximumClipboardEntities)) add_seed(entity);
                     if (group) {
                         // Typed commands may solve connected owners or refresh
                         // measured areas beyond the selected roots. Show every
@@ -11343,13 +11479,14 @@ public:
                         }
                     }
                     auto graph = group && changes && changes->entity_changes.empty()
-                        ? std::move(seeds) : independentAreaCopyGraph(snapshot,std::move(seeds),true,group);
+                        ? std::move(seeds) : independentAreaCopyGraph(snapshot,std::move(seeds),true,group,
+                            group ? kMaximumNumericSelectionGraphEntities : kMaximumClipboardEntities);
                     std::set<std::string, std::less<>> graph_ids;
                     for (const auto& entity : graph) graph_ids.insert(entity.id);
                     for (std::size_t cursor = 0; group && cursor < graph.size(); ++cursor) {
                         const auto entity = graph[cursor];
                         if (!geometry_root(entity)) continue;
-                        for (const auto& dependency : clipboard_entities_for_selection(snapshot, entity.id))
+                        for (const auto& dependency : clipboard_entities_for_selection(snapshot, entity.id,kMaximumNumericSelectionGraphEntities))
                             if (graph_ids.insert(dependency.id).second) graph.push_back(dependency);
                     }
                     for (const auto& entity : graph) {
@@ -11369,7 +11506,10 @@ public:
                     }
                 };
                 add_graph(source, group ? geometry_selection : QStringList{id_from(original->id)}, false);
-                add_graph(proposed, group ? geometry_selection : QStringList{id_from(candidate.second)}, true);
+                auto proposed_geometry = geometry_selection;
+                if (group && clone->isChecked())
+                    for (auto& id : proposed_geometry) id = id_from(candidate_copy_ids.at(id.toStdString()));
+                add_graph(proposed, group ? proposed_geometry : QStringList{id_from(candidate.second)}, true);
                 if (group) {
                     // Geometry commands supply their full solved consequence
                     // graph above. Add authored artwork and its canonical
@@ -11385,11 +11525,19 @@ public:
                         PlanSceneCaches caches;
                         const auto scene=selected ? projectSnapshotPlanScene(snapshot,presentation_options,caches) : *presentation_scene;
                         const auto render_id = [&](const QString& id) -> std::optional<QString> {
-                            if (!site_group) return render_targets.contains(id) ? std::optional{id} : std::nullopt;
-                            const auto child=scene.annotation_targets.find(id);
-                            if (child==scene.annotation_targets.end()) return std::nullopt;
-                            for (const auto& [render,target] : render_targets)
-                                if (target.owner_id==child->second.owner_entity_id && target.child_id==child->second.child_id) return render;
+                            for (const auto& [render,target] : render_targets) {
+                                const auto copied = selected && clone->isChecked();
+                                const auto owner = copied ? candidate_copy_ids.at(target.owner_id) : target.owner_id;
+                                const auto child = copied ? candidate_copy_children.at({target.owner_id,target.child_id}) : target.child_id;
+                                if (!site_group) {
+                                    if (id.toStdString()==child) return copied ? id : render;
+                                } else {
+                                    const auto displayed=scene.annotation_targets.find(id);
+                                    if (displayed!=scene.annotation_targets.end() &&
+                                        displayed->second.owner_entity_id==owner && displayed->second.child_id==child)
+                                        return copied ? id : render;
+                                }
+                            }
                             return std::nullopt;
                         };
                         std::set<QString> admitted_artwork,admitted_references;
@@ -11427,7 +11575,9 @@ public:
                             labels.push_back(std::move(label));
                         }
                         for (auto reference : scene.references) {
-                            if (std::find(reference_targets.begin(),reference_targets.end(),reference.id.toStdString())==reference_targets.end()) continue;
+                            if (std::none_of(reference_targets.begin(),reference_targets.end(),[&](const auto& id) {
+                                return reference.id.toStdString()==(selected && clone->isChecked() ? candidate_copy_ids.at(id) : id);
+                            })) continue;
                             if (!reference.visible || reference.image.isNull() || !admitted_references.insert(reference.id).second)
                                 throw std::invalid_argument("A selected reference cannot be uniquely displayed from the candidate source.");
                             reference.selected=selected;
@@ -11483,10 +11633,55 @@ public:
                 try {
                     const auto* changes = std::get_if<ApplyEntityChanges>(&candidate_command->first);
                     if (!changes || !changes->entity_changes.empty()) {
+                        QStringList copied_selection;
+                        std::map<QString,SiteAnnotationTarget> copied_children;
+                        if (group && clone->isChecked()) {
+                            if (!changes) throw std::invalid_argument("A selection copy requires its complete previewed command.");
+                            for (const auto& change : changes->entity_changes) {
+                                if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id)) continue;
+                                if (geometry_root(change.entity) || change.entity.type=="reference_asset")
+                                    copied_selection.push_back(id_from(change.entity.id));
+                                if (change.entity.type==kAnnotationEntityType) {
+                                    const auto state=decode_annotation_entity(change.entity);
+                                    const auto add_child=[&](const auto& child) {
+                                        const auto id=id_from(child.id);
+                                        copied_selection.push_back(id);
+                                        copied_children.emplace(id,SiteAnnotationTarget{change.entity.id,child.id});
+                                    };
+                                    for (const auto& child : state.labels) add_child(child);
+                                    for (const auto& child : state.symbols) add_child(child);
+                                }
+                            }
+                            if (copied_selection.isEmpty()) throw std::invalid_argument("The complete selection copy has no selectable roots.");
+                            const auto primary=id_from(candidate_command->second);
+                            if (!copied_selection.contains(primary))
+                                throw std::invalid_argument("The copied primary is absent from the complete selection.");
+                            // refresh reconciles the primary with the final
+                            // selected ID. Keep that order to retain the group.
+                            copied_selection.removeAll(primary);
+                            copied_selection.push_back(primary);
+                        }
                         applyAuthoredCommand(candidate_command->first);
                         m_selected_id = id_from(candidate_command->second);
-                        if (group) m_selected_ids = selection;
+                        if (group) m_selected_ids = clone->isChecked() ? copied_selection : selection;
                         refresh();
+                        if (group && clone->isChecked() && site_group) {
+                            // Site aliases are published by refresh. Resolve the
+                            // copied typed children only against that publication.
+                            m_selected_ids=remapSiteAnnotationSelection(copied_selection,copied_children,m_site_annotation_targets);
+                            const auto primary=copied_children.find(id_from(candidate_command->second));
+                            if (primary!=copied_children.end()) {
+                                const auto aliases=remapSiteAnnotationSelection({primary->first},copied_children,m_site_annotation_targets);
+                                m_selected_id=aliases.isEmpty() ? QString{} : aliases.front();
+                            }
+                            if (!m_selected_ids.contains(m_selected_id))
+                                m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
+                            if (!m_selected_id.isEmpty()) {
+                                m_selected_ids.removeAll(m_selected_id);
+                                m_selected_ids.push_back(m_selected_id);
+                            }
+                            refresh();
+                        }
                     }
                     clearError();
                     dialog.accept();
@@ -25622,7 +25817,10 @@ public:
     static std::vector<Entity> independentAreaCopyGraph(const DocumentSnapshot& snapshot,
                                                 std::vector<Entity> graph,
                                                 bool include_constraints=true,
-                                                bool include_wall_roots=false) {
+                                                bool include_wall_roots=false,
+                                                std::size_t maximum_entities=kMaximumClipboardEntities) {
+        if (graph.size()>maximum_entities)
+            throw std::invalid_argument("The complete selection dependency graph exceeds the entity limit.");
         if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity) {
                 return is_closed_boundary_entity(entity.type) || entity.type == "measurement_linework" ||
                     (include_wall_roots && entity.type == "wall");
@@ -25632,13 +25830,13 @@ public:
         for (const auto& entity : graph) ids.insert(entity.id);
         const auto add = [&](const Entity& entity) {
             if (ids.insert(entity.id).second) graph.push_back(entity);
-            if (graph.size() > kMaximumClipboardEntities)
+            if (graph.size() > maximum_entities)
                 throw std::invalid_argument("The independent area copy exceeds the clipboard entity limit.");
         };
         const auto add_geometry = [&](const std::string& id) {
             if (!snapshot.entities().contains(id))
                 throw std::invalid_argument("A required area copy dependency is unavailable: " + id);
-            const auto dependency = clipboard_entities_for_selection(snapshot,id);
+            const auto dependency = clipboard_entities_for_selection(snapshot,id,maximum_entities);
             if (dependency.empty()) throw std::invalid_argument("A required area copy dependency is unsupported: " + id);
             for (const auto& entity : dependency) add(entity);
         };
@@ -25664,9 +25862,17 @@ public:
         }
         (void)prepare_ansi_appraisal_partition_targets(snapshot,ansi_partitions);
         includeMeasuredAreaSources(snapshot, graph);
-        if (graph.size() > kMaximumClipboardEntities)
+        if (graph.size() > maximum_entities)
             throw std::invalid_argument("The complete measured area copy exceeds the clipboard entity limit.");
         for (const auto& entity : graph) ids.insert(entity.id);
+        // Measured-area lineage adds member owners directly. Close their
+        // hosted openings and saved dimensions before collecting constraints
+        // and appearance, just as for explicitly selected geometry roots.
+        for (std::size_t cursor = 0; cursor < graph.size(); ++cursor) {
+            const auto entity = graph[cursor];
+            if (is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework" || entity.type=="wall")
+                add_geometry(entity.id);
+        }
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != "constraint") continue;
             if (!include_constraints) continue;
@@ -27455,6 +27661,8 @@ public:
                 } else if(entity.type!="assembly_model") {
                     remap_entity_references(entity, remap);
                 }
+                if (entity.type == "measurement_linework")
+                    entity.extensions["measurement_linework_copy_scope"] = {{"version",1}};
                 if (entity.type == kAnnotationEntityType) {
                     const auto context = requireDrawingContext();
                     if (!context) return false;
@@ -37565,6 +37773,161 @@ private:
         return augmentAuthoredCommand(command, authoringSnapshot());
     }
 
+    static void registerNewObjectMemberships(const DocumentSnapshot& source, ApplyEntityChanges& command) {
+        auto* changes = &command;
+        // Imported page views retain explicit ownership as new content is
+        // authored. The same command registers new layer-owned objects,
+        // so drawing after import also appears on that page's output.
+        const auto page_records=pincPages(source);
+        if (!page_records.empty()) {
+            const auto authored=changes->entity_changes;
+            for (const auto& [id,original]:source.entities()) {
+                if (original.type!=kSheetViewEntityType || !original.extensions.contains("pinc_import")) continue;
+                auto updated=original;
+                for (const auto& change:changes->entity_changes) if (change.kind==EntityChangeKind::upsert && change.entity.id==id) updated=change.entity;
+                const auto model=decode_sheet_view_entity(updated);auto views=model.views();bool changed=false;
+                for (auto& view:views) {
+                    const auto page=std::find_if(page_records.begin(),page_records.end(),[&](const auto& record){return record.view_id==view.id;});
+                    if (page==page_records.end()) continue;
+                    for (const auto& change:authored) {
+                        if (change.kind!=EntityChangeKind::upsert || change.entity.id==id || source.entities().contains(change.entity.id)) continue;
+                        const auto layer=change.entity.properties.value("layer_id",std::string{});
+                        if (layer!=page->calculation_layer_id && layer!=page->interior_layer_id) continue;
+                        if (std::find(view.object_ids.begin(),view.object_ids.end(),change.entity.id)==view.object_ids.end()) {
+                            view.object_ids.push_back(change.entity.id);changed=true;
+                        }
+                    }
+                }
+                if (!changed) continue;
+                updated.properties["model"]=merge_canonical_metadata(updated.properties.at("model"),
+                        updated.properties.at("model"),SheetViewModel::create(std::move(views),
+                            model.sheets(),model.schedule_ids(),model.sheet_order()).to_json());
+                std::erase_if(changes->entity_changes,[&](const auto& change){return change.kind==EntityChangeKind::upsert && change.entity.id==id;});
+                changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
+            }
+        }
+        if (const auto record = decode_phase_model(source); record &&
+            std::none_of(changes->entity_changes.begin(), changes->entity_changes.end(),
+                [&](const auto& change) {
+                    return change.kind == EntityChangeKind::erase &&
+                           change.entity_id == record->entity_id;
+                })) {
+            auto registry = source.entities().at(record->entity_id);
+            auto model = record->model;
+            for (const auto& change : changes->entity_changes) {
+                if (change.entity_id == record->entity_id ||
+                    change.entity.id == record->entity_id) {
+                    registry = change.entity;
+                    model = ModelPhases::from_json(registry.properties.at("model"));
+                }
+            }
+            auto ids = model.entity_ids();
+            auto baseline = model.baseline_ids();
+            auto alternatives = model.alternatives();
+            bool changed = false;
+            for (const auto& change : changes->entity_changes) {
+                if (change.kind != EntityChangeKind::erase) continue;
+                const auto removed = change.entity_id;
+                if (removed == record->entity_id) continue;
+                const auto entity_before = std::find(ids.begin(), ids.end(), removed);
+                if (entity_before == ids.end()) continue;
+                ids.erase(entity_before);
+                std::erase(baseline, removed);
+                for (auto& alternative : alternatives) {
+                    std::erase(alternative.demolished_ids, removed);
+                    std::erase(alternative.proposed_ids, removed);
+                }
+                changed = true;
+            }
+            for (const auto& change : changes->entity_changes) {
+                if (change.kind != EntityChangeKind::upsert ||
+                    source.entities().contains(change.entity.id) ||
+                    !is_phase_model_entity(change.entity.type) ||
+                    hosted_stair_railing(change.entity) ||
+                    change.entity.type == "building" || change.entity.type == "floor" ||
+                    std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
+                ids.push_back(change.entity.id);
+                if (model.active_alternative()) {
+                    for (auto& alternative : alternatives) {
+                        if (alternative.id == *model.active_alternative())
+                            alternative.proposed_ids.push_back(change.entity.id);
+                    }
+                } else {
+                    baseline.push_back(change.entity.id);
+                }
+                changed = true;
+            }
+            // A newly hosted rail follows its stair in every alternative.
+            // Admission must not leave an existing rail surviving a
+            // demolished host, including alternatives that are inactive.
+            for (const auto& change : changes->entity_changes) {
+                if (change.kind != EntityChangeKind::upsert ||
+                    source.entities().contains(change.entity.id) || !hosted_stair_railing(change.entity) ||
+                    std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
+                const auto rail = decode_railing_properties(change.entity.id, change.entity.properties);
+                if (std::find(ids.begin(), ids.end(), stair_railing_host_id(rail)) == ids.end())
+                    throw std::invalid_argument("A new stair railing needs a host in the phase registry.");
+                ids.push_back(change.entity.id);
+                if (std::find(baseline.begin(), baseline.end(), stair_railing_host_id(rail)) != baseline.end())
+                    baseline.push_back(change.entity.id);
+                for (auto& alternative : alternatives) {
+                    if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(),
+                            stair_railing_host_id(rail)) != alternative.demolished_ids.end())
+                        alternative.demolished_ids.push_back(change.entity.id);
+                    if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(),
+                            stair_railing_host_id(rail)) != alternative.proposed_ids.end())
+                        alternative.proposed_ids.push_back(change.entity.id);
+                }
+                changed = true;
+            }
+            if (changed) {
+                const auto phase_model = ModelPhases::create(
+                    std::move(ids), std::move(baseline), std::move(alternatives),
+                    model.active_alternative()).to_json();
+                registry.properties["model"] = merge_canonical_metadata(registry.properties.at("model"),
+                    registry.properties.at("model"), phase_model);
+                std::erase_if(changes->entity_changes, [&](const auto& change) {
+                    return change.entity.id == record->entity_id;
+                });
+                changes->entity_changes.push_back(EntityChange::upsert(std::move(registry)));
+            }
+        }
+    }
+
+    static void requireIndependentCopyRegistrations(const DocumentSnapshot& source,
+        const ApplyEntityChanges& intent, const ApplyEntityChanges& candidate) {
+        // Originals can gain only the exact phase/page registrations derived
+        // from fresh copied objects. Geometry completion cannot alter an
+        // original body, dependency or unrelated registry as a side effect.
+        std::set<std::string,std::less<>> intent_ids;
+        for (const auto& change : intent.entity_changes)
+            if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
+                !intent_ids.insert(change.entity.id).second)
+                throw std::invalid_argument("An independent copy requires fresh unique object identities.");
+        if (!intent.asset_changes.empty() || !candidate.asset_changes.empty())
+            throw std::invalid_argument("An independent selection copy must retain its existing local assets.");
+        auto registrations = intent;
+        registerNewObjectMemberships(source,registrations);
+        std::map<std::string,Entity,std::less<>> allowed;
+        for (const auto& change : registrations.entity_changes)
+            if (source.entities().contains(change.entity.id))
+                allowed.emplace(change.entity.id,change.entity);
+        std::set<std::string,std::less<>> published;
+        for (const auto& change : candidate.entity_changes) {
+            if (change.kind!=EntityChangeKind::upsert || !published.insert(change.entity.id).second)
+                throw std::invalid_argument("Copy cannot remove objects or publish duplicate identities.");
+            if (!source.entities().contains(change.entity.id)) continue;
+            const auto expected = allowed.find(change.entity.id);
+            if (expected==allowed.end() || change.entity!=expected->second)
+                throw std::invalid_argument("Copy cannot modify an original drawing object or its dependencies.");
+        }
+        for (const auto& [id,registration] : allowed) {
+            (void)registration;
+            if (!published.contains(id))
+                throw std::invalid_argument("A copied object's phase or page registration is missing.");
+        }
+    }
+
     static Command augmentAuthoredCommand(const Command& command, const DocumentSnapshot& source) {
         // Register only newly authored geometry. Existing unregistered objects
         // retain their legacy visibility; editing them must not change ownership.
@@ -37646,121 +38009,7 @@ private:
                     changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
                 }
             }
-            // Imported page views retain explicit ownership as new content is
-            // authored. The same command registers new layer-owned objects,
-            // so drawing after import also appears on that page's output.
-            const auto page_records=pincPages(source);
-            if (!page_records.empty()) {
-                const auto authored=changes->entity_changes;
-                for (const auto& [id,original]:source.entities()) {
-                    if (original.type!=kSheetViewEntityType || !original.extensions.contains("pinc_import")) continue;
-                    auto updated=original;
-                    for (const auto& change:changes->entity_changes) if (change.kind==EntityChangeKind::upsert && change.entity.id==id) updated=change.entity;
-                    const auto model=decode_sheet_view_entity(updated);auto views=model.views();bool changed=false;
-                    for (auto& view:views) {
-                        const auto page=std::find_if(page_records.begin(),page_records.end(),[&](const auto& record){return record.view_id==view.id;});
-                        if (page==page_records.end()) continue;
-                        for (const auto& change:authored) {
-                            if (change.kind!=EntityChangeKind::upsert || change.entity.id==id || source.entities().contains(change.entity.id)) continue;
-                            const auto layer=change.entity.properties.value("layer_id",std::string{});
-                            if (layer!=page->calculation_layer_id && layer!=page->interior_layer_id) continue;
-                            if (std::find(view.object_ids.begin(),view.object_ids.end(),change.entity.id)==view.object_ids.end()) {
-                                view.object_ids.push_back(change.entity.id);changed=true;
-                            }
-                        }
-                    }
-                    if (!changed) continue;
-                    updated.properties=make_sheet_view_entity(id,SheetViewModel::create(std::move(views),model.sheets(),model.schedule_ids(),model.sheet_order())).properties;
-                    std::erase_if(changes->entity_changes,[&](const auto& change){return change.kind==EntityChangeKind::upsert && change.entity.id==id;});
-                    changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
-                }
-            }
-            if (const auto record = decode_phase_model(source); record &&
-                std::none_of(changes->entity_changes.begin(), changes->entity_changes.end(),
-                    [&](const auto& change) {
-                        return change.kind == EntityChangeKind::erase &&
-                               change.entity_id == record->entity_id;
-                    })) {
-                auto registry = source.entities().at(record->entity_id);
-                auto model = record->model;
-                for (const auto& change : changes->entity_changes) {
-                    if (change.entity_id == record->entity_id ||
-                        change.entity.id == record->entity_id) {
-                        registry = change.entity;
-                        model = ModelPhases::from_json(registry.properties.at("model"));
-                    }
-                }
-                auto ids = model.entity_ids();
-                auto baseline = model.baseline_ids();
-                auto alternatives = model.alternatives();
-                bool changed = false;
-                for (const auto& change : changes->entity_changes) {
-                    if (change.kind != EntityChangeKind::erase) continue;
-                    const auto removed = change.entity_id;
-                    if (removed == record->entity_id) continue;
-                    const auto entity_before = std::find(ids.begin(), ids.end(), removed);
-                    if (entity_before == ids.end()) continue;
-                    ids.erase(entity_before);
-                    std::erase(baseline, removed);
-                    for (auto& alternative : alternatives) {
-                        std::erase(alternative.demolished_ids, removed);
-                        std::erase(alternative.proposed_ids, removed);
-                    }
-                    changed = true;
-                }
-                for (const auto& change : changes->entity_changes) {
-                    if (change.kind != EntityChangeKind::upsert ||
-                        source.entities().contains(change.entity.id) ||
-                        !is_phase_model_entity(change.entity.type) ||
-                        hosted_stair_railing(change.entity) ||
-                        change.entity.type == "building" || change.entity.type == "floor" ||
-                        std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
-                    ids.push_back(change.entity.id);
-                    if (model.active_alternative()) {
-                        for (auto& alternative : alternatives) {
-                            if (alternative.id == *model.active_alternative())
-                                alternative.proposed_ids.push_back(change.entity.id);
-                        }
-                    } else {
-                        baseline.push_back(change.entity.id);
-                    }
-                    changed = true;
-                }
-                // A newly hosted rail follows its stair in every alternative.
-                // Admission must not leave an existing rail surviving a
-                // demolished host, including alternatives that are inactive.
-                for (const auto& change : changes->entity_changes) {
-                    if (change.kind != EntityChangeKind::upsert ||
-                        source.entities().contains(change.entity.id) || !hosted_stair_railing(change.entity) ||
-                        std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
-                    const auto rail = decode_railing_properties(change.entity.id, change.entity.properties);
-                    if (std::find(ids.begin(), ids.end(), stair_railing_host_id(rail)) == ids.end())
-                        throw std::invalid_argument("A new stair railing needs a host in the phase registry.");
-                    ids.push_back(change.entity.id);
-                    if (std::find(baseline.begin(), baseline.end(), stair_railing_host_id(rail)) != baseline.end())
-                        baseline.push_back(change.entity.id);
-                    for (auto& alternative : alternatives) {
-                        if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(),
-                                stair_railing_host_id(rail)) != alternative.demolished_ids.end())
-                            alternative.demolished_ids.push_back(change.entity.id);
-                        if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(),
-                                stair_railing_host_id(rail)) != alternative.proposed_ids.end())
-                            alternative.proposed_ids.push_back(change.entity.id);
-                    }
-                    changed = true;
-                }
-                if (changed) {
-                    const auto phase_model = ModelPhases::create(
-                        std::move(ids), std::move(baseline), std::move(alternatives),
-                        model.active_alternative()).to_json();
-                    registry.properties["model"] = merge_canonical_metadata(registry.properties.at("model"),
-                        registry.properties.at("model"), phase_model);
-                    std::erase_if(changes->entity_changes, [&](const auto& change) {
-                        return change.entity.id == record->entity_id;
-                    });
-                    changes->entity_changes.push_back(EntityChange::upsert(std::move(registry)));
-                }
-            }
+            registerNewObjectMemberships(source,*changes);
         }
         // Constraint authoring completed its physical/exterior consequences
         // before sealing the candidate. Never change that admitted command.

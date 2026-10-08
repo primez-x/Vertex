@@ -164,7 +164,9 @@ public:
     // across every retained revision, including deleted and abandoned owners.
     // Qualified mixed-stroke replay and saved wall dimensions require v66,
     // including commands retained after undo or deletion.
-    static constexpr std::uint32_t format_version = 66;
+    // Explicit measured-copy source isolation requires v67, including when
+    // its owner survives only in undone, deleted or abandoned history.
+    static constexpr std::uint32_t format_version = 67;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

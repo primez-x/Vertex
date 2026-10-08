@@ -144,7 +144,32 @@ bool has_source(const Entity& area) {
     return area.extensions.contains("measurement_linework_sources") ||
         (area.type=="measurement_boundary" && area.extensions.contains("measurement_linework_group"));
 }
-struct GraphState {std::optional<MeasurementAreaGraph> graph;std::string diagnostic;};
+struct GraphState {std::optional<MeasurementAreaGraph> graph;std::string diagnostic;std::size_t last_use{};};
+using SourceOwners=std::set<std::string,std::less<>>;
+using CohortKey=std::pair<std::string,SourceOwners>;
+// Bound additional resident graphs and total reconstruction work independently
+// of the unchanged legacy per-layer path. Failed builds consume work too.
+struct CohortWork {
+    static constexpr std::size_t maximum_cached_graphs=16;
+    std::size_t builds_remaining=256;
+    std::size_t sources_remaining=65536;
+    std::size_t comparisons_remaining=16'000'000;
+    void begin() {
+        if(!builds_remaining)throw std::invalid_argument("Measured copy source cohort graph build budget exhausted.");
+        --builds_remaining;
+    }
+    void charge_sources(std::size_t count) {
+        if(count>sources_remaining)throw std::invalid_argument("Measured copy source cohort segment budget exhausted.");
+        sources_remaining-=count;
+    }
+    void charge_graph(std::size_t count) {
+        // The caller has already enforced the graph's 2048-segment limit.
+        const auto comparisons=count<2 ? 0 : count*(count-1)/2;
+        if(comparisons>comparisons_remaining)
+            throw std::invalid_argument("Measured copy source cohort contact work budget exhausted.");
+        comparisons_remaining-=comparisons;
+    }
+};
 struct AlignedFace {Boundary boundary;Uses uses;};
 AlignedFace align(const DerivedMeasurementFace& face,const Uses& uses,std::size_t start,bool reverse) {
     AlignedFace result;const auto count=face.boundary.size();
@@ -157,6 +182,14 @@ AlignedFace align(const DerivedMeasurementFace& face,const Uses& uses,std::size_
     return result;
 }
 }
+bool measurement_linework_copy_isolated(const Entity& entity) {
+    if(!entity.extensions.contains("measurement_linework_copy_scope"))return false;
+    const auto& marker=entity.extensions.at("measurement_linework_copy_scope");
+    if(entity.type!="measurement_linework" || !marker.is_object() || marker.size()!=1 ||
+       !marker.contains("version") || !marker.at("version").is_number_integer() || marker.at("version")!=1)
+        throw std::invalid_argument("Measured linework copy scope schema, version or owner type is unsupported.");
+    return true;
+}
 std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
     const std::set<std::string,std::less<>>* semantic_visible) {
@@ -165,11 +198,21 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
     std::optional<ProjectOrganization> organization;
     std::string organization_error;
     try{organization=organize_project(entities);}catch(const std::exception& error){organization_error=error.what();}
+    SourceOwners copy_owners;
+    std::string copy_scope_error;
+    try {
+        for(const auto& [id,entity]:entities)
+            if(measurement_linework_copy_isolated(entity))copy_owners.insert(id);
+    }catch(const std::exception& error){copy_scope_error=error.what();}
     std::map<std::string,GraphState,std::less<>> graphs;
+    std::map<CohortKey,GraphState> cohort_graphs;
+    CohortWork cohort_work;
+    std::size_t cohort_access=0;
     for(const auto& [id,area]:entities) if(has_source(area)) {
         auto& check=result[id];
         try {
             if(!organization)throw std::invalid_argument(organization_error);
+            if(!copy_scope_error.empty())throw std::invalid_argument(copy_scope_error);
             if(area.type!="measurement_boundary")throw std::invalid_argument("Measured linework lineage requires a measurement boundary.");
             const auto context=organization->drawing_context(id);
             if(!context)throw std::invalid_argument("Measured area has no resolved drawing context.");
@@ -181,8 +224,10 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
             const auto expected=grouped ? read_group_outer(area.extensions.at("measurement_linework_sources"),saved.size()) :
                 read_uses(area.extensions.at("measurement_linework_sources"),saved.size());
             std::map<std::string,std::set<std::string>,std::less<>> validated_group_sources;
+            SourceOwners source_owners;
             const auto validate_sources=[&](const Uses& inputs) {
             for(const auto& edge:inputs)for(const auto& use:edge) {
+                source_owners.insert(use.owner_id);
                 if(grouped) {
                     const auto validated=validated_group_sources.find(use.owner_id);
                     if(validated!=validated_group_sources.end()) {
@@ -207,25 +252,62 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
             };
             validate_sources(expected);
             for(const auto& member:members)validate_sources(member);
-            auto found=graphs.find(context->layer_id);
-            if(found==graphs.end()) {
-                GraphState state;
-                try {
-                    std::vector<MeasurementGraphSource> sources;
-                    for(const auto& [owner_id,owner]:entities) {
-                        if(owner.type!="measurement_linework" || organization->drawing_context(owner_id)!=context ||
-                            (semantic_visible && !semantic_visible->contains(owner_id)))continue;
-                        const auto decoded=decode_measurement_linework_model(owner.properties.at("model"));
-                        if(!decoded.supported())throw std::invalid_argument("The source layer contains unsupported measured geometry.");
-                        for(const auto& edge:replay_measurement_linework(*decoded.model).edges)sources.push_back({owner_id,edge.segment_id,edge.segment});
+            const bool isolated=std::any_of(source_owners.begin(),source_owners.end(),
+                [&](const auto& owner){return copy_owners.contains(owner);});
+            GraphState* selected_graph=nullptr;
+            if(isolated) {
+                const CohortKey key{context->layer_id,source_owners};
+                auto found=cohort_graphs.find(key);
+                if(found==cohort_graphs.end()) {
+                    GraphState state;
+                    try {
+                        cohort_work.begin();
+                        std::vector<MeasurementGraphSource> sources;
+                        for(const auto& owner_id:source_owners) {
+                            const auto& owner=entities.at(owner_id);
+                            const auto decoded=decode_measurement_linework_model(owner.properties.at("model"));
+                            if(!decoded.supported())throw std::invalid_argument("A measured area source has an unsupported model.");
+                            if(decoded.model->edges.size()>2048-sources.size())
+                                throw std::invalid_argument("Measurement area graph: source limit of 2048 segments exceeded");
+                            cohort_work.charge_sources(decoded.model->edges.size());
+                            for(const auto& edge:replay_measurement_linework(*decoded.model).edges)
+                                sources.push_back({owner_id,edge.segment_id,edge.segment});
+                        }
+                        cohort_work.charge_graph(sources.size());
+                        state.graph=build_measurement_area_graph(sources);
+                    }catch(const std::exception& error){state.diagnostic=error.what();}
+                    if(cohort_graphs.size()==CohortWork::maximum_cached_graphs) {
+                        const auto oldest=std::min_element(cohort_graphs.begin(),cohort_graphs.end(),
+                            [](const auto& a,const auto& b){return a.second.last_use<b.second.last_use;});
+                        cohort_graphs.erase(oldest);
                     }
-                    state.graph=build_measurement_area_graph(sources);
-                }catch(const std::exception& error){state.diagnostic=error.what();}
-                found=graphs.emplace(context->layer_id,std::move(state)).first;
+                    found=cohort_graphs.emplace(key,std::move(state)).first;
+                }
+                found->second.last_use=++cohort_access;
+                selected_graph=&found->second;
+            } else {
+                auto found=graphs.find(context->layer_id);
+                if(found==graphs.end()) {
+                    GraphState state;
+                    try {
+                        std::vector<MeasurementGraphSource> sources;
+                        for(const auto& [owner_id,owner]:entities) {
+                            if(owner.type!="measurement_linework" || organization->drawing_context(owner_id)!=context ||
+                                (semantic_visible && !semantic_visible->contains(owner_id)))continue;
+                            if(copy_owners.contains(owner_id))continue;
+                            const auto decoded=decode_measurement_linework_model(owner.properties.at("model"));
+                            if(!decoded.supported())throw std::invalid_argument("The source layer contains unsupported measured geometry.");
+                            for(const auto& edge:replay_measurement_linework(*decoded.model).edges)sources.push_back({owner_id,edge.segment_id,edge.segment});
+                        }
+                        state.graph=build_measurement_area_graph(sources);
+                    }catch(const std::exception& error){state.diagnostic=error.what();}
+                    found=graphs.emplace(context->layer_id,std::move(state)).first;
+                }
+                selected_graph=&found->second;
             }
-            if(!found->second.graph)throw std::invalid_argument("Measured source graph could not be resolved: "+found->second.diagnostic);
+            if(!selected_graph->graph)throw std::invalid_argument("Measured source graph could not be resolved: "+selected_graph->diagnostic);
             if(grouped) {
-                const auto& graph=*found->second.graph;
+                const auto& graph=*selected_graph->graph;
                 GroupMatchWork work;
                 std::set<std::size_t> assigned;
                 std::vector<Uses> proposed_members;
@@ -287,9 +369,9 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
                 continue;
             }
             std::vector<AlignedFace> proposals;
-            for(const auto& face:found->second.graph->faces) {
+            for(const auto& face:selected_graph->graph->faces) {
                 if(face.boundary.size()!=saved.size())continue;
-                const auto uses=face_uses(*found->second.graph,face);
+                const auto uses=face_uses(*selected_graph->graph,face);
                 for(std::size_t start=0;start<saved.size();++start)for(const bool reverse:{false,true}) {
                     auto candidate=align(face,uses,start,reverse);
                     bool signature=true,exact=true;

@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 complete numerical selection copies
+
+The numerical Transform selection editor now copies complete supported groups:
+walls, measured lines, closed areas, explicit symbol/text children and calibrated
+reference images. Shared geometry identities and qualified owner/child IDs are
+remapped together. Hosted openings, deductions, locked internal relationships,
+saved dimensions, styling and retained source evidence follow the copied graph.
+All copied roots stay selected, including Site annotation aliases. The preview
+and Apply retain one complete command; originals and their dependencies remain
+unchanged. Only exact new-object phase/page registrations may update existing
+registries, with raw model metadata preserved.
+
+Copied measured owners now carry an explicit copy-isolation flag. Full-snapshot
+source checks reproduce each copied area's complete referenced-owner graph and
+exclude those copies from historical ambient graphs, so coincident copies do
+not invalidate their originals. Native format 67 and extraction version 65
+retain this semantic contract through current, deleted and undone history.
+Ordinary Paste also marks independent measured copies. Strict marker, topology,
+context and provenance validation remains in place.
+
+Independent source reviews accepted the corrected copy integration, source
+cohort policy and persistence gates. Source diff checks passed.
+No build, test, probe, native job, launch, package or installation ran. The
+installed candidate is unchanged; compilation and user interaction remain
+unverified. Manual checks remain Not tested. Numerical architectural-family
+groups, generated labels/profiles and typed Site collision editing remain gaps.
+
 ### October 7 numerical presentation groups and typed Site placements
 
 Numerical Transform selection now includes explicit symbols, authored text and

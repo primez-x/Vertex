@@ -22,8 +22,21 @@ struct MeasurementLineworkSourceCheck {
     nlohmann::json proposed_group;
     std::vector<std::size_t> group_face_indices;
 };
-// Derived geometry is rebuilt once per complete drawing context. Ordinary
-// boundaries without measured-line lineage are omitted. No inputs are changed.
+// Validate/query the optional extensions.measurement_linework_copy_scope
+// semantic flag. Absent returns false; present requires measurement_linework
+// and exactly {"version":1} with an integer version. Malformed/unknown markers
+// throw invalid_argument. The marker does not contain a source cohort identity.
+[[nodiscard]] bool measurement_linework_copy_isolated(const Entity& entity);
+// Unmarked lineage uses the historical shared drawing-layer graph, excluding
+// marked copy owners. If any retained outer/group-member source owner is marked,
+// rebuild from exactly all referenced owners and ALL their canonical edges.
+// Cohorts come from validated retained lineage, never arbitrary scope IDs.
+// Graph/source/topology and group matching budgets still apply; the additional
+// cohort cache/work is bounded per call: 16 resident graphs, 256 rebuilds,
+// 65536 canonical source segments and 16000000 possible segment pairs. Cache
+// misses/evictions and failed builds consume work; exhaustion refuses a check.
+// With no markers, graph construction/replay follows the historical path.
+// Ordinary boundaries without measured lineage are omitted. No inputs change.
 [[nodiscard]] std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
     const std::set<std::string,std::less<>>* semantic_visible=nullptr);

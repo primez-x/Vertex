@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 65 retains the explicit measured-copy source-isolation marker
+and requires native reader 67. The floor persists through all retained history,
+including undone and deleted owners. Each area's owner cohort is derived from
+its complete retained lineage; no arbitrary scope ID or original-owner link is
+added. Earlier unmarked documents retain their previous extraction floor.
+
 Exchange version 64 identifies explicit measured-line and saved-wall-dimension completion and
 requires native reader 66. Version-2 `transform_boundaries` and constraint
 envelope 21 retain their shared rigid intent and callout completion across all

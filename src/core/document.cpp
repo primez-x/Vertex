@@ -311,6 +311,12 @@ void validate_entity(const Entity& entity) {
                          "entity properties");
     validate_json_object(entity.extensions, DocumentErrorCode::invalid_entity,
                          "entity extensions");
+    try {
+        (void)measurement_linework_copy_isolated(entity);
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "invalid measured-copy source scope " + entity.id + ": " + error.what());
+    }
     static constexpr std::array reserved{"id", "type", "required", "properties"};
     for (const auto* key : reserved) {
         if (entity.extensions.contains(key)) {
