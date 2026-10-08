@@ -2753,7 +2753,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
             }
-            hosted_slab_asset_reservation=hosted_slab_asset_reservation || !replacement.hosted_instance_identities.empty();
+            hosted_slab_asset_reservation=hosted_slab_asset_reservation ||
+                !replacement.hosted_instance_identities.empty() || replacement.coordinate_ordinary_hosted_geometry;
             for (const auto& [original,id]:replacement.hosted_instance_identities) {
                 if (!fresh.insert(id).second)
                     throw std::invalid_argument("A proposed hosted component overlaps another fresh replacement identity: "+id);

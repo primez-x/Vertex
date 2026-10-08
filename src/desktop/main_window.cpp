@@ -48,6 +48,7 @@
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
+#include "sketch/slab_hosted_geometry_edit.hpp"
 #include "sketch/phase_roof_demolition.hpp"
 #include "sketch/roof_removal.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
@@ -42403,8 +42404,10 @@ private:
             }
         }
         if (!request) {
+            const auto ordinary = geometry_edit
+                ? replay_slab_geometry_with_hosted_entities(source.entities(), geometry) : physical;
             ApplyEntityChanges command{source.revision(), {}, {}, message};
-            for (const auto& [id, proposed] : physical) {
+            for (const auto& [id, proposed] : ordinary) {
                 const auto& original = source.entities().at(id);
                 if (original != proposed || original.properties.dump() != proposed.properties.dump() ||
                     original.extensions.dump() != proposed.extensions.dump())
@@ -42432,6 +42435,7 @@ private:
         if (geometry_partition) {
             replacement.slab_geometry = geometry_partition->baseline_geometry;
             replacement.ordinary_geometry = geometry_partition->ordinary_geometry;
+            replacement.coordinate_ordinary_hosted_geometry = !replacement.ordinary_geometry.empty();
         }
         if (!occupied) occupied = retainedSlabIdentityNames(source);
         for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})

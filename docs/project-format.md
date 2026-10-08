@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v111
+# Vertex project formats v1 through v112
+
+## Coordinated ordinary and proposed hosted movement (v112)
+
+Native format 112 and JSON/assets extraction version 110 retain horizontal
+replacement authoring version six. It adds
+`coordinate_ordinary_hosted_geometry:true` to the version-five ten-field
+envelope. Both geometry lists must be nonempty; the qualified hosted copy map
+may be empty. Versions one through five retain their original replay meaning.
+Retained direct, wrapped and undone version-six authoring raises the reader
+floor independently of the current live entities.
+
+Ordinary movement independently derives physical geometry and actual attached
+catalog placements from the full source. Rigid plan and physical XYZ/uniform
+model transforms carry the hosted instances; vertex and axis edits keep their
+placement while legacy host geometry follows the resulting actual slab.
+Strict source/candidate expansion and native admission use actual contexts,
+hosts, materials and overrides. Affected future or malformed bindings refuse;
+unaffected catalogs remain opaque.
+
+Mixed replay combines the proposed baseline copies with those independently
+derived ordinary catalog changes in one publication. A catalog shared by
+baseline and ordinary hosts retains the baseline-hosted values while the
+ordinary placements change. A needed XYZ upgrade adds the required version-five
+envelope and zero Z to other placements without changing their values. Only
+baseline seed owners acquire demolition membership. Definitions, material
+values, overrides, unrelated payload and instance identities remain unchanged.
+Hosted nonunit plan scaling remains a separate representation gap. This source
+has not been compiled or qualified through interaction/storage round trips.
 
 ## Proposed horizontal assemblies with hosted components (v111)
 

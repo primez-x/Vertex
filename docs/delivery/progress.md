@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 coordinated ordinary hosted movement source integration
+
+Ordinary horizontal plan/XYZ movement now derives attached component placements
+from the actual source alongside the physical floor/slab/ceiling/foundation.
+Vertex and axis edits retain placement and admit the changed actual host.
+Affected catalogs receive strict source/candidate admission while unrelated
+catalogs remain exact and opaque. Hosted nonunit plan scaling still refuses.
+
+Mixed baseline/ordinary movement combines proposed copies and actual ordinary
+catalog consequences in one source-bound publication, including catalogs shared
+across those host roles. Baseline instance values remain unchanged; a required
+XYZ envelope upgrade retains values while adding its codec-required fields.
+Replacement six and native 112/extraction 110 retain this new opt-in meaning
+without reinterpreting earlier saved authoring. Independent source review
+approved this slice after closing malformed affected placement discovery.
+Remaining mixed-family authoring and nonuniform analytic arc resizing
+remain open.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. The installed candidate remains unchanged; compilation,
+interaction and storage round trips remain unverified. No production
+acceptance, completion percentage or ETA is claimed.
+
 ### October 8 proposed horizontal hosted-component source integration
 
 Design-alternative edits now discover and allocate qualified components with

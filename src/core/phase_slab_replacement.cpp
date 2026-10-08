@@ -9,6 +9,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/slab_clone.hpp"
+#include "sketch/slab_hosted_geometry_edit.hpp"
 
 #include <algorithm>
 #include <numbers>
@@ -456,13 +457,16 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
     const PhaseSlabReplacementIdentityMap& identities, const std::vector<SlabProfileEditIntent>& profiles,
     const std::vector<SlabLayerStackEditIntent>& stacks, const std::vector<SlabGeometryEditIntent>& geometry,
     const std::vector<SlabGeometryEditIntent>& ordinary_geometry,
-    const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities) {
+    const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities,
+    bool coordinate_ordinary_hosted_geometry) {
     try {
         const bool profile_edit = !profiles.empty(), stack_edit = !stacks.empty(), geometry_edit = !geometry.empty();
         if ((profile_edit + stack_edit + geometry_edit) != 1)
             reject("requires exactly one nonempty profile, stack or geometry edit family");
         if (!ordinary_geometry.empty() && !geometry_edit)
             reject("ordinary geometry requires the exclusive baseline geometry family");
+        if (coordinate_ordinary_hosted_geometry && (ordinary_geometry.empty() || !geometry_edit))
+            reject("coordinated ordinary hosted movement requires both geometry families");
         const auto derived = inspect_phase_slab_replacement_plan(source, plan.seed_slab_ids, plan.registry_id, plan.alternative_id);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
@@ -496,6 +500,9 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         }
         for (const auto& id : targets) if (exact(source.at(id), physical.at(id)))
             reject("unchanged slab cannot acquire replacement authority as an extra seed");
+        std::optional<PhaseSlabReplacementEntities> ordinary;
+        if (coordinate_ordinary_hosted_geometry)
+            ordinary=replay_slab_geometry_with_hosted_entities(source, ordinary_geometry);
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
         if (identities.size() != expected.size()) reject("requires complete exact entity/child mapping");
@@ -542,6 +549,8 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         admit_slabs(physical, seeds);
         PhaseSlabReplacementResult result{source, identities, {}, hosted_instance_identities};
         for (const auto& id : ordinary_targets) result.entities.at(id) = physical.at(id);
+        if (ordinary) for (const auto& [id,entity]:*ordinary)
+            if (entity.type=="assembly_model" && !exact(entity,source.at(id))) result.entities.at(id)=entity;
         for (const auto& id : seeds) {
             auto copy = physical.at(id);
             copy.id = identities.at(id);
@@ -660,8 +669,9 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
                         reject("proposed hosted component differs from its exact actual source host/type/overrides");
                 }
             }
-            for (const auto& id : plan.required_entity_ids) if (!exact(result.entities.at(id), source.at(id)))
-                reject("replacement changed an original slab or source catalog");
+            for (const auto& id : plan.required_entity_ids)
+                if (!exact(result.entities.at(id), ordinary ? ordinary->at(id) : source.at(id)))
+                    reject("replacement changed an original slab or source catalog");
         }
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());
         return result;
@@ -705,6 +715,7 @@ nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacemen
     const bool geometry_edit = !authoring.slab_geometry.empty();
     const bool mixed_geometry = !authoring.ordinary_geometry.empty();
     const bool hosted_edit = !authoring.hosted_instance_identities.empty();
+    const bool coordinated = authoring.coordinate_ordinary_hosted_geometry;
     if (authoring.seed_slab_ids.empty() || authoring.seed_slab_ids.size() > maximum_replacements ||
         authoring.identities.empty() || authoring.identities.size() > maximum_replacements ||
         authoring.slab_profiles.size() > maximum_replacements || authoring.slab_stacks.size() > maximum_replacements ||
@@ -713,7 +724,7 @@ nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacemen
         authoring.slab_geometry.size() + authoring.ordinary_geometry.size() > maximum_replacements ||
         authoring.hosted_instance_identities.size() > maximum_replacements ||
         authoring.identities.size() + authoring.hosted_instance_identities.size() > maximum_replacements ||
-        (mixed_geometry && !geometry_edit) ||
+        (mixed_geometry && !geometry_edit) || (coordinated && !mixed_geometry) ||
         (profile_edit + stack_edit + geometry_edit) != 1)
         reject("authoring requires bounded nonempty seeds, mapping and exactly one edit family");
     Ids seeds, targets, fresh;
@@ -724,13 +735,14 @@ nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacemen
     }
     for (const auto& id : seeds) if (!authoring.identities.contains(id)) reject("authoring seed has no proposed identity");
     const auto* family = geometry_edit ? "slab_geometry" : stack_edit ? "slab_stacks" : "slab_profiles";
-    Json result{{"version", hosted_edit ? 5 : mixed_geometry ? 4 : geometry_edit ? 3 : stack_edit ? 2 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+    Json result{{"version", coordinated ? 6 : hosted_edit ? 5 : mixed_geometry ? 4 : geometry_edit ? 3 : stack_edit ? 2 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
         {"seed_slab_ids", authoring.seed_slab_ids}, {"identities", authoring.identities}, {family, Json::array()}};
-    if (mixed_geometry || hosted_edit) result["ordinary_geometry"] = Json::array();
-    if (hosted_edit) {
+    if (mixed_geometry || hosted_edit || coordinated) result["ordinary_geometry"] = Json::array();
+    if (hosted_edit || coordinated) {
         for (const auto* key : {"slab_profiles", "slab_stacks", "slab_geometry"}) result[key] = Json::array();
         result["hosted_instance_identities"] = Json::array();
     }
+    if (coordinated) result["coordinate_ordinary_hosted_geometry"]=true;
     auto bytes = result.dump().size();
     if (bytes > maximum_authoring_bytes) reject("authoring byte budget exceeded");
     for (const auto& [key, new_id] : authoring.hosted_instance_identities) {
@@ -778,23 +790,30 @@ PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(const nloh
         if (!value.is_object() || !value.contains("version") ||
             !value.at("version").is_number_integer() ||
             (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 &&
-                value.at("version") != 4 && value.at("version") != 5) ||
-            value.size() != (value.at("version") == 5 ? 10 : value.at("version") == 4 ? 7 : 6) ||
+                value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6) ||
+            value.size() != (value.at("version") == 6 ? 11 : value.at("version") == 5 ? 10 : value.at("version") == 4 ? 7 : 6) ||
             !value.contains("registry_id") || !value.contains("alternative_id") || !value.contains("seed_slab_ids") ||
             !value.contains("identities") || !value.at("identities").is_object() || !value.at("seed_slab_ids").is_array())
             reject("authoring must contain exactly its supported versioned fields");
-        const bool hosted_edit = value.at("version") == 5;
+        const bool coordinated = value.at("version") == 6;
+        if (coordinated && (!value.contains("coordinate_ordinary_hosted_geometry") ||
+            !value.at("coordinate_ordinary_hosted_geometry").is_boolean() ||
+            value.at("coordinate_ordinary_hosted_geometry")!=true ||
+            !value.contains("ordinary_geometry") || !value.at("ordinary_geometry").is_array() ||
+            value.at("ordinary_geometry").empty()))
+            reject("v6 requires explicit coordinated ordinary hosted geometry");
+        const bool hosted_edit = value.at("version") == 5 || coordinated;
         if (hosted_edit) {
             for (const auto* key : {"slab_profiles", "slab_stacks", "slab_geometry", "ordinary_geometry", "hosted_instance_identities"})
                 if (!value.contains(key) || !value.at(key).is_array() || value.at(key).size() > maximum_replacements)
-                    reject("v5 authoring requires all bounded typed arrays");
-            if (value.at("hosted_instance_identities").empty() ||
+                    reject("hosted authoring requires all bounded typed arrays");
+            if ((!coordinated && value.at("hosted_instance_identities").empty()) ||
                 ((!value.at("slab_profiles").empty()) + (!value.at("slab_stacks").empty()) +
                     (!value.at("slab_geometry").empty())) != 1 ||
                 (!value.at("ordinary_geometry").empty() && value.at("slab_geometry").empty()) ||
                 value.at("slab_geometry").size() + value.at("ordinary_geometry").size() > maximum_replacements ||
                 value.at("identities").size() + value.at("hosted_instance_identities").size() > maximum_replacements)
-                reject("v5 requires qualified hosted identities and exactly one exclusive primary family");
+                reject("hosted authoring requires its qualified identities and exactly one exclusive primary family");
         }
         const bool stack_edit = value.at("version") == 2 || (hosted_edit && !value.at("slab_stacks").empty());
         const bool mixed_geometry = value.at("version") == 4 || (hosted_edit && !value.at("ordinary_geometry").empty());
@@ -814,6 +833,7 @@ PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(const nloh
         budget.read(value);
         if (value.dump().size() > maximum_authoring_bytes) reject("authoring byte budget exceeded");
         PhaseSlabReplacementAuthoring result;
+        result.coordinate_ordinary_hosted_geometry=coordinated;
         result.registry_id = value.at("registry_id").get<std::string>();
         result.alternative_id = value.at("alternative_id").get<std::string>();
         result.seed_slab_ids = value.at("seed_slab_ids").get<std::vector<std::string>>();
@@ -848,7 +868,8 @@ PhaseSlabReplacementEntities replay_phase_slab_replacement_authoring(
     if (canonical != encoded || canonical.dump() != encoded.dump()) reject("authoring typed round trip differs");
     const auto plan = inspect_phase_slab_replacement_plan(source, authoring.seed_slab_ids, authoring.registry_id, authoring.alternative_id);
     return replay_phase_slab_replacement(source, plan, authoring.identities, authoring.slab_profiles,
-        authoring.slab_stacks, authoring.slab_geometry, authoring.ordinary_geometry, authoring.hosted_instance_identities).entities;
+        authoring.slab_stacks, authoring.slab_geometry, authoring.ordinary_geometry,
+        authoring.hosted_instance_identities, authoring.coordinate_ordinary_hosted_geometry).entities;
 }
 
 } // namespace sketch

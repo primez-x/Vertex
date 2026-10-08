@@ -392,6 +392,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (intent.is_object() && intent.value("version",0)==5) {
                     const auto replacement = intent.find("slab_replacement");
                     if (replacement != intent.end() && replacement->is_object()) {
+                        if (replacement->value("version", 0) == 6) return 112U;
                         if (replacement->value("version", 0) == 5) return 111U;
                         for (const auto* name : {"slab_geometry", "ordinary_geometry"}) {
                             const auto geometry = replacement->find(name);
@@ -2245,6 +2246,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 112 &&
          sqlite3_column_int(user_version.get(), 0) != 111 &&
          sqlite3_column_int(user_version.get(), 0) != 110 &&
          sqlite3_column_int(user_version.get(), 0) != 109 &&
@@ -2811,6 +2813,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=112)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 112 for coordinated ordinary and proposed hosted horizontal movement");
         if (required_format>=111)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 111 for proposed horizontal assemblies with hosted components");
         if (required_format>=110)

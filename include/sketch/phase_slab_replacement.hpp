@@ -73,7 +73,8 @@ struct PhaseSlabReplacementResult {
     const std::vector<SlabLayerStackEditIntent>& slab_stacks = {},
     const std::vector<SlabGeometryEditIntent>& slab_geometry = {},
     const std::vector<SlabGeometryEditIntent>& ordinary_geometry = {},
-    const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities = {});
+    const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities = {},
+    bool coordinate_ordinary_hosted_geometry = false);
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -85,6 +86,10 @@ struct PhaseSlabReplacementAuthoring {
     std::vector<SlabGeometryEditIntent> slab_geometry;
     std::vector<SlabGeometryEditIntent> ordinary_geometry;
     PhaseSlabReplacementHostedInstanceIdentityMap hosted_instance_identities;
+    // V6 opts into actual-source hosted placement consequences for the
+    // ordinary members of a mixed geometry operation. Earlier retained wires
+    // keep their original replay semantics.
+    bool coordinate_ordinary_hosted_geometry{false};
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
@@ -98,6 +103,8 @@ struct PhaseSlabReplacementAuthoring {
 // fields. Exactly one primary array is nonempty. Qualified rows are sorted
 // {catalog_id, instance_id, proposed_instance_id}; replay derives their exact
 // roster from actual source slots. V1-V4 retain their original encoding.
+// V6 adds coordinate_ordinary_hosted_geometry:true to the V5 envelope, allows
+// an empty hosted copy roster, and requires both geometry lists nonempty.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(
