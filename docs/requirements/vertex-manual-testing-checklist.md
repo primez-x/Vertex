@@ -475,6 +475,8 @@ drawing; switching modes does not change existing geometry.
   - Steps: Rotate an area and a column to 90 degrees, release, then rotate again to 180 degrees and back to the original angle. Hold Shift for an angle between snapping points. Repeat with a circular column and in a saved horizontal architectural plan view.
   - Area and line check: Rotate an appraisal area containing a deduction, then a measured area derived from walls containing a door or window. The complete preview and released result must agree, including dimensions, labels and any related room. Rotate a standalone measured line too. Repeat in a reflected or cropped horizontal plan and in Site Plan with a shifted, rotated building. Nearby symbols, labels and reference images must retain their own placement and calibration. Release immediately after choosing the final angle, then Undo and Redo. Return exactly to the starting angle and release; no edit should be added. Escape or canvas navigation during a pending turn must leave the original drawing unchanged.
   - Fine-angle check: Stop the pointer between common angles while still holding the rotation grip. Press and release Shift without moving the pointer; the displayed angle must switch between the fine and snapped choices. Release at that same position and check the accepted angle.
+  - Group numerical check: Ctrl-select two walls, then repeat with two completed measured areas and with measured lines. Open **Transform selection**, enter 90 degrees and an X/Y offset, and review both original and proposed outlines before Apply. Every selected object must share the combined center and offset; dimensions, deductions and related geometry must follow. Repeat horizontal and vertical flips. One Undo restores the group, Redo restores it, and the group stays selected. Enter 360 degrees with zero offset; no edit should be added. Selecting a symbol with a wall must refuse the whole numerical operation, never transform only the wall.
+  - Wall constraint check: Use two dimensioned walls with horizontal locks and a fixed anchor. Select the complete connected pair, turn it 90 degrees, then 180 degrees, and mirror it. The locks and anchor must follow the group. Saved automatic and manually positioned dimensions must move once and retain their placement settings. Include a measured line connected to one wall and repeat. Leave a required connected wall out of the selection; an incompatible operation must refuse the whole edit.
   - Expected: The handle stays attached to the rotated selection box after release. Common angles snap, Shift permits fine adjustment, and degrees appear while dragging. Undo/redo and save/reopen retain the orientation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -937,13 +939,14 @@ drawing; switching modes does not change existing geometry.
 ## Navigation and input
 
 - [ ] **U147 — Pan with the mouse**
+  - Steps: Try each pan gesture with a selected symbol and an unfinished wall. If your mouse has a tilt wheel or your touchpad supports horizontal scrolling, make a horizontal-only scroll in both plan workspaces. The view should travel horizontally; the selection and pending wall stay available. A new canvas click then places a point at the new view location.
   - Expected: Ordinary left-drag outside a selected object, middle-drag, and Space-left-drag move the view smoothly without creating or editing geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U148 — Zoom in and out at the pointer**
   - Steps: Zoom with ordinary wheel detents, then with small vertical touchpad movements if available. Repeat with the pointer over a corner, at a close zoom and at a wide zoom. Try a horizontal-only scroll.
-  - Expected: The intended drawing location stays under the pointer. Small vertical movements zoom progressively, ordinary detents retain their normal response, and a horizontal-only scroll does not cause vertical zoom.
+  - Expected: The intended drawing location stays under the pointer during zoom. Small vertical movements zoom progressively, ordinary detents retain their normal response, and a horizontal-only scroll pans the plan without changing the zoom.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

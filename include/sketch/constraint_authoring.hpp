@@ -75,6 +75,9 @@ struct WallGeometryMoveTarget {
 struct WallGeometryMoveIntent {
     std::vector<WallGeometryMoveTarget> targets;
     bool move_connected_walls{true};
+    // Opt-in rigid-owner placement is persisted separately from older wall
+    // movement proofs, whose saved callouts retained their old positions.
+    bool complete_saved_dimensions{};
 };
 
 // Keep the selected boundary's existing anchored/local-chain resize semantics;
@@ -143,6 +146,8 @@ struct ConstraintAuthoringIntent {
     std::optional<ExteriorCornerMoveIntent> exterior_corner_move;
     std::optional<MeasuredStrokeResizeIntent> measured_stroke_resize;
     std::optional<MeasuredStrokeVertexMoveIntent> measured_stroke_vertex_move;
+    // May accompany wall_geometry_move only for exactly the same rigid
+    // transform and connected-owner policy in one hard-connected solve.
     std::optional<MeasuredStrokeTransformIntent> measured_stroke_transform;
     std::optional<ExteriorSegmentResizeIntent> exterior_segment_resize;
     std::optional<ExteriorSegmentArcIntent> exterior_segment_arc;

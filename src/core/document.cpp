@@ -1971,6 +1971,23 @@ static void validate_dimension_placement_intent(const ApplyBoundaryConstraintCha
     }
 }
 
+static void validate_wall_dimension_completion(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.wall_dimension_completion) return;
+    if (command.wall_edits.empty() || !command.boundary_edits.empty() || !command.physical_entity_changes.empty() ||
+        command.wall_split || command.wall_merge || command.exterior_corner_move || command.exterior_segment_resize ||
+        command.exterior_segment_arc || has_dimension_placement_completion(command) || has_rigid_group_completion(command) ||
+        has_joint_translation_completion(command) || has_room_review_completion(command) || has_disto_measurement_completion(command))
+        throw std::invalid_argument("Wall callout completion requires only qualified rigid wall and measured-stroke geometry");
+    const auto& shared = command.wall_edits.front().rigid_transform;
+    if (!shared) throw std::invalid_argument("Wall callout completion requires an explicit rigid source transform");
+    for (const auto& edit : command.wall_edits)
+        if ((edit.version != 4 && edit.version != 5) || !edit.rigid_transform || !(*edit.rigid_transform == *shared))
+            throw std::invalid_argument("Wall callout completion requires one shared qualified rigid wall transform");
+    for (const auto& edit : command.measured_stroke_edits)
+        if (!edit.rigid_transform || !(*edit.rigid_transform == *shared) || edit.authored_edit || !edit.vertex_edits.empty())
+            throw std::invalid_argument("Wall callout completion cannot borrow a different or partial measured-stroke transform");
+}
+
 static void complete_dimension_placements(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const ApplyBoundaryConstraintChanges& command) {
     for (const auto& move : command.dimension_placement_moves) {
@@ -2036,9 +2053,10 @@ static bool has_measured_stroke_dimensions(const std::map<std::string,Entity,std
     });
 }
 
-static void complete_measured_stroke_dimensions(const std::map<std::string,Entity,std::less<>>& source,
+static void complete_rigid_geometry_dimensions(const std::map<std::string,Entity,std::less<>>& source,
     std::map<std::string,Entity,std::less<>>& entities,
-    const std::map<std::string,PlanarTransform,std::less<>>& transforms) {
+    const std::map<std::string,PlanarTransform,std::less<>>& transforms,
+    bool wall_owners = false) {
     if(transforms.empty())return;
     for(const auto& [id,original]:source) {
         if(!can_recognize_boundary_dimension_entity_type(original.type))continue;
@@ -2047,14 +2065,16 @@ static void complete_measured_stroke_dimensions(const std::map<std::string,Entit
             const auto target=original.properties.find("target");
             if(target!=original.properties.end() && target->is_object() && target->contains("entity_id") &&
                target->at("entity_id").is_string() && transforms.contains(target->at("entity_id").get<std::string>()))
-                throw std::invalid_argument("Unsupported attached dimension cannot follow a measured transform");
+                throw std::invalid_argument(wall_owners ? "Unsupported attached dimension cannot follow a rigid wall transform" :
+                    "Unsupported attached dimension cannot follow a measured transform");
             continue;
         }
         const auto transform=transforms.find(decoded.dimension->boundary_id);
         if(transform==transforms.end())continue;
         const auto candidate=entities.find(id);
         if(candidate==entities.end() || candidate->second!=original)
-            throw std::invalid_argument("Measured transform overlaps an edit of its attached dimension");
+            throw std::invalid_argument(wall_owners ? "Rigid wall transform overlaps an edit of its attached dimension" :
+                "Measured transform overlaps an edit of its attached dimension");
         auto dimension=*decoded.dimension;
         dimension.text_position=transform_point(dimension.text_position,transform->second);
         candidate->second=encode_boundary_dimension_entity(dimension,&original);
@@ -2600,7 +2620,7 @@ static void validate_room_review_lifetime(const nlohmann::json& encoded,
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); }
+    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); validate_wall_dimension_completion(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if(command.wall_merge) {
         (void)command_to_json(Command{command});
@@ -2616,7 +2636,8 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     }
     const bool source_completion = has_exterior_source_completion(command);
     const bool measured_completion=has_measured_source_completion(command);
-    if (source_completion || measured_completion || has_dimension_placement_completion(command)) (void)command_to_json(Command{command});
+    if (source_completion || measured_completion || has_dimension_placement_completion(command) || command.wall_dimension_completion)
+        (void)command_to_json(Command{command});
     if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion && !measured_completion)
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
@@ -2845,10 +2866,17 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             std::map<std::string,PlanarTransform,std::less<>> transforms;
             for(const auto& edit:command.measured_stroke_edits)
                 if(edit.rigid_transform)transforms.emplace(edit.stroke_id,*edit.rigid_transform);
-            complete_measured_stroke_dimensions(source,result,transforms);
+            complete_rigid_geometry_dimensions(source,result,transforms);
             complete_measured_stroke_annotations(source,result,command);
         }
         catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
+    }
+    if (command.wall_dimension_completion) {
+        try {
+            std::map<std::string,PlanarTransform,std::less<>> transforms;
+            for (const auto& edit : command.wall_edits) transforms.emplace(edit.wall_id,*edit.rigid_transform);
+            complete_rigid_geometry_dimensions(source,result,transforms,true);
+        } catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     }
     if (has_dimension_placement_completion(command)) {
         try { complete_dimension_placements(source, result, command); }
@@ -3025,7 +3053,7 @@ std::map<std::string, Entity, std::less<>> boundary_translation_entities(
     }
     // Supplemental edits get ordinary admission against the translated state;
     // they cannot use the typed proof to launder an unrelated receipt edit.
-    complete_measured_stroke_dimensions(source,result,measured_transforms);
+    complete_rigid_geometry_dimensions(source,result,measured_transforms);
     validate_boundary_change(history, intermediate, result);
     try { validate_boundary_identity_transition(history, source, result); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
@@ -3158,7 +3186,8 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
                     throw std::invalid_argument("Rigid wall transform must preserve physical dimensions and source context");
             }
             moved_walls.insert(id);
-        } else if(change.entity.type=="measurement_linework" && has_measured_stroke_dimensions(source,id)) {
+        } else if(change.entity.type=="measurement_linework" &&
+            (command.measured_stroke_transform_completion || has_measured_stroke_dimensions(source,id))) {
             const auto decoded=decode_measurement_linework_model(previous->second.properties.at("model"));
             if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
             auto expected=previous->second;
@@ -3184,6 +3213,10 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
         if (!moved_walls.contains(id) && !identity)
             throw std::invalid_argument("Rigid exterior transform must include every source wall");
     std::set<std::string> transformed_ids = owners;
+    if (command.wall_dimension_completion && moved_walls.empty())
+        throw std::invalid_argument("Rigid wall callout completion requires a validated wall witness");
+    if (command.measured_stroke_transform_completion && measured_transforms.empty())
+        throw std::invalid_argument("Rigid measured completion requires a validated stroke witness");
     transformed_ids.insert(moved_walls.begin(),moved_walls.end());
     for(const auto& [id,transform]:measured_transforms){(void)transform;transformed_ids.insert(id);}
     for (const auto& [id, entity] : source) {
@@ -3214,7 +3247,13 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             throw std::invalid_argument("Rigid transform must preserve constraint endpoint identities, values and metadata");
     }
     // Reject ordinary receipt edits before any canonical source reconciliation.
-    complete_measured_stroke_dimensions(source,result,measured_transforms);
+    complete_rigid_geometry_dimensions(source,result,measured_transforms);
+    std::map<std::string,PlanarTransform,std::less<>> wall_transforms;
+    for (const auto& id : moved_walls) wall_transforms.emplace(id,shared);
+    // Only independently validated shared wall baselines lend placement
+    // authority. Raw dimension supplements remain forbidden above.
+    if (command.wall_dimension_completion)
+        complete_rigid_geometry_dimensions(source,result,wall_transforms,true);
     validate_boundary_change(history,intermediate,result);
     if (identity) {
         if (result != source)
@@ -3303,7 +3342,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); }
+    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_wall_dimension_completion(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     if (has_disto_measurement_completion(command)) {
         try {
@@ -3939,6 +3978,11 @@ nlohmann::json command_to_json(const Command& command) {
                 typed.expected_revision, typed.entity_changes, {}, typed.message});
             encoded["kind"] = "transform_boundaries";
             encoded.erase("asset_changes");
+            if (typed.wall_dimension_completion || typed.measured_stroke_transform_completion) {
+                encoded["version"] = 2;
+                encoded["wall_dimension_completion"] = typed.wall_dimension_completion;
+                encoded["measured_stroke_transform_completion"] = typed.measured_stroke_transform_completion;
+            }
             encoded["transformations"] = nlohmann::json::array();
             if (typed.transformations.empty())
                 document_error(DocumentErrorCode::invalid_entity, "Boundary transform group is empty");
@@ -3972,6 +4016,23 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (typed.wall_dimension_completion) {
+                try {
+                    validate_wall_dimension_completion(typed);
+                    auto original = typed;
+                    original.wall_dimension_completion = false;
+                    auto proof = command_to_json(Command{original});
+                    if (proof.at("version") != 10 && proof.at("version") != 11)
+                        throw std::invalid_argument("Wall callout completion requires the existing rigid wall or wall/stroke dialect");
+                    auto encoded = nlohmann::json{{"version",21},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"wall_dimension_completion",true},{"proof",std::move(proof)}};
+                    if (encoded.dump().size() > 1024 * 1024)
+                        throw std::invalid_argument("Wall callout completion exceeds the persisted proof budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             try { validate_room_aware_wall_split_mode(typed); validate_wall_merge_mode(typed); }
             catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
             if (typed.wall_merge) {
@@ -4277,24 +4338,41 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
         const auto kind = value.at("kind").get<std::string>();
-        if (value.at("version") != 1 && kind != "apply_boundary_constraint_changes")
+        if (value.at("version") != 1 && kind != "apply_boundary_constraint_changes" &&
+            !(kind == "transform_boundaries" && value.at("version") == 2))
             document_error(DocumentErrorCode::invalid_entity,"Unsupported command envelope version");
         if (kind == "transform_boundaries") {
-            command_exact_fields(value, {"version", "kind", "expected_revision", "message", "entity_changes", "transformations"},
+            const bool qualified_group = value.at("version") == 2;
+            if (qualified_group) {
+                command_exact_fields(value, {"version", "kind", "expected_revision", "message", "entity_changes", "transformations", "wall_dimension_completion", "measured_stroke_transform_completion"},
+                                     DocumentErrorCode::invalid_entity, "serialized transform group with wall callouts");
+                if (!value.at("wall_dimension_completion").is_boolean() ||
+                    !value.at("measured_stroke_transform_completion").is_boolean() ||
+                    (!value.at("wall_dimension_completion").get<bool>() &&
+                     !value.at("measured_stroke_transform_completion").get<bool>()))
+                    throw std::invalid_argument("Transform group geometry completion must be explicit");
+            } else command_exact_fields(value, {"version", "kind", "expected_revision", "message", "entity_changes", "transformations"},
                                  DocumentErrorCode::invalid_entity, "serialized transform group");
+            if (value.dump().size() > 1024 * 1024)
+                throw std::invalid_argument("Boundary transform group exceeds the persisted proof budget");
             if (!value.at("transformations").is_array() || value.at("transformations").empty())
                 document_error(DocumentErrorCode::invalid_entity, "Transformations must be a nonempty array");
             auto ordinary = value;
+            ordinary["version"] = 1;
             ordinary["kind"] = "apply_entity_changes";
             ordinary.erase("transformations");
+            ordinary.erase("wall_dimension_completion");
+            ordinary.erase("measured_stroke_transform_completion");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
             TransformBoundaries result{changes.expected_revision, {}, changes.entity_changes, changes.message};
+            result.wall_dimension_completion = qualified_group && value.at("wall_dimension_completion").get<bool>();
+            result.measured_stroke_transform_completion = qualified_group && value.at("measured_stroke_transform_completion").get<bool>();
             std::set<std::string> owners;
             for (const auto& transformation : value.at("transformations")) {
                 const auto single = std::get<TransformBoundary>(command_from_json(nlohmann::json{
@@ -4333,6 +4411,28 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 21) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","wall_dimension_completion","proof"},
+                    DocumentErrorCode::invalid_entity,"serialized rigid wall callout completion");
+                if (value.dump().size() > 1024 * 1024 || !value.at("wall_dimension_completion").is_boolean() ||
+                    !value.at("wall_dimension_completion").get<bool>())
+                    throw std::invalid_argument("Wall callout completion mode or proof budget is invalid");
+                const auto& proof = value.at("proof");
+                if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
+                    (proof.at("version") != 10 && proof.at("version") != 11))
+                    throw std::invalid_argument("Wall callout completion requires one unnested rigid wall or wall/stroke proof");
+                const auto decoded = command_from_json(proof, asset_resolver);
+                const auto* original = std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+                if (!original || original->wall_dimension_completion ||
+                    command_revision(value.at("expected_revision"),"Wall callout completion revision") != original->expected_revision ||
+                    !value.at("message").is_string() || value.at("message") != proof.at("message"))
+                    throw std::invalid_argument("Wall callout completion does not retain its original command identity");
+                auto result = *original;
+                result.wall_dimension_completion = true;
+                validate_wall_dimension_completion(result);
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 20) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","wall_merge"},
                     DocumentErrorCode::invalid_entity,"serialized wall merge command");
@@ -4436,9 +4536,11 @@ Command command_from_json(const nlohmann::json& value,
                 const auto& child = value.at("rigid_group_transform");
                 if (!child.is_null()) {
                     // Inspect identity before recursive decoding: no arbitrary
-                    // commands, nested mixed envelopes or alternate dialects.
+                    // commands or nested mixed envelopes. Qualified child
+                    // dialect two retains its own format-66 floor.
                     if (!child.is_object() || !child.contains("kind") || child.at("kind") != "transform_boundaries" ||
-                        !child.contains("version") || child.at("version") != 1)
+                        !child.contains("version") || !child.at("version").is_number_integer() ||
+                        (child.at("version") != 1 && child.at("version") != 2))
                         throw std::invalid_argument("Mixed rigid child must be a TransformBoundaries proof");
                     result.rigid_group_transform = std::get<TransformBoundaries>(command_from_json(child, asset_resolver));
                 }

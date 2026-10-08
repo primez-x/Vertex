@@ -185,6 +185,16 @@ struct CanvasEntity {
     std::optional<Segment> endpoint_baseline;
 };
 
+// A geometry presentation is distinct from its semantic model owner. Embedded
+// profiles may share an ID with a persisted body, so source-frame admission
+// also retains the exact profile key and the captured geometry type.
+struct CanvasEntityPresentationIdentity {
+    QString id;
+    QString presentation_key;
+    QString type;
+    bool operator==(const CanvasEntityPresentationIdentity&) const = default;
+};
+
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
 // part of the committed drawing and therefore render in both screen and
 // fit-to-content output.
@@ -402,6 +412,7 @@ public:
     void setCanvasBackground(QColor background);
     void setSelectedId(const QString& entity_id);
     void setSelectedIds(const QStringList& entity_ids);
+    [[nodiscard]] std::vector<CanvasEntityPresentationIdentity> selectedEntityPresentations() const;
     // Screen-only retained selection caption. It is painted inside the canvas
     // and is intentionally excluded from print/export rendering.
     void setSelectionCaption(QString caption);

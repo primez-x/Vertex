@@ -40,6 +40,13 @@ selection and retains selected plan-only objects. Escape, capture or focus loss,
 or a changed source, camera or view extent abandons the marquee without applying
 its result.
 
+In plan views, vertical wheel and touchpad input zooms about the pointer.
+Horizontal-only touchpad packets or tilt-wheel input pan horizontally through
+the same navigation path as canvas dragging. Pixel input retains its logical
+travel; horizontal detents use a small logical step. A diagonal packet with
+vertical travel follows the existing zoom rule. These gestures preserve drafts
+and selection, and retire captured edit previews through navigation authority.
+
 Alt-click in an idle plan cycles the distinct eligible objects at the pointer,
 including labels, furniture, room interiors and reference images. The ordinary
 pick comes first when the current selection is outside that list. The active

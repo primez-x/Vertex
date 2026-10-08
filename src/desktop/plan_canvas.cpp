@@ -5621,6 +5621,15 @@ void PlanCanvas::wheelEvent(QWheelEvent* event) {
     const auto steps = static_cast<double>(delta) / 120.0;
     if (steps != 0.0) {
         zoomBy(std::pow(1.18, steps), event->position());
+    } else {
+        // A horizontal-only touchpad stroke or tilt wheel pans the view.
+        // Pixel packets keep their actual logical travel; wheel detents use
+        // a small fixed travel rather than disappearing as a consumed event.
+        const auto travel = event->pixelDelta().x() != 0
+            ? static_cast<double>(event->pixelDelta().x())
+            : static_cast<double>(event->angleDelta().x()) * 48.0 / 120.0;
+        if (travel != 0.0)
+            setViewTransform({m_view_center.x - travel / m_scale, m_view_center.y}, m_scale);
     }
     event->accept();
 }
@@ -7221,6 +7230,17 @@ void PlanCanvas::ensureRetainedSelection() const {
 const QStringList& PlanCanvas::selectedIds() const {
     ensureRetainedSelection();
     return m_retained_selected_ids;
+}
+
+std::vector<CanvasEntityPresentationIdentity> PlanCanvas::selectedEntityPresentations() const {
+    ensureRetainedSelection();
+    std::vector<CanvasEntityPresentationIdentity> result;
+    result.reserve(m_selected_entity_indices.size());
+    for (const auto index : m_selected_entity_indices) {
+        const auto& entity = m_entities[index];
+        result.push_back({entity.id, entity.presentation_key, entity.type});
+    }
+    return result;
 }
 
 bool PlanCanvas::selectionInteractionEnabled() const {

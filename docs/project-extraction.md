@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version 64 identifies explicit measured-line and saved-wall-dimension completion and
+requires native reader 66. Version-2 `transform_boundaries` and constraint
+envelope 21 retain their shared rigid intent and callout completion across all
+history, including undone commands and deleted owners. Earlier envelopes keep
+their original replay behavior and extraction floor. Saved placement provenance
+and unknown presentation metadata are preserved.
+
 Exchange version 57 identifies retained command-envelope-19 device measurement
 completion and requires native reader 59. It preserves the original nested
 geometry proof and the same-owner observation attachment across current,

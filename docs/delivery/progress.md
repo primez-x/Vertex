@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 numerical group transforms and horizontal navigation
+
+The numerical Transform selection editor now captures the whole selected
+geometry group. Persisted walls, closed areas and measured lines share one
+source-plan pivot and one complete rotate, flip or offset command. The preview
+includes deduplicated selected roots, changed consequences and dimensions;
+Apply retains the full selection. Exact source, context and Site frame checks
+refuse stale candidates. Equivalent identity turns and double flips use the
+empty-command path. Unsupported architectural/presentation groups cannot fall
+through to an edit of their primary object. Numerical group copying remains
+open; existing multi-selection copying is unchanged.
+
+Horizontal-only touchpad and tilt-wheel input now pans plan views through the
+existing navigation path. Actual pixel travel is retained, wheel detents use
+small logical steps, and vertical input keeps pointer-centred zoom. Navigation
+retires captured edit previews without inserting drawing nodes.
+These are source changes only. No build, test, probe, native job, launch,
+package or installation ran. Manual checks remain Not tested, the installed
+candidate is unchanged.
+The first review identified missing wall-dimension movement and wall-only
+constraint collection in the reused builder. Both are corrected in source.
+Wall and measured-line groups share one qualified rigid solve; internal anchors
+and axis relations retain their named targets. Exact reflections and half-turns
+use that proof without weakening ordinary endpoint-reversal guards. Saved wall
+callouts follow their original positions once, preserving placement provenance
+and raw metadata. Explicit new proof dialects require native format 66 and
+extraction version 64; older commands retain their original replay semantics.
+Mixed closed-area groups now prove every included measured line, even without
+a saved dimension, before admitting its internal constraints. This uses the
+new dialect; earlier version-one supplemental-line replay stays unchanged.
+The native SQLite schema gate also admits format 66.
+Single assemblies still use their single-object editor even when rendered as
+several profiles. A distinct same-ID body/profile selection cannot silently
+transform only the persisted body. Independent source review accepted the
+corrected integration. Compilation and history/reopen behavior remain
+unverified.
+
 ### October 7 Site geometry transforms and corner feedback
 
 Site measured areas, measured lines and embedded geometric assembly profiles
@@ -1820,18 +1857,20 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Continue production implementation, starting with pointer picking/snapping,
-   Site Plan assistance coordinates and practical device measurement entry.
-   Resolve source-review defects before committing each coherent batch, then
-   push and verify the remote ref. The Site, recovery and responsiveness source
-   checkpoint is already preserved at `6f5d7def1dbb832a40190a53efa81eca126189cf`.
-2. Deliver the next coherent human-test candidate from the existing Release tree
-   when the implementation batch is ready. Preserve the active candidate and
-   every rollback. Do not restart test suites or produce a package at every turn.
-3. Continue the remaining concrete code gaps and D01/D02 acquisition. Compose
-   the exact runtime, notices, application source and dependency source kit for
-   that candidate. The latest instruction prioritizes coding and user testing
-   over further suite runs.
+1. Continue the distinct typed Site placement gap for embedded profiles and
+   same-ID persisted bodies. Extend numerical group transforms to the remaining
+   architectural/presentation families and group-copy workflow. The implemented
+   wall/area/measured-line groups require later runtime qualification.
+   Keep unsupported combinations visible as gaps;
+   never mutate only part of a selection under a group command.
+2. Continue concrete source implementation and D01/D02 acquisition from the
+   current checkout. Resolve source-review defects in each coherent batch,
+   then commit, push and verify the remote ref. Preserve completed canvas,
+   assistance and measurement-entry work instead of restarting it.
+3. Preserve the existing installed candidate and rollback. The current
+   source-only instruction suspends builds, tests, native jobs, packages and
+   installations, including the plan's build-after-batch cadence. Updated
+   source is not updated installed or accepted behavior.
 4. Keep final production qualification open. Restricted export, physical output,
    performance, clean offline installation, hardware and human acceptance still
    require evidence; source implementation does not certify those outcomes.

@@ -132,6 +132,12 @@ struct TransformBoundaries {
     std::vector<BoundaryTransformation> transformations;
     std::vector<EntityChange> entity_changes;
     std::string message;
+    // Envelope two completes saved wall callouts from the validated shared
+    // transform. Older proofs retain their original placement semantics.
+    bool wall_dimension_completion{};
+    // The same dialect qualifies all supplied measured strokes, including
+    // those without saved dimensions, for internal constraint admission.
+    bool measured_stroke_transform_completion{};
 };
 
 struct EditBoundaryGeometry {
@@ -324,6 +330,9 @@ struct ApplyBoundaryConstraintChanges {
     bool disto_measurement_completion{};
     // Envelope twenty admits only this source-reconstructed merge intent.
     std::optional<WallMergeIntent> wall_merge;
+    // Envelope twenty-one wraps the existing rigid wall/stroke proof and
+    // reconstructs wall callouts without changing placement provenance.
+    bool wall_dimension_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

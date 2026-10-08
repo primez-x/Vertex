@@ -245,8 +245,28 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         static_cast<unsigned>(result.measured_stroke_vertex_move.has_value()) +
         static_cast<unsigned>(result.measured_stroke_transform.has_value()) +
         static_cast<unsigned>(result.joint_translation.has_value());
-    if (coordinate_intents > 1)
+    const bool shared_rigid_lanes = coordinate_intents == 2 &&
+        result.wall_geometry_move && result.measured_stroke_transform;
+    if (coordinate_intents > 1 && !shared_rigid_lanes)
         invalid("Only one wall or boundary coordinate intent may be authored at a time");
+    if (shared_rigid_lanes) {
+        const auto& walls = *result.wall_geometry_move;
+        const auto& strokes = *result.measured_stroke_transform;
+        if (walls.targets.empty() || strokes.targets.empty() || !walls.targets.front().rigid_transform ||
+            walls.move_connected_walls != strokes.move_related_objects)
+            invalid("Shared wall and measured movement requires rigid targets and one connected-owner policy");
+        const auto& shared = *walls.targets.front().rigid_transform;
+        if (!std::isfinite(shared.pivot.x) || !std::isfinite(shared.pivot.y) ||
+            !std::isfinite(shared.offset.x) || !std::isfinite(shared.offset.y) ||
+            !std::isfinite(shared.rotation_radians))
+            invalid("Shared wall and measured movement requires a finite rigid transform");
+        for (const auto& target : walls.targets)
+            if (!target.rigid_transform || !(*target.rigid_transform == shared))
+                invalid("Every selected wall must retain the same explicit rigid transform");
+        for (const auto& target : strokes.targets)
+            if (!(target.transform == shared))
+                invalid("Every selected measured stroke must retain the shared wall transform");
+    }
     if (result.joint_translation) {
         auto& move=*result.joint_translation;
         if (!std::isfinite(move.offset.x) || !std::isfinite(move.offset.y) || (move.offset.x==0 && move.offset.y==0))
@@ -335,6 +355,13 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         auto& move = *result.wall_geometry_move;
         if (move.targets.empty()) {
             invalid("Wall geometry move requires at least one selected wall");
+        }
+        if (move.complete_saved_dimensions) {
+            const auto& shared = move.targets.front().rigid_transform;
+            if (!shared) invalid("Saved wall callouts require an explicit rigid transform");
+            for (const auto& target : move.targets)
+                if (!target.rigid_transform || !(*target.rigid_transform == *shared))
+                    invalid("Saved wall callouts require one shared rigid source transform");
         }
         std::set<std::string, std::less<>> target_ids;
         for (const auto& target : move.targets) {
@@ -1253,7 +1280,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             }
         } else if (intent.wall_geometry_move.has_value()) {
             const auto& move = *intent.wall_geometry_move;
-            std::set<std::string, std::less<>> selected_walls;
+            std::set<std::string, std::less<>> selected_owners;
             std::set<std::string, std::less<>> movable_component;
             for (const auto& target : move.targets) {
                 const auto old = old_baselines.at(target.wall_id);
@@ -1284,10 +1311,25 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     (void)arc_from_chord_angle(proposed.start, proposed.end,
                                                proposed.sweep_radians);
                 }
-                selected_walls.insert(target.wall_id);
+                selected_owners.insert(target.wall_id);
                 add_fixed({target.wall_id, WallEndpointRole::start}, proposed.start);
                 add_fixed({target.wall_id, WallEndpointRole::end}, proposed.end);
                 const auto component = connected_from(target.wall_id);
+                movable_component.insert(component.begin(), component.end());
+            }
+            // The only admitted second coordinate lane is the same rigid
+            // movement. Pin its named vertices in this one solve, rather than
+            // let a wall-only solve infer or partially deform the stroke.
+            for (const auto& [owner_id, edit] : selected_stroke_edits) {
+                (void)edit;
+                selected_owners.insert(owner_id);
+                const auto proposed = resolve_constraint_segment_owner(candidate.at(owner_id));
+                for (const auto& edge : proposed.segments)
+                    for (const auto role : {WallEndpointRole::start, WallEndpointRole::end})
+                        add_fixed({owner_id, role, edge.segment_id,
+                            role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id},
+                            endpoint_position(edge.segment, role));
+                const auto component = connected_from(owner_id);
                 movable_component.insert(component.begin(), component.end());
             }
             if (has_upsert && intent.relation_anchor.has_value() &&
@@ -1296,7 +1338,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             }
             for (const auto& [id, position] : positions) {
                 const auto& binding = point_bindings.at(id);
-                if (selected_walls.contains(binding.owner_id)) {
+                if (selected_owners.contains(binding.owner_id)) {
                     continue;
                 }
                 if (!move.move_connected_walls ||
@@ -1502,7 +1544,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             }
             const bool rigid_top_plane_edit=rigid_transform && old.sweep_radians==0.0 &&
                 snapshot.entities().at(wall_id).properties.contains("top_plane");
-            if (!rigid_top_plane_edit && proposed.start.x == old.start.x && proposed.start.y == old.start.y &&
+            const bool rigid_callout_edit = rigid_transform && intent.wall_geometry_move &&
+                intent.wall_geometry_move->complete_saved_dimensions;
+            if (!rigid_top_plane_edit && !rigid_callout_edit && proposed.start.x == old.start.x && proposed.start.y == old.start.y &&
                 proposed.end.x == old.end.x && proposed.end.y == old.end.y && proposed.sweep_radians == old.sweep_radians) {
                 // A saved constraint can solve an attachment back to its
                 // original geometry. Discard its provisional contact redraw.
@@ -1627,6 +1671,27 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         (void)validate_boundary_integrity(candidate);
         (void)validate_constraint_integrity(candidate);
 
+        if (intent.wall_geometry_move && intent.wall_geometry_move->complete_saved_dimensions) {
+            for (const auto& [id, original] : snapshot.entities()) {
+                if (!can_recognize_boundary_dimension_entity_type(original.type)) continue;
+                const auto decoded = decode_boundary_dimension_entity(original);
+                if (!decoded.supported()) {
+                    const auto target = original.properties.find("target");
+                    if (target != original.properties.end() && target->is_object() && target->contains("entity_id") &&
+                        target->at("entity_id").is_string() && selected_rigid_ids.contains(target->at("entity_id").get<std::string>()))
+                        invalid("Unsupported attached dimension cannot follow a rigid wall transform");
+                    continue;
+                }
+                const auto transform = selected_wall_rigid_transform(intent, decoded.dimension->boundary_id);
+                if (!transform) continue;
+                if (!candidate.contains(id) || candidate.at(id) != original)
+                    invalid("Rigid wall transform overlaps an edit of its attached dimension");
+                auto dimension = *decoded.dimension;
+                dimension.text_position = transform_point(dimension.text_position, *transform);
+                candidate.at(id) = encode_boundary_dimension_entity(dimension, &original);
+            }
+        }
+
         bool entity_changed = candidate.size() != snapshot.entities().size();
         if (!entity_changed) {
             for (const auto& [id, entity] : candidate) {
@@ -1650,7 +1715,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
 
         result.accepted_ = true;
         result.candidate_entities_ = std::move(candidate);
-        if (result.measured_source_completion_ || intent.joint_translation) {
+        if (result.measured_source_completion_ || intent.joint_translation ||
+            (intent.wall_geometry_move && intent.wall_geometry_move->complete_saved_dimensions)) {
             if (snapshot.retained && !intent.joint_translation) {
                 const auto completed=Document::preview_command(*snapshot.retained,command_for(*snapshot.retained,result));
                 result.candidate_entities_=completed.entities();
@@ -2053,6 +2119,8 @@ Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision
                 length_entry, proof_version,proof_rigid_transform});
             command.rigid_wall_transform_completion=command.rigid_wall_transform_completion || proof_rigid_transform.has_value();
         }
+        command.wall_dimension_completion = recomputed.normalized_intent_.wall_geometry_move &&
+            recomputed.normalized_intent_.wall_geometry_move->complete_saved_dimensions;
         return Command{std::move(command)};
     }
     Command command = ApplyEntityChanges{

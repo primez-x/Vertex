@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v65
+# Vertex project formats v1 through v66
+
+## Qualified measured lines and saved wall dimensions in rigid groups (v66)
+
+Native format 66 and JSON/assets extraction version 64 retain explicit
+measured-line and saved-wall-dimension completion. Earlier commands keep their
+original replay behavior; reading them does not add geometry authority or
+dimension movement retroactively.
+
+The version-2 `transform_boundaries` envelope adds exactly the two boolean
+fields `wall_dimension_completion` and `measured_stroke_transform_completion`
+to the version-1 fields. At least one must be true, and each true field requires
+an independently validated owner witness. Measured-line completion reconstructs
+every supplied line from the same source rigid transform, even without saved
+dimensions, before admitting its internal constraints. Wall completion
+reconstructs physical geometry before moving each attached saved callout's
+original text position once. Raw dimension supplements cannot supply that
+authority. Automatic/manual placement provenance and unrecognized saved
+presentation fields remain intact.
+
+Constraint command envelope 21 has exactly `version`,
+`kind: "apply_boundary_constraint_changes"`, `expected_revision`, `message`,
+`wall_dimension_completion: true` and `proof`. The proof is one existing
+version-10 rigid wall or version-11 wall/measured-line command with the same
+revision and message. This wrapper does not nest or lend its authority to
+unrelated completion lanes. Every selected wall and measured line must retain
+the same explicit rigid transform. Named wall endpoint identities remain
+stable through reflection and half-turns; ordinary reversal admission is
+unchanged.
+
+The flags require format 66 anywhere in retained history, including nested
+rigid group proofs within envelope 16, undone commands and deleted owners. Older projects keep
+their previous floor and command bytes. Lowered markers are refused even when
+their digests have been recomputed.
 
 ## Current-room continuity during physical wall splits (v65)
 

@@ -7334,9 +7334,7 @@ public:
     static Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
         const QStringList& root_ids, const PlanarTransform& transform,
         std::vector<EntityChange> supplemental_changes = {}) {
-        if(supplemental_changes.empty() && !root_ids.isEmpty() &&
-           std::all_of(root_ids.begin(),root_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
-            return measuredStrokeTransformCommand(source,root_ids,transform);
+        if (root_ids.isEmpty()) throw std::invalid_argument("Select plan geometry before transforming it.");
         std::vector<Entity> selected_roots;
         for (const auto& id : root_ids) {
             const auto found=source.entities().find(id.toStdString());
@@ -7346,12 +7344,22 @@ public:
             if (found->second.type=="measurement_linework") selected_roots.push_back(found->second);
             else for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
         }
-        auto graph=independentAreaCopyGraph(source,std::move(selected_roots));
-        includeMeasuredAreaSources(source,graph);
+        if (!std::isfinite(transform.pivot.x) || !std::isfinite(transform.pivot.y) ||
+            !std::isfinite(transform.rotation_radians) || !std::isfinite(transform.offset.x) ||
+            !std::isfinite(transform.offset.y))
+            throw std::invalid_argument("A shared rigid transform requires finite plan coordinates.");
         if (transform.rotation_radians==0.0 && !transform.flip_horizontal && !transform.flip_vertical &&
             transform.offset.x==0.0 && transform.offset.y==0.0 && supplemental_changes.empty())
             return ApplyEntityChanges{source.revision(),{}, {},"Transform areas with deductions and source walls"};
+        if(supplemental_changes.empty() &&
+           std::all_of(root_ids.begin(),root_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
+            return measuredStrokeTransformCommand(source,root_ids,transform);
+        auto graph=independentAreaCopyGraph(source,std::move(selected_roots),true,true);
+        includeMeasuredAreaSources(source,graph);
         std::vector<BoundaryTransformation> transformations;
+        std::vector<WallGeometryMoveTarget> wall_targets;
+        MeasuredStrokeTransformIntent stroke_targets;
+        std::vector<ConstraintRelationMutation> relation_mutations;
         std::map<std::string,Entity,std::less<>> supplemental;
         for (const auto& change : supplemental_changes) {
             if (change.kind!=EntityChangeKind::upsert)
@@ -7365,15 +7373,23 @@ public:
                     throw std::invalid_argument("A dependent boundary needs an explicit identity upgrade before transforming.");
                 transformations.push_back({entity.id,transform});
             } else if (entity.type=="measurement_linework") {
+                stroke_targets.targets.push_back({entity.id,transform});
                 const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
                 if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
                 auto moved=entity;
                 moved.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
                 supplemental.insert_or_assign(entity.id,std::move(moved));
             } else if (entity.type=="wall") {
+                const auto baseline = read_required_segment(entity.properties,"baseline");
+                if (!baseline) throw std::invalid_argument("A selected wall has no canonical baseline.");
+                const auto proposed = transform_segment(*baseline,transform);
+                wall_targets.push_back({entity.id,proposed.start,proposed.end,transform});
                 const auto built=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,transform,nullptr,true);
                 const auto* changes=std::get_if<ApplyEntityChanges>(&built.first);
                 if (!changes) throw std::invalid_argument("Source walls did not produce a detached transform.");
+                // An unchanged axis can still mirror its saved callout.
+                // Retain an explicit source wall witness in the rigid group.
+                supplemental.try_emplace(entity.id,entity);
                 for (const auto& change : changes->entity_changes)
                     supplemental.insert_or_assign(change.entity.id,change.entity);
             } else if (entity.type=="constraint") {
@@ -7389,7 +7405,10 @@ public:
                             ? ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
                 }
                 const auto encoded=encode_constraint_entity(constraint,&entity);
-                if (encoded!=entity) supplemental.insert_or_assign(entity.id,encoded);
+                if (encoded!=entity) {
+                    relation_mutations.push_back(ConstraintRelationMutation::upsert(constraint));
+                    supplemental.insert_or_assign(entity.id,encoded);
+                }
             } else if (entity.type==kAnnotationEntityType) {
                 // The dependency graph contains only owned overrides. Merge
                 // them into the full owner so its other artwork stays intact.
@@ -7418,12 +7437,69 @@ public:
                 if (annotation!=source.entities().at(entity.id)) supplemental.insert_or_assign(entity.id,std::move(annotation));
             }
         }
+        if (transformations.empty() && !wall_targets.empty()) {
+            ConstraintAuthoringIntent intent;
+            intent.wall_geometry_move = WallGeometryMoveIntent{std::move(wall_targets),true,true};
+            if (!stroke_targets.targets.empty()) intent.measured_stroke_transform = stroke_targets;
+            intent.relation_mutations = std::move(relation_mutations);
+            intent.message = "Transform selected walls and measured lines";
+            const auto preview = preview_constraint_authoring(source,intent);
+            if (preview.accepted()) {
+                auto command = constraint_authoring_verified_command(source,preview,nullptr);
+                auto* proof = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+                if (!proof) throw std::invalid_argument("The shared wall transform has no qualified rigid geometry proof.");
+                const auto proposed = Document::preview_command(source,command);
+                for (const auto& entity : graph) {
+                    if (entity.type != "wall" && entity.type != "measurement_linework") continue;
+                    const auto expected = supplemental.find(entity.id);
+                    if (proposed.entities().at(entity.id) != (expected == supplemental.end() ? entity : expected->second))
+                        throw std::invalid_argument("The connected solve differs from a selected object's exact rigid source replay.");
+                }
+                for (auto& [id,entity] : supplemental) {
+                    if (entity.type == "wall" || entity.type == "measurement_linework" || entity.type == "constraint") continue;
+                    if (entity.type == kAnnotationEntityType) {
+                        // Measured proof completion owns these offsets. Retain
+                        // their source value in the supplement so completion
+                        // moves them once; keep other authored overrides here.
+                        const auto& original_records = source.entities().at(id).properties.at("state").at("overrides");
+                        for (auto& record : entity.properties.at("state").at("overrides")) {
+                            const auto kind = record.at("target_kind").get<std::string>();
+                            if ((kind != "area" && !area_callout_role(kind)) || !record.contains("plan_label_offset_m")) continue;
+                            const auto stroke = std::find_if(stroke_targets.targets.begin(),stroke_targets.targets.end(),[&](const auto& target) {
+                                return target.stroke_id == record.at("target_id").get<std::string>();
+                            });
+                            if (stroke == stroke_targets.targets.end()) continue;
+                            const auto original = std::find_if(original_records.begin(),original_records.end(),[&](const auto& value) {
+                                return value.at("target_id") == record.at("target_id") && value.at("target_kind") == record.at("target_kind");
+                            });
+                            if (original == original_records.end() || !original->contains("plan_label_offset_m"))
+                                throw std::invalid_argument("A measured callout lost its source placement override.");
+                            record["plan_label_offset_m"] = original->at("plan_label_offset_m");
+                        }
+                    }
+                    if (entity != source.entities().at(id)) proof->supplemental_entity_changes.push_back(EntityChange::upsert(entity));
+                }
+                proof->supplemental_source_completion = !proof->supplemental_entity_changes.empty();
+                (void)Document::preview_command(source,command);
+                return command;
+            }
+            // A reflection may leave every axis and callout unchanged while
+            // reversing opening artwork. That ordinary, geometry-free case
+            // needs no endpoint authority; all other refusals remain binding.
+            const bool unchanged_geometry = std::none_of(supplemental.begin(),supplemental.end(),[&](const auto& item) {
+                return (item.second.type == "wall" || item.second.type == "measurement_linework" || item.second.type == "constraint") &&
+                    item.second != source.entities().at(item.first);
+            });
+            if (!unchanged_geometry || preview.diagnostics().size() != 1 ||
+                preview.diagnostics().front() != "Constraint authoring intent makes no document change")
+                requireAcceptedConstraintPreview(preview);
+        }
         std::vector<EntityChange> changes;
         for (auto& [id,entity] : supplemental) changes.push_back(EntityChange::upsert(std::move(entity)));
         const Command command=completeMeasuredAreaConsequences(source, completeOrdinaryMeasuredDimensionMovement(source,transformations.empty()
             ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Rotate measured strokes"}}
             : Command{TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),
-                "Transform areas with deductions and source walls"}},transform));
+                "Transform areas with deductions and source walls",!wall_targets.empty(),!stroke_targets.targets.empty()}},transform));
         const auto candidate=Document::preview_command(source,command);
         for (const auto& entity : graph)
             if (is_closed_boundary_entity(entity.type) && !wall_measurement_source_current(candidate,candidate.entities().at(entity.id)))
@@ -10753,16 +10829,110 @@ public:
     }
 
     void showBoundaryTransformEditor() {
+        const auto selection = m_selected_ids;
+        auto* selection_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        const auto selection_presentations = selection_canvas->selectedEntityPresentations();
         const auto original = selectedEntity();
-        if (original && (can_recognize_building_entity_type(original->type) ||
+        const auto source = authoringSnapshot();
+        std::map<QString,std::set<QString>> retained_body_types;
+        for (const auto& identity : selection_presentations)
+            if (identity.presentation_key.isEmpty()) retained_body_types[identity.id].insert(identity.type);
+        const bool presentation_collision = std::any_of(selection_presentations.begin(),selection_presentations.end(),[&](const auto& identity) {
+            if (identity.presentation_key.isEmpty()) return false;
+            const auto persisted = source.entities().find(identity.id.toStdString());
+            if (persisted != source.entities().end() && persisted->second.type != "assembly_instance") return true;
+            const auto bodies = retained_body_types.find(identity.id);
+            return bodies != retained_body_types.end() && std::any_of(bodies->second.begin(),bodies->second.end(),[&](const auto& type) {
+                return type != identity.type;
+            });
+        });
+        // Several profiles can describe one assembly. Count semantic roots,
+        // while refusing a distinct persisted body hidden behind the same ID.
+        const bool group = selection.size() > 1 || presentation_collision;
+        if (!group && original && (can_recognize_building_entity_type(original->type) ||
                          original->type == "slab" || original->type == "room")) {
             showArchitecturalObjectTransformEditor();
             return;
         }
         const auto context = captureModalContext();
-        const auto source = authoringSnapshot();
-        const bool supported_selection = original &&
-            (original->type == "wall" || original->type=="measurement_linework" || is_closed_boundary_entity(original->type));
+        const auto authority = captureSourceEditAuthority(source);
+        const auto geometry_root = [](const Entity& entity) {
+            return entity.type == "wall" || entity.type == "measurement_linework" ||
+                is_closed_boundary_entity(entity.type);
+        };
+        bool supported_selection = original && geometry_root(*original);
+        QString selection_diagnostic;
+        std::optional<Vec2> group_pivot;
+        const bool site_group = group && siteCanvas(m_architecturalCanvas);
+        if (group) {
+            try {
+                if (std::any_of(selection_presentations.begin(),selection_presentations.end(),[](const auto& identity) {
+                    return !identity.presentation_key.isEmpty();
+                })) throw std::invalid_argument("The entire selection includes an embedded presentation. Numeric group Transform supports persisted walls, closed areas and measured lines only.");
+                if (!original || !selection.contains(id_from(original->id)))
+                    throw std::invalid_argument("The primary object is unavailable in the complete selection. Select the group again before transforming it.");
+                Boundary geometry;
+                const auto visible = visible_project_entities_with_phase(source, m_view_filter);
+                for (const auto& id : selection) {
+                    const auto found = source.entities().find(id.toStdString());
+                    if (found == source.entities().end() || !geometry_root(found->second))
+                        throw std::invalid_argument("The entire selection is not supported by numeric Transform. Select only persisted walls, closed areas and measured lines. Architectural and presentation groups are not supported here.");
+                    if (!visible.contains(found->first))
+                        throw std::invalid_argument("A selected object is outside the current visible source. Reopen Transform with a visible selection.");
+                    const auto& entity = found->second;
+                    if (entity.type == "wall") {
+                        const auto baseline = read_required_segment(entity.properties, "baseline");
+                        if (!baseline) throw std::invalid_argument("A selected wall has no canonical axis geometry.");
+                        geometry.push_back(*baseline);
+                    } else if (entity.type == "measurement_linework") {
+                        for (const auto& edge : resolve_dimension_geometry_owner(entity).segments)
+                            geometry.push_back(edge.segment);
+                    } else {
+                        const auto boundary = read_boundary(entity.properties);
+                        if (boundary.empty()) throw std::invalid_argument("A selected area has no canonical outline geometry.");
+                        geometry.insert(geometry.end(), boundary.begin(), boundary.end());
+                    }
+                }
+                if (geometry.empty()) throw std::invalid_argument("The selection has no canonical plan geometry.");
+                const auto bounds = boundary_bounds(geometry);
+                group_pivot = Vec2{std::midpoint(bounds.minimum.x, bounds.maximum.x),
+                    std::midpoint(bounds.minimum.y, bounds.maximum.y)};
+                if (site_group) {
+                    captureSiteEdit(m_architecturalCanvas);
+                    (void)siteEditFrame(selection);
+                }
+                supported_selection = true;
+            } catch (const std::exception& error) {
+                supported_selection = false;
+                selection_diagnostic = QString::fromUtf8(error.what());
+            }
+        }
+        const auto site_generation = m_site_edit_generation;
+        const auto site_publication_generation = m_site_publication_generation;
+        const auto context_current = [&] {
+            if (!sourceEditAuthorityUnchanged(authority)) return false;
+            if (group && selection_canvas->selectedEntityPresentations() != selection_presentations) {
+                setError(QStringLiteral("The selected presentations changed. Reopen Transform to review the complete selection."));
+                return false;
+            }
+            if (group && hasPendingPlacementEdit()) {
+                setError(QStringLiteral("Finish or cancel the active drawing or placement before transforming the selection."));
+                return false;
+            }
+            if (site_group) {
+                try {
+                    requireSiteEditCurrent();
+                    (void)siteEditFrame(selection);
+                    if (site_generation != m_site_edit_generation ||
+                        site_publication_generation != m_site_publication_generation)
+                        throw std::invalid_argument("The Site Plan frame changed. Reopen Transform.");
+                } catch (const std::exception& error) {
+                    setError(QString::fromUtf8(error.what()));
+                    return false;
+                }
+            }
+            return true;
+        };
         std::optional<std::pair<Command, std::string>> candidate_command;
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -10770,7 +10940,8 @@ public:
         dialog.setWindowTitle(QStringLiteral("Transform selection"));
         dialog.resize(520, 330);
         auto* layout = new QVBoxLayout(&dialog);
-        auto* help = new QLabel(QStringLiteral(
+        auto* help = new QLabel(group ? QStringLiteral(
+            "Rotate or flip all %1 selected objects around their combined center. X/Y offsets use the project's plan coordinates.").arg(selection.size()) : QStringLiteral(
             "Pivot: area or measured-line bounds center, or wall endpoint midpoint. Rotation is in degrees; offsets use the current input units."),
             &dialog);
         help->setWordWrap(true);
@@ -10795,9 +10966,12 @@ public:
         flip_vertical->setObjectName(QStringLiteral("boundaryFlipVertical"));
         layout->addWidget(flip_horizontal);
         layout->addWidget(flip_vertical);
-        auto* clone = new QCheckBox(QStringLiteral("Create a copy"), &dialog);
-        clone->setObjectName(QStringLiteral("boundaryClone"));
-        layout->addWidget(clone);
+        QCheckBox* clone = nullptr;
+        if (!group) {
+            clone = new QCheckBox(QStringLiteral("Create a copy"), &dialog);
+            clone->setObjectName(QStringLiteral("boundaryClone"));
+            layout->addWidget(clone);
+        }
         PlanCanvas* preview = nullptr;
         if (supported_selection) {
             preview = new PlanCanvas(&dialog);
@@ -10818,6 +10992,7 @@ public:
         freedom->setWordWrap(true);
         freedom->setTextFormat(Qt::PlainText);
         freedom->setToolTip(persistentFreedomHelp());
+        freedom->setVisible(!group);
         layout->addWidget(freedom);
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("boundaryTransformStatus"));
@@ -10833,16 +11008,44 @@ public:
             try {
                 if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
                 if (m_boundary_session) throw std::invalid_argument("Finish or cancel the active boundary before transforming the selection.");
-                if (!modalContextUnchanged(context)) throw std::invalid_argument(lastError().toStdString());
-                auto candidate = makeSelectedTransformCommand(source,*original,rotation->text(),
-                    flip_horizontal->isChecked(),flip_vertical->isChecked(),offset_x->text(),offset_y->text(),clone->isChecked());
+                if (!context_current()) throw std::invalid_argument(lastError().toStdString());
+                auto candidate = [&]() -> std::pair<Command, std::string> {
+                    if (!group) return makeSelectedTransformCommand(source,*original,rotation->text(),
+                        flip_horizontal->isChecked(),flip_vertical->isChecked(),offset_x->text(),offset_y->text(),clone->isChecked());
+                    bool valid = rotation->text().trimmed().isEmpty();
+                    const auto degrees = valid ? 0.0 : rotation->text().trimmed().toDouble(&valid);
+                    if (!valid || !std::isfinite(degrees) || std::abs(degrees) > 360000.0)
+                        throw std::invalid_argument("Rotation must be a finite value between -360000 and 360000 degrees.");
+                    const auto offset = [&](const QString& text) {
+                        const auto value = text.trimmed().isEmpty() ? 0.0 :
+                            parse_quantity(text.trimmed().toStdString(), context.metric_units ? Unit::metre : Unit::foot).metres;
+                        if (!std::isfinite(value)) throw std::invalid_argument("Transform offsets must be finite.");
+                        return value;
+                    };
+                    // Numeric values already describe source-plan coordinates;
+                    // applying the Site presentation inverse would transform twice.
+                    auto angle = std::remainder(degrees, 360.0);
+                    auto horizontal = flip_horizontal->isChecked();
+                    auto vertical = flip_vertical->isChecked();
+                    if (horizontal && vertical) {
+                        angle = std::remainder(angle + 180.0, 360.0);
+                        horizontal = vertical = false;
+                    }
+                    const PlanarTransform transform{*group_pivot, angle * std::numbers::pi / 180.0,
+                        horizontal, vertical,
+                        {offset(offset_x->text()), offset(offset_y->text())}};
+                    return {makeSelectionGeometryTransformCommand(source, selection, transform), original->id};
+                }();
                 candidate.first = augmentAuthoredCommand(candidate.first, source);
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
                 const auto proposed = changes && changes->entity_changes.empty() ? source :
                     Document::preview_command(source, candidate.first);
                 std::vector<CanvasEntity> geometry;
                 std::vector<CanvasLabel> labels;
+                std::array<std::set<std::string, std::less<>>, 2> preview_ids;
                 const auto add_owner = [&](const DocumentSnapshot& snapshot, const std::string& root, bool selected) {
+                    auto& ids = preview_ids[selected ? 1 : 0];
+                    if (!ids.insert(root).second) return;
                     const auto& root_entity = snapshot.entities().at(root);
                     if(root_entity.type=="measurement_linework") {
                         Boundary path;
@@ -10872,6 +11075,7 @@ public:
                     wall_preview.stroke_segments = plan.strokes;
                     geometry.push_back(std::move(wall_preview));
                     for (const auto* opening : openings) {
+                        if (!ids.insert(opening->id).second) continue;
                         const auto found = std::find_if(wall.openings.begin(), wall.openings.end(),
                             [&](const auto& item) { return item.id == opening->id; });
                         if (found == wall.openings.end()) throw std::invalid_argument("Opening lost its preview host.");
@@ -10892,11 +11096,40 @@ public:
                         }
                     }
                 };
-                const auto add_graph = [&](const DocumentSnapshot& snapshot,const std::string& root,bool selected) {
-                    const auto graph=independentAreaCopyGraph(snapshot,clipboard_entities_for_selection(snapshot,root));
+                const auto add_graph = [&](const DocumentSnapshot& snapshot,const QStringList& roots,bool selected) {
+                    std::vector<Entity> seeds;
+                    std::set<std::string, std::less<>> seed_ids;
+                    const auto add_seed = [&](const Entity& entity) {
+                        if (seed_ids.insert(entity.id).second) seeds.push_back(entity);
+                    };
+                    for (const auto& root : roots)
+                        for (const auto& entity : clipboard_entities_for_selection(snapshot, root.toStdString())) add_seed(entity);
+                    if (group) {
+                        // Typed commands may solve connected owners or refresh
+                        // measured areas beyond the selected roots. Show every
+                        // changed drawable owner and its dimensions on both sides.
+                        for (const auto& [id, entity] : snapshot.entities()) {
+                            const auto before = source.entities().find(id);
+                            const auto after = proposed.entities().find(id);
+                            if (before != source.entities().end() && after != proposed.entities().end() &&
+                                before->second == after->second) continue;
+                            if (geometry_root(entity) || can_recognize_boundary_dimension_entity_type(entity.type)) add_seed(entity);
+                        }
+                    }
+                    auto graph = group && changes && changes->entity_changes.empty()
+                        ? std::move(seeds) : independentAreaCopyGraph(snapshot,std::move(seeds),true,group);
+                    std::set<std::string, std::less<>> graph_ids;
+                    for (const auto& entity : graph) graph_ids.insert(entity.id);
+                    for (std::size_t cursor = 0; group && cursor < graph.size(); ++cursor) {
+                        const auto entity = graph[cursor];
+                        if (!geometry_root(entity)) continue;
+                        for (const auto& dependency : clipboard_entities_for_selection(snapshot, entity.id))
+                            if (graph_ids.insert(dependency.id).second) graph.push_back(dependency);
+                    }
                     for (const auto& entity : graph) {
-                        if (is_closed_boundary_entity(entity.type) || entity.type=="wall" || entity.type=="measurement_linework") add_owner(snapshot,entity.id,selected);
+                        if (geometry_root(entity)) add_owner(snapshot,entity.id,selected);
                         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+                        if (!preview_ids[selected ? 1 : 0].insert(entity.id).second) continue;
                         const auto decoded=decode_boundary_dimension_entity(entity);
                         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                         auto projection=project_boundary_dimension(*decoded.dimension,
@@ -10909,12 +11142,12 @@ public:
                         labels.push_back(std::move(projection.label));
                     }
                 };
-                add_graph(source, original->id, false);
-                add_graph(proposed, candidate.second, true);
+                add_graph(source, group ? selection : QStringList{id_from(original->id)}, false);
+                add_graph(proposed, group ? selection : QStringList{id_from(candidate.second)}, true);
                 preview->setEntities(std::move(geometry));
                 preview->setLabels(std::move(labels));
                 preview->fitView();
-                freedom->setText(persistentFreedomSummary(source, proposed, original->id, candidate.second));
+                if (!group) freedom->setText(persistentFreedomSummary(source, proposed, original->id, candidate.second));
                 candidate_command = std::move(candidate);
                 status->clear();
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
@@ -10928,13 +11161,14 @@ public:
         if (supported_selection) {
             for (auto* field : {rotation, offset_x, offset_y})
                 QObject::connect(field, &QLineEdit::textChanged, &dialog, update_preview);
-            for (auto* field : {flip_horizontal, flip_vertical, clone})
+            for (auto* field : {flip_horizontal, flip_vertical})
                 QObject::connect(field, &QCheckBox::toggled, &dialog, update_preview);
+            if (clone) QObject::connect(clone, &QCheckBox::toggled, &dialog, update_preview);
             update_preview();
         }
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
-            if (!modalContextUnchanged(context)) {
+            if (!context_current()) {
                 status->setText(lastError());
                 if (supported_selection) {
                     candidate_command.reset();
@@ -10952,6 +11186,7 @@ public:
                     if (!changes || !changes->entity_changes.empty()) {
                         applyAuthoredCommand(candidate_command->first);
                         m_selected_id = id_from(candidate_command->second);
+                        if (group) m_selected_ids = selection;
                         refresh();
                     }
                     clearError();
@@ -10962,11 +11197,25 @@ public:
                 return;
             }
         });
-        if (!selectedEntity().has_value() ||
-            (!is_closed_boundary_entity(selectedEntity()->type) && selectedEntity()->type != "wall")) {
-            status->setText(QStringLiteral("Select a wall or an identified closed boundary first."));
+        if (!supported_selection) {
+            status->setText(selection_diagnostic.isEmpty()
+                ? QStringLiteral("Select a wall, measured line or an identified closed boundary first.")
+                : selection_diagnostic);
             buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
         }
+        QTimer source_guard(&dialog);
+        source_guard.setInterval(100);
+        QObject::connect(&source_guard, &QTimer::timeout, &dialog, [&] {
+            if (candidate_command && !context_current()) {
+                candidate_command.reset();
+                freedom->clear();
+                preview->setEntities({});
+                preview->setLabels({});
+                status->setText(lastError());
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            }
+        });
+        source_guard.start();
         dialog.exec();
     }
 
@@ -25038,9 +25287,11 @@ public:
 
     static std::vector<Entity> independentAreaCopyGraph(const DocumentSnapshot& snapshot,
                                                 std::vector<Entity> graph,
-                                                bool include_constraints=true) {
-        if (std::none_of(graph.begin(),graph.end(),[](const auto& entity) {
-                return is_closed_boundary_entity(entity.type) || entity.type == "measurement_linework";
+                                                bool include_constraints=true,
+                                                bool include_wall_roots=false) {
+        if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity) {
+                return is_closed_boundary_entity(entity.type) || entity.type == "measurement_linework" ||
+                    (include_wall_roots && entity.type == "wall");
             }))
             return graph;
         std::set<std::string, std::less<>> ids;

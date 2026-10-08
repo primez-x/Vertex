@@ -208,6 +208,9 @@
   right-click without dragging cancels a pending drawing or new symbol placement;
   already placed walls and symbols remain. With no pending action, it opens the
   relevant context menu.</p>
+  <p>Vertical wheel or touchpad movement zooms about the pointer. Horizontal-only
+  touchpad movement or a tilt wheel pans the plan left and right while retaining
+  a pending drawing or placement.</p>
   <p>A pen uses the same plan controls through the buttons reported by its
   Windows driver. The tip uses left-click; a barrel mapped to right-click opens
   context actions or cancels a pending step, and dragging it pans. A
@@ -270,6 +273,12 @@
   refused without changing either area. Releasing while the final preview is
   pending waits for that proposal; it cannot apply an earlier angle. Returning
   to the original angle adds no edit.</p>
+  <p>Ctrl-select walls, completed areas or measured lines and use
+  <strong>Transform selection</strong> to rotate, flip or offset that group
+  around its combined center. X/Y offsets use the project's plan coordinates.
+  Review all changed geometry before Apply; the complete operation is one
+  Undo step. An unsupported item in the group blocks the whole numerical
+  operation rather than editing one selected object.</p>
   <p>Area, measured-line and geometric assembly controls also work in Site Plan.
   The building's Site placement stays fixed while the selected source geometry
   changes; related callouts and calibrated reference images retain their own
