@@ -14,6 +14,36 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 canvas wall-group rotation and mirrored room consequences
+
+The source now exposes a rotation grip for an unambiguous physical wall group in
+horizontal measurement and architectural plans. The frame follows a deterministic
+selected wall's actual baseline or saved axes and analytically encloses every
+selected wall. Press captures the full selection/presentation identities and
+immutable displayed pivot. The existing geometry worker prepares the actual
+rigid or joint command and its full history; deferred release uses that retained
+proposal and the same atomic room-review publication. Group resize remains a
+separate operation; Site and vertical views do not offer this rotation grip.
+
+Common angles snap in 45-degree steps, Shift permits fine rotation, and the
+selection displays its live angle. Exact preview completion requires each
+selected wall's identity; missing, ambiguous, stale or incomplete proposals
+refuse. Cancellation and source, selection, callback or capability changes
+invalidate the gesture. Interactive projection retains real wall baselines for
+every wall so group eligibility does not depend on the last-clicked member.
+
+Numerical in-place wall mirrors now enter room review rather than bypass it.
+Captured input values include mirror and copy choices, and a changed choice
+invalidates the accepted proposal. Original command operators and dimensions
+remain authoritative; the room wrapper does not manufacture reflected geometry.
+Copy, mixed-selection, Site and semantic phase room consequences remain open.
+
+Independent source review approved the integrated canvas/controller batch with
+no required P1/P2 defect or obvious source-level compile inconsistency proved.
+No builds, tests, probes, launches, packages or installations run. Compilation,
+interaction, deferred release, cancellation, Undo and persistence remain
+unverified; the installed candidate stays unchanged.
+
 ### October 8 wall-group movement and room consequences
 
 Room composition now retains an intact joint wall command, covering its original
@@ -36,9 +66,9 @@ Independent source review found and then approved corrections for the ordinary
 group producer and selection-order bypass. No further required P1/P2 source issue
 was proved. No builds, tests, probes, launches, packages or installations run.
 Compilation, interaction, cancellation, Undo and persistence remain unverified.
-The installed candidate stays unchanged. Canvas group rotation handles, mirrors,
-copies, mixed selections, Site room consequences and phase demolition remain
-separate implementation work.
+The installed candidate stays unchanged. Canvas group rotation and numerical
+mirror room consequences are recorded above. Copies, mixed selections, Site
+room consequences and phase demolition remain separate implementation work.
 
 ### October 8 grouped wall Delete and Cut implementation
 

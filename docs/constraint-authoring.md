@@ -173,6 +173,17 @@ their own qualified placement offsets. Selected membership is compared without
 requiring Ctrl-click order to match canvas presentation order; duplicate or
 different membership refuses while the original primary stays authoritative.
 
+Horizontal-plan wall groups expose a canvas rotation grip through the same
+retained geometry worker used by single objects. Its frame and pivot are derived
+from actual selected wall presentations before preview; an exact completion must
+cover every captured wall. The group has no resize grip or affine fallback.
+45-degree snapping, Shift fine adjustment and live degrees use the existing
+rotation contract. Source replacement, a different view or selection, cancellation
+and stale serials discard authority. Room consequences retain the worker's exact
+rigid/joint command and full prepared history in one event. Numerical in-place
+wall mirrors also require room review; captured checkbox choices participate in
+the input fence. These source changes do not add a new native format dialect.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

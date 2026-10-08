@@ -601,6 +601,19 @@ public:
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
     void setEntityTransformStarted(std::function<void(QString)> callback);
+    // Physical wall groups use only host-admitted rigid rotation proposals.
+    // The host enables this in editable horizontal plans; there is no affine
+    // geometry fallback, group resize, or canvas-owned document mutation.
+    void setWallGroupRotationEnabled(bool enabled);
+    // Immutable canvas-world pivot is available before the start callback;
+    // outside a gesture this is the eligible retained group's frame center.
+    [[nodiscard]] std::optional<Vec2> wallGroupRotationPivot() const;
+    void setEntitiesTransformStarted(std::function<void(QStringList)> callback);
+    // Relative canvas-world radians and the captured pivot. Mark/complete use
+    // the shared transform serial. Unmarked nullopt/empty rejects the group.
+    void setEntitiesTransformPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QStringList, double, Vec2, std::uint64_t)> callback);
+    void setEntitiesTransformRequested(std::function<bool(QStringList, double, Vec2)> callback);
     // Capture authority at an opening-width or boundary-vertex press.
     void setEntityEditGestureStarted(std::function<void(QString)> callback);
     // Admit semantic input against the exact displayed source before any hit
@@ -798,6 +811,7 @@ private:
         const CanvasEntity& entity) const;
     [[nodiscard]] std::optional<CanvasSelectionFrame> selectionAxes() const;
     [[nodiscard]] std::optional<CanvasSelectionFrame> computeSelectionAxes() const;
+    [[nodiscard]] std::optional<CanvasSelectionFrame> wallGroupRotationAxes() const;
     [[nodiscard]] const std::vector<CanvasLabel>& positionedLabels(
         const QFont& base_font, const QPaintDevice* device, double scale,
         double dpi, bool output, bool content_only = false, Vec2 layout_origin = {},
@@ -1180,6 +1194,10 @@ private:
     std::optional<double> m_transform_source_rotation;
     double m_transform_source_rotation_direction{1.0};
     QString m_transform_source_id;
+    QStringList m_transform_group_ids;
+    std::vector<CanvasEntityPresentationIdentity> m_transform_group_presentations;
+    std::optional<CanvasSelectionFrame> m_transform_group_frame;
+    bool m_wall_group_rotation_enabled{};
     bool m_selection_controls_visible{true};
     Vec2 m_transform_pivot{};
     std::vector<CanvasEntity> m_transform_entities_preview;
@@ -1190,6 +1208,7 @@ private:
     bool m_transform_preview_valid{};
     bool m_transform_preview_pending{};
     bool m_transform_preview_request_in_progress{};
+    bool m_transform_preview_completed{};
     bool m_transform_release_pending{};
     std::optional<VertexHandleHit> m_vertex_move_handle;
     std::optional<Vec2> m_vertex_move_press_pointer;
@@ -1265,6 +1284,10 @@ private:
         QStringList, Vec2, std::uint64_t)> m_entities_move_preview_requested;
     std::function<bool(QString, double, double)> m_entity_transform_requested;
     std::function<void(QString)> m_entity_transform_started;
+    std::function<void(QStringList)> m_entities_transform_started;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QStringList, double, Vec2, std::uint64_t)> m_entities_transform_preview_requested;
+    std::function<bool(QStringList, double, Vec2)> m_entities_transform_requested;
     std::function<void(QString)> m_entity_edit_gesture_started;
     std::function<bool(bool)> m_interaction_admission_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(
