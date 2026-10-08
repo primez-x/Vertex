@@ -129,6 +129,17 @@ proofs. Envelope 28/native 80/extraction 78 protect single reviews, and a batch
 containing these children also requires native 80. This does not admit arbitrary
 transform wrappers or independently moving physical-room boundaries.
 
+Single-wall numerical offset/rotation edits retain both the exact authored
+command and its admitted snapshot. Typing new values immediately retires the
+previous proposal and Apply authority. Affected rooms are reviewed before the
+wall is published; cancelling that review leaves the project unchanged. The
+canvas wall rotation release uses the ordinary geometry-transform capture,
+retaining its actual prepared command and complete candidate history. It
+consumes gesture tickets before nested review while keeping source, recovery
+mirror, selection, viewport and replacement-proposal fences. Acceptance applies
+only the reviewed composite once. This route excludes Site, mixed selections,
+copies, mirrors and scaling; those room consequences remain separate work.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

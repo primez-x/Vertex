@@ -5384,6 +5384,7 @@ class MainWindow::Impl {
         OrdinaryGeometryTransformIntent intent;
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
+        Command command;
     };
     struct SiteWallMovePreviewCommand {
         std::shared_ptr<const SiteTransformPreviewCapture> capture;
@@ -5555,6 +5556,7 @@ class MainWindow::Impl {
         std::optional<PresentationTransformIntent> presentation_intent;
         std::shared_ptr<const OrdinaryGeometryTransformCapture> ordinary_transform_capture;
         std::optional<OrdinaryGeometryTransformIntent> ordinary_transform_intent;
+        std::shared_ptr<std::optional<Command>> ordinary_transform_command;
     };
 
 public:
@@ -7410,6 +7412,7 @@ public:
                     "Finish or cancel the active boundary before transforming a selected boundary.");
             }
             const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
             const auto found = source.entities().find(m_selected_id.toStdString());
             if (found == source.entities().end() ||
                 (found->second.type != "wall" && found->second.type!="measurement_linework" && !is_closed_boundary_entity(found->second.type))) {
@@ -7420,8 +7423,16 @@ public:
             command = augmentAuthoredCommand(command, source);
             const auto* changes = std::get_if<ApplyEntityChanges>(&command);
             if (!changes || !changes->entity_changes.empty()) {
-                (void)Document::preview_command(source, command);
-                applyAuthoredCommand(command);
+                const auto candidate = Document::preview_command(source, command);
+                if (!clone && !flip_horizontal && !flip_vertical && found->second.type == "wall" &&
+                    authority.selection.size() == 1 &&
+                    !siteCanvas(m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) &&
+                    affectedPhysicalWallRooms(source, candidate.entities(), found->first) != 0) {
+                    const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
+                        found->first, authority, owner);
+                    if (!reviewed) { clearError(); refreshInspector(); return false; }
+                    applyDocumentCommand(*reviewed);
+                } else applyAuthoredCommand(command);
                 m_selected_id = id_from(root);
                 refresh();
             }
@@ -7700,6 +7711,7 @@ public:
                     "Finish or cancel the active boundary before transforming an architectural object.");
             }
             const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
             if (geometric_assembly_for_child(source, m_selected_id.toStdString())) {
                 auto [command, root] = embeddedAssemblyTransformCommand(source, m_selected_id.toStdString(),
                     parseArchitecturalTransform(rotation_degrees, offset_x, offset_y, offset_z, uniform_scale), clone);
@@ -7721,8 +7733,16 @@ public:
                 architecturalObjectTransformCommand(source,found->second,transaction), source);
             if (const auto* changes=std::get_if<ApplyEntityChanges>(&command);
                 changes && changes->entity_changes.empty()) { clearError(); return true; }
-            (void)Document::preview_command(source,command);
-            applyAuthoredCommand(command);
+            const auto candidate = Document::preview_command(source,command);
+            if (!clone && found->second.type == "wall" && authority.selection.size() == 1 &&
+                parseArchitecturalTransform(rotation_degrees, offset_x, offset_y, offset_z, uniform_scale).scale == 1.0 &&
+                !siteCanvas(m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) &&
+                affectedPhysicalWallRooms(source, candidate.entities(), found->first) != 0) {
+                const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
+                    found->first, authority, owner);
+                if (!reviewed) { clearError(); refreshInspector(); return false; }
+                applyDocumentCommand(*reviewed);
+            } else applyAuthoredCommand(command);
             m_selected_id = id_from(root);
             clearError();
             refresh();
@@ -11836,8 +11856,16 @@ public:
         auto* apply = buttons->button(QDialogButtonBox::Apply);
 
         std::optional<std::pair<Command, std::string>> candidate_command;
+        std::optional<DocumentSnapshot> candidate_snapshot;
+        std::uint64_t input_generation{};
+        bool room_review_active{};
+        const auto input_values = [&] {
+            return QStringList{rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()};
+        };
         const auto update_preview = [&] {
+            ++input_generation;
             candidate_command.reset();
+            candidate_snapshot.reset();
             try {
                 if (!m_document->is_editable())
                     throw std::invalid_argument("This document is read-only.");
@@ -11847,7 +11875,7 @@ public:
                     candidate_command = embeddedAssemblyTransformCommand(source, context.selected_id.toStdString(),
                         parseArchitecturalTransform(rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()),
                         clone->isChecked(),flip_horizontal->isChecked(),flip_vertical->isChecked());
-                    (void)Document::preview_command(source, candidate_command->first);
+                    candidate_snapshot = Document::preview_command(source, candidate_command->first);
                 } else {
                     auto [command, root] = [&]() -> std::pair<Command,std::string> {
                         if (flip_horizontal->isChecked() || flip_vertical->isChecked())
@@ -11865,14 +11893,13 @@ public:
                     if (can_recognize_building_entity_type(preview_entity->second.type))
                         (void)decode_building_entity(preview_entity->second);
                     candidate_command = std::pair{std::move(command), root};
+                    candidate_snapshot = preview;
                 }
-                status->setText(QStringLiteral("Preview ready at model revision %1. Apply to commit %2.")
-                                    .arg(source.revision())
-                                    .arg(clone->isChecked() ? QStringLiteral("a transformed copy")
-                                                             : QStringLiteral("the object transform")));
+                status->clear();
                 apply->setEnabled(true);
             } catch (const std::exception& error) {
                 candidate_command.reset();
+                candidate_snapshot.reset();
                 status->setText(QStringLiteral("Preview: %1").arg(QString::fromUtf8(error.what())));
                 apply->setEnabled(false);
             }
@@ -11887,12 +11914,38 @@ public:
             QObject::connect(field, &QCheckBox::toggled, &dialog,
                              [&update_preview](bool) { update_preview(); });
         QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
+            if (room_review_active) return;
             if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority)) {
                 update_preview();
                 return;
             }
-            if (!candidate_command) return;
+            if (!candidate_command || !candidate_snapshot) return;
             try {
+                if (!embedded && original->type == "wall" && authority.selection.size() == 1 &&
+                    !clone->isChecked() && !flip_horizontal->isChecked() && !flip_vertical->isChecked() &&
+                    parseArchitecturalTransform(rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()).scale == 1.0 &&
+                    !siteCanvas(m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) &&
+                    affectedPhysicalWallRooms(source, candidate_snapshot->entities(), original->id) != 0) {
+                    const auto retained = *candidate_command;
+                    const auto admitted = *candidate_snapshot;
+                    const auto generation = input_generation;
+                    const auto values = input_values();
+                    const auto input_fence = [&] {
+                        if (generation != input_generation || values != input_values() || clone->isChecked() ||
+                            flip_horizontal->isChecked() || flip_vertical->isChecked())
+                            throw std::invalid_argument("The entered transform changed during room review. Preview it again.");
+                    };
+                    candidate_command.reset(); candidate_snapshot.reset(); apply->setEnabled(false);
+                    room_review_active = true;
+                    const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, admitted, retained.first,
+                        original->id, authority, &dialog, input_fence);
+                    room_review_active = false;
+                    if (!reviewed) { clearError(); update_preview(); return; }
+                    input_fence();
+                    applyDocumentCommand(*reviewed);
+                    m_selected_id = id_from(retained.second); m_selected_ids = {m_selected_id};
+                    clearError(); refresh(); dialog.accept(); return;
+                }
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate_command->first);
                 if (!changes || !changes->entity_changes.empty()) {
                     applyAuthoredCommand(candidate_command->first);
@@ -11905,11 +11958,23 @@ public:
                 clearError();
                 dialog.accept();
             } catch (const std::exception& error) {
+                room_review_active = false;
+                candidate_command.reset(); candidate_snapshot.reset(); apply->setEnabled(false);
                 status->setText(QString::fromUtf8(error.what()));
             }
         });
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         update_preview();
+        QTimer source_guard(&dialog);
+        source_guard.setInterval(100);
+        QObject::connect(&source_guard, &QTimer::timeout, &dialog, [&] {
+            if (candidate_command && (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))) {
+                candidate_command.reset(); candidate_snapshot.reset();
+                apply->setEnabled(false);
+                status->setText(QStringLiteral("The project or selection changed. Reopen the transform editor."));
+            }
+        });
+        source_guard.start();
         dialog.exec();
     }
 
@@ -12293,6 +12358,9 @@ public:
         std::optional<std::pair<Command, std::string>> candidate_command;
         std::map<std::string,std::string,std::less<>> candidate_copy_ids;
         std::map<std::pair<std::string,std::string>,std::string> candidate_copy_children;
+        std::optional<DocumentSnapshot> candidate_snapshot;
+        std::uint64_t input_generation{};
+        bool room_review_active{};
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("boundaryTransformDialog"));
@@ -12360,9 +12428,14 @@ public:
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
         buttons->setObjectName(QStringLiteral("boundaryTransformButtons"));
         layout->addWidget(buttons);
+        const auto input_values = [&] {
+            return QStringList{rotation->text(), offset_x->text(), offset_y->text()};
+        };
         const auto update_preview = [&] {
             if (!supported_selection) return;
+            ++input_generation;
             candidate_command.reset();
+            candidate_snapshot.reset();
             candidate_copy_ids.clear();
             candidate_copy_children.clear();
             freedom->clear();
@@ -13068,10 +13141,12 @@ public:
                 preview->fitView();
                 if (!group) freedom->setText(persistentFreedomSummary(source, proposed, original->id, candidate.second));
                 candidate_command = std::move(candidate);
+                candidate_snapshot = proposed;
                 status->clear();
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
             } catch (const Standard_Failure& error) {
                 candidate_command.reset();
+                candidate_snapshot.reset();
                 preview->setEntities({});
                 preview->setLabels({});
                 preview->setReferences({});
@@ -13080,6 +13155,7 @@ public:
                     "The complete copied physical geometry could not be admitted."));
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             } catch (const std::exception& error) {
+                candidate_command.reset(); candidate_snapshot.reset();
                 preview->setEntities({});
                 preview->setLabels({});
                 preview->setReferences({});
@@ -13095,6 +13171,8 @@ public:
             // Never apply the previous values while a replacement preview is
             // pending. Coalesce typing before preparing the complete graph.
             candidate_command.reset();
+            candidate_snapshot.reset();
+            ++input_generation;
             candidate_copy_ids.clear();
             candidate_copy_children.clear();
             freedom->clear();
@@ -13115,10 +13193,12 @@ public:
         }
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+            if (room_review_active) return;
             if (!context_current()) {
                 status->setText(lastError());
                 if (supported_selection) {
                     candidate_command.reset();
+                    candidate_snapshot.reset();
                     freedom->clear();
                     preview->setEntities({});
                     preview->setLabels({});
@@ -13128,8 +13208,33 @@ public:
                 return;
             }
             if (supported_selection) {
-                if (!candidate_command) return;
+                if (!candidate_command || !candidate_snapshot) return;
                 try {
+                    if (!group && original->type == "wall" && authority.selection.size() == 1 &&
+                        !clone->isChecked() && !flip_horizontal->isChecked() && !flip_vertical->isChecked() &&
+                        !siteCanvas(selection_canvas) &&
+                        affectedPhysicalWallRooms(source, candidate_snapshot->entities(), original->id) != 0) {
+                        const auto retained = *candidate_command;
+                        const auto admitted = *candidate_snapshot;
+                        const auto generation = input_generation;
+                        const auto values = input_values();
+                        const auto input_fence = [&] {
+                            if (generation != input_generation || values != input_values() || clone->isChecked() ||
+                                flip_horizontal->isChecked() || flip_vertical->isChecked() || preview_debounce.isActive())
+                                throw std::invalid_argument("The entered transform changed during room review. Preview it again.");
+                        };
+                        candidate_command.reset(); candidate_snapshot.reset();
+                        buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                        room_review_active = true;
+                        const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, admitted, retained.first,
+                            original->id, authority, &dialog, input_fence);
+                        room_review_active = false;
+                        if (!reviewed) { clearError(); update_preview(); return; }
+                        input_fence();
+                        applyDocumentCommand(*reviewed);
+                        m_selected_id = id_from(retained.second);
+                        clearError(); refresh(); dialog.accept(); return;
+                    }
                     const auto* changes = std::get_if<ApplyEntityChanges>(&candidate_command->first);
                     if (!changes || !changes->entity_changes.empty()) {
                         QStringList copied_selection;
@@ -13207,6 +13312,9 @@ public:
                     clearError();
                     dialog.accept();
                 } catch (const std::exception& error) {
+                    room_review_active = false;
+                    candidate_command.reset(); candidate_snapshot.reset();
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                     status->setText(QString::fromUtf8(error.what()));
                 }
                 return;
@@ -13223,6 +13331,7 @@ public:
         QObject::connect(&source_guard, &QTimer::timeout, &dialog, [&] {
             if (candidate_command && !context_current()) {
                 candidate_command.reset();
+                candidate_snapshot.reset();
                 freedom->clear();
                 preview->setEntities({});
                 preview->setLabels({});
@@ -24836,15 +24945,19 @@ public:
         const auto presentation_intent=request.presentation_intent;
         const auto ordinary_capture=request.ordinary_transform_capture;
         const auto ordinary_intent=request.ordinary_transform_intent;
+        const auto ordinary_command=request.ordinary_transform_command;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,plan_move_model_plan_labels,move_references,component_sources,edit_source,prepared_move,presentation_capture,presentation_intent,ordinary_capture,ordinary_intent]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,plan_move_model_plan_labels,move_references,component_sources,edit_source,prepared_move,presentation_capture,presentation_intent,ordinary_capture,ordinary_intent,ordinary_command]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (ordinary_capture && ordinary_intent && prepared_move) {
+                        if (!ordinary_command)
+                            throw std::invalid_argument("The geometric transform has no retained command output.");
                         const auto& intent=*ordinary_intent;
                         const auto command=ordinaryGeometryTransformCommand(*source,*ordinary_capture,intent);
                         if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(),{}};
                         const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
+                        *ordinary_command=command;
                         if (intent.scale==1.0 && intent.radians==0.0) {
                             VertexPreviewProjection projection;
                             projection.entities=*retained;projection.labels=*labels;
@@ -26213,6 +26326,7 @@ public:
             request.component_sources=capture->components;
             request.entity_transform_preview=true;
             request.ordinary_transform_capture=capture;request.ordinary_transform_intent=intent;
+            request.ordinary_transform_command=std::make_shared<std::optional<Command>>();
             request.model_edit_source=m_entity_transform_edit_source;
             request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
             clearError();
@@ -26855,9 +26969,11 @@ public:
             }
             if (request.entity_transform_preview) {
                 if (request.ordinary_transform_capture) {
-                    if (!request.ordinary_transform_intent) { reject(request);continue; }
+                    if (!request.ordinary_transform_intent || !request.ordinary_transform_command ||
+                        !*request.ordinary_transform_command) { reject(request);continue; }
                     m_ordinary_transform_preview=OrdinaryGeometryTransformPreview{request.ordinary_transform_capture,
-                        request.serial,*request.ordinary_transform_intent,request.model_edit_source,request.model_edit_prepared};
+                        request.serial,*request.ordinary_transform_intent,request.model_edit_source,request.model_edit_prepared,
+                        **request.ordinary_transform_command};
                     m_entity_transform_ready=true;
                     if (!request.canvas->completeEntityTransformPreview(request.serial,std::move(projection.entities),
                         std::move(projection.labels),std::move(projection.references))) reject(request);
@@ -27494,9 +27610,9 @@ public:
         const auto preview=std::move(m_ordinary_transform_preview);
         m_ordinary_transform_preview.reset();m_entity_transform_ready=false;
         const auto capture=m_ordinary_transform_capture;
-        const auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
         if (!preview || !capture || preview->capture!=capture || !preview->prepared ||
-            preview->edit_source!=m_entity_transform_edit_source || !entityTransformContextUnchanged() ||
+            !preview->edit_source || preview->edit_source!=m_entity_transform_edit_source || !entityTransformContextUnchanged() ||
             !m_document->is_editable() || !canvas || canvas!=m_entity_transform_canvas || capture->id!=id ||
             m_entity_transform_id!=id || m_entity_transform_axis_resize || m_selected_ids.size()!=1 || m_selected_ids.front()!=id ||
             canvas->entityTransformPreviewSerial()!=preview->serial || m_entity_transform_serial!=preview->serial ||
@@ -27510,6 +27626,102 @@ public:
             preview->intent.canvas_pivot.x!=m_entity_transform_pivot.x || preview->intent.canvas_pivot.y!=m_entity_transform_pivot.y)
             throw std::invalid_argument("The exact geometric transform preview or editing source changed. Start again.");
         const bool no_op=scale==1.0 && radians==0.0;
+        const auto source=m_entity_transform_source;
+        const auto selected=source->entities().find(id.toStdString());
+        if (!no_op && scale==1.0 && !siteCanvas(canvas) && !capture->site_input && !capture->embedded &&
+            selected!=source->entities().end() && selected->second.type=="wall") {
+            const auto prepared=preview->prepared;
+            const auto edit_source=preview->edit_source;
+            const auto candidate=[&] {
+                if (edit_source->workspace) {
+                    if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
+                        throw std::invalid_argument("The wall rotation's recovery authority changed.");
+                    return prepared->workspace->preview();
+                }
+                if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
+                    throw std::invalid_argument("The wall rotation's document authority changed.");
+                return prepared->document->preview();
+            }();
+            if (!affectedPhysicalWallRoomGroups(*source,candidate.entities(),selected->first).empty()) {
+                const auto command=preview->command;
+                // Retain the worker's exact admitted command and complete history;
+                // the release never constructs an alternate geometric proposal.
+                if (fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(candidate))
+                    throw std::invalid_argument("The wall rotation's admitted command or history changed.");
+                const auto authority=m_entity_transform_context;
+                const auto viewport=*m_entity_transform_viewport;
+                const auto release_serial=preview->serial;
+                const auto plan_publication=m_plan_publication_source;
+                const auto site_publication=m_site_publication_source;
+                const auto site_generation=m_site_edit_generation;
+                const auto site_publication_generation=m_site_publication_generation;
+                const auto native_publication=m_nativeModelView ? m_nativeModelView->preparationSourceSnapshot() : nullptr;
+                const auto original_job=[&](const PendingVertexPreview& request) {
+                    return request.entity_transform_preview && request.ordinary_transform_capture==capture &&
+                        request.canvas==viewport.canvas && request.source==source && request.authority==authority &&
+                        request.serial==release_serial && request.model_edit_source==edit_source &&
+                        request.model_edit_prepared==prepared;
+                };
+                const auto rotation_fence=[&] {
+                    // Modal focus and gesture serial changes are expected. The
+                    // original source, viewport and recovery head remain binding.
+                    if (!viewport.canvas || !viewport.canvas->isVisible() || siteCanvas(viewport.canvas) ||
+                        viewport.canvas->viewCenter().x!=viewport.center.x ||
+                        viewport.canvas->viewCenter().y!=viewport.center.y ||
+                        viewport.canvas->viewScale()!=viewport.zoom || viewport.canvas->size()!=viewport.size ||
+                        viewport.canvas->devicePixelRatioF()!=viewport.dpr ||
+                        viewport.canvas->navigationGeneration()!=viewport.navigation_generation ||
+                        viewport.canvas->font()!=capture->font || viewport.canvas->logicalDpiX()!=capture->dpi_x ||
+                        viewport.canvas->logicalDpiY()!=capture->dpi_y ||
+                        viewport.canvas->entityTransformPreviewPending() || !viewport.canvas->entityTransformPreview().empty() ||
+                        m_ordinary_transform_preview || m_ordinary_transform_capture || m_ordinary_transform_intent ||
+                        m_entity_transform_source || m_entity_transform_context || m_entity_transform_prepared ||
+                        m_entity_transform_edit_source || m_entity_transform_command || m_entity_transform_viewport ||
+                        m_entity_transform_site_capture || m_presentation_transform_capture || m_presentation_transform_preview ||
+                        m_presentation_transform_intent || m_plan_endpoint_capture || m_plan_endpoint_preview ||
+                        m_plan_move_capture || m_plan_move_preview || m_model_move_edit_source ||
+                        m_wall_move_source || m_wall_move_authority || m_vertex_preview_source || m_vertex_preview_authority ||
+                        m_pending_vertex_preview || (m_running_vertex_preview && !original_job(*m_running_vertex_preview)) ||
+                        m_pending_opening_preview || m_running_opening_preview || m_opening_preview_source ||
+                        plan_publication!=m_plan_publication_source || site_publication!=m_site_publication_source ||
+                        site_generation!=m_site_edit_generation || site_publication_generation!=m_site_publication_generation ||
+                        (m_nativeModelView && native_publication!=m_nativeModelView->preparationSourceSnapshot()) ||
+                        !sourceEditAuthorityCurrent(*authority))
+                        throw std::invalid_argument("The captured wall rotation view or proposal changed during room review.");
+                    if (edit_source->mirror && fullSnapshotDigest(m_document->snapshot())!=fullSnapshotDigest(*edit_source->mirror))
+                        throw std::invalid_argument("The project's save or recovery state changed during room review.");
+                };
+                if (m_pending_vertex_preview && !original_job(*m_pending_vertex_preview))
+                    throw std::invalid_argument("Another geometry proposal is pending; start the wall rotation again.");
+                if (m_running_vertex_preview && !original_job(*m_running_vertex_preview))
+                    throw std::invalid_argument("Another geometry preview is running; start the wall rotation again.");
+                m_pending_vertex_preview.reset();
+                if (m_running_vertex_preview) (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+                // Consume transient tickets before nested review. Only local
+                // copies retain the admitted source, candidate and command.
+                m_ordinary_transform_capture.reset(); m_ordinary_transform_intent.reset();
+                m_entity_transform_prepared.reset(); m_entity_transform_edit_source.reset();
+                m_entity_transform_command.reset(); m_entity_transform_ready=false;
+                m_entity_transform_source.reset(); m_entity_transform_context.reset();
+                m_entity_transform_viewport.reset(); m_entity_transform_frame.reset();
+                m_entity_transform_site_capture.reset(); m_entity_transform_canvas.clear();
+                m_entity_transform_document.reset(); m_entity_transform_id.clear(); m_entity_transform_selection.clear();
+                m_entity_transform_axis_resize=false; m_entity_transform_physical_rotation=false;
+                m_vertex_preview_source.reset(); m_vertex_preview_authority.reset();
+                m_vertex_preview_scene.reset(); m_vertex_preview_eligible.reset(); m_vertex_preview_labels.reset();
+                m_vertex_preview_appraisal_area_ids.reset(); m_vertex_preview_label_footprints.reset();
+                m_vertex_preview_component_bounds.reset(); m_vertex_preview_components.reset();
+                m_vertex_preview_references.reset(); m_vertex_preview_view_context.reset();
+                m_vertex_preview_canvas.clear(); m_vertex_preview_document.reset();
+                canvas->setEntities(canvas->entities());
+                const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,candidate,command,
+                    selected->first,*authority,owner,rotation_fence);
+                if (!reviewed) { clearError(); refreshInspector(); return false; }
+                rotation_fence();
+                applyDocumentCommand(*reviewed);
+                clearError(); refresh(); return true;
+            }
+        }
         if (!no_op) publishPreparedCanvasEdit(preview->prepared,preview->edit_source);
         clearError();if (!no_op) refresh();return true;
     }
@@ -53568,7 +53780,7 @@ public:
                 const auto found = source.entities().find(id);
                 if (found != source.entities().end()) {
                     const auto label = QString::fromStdString(found->second.properties.value("name", std::string{}));
-                    if (!label.isEmpty()) return label + QStringLiteral(" (%1)").arg(QString::fromStdString(id));
+                    if (!label.isEmpty()) return label;
                 }
                 return QString::fromStdString(id);
             };

@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 single-wall numerical transforms and canvas rotation review
+
+The actual boundary and architectural transform dialogs now retain an admitted
+snapshot with their exact command. A change to input values retires both and
+disables Apply until the replacement is ready. Existing singleton physical-wall
+offset/rotation proposals review affected rooms before publication. Cancel
+publishes nothing; acceptance applies one combined wall/room event.
+
+The canvas release integration is in the ordinary geometry-transform
+handler used by walls, with the worker's exact command retained beside its
+prepared candidate. The initial source/release checks remain; gesture tickets
+are consumed before modal review and original source, recovery mirror,
+selection, viewport and replacement-proposal fences remain authoritative.
+The independent source review identified an unreachable branch in the
+separate physical-object rotation handler. That branch was removed and the
+actual ordinary route corrected; the focused source recheck approved it.
+
+This source batch excludes Site, mixed/group selections, copies, mirrors,
+scaling and wall deletion/remodel consequences. Compilation, runtime
+cancellation, Undo and persistence remain unverified. No builds, tests, probes,
+launches, packages or installations ran; the installed candidate is unchanged.
+
 ### October 8 single-wall drag and qualified rigid room children
 
 Ordinary single-wall translation now checks retained-room consumers before
@@ -2444,7 +2466,8 @@ passes. No installed ACL, profile or firewall was changed.
    commit, guessed classification, silent identity reassignment or reference
    loss is permitted. Wall profiles/sloped tops/layers, ordinary length/endpoint editing,
    explicit connected curve construction and their atomic room reviews, including
-   multi-context/plane completion and ordinary single-wall drag, are
+   multi-context/plane completion, ordinary single-wall drag and the singleton
+   numerical/canvas rotation integration, are
    recorded above; do not restart them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent
