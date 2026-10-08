@@ -3,6 +3,7 @@
 #include "sketch/architecture.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/phase_roof_form_edit.hpp"
 #include "sketch/phase_roof_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
@@ -314,8 +315,10 @@ std::map<std::string, Entity, std::less<>> replay_roof_pose_entities(
     admit_joins(result, joins);
     return result;
 }
-Entity normalize_equivalent_roof_pose_inputs(const Entity& original, const Entity& candidate) {
-    auto normalized = normalize_equivalent_roof_inputs(original, candidate);
+Entity normalize_equivalent_roof_pose_inputs(const Entity& original, const Entity& candidate, bool allow_form_change) {
+    auto normalized = allow_form_change && original.properties.at("form") != candidate.properties.at("form")
+        ? normalize_equivalent_roof_form_inputs(original, candidate)
+        : normalize_equivalent_roof_inputs(original, candidate);
     for (const auto& coordinate : coordinates) {
         const double before = number(original.properties.at("base_position_m").at(coordinate.index));
         const double after = number(candidate.properties.at("base_position_m").at(coordinate.index));
@@ -323,10 +326,11 @@ Entity normalize_equivalent_roof_pose_inputs(const Entity& original, const Entit
     }
     return normalized;
 }
-std::optional<RoofPoseEditIntent> infer_roof_pose_edit(const Entity& original, const Entity& candidate) {
+std::optional<RoofPoseEditIntent> infer_roof_pose_edit(const Entity& original, const Entity& candidate, bool allow_form_change) {
     validate_roof_pose_source_entity(original);
     validate_roof_pose_source_entity(candidate);
-    if (original.id != candidate.id || original.type != candidate.type)
+    if (original.id != candidate.id || original.type != candidate.type ||
+        (!allow_form_change && original.properties.at("form") != candidate.properties.at("form")))
         invalid("Roof pose input inference cannot change owner identity or type");
     RoofPoseEditIntent intent;
     intent.roof_id = original.id;

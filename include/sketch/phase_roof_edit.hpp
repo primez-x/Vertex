@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sketch/phase_roof_form_edit.hpp"
 #include "sketch/phase_roof_opening_edit.hpp"
 #include "sketch/phase_roof_pose_edit.hpp"
 #include "sketch/phase_roof_profile_edit.hpp"
@@ -14,10 +15,13 @@ struct RoofEditIntent {
     std::optional<RoofProfileEditIntent> profile;
     std::optional<RoofOpeningEditIntent> openings;
     std::optional<RoofPoseEditIntent> pose;
+    std::optional<RoofFormEditIntent> form;
 };
 
 // Strict version one: version, roof_id, profile, openings, pose. At least one
 // nonnull typed component is required; all component owner IDs must agree.
+// Conversion uses strict version two: those five fields plus nonnull form,
+// with profile null. Historical same-form edits retain the exact v1 wire.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 

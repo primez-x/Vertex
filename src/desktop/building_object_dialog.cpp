@@ -386,12 +386,12 @@ public:
                 if (found == entities.end()) throw std::invalid_argument("The selected stair host is unavailable.");
                 (void)make_building_shape(*object, entities);
             }
-            const auto roof_edit = same_form_roof_edit(*object);
+            const auto roof_edit = typed_roof_edit(*object);
             if (roof_edit) {
                 // Every component binds the actual original. Admission happens
                 // after their independent deltas form one complete final roof.
                 candidate_entity = *original_entity;
-                if (roof_edit->profile || roof_edit->openings || roof_edit->pose)
+                if (roof_edit->form || roof_edit->profile || roof_edit->openings || roof_edit->pose)
                     candidate_entity = replay_roof_edit_entity(*original_entity, *roof_edit);
             } else if (original_entity.has_value()) {
                 const auto canonical = encode_building_entity(*object,
@@ -628,7 +628,12 @@ private:
             loading = false;
             rebuild_form();
             type_combo->setEnabled(false);
-            form_combo->setEnabled(false);
+            // Roof conversion is a typed edit within the locked roof family.
+            // Other families keep their existing form-specific lifecycle.
+            form_combo->setEnabled(type == "roof" &&
+                (std::holds_alternative<SlopedRoofPanel>(*original_object) ||
+                 std::holds_alternative<GableRoof>(*original_object) ||
+                 std::holds_alternative<HipRoof>(*original_object)));
         } catch (const std::exception& caught) {
             original_invalid = true;
             loading = false;
@@ -1563,15 +1568,29 @@ private:
         }, *original_object);
     }
 
-    std::optional<RoofEditIntent> same_form_roof_edit(const BuildingObject& candidate) const {
+    bool changing_roof_form() const {
+        if (!original_entity || original_entity->type != "roof") return false;
+        const auto selected = form_string(form_combo->currentData().toString());
+        const auto* info = form_info(selected);
+        return info && info->type == "roof" && original_entity->properties.at("form") != selected;
+    }
+
+    // Only the active length key changes meaning between panel and ridge forms.
+    // This maps an actual known source receipt, never a numeric approximation.
+    std::string conversion_source_pointer(const std::string& pointer) const {
+        if (pointer == "/run_m" || pointer == "/length_m")
+            return original_entity->properties.at("form") == "sloped_roof_panel" ? "/run_m" : "/length_m";
+        return pointer;
+    }
+
+    std::optional<RoofEditIntent> typed_roof_edit(const BuildingObject& candidate) const {
         if (!original_entity || original_entity->type != "roof") return std::nullopt;
         return std::visit([this](const auto& roof) -> std::optional<RoofEditIntent> {
             using Roof = std::decay_t<decltype(roof)>;
             if constexpr (std::is_same_v<Roof, SlopedRoofPanel> || std::is_same_v<Roof, GableRoof> ||
                           std::is_same_v<Roof, HipRoof>) {
                 const auto* source = original_as<Roof>();
-                if (!source) return std::nullopt;
-                if (roof.id != source->id || roof.id != original_entity->id)
+                if (roof.id != original_entity->id || (source && roof.id != source->id))
                     throw std::invalid_argument("The roof edit differs from its original owner.");
 
                 // A changed scalar must come from the parser's actual exact
@@ -1587,25 +1606,49 @@ private:
                 };
                 RoofEditIntent result;
                 result.roof_id = original_entity->id;
-                RoofProfileEditIntent profile;
-                profile.roof_id = result.roof_id;
-                if constexpr (std::is_same_v<Roof, SlopedRoofPanel>)
-                    profile.length = changed_quantity("/run_m", source->run, roof.run);
-                else
-                    profile.length = changed_quantity("/length_m", source->length, roof.length);
-                profile.span = changed_quantity("/span_m", source->span, roof.span);
-                profile.rise = changed_quantity("/rise_m", source->rise, roof.rise);
-                profile.overhang = changed_quantity("/overhang_m", source->overhang, roof.overhang);
-                profile.thickness = changed_quantity("/thickness_m", source->thickness, roof.thickness);
-                if (profile.length || profile.span || profile.rise || profile.overhang || profile.thickness)
-                    result.profile = std::move(profile);
+                if (source) {
+                    RoofProfileEditIntent profile;
+                    profile.roof_id = result.roof_id;
+                    if constexpr (std::is_same_v<Roof, SlopedRoofPanel>)
+                        profile.length = changed_quantity("/run_m", source->run, roof.run);
+                    else
+                        profile.length = changed_quantity("/length_m", source->length, roof.length);
+                    profile.span = changed_quantity("/span_m", source->span, roof.span);
+                    profile.rise = changed_quantity("/rise_m", source->rise, roof.rise);
+                    profile.overhang = changed_quantity("/overhang_m", source->overhang, roof.overhang);
+                    profile.thickness = changed_quantity("/thickness_m", source->thickness, roof.thickness);
+                    if (profile.length || profile.span || profile.rise || profile.overhang || profile.thickness)
+                        result.profile = std::move(profile);
+                } else {
+                    const auto entered = [this](const char* pointer, double metres) -> Quantity {
+                        const auto found = parsed_quantities.find(pointer);
+                        if (found == parsed_quantities.end() || found->second.metres != metres)
+                            throw std::invalid_argument("Every converted roof dimension requires its actual exact input.");
+                        return found->second;
+                    };
+                    RoofFormEditIntent form;
+                    form.roof_id = result.roof_id;
+                    if constexpr (std::is_same_v<Roof, SlopedRoofPanel>) {
+                        form.target_form = RoofForm::sloped_roof_panel;
+                        form.length = entered("/run_m", roof.run);
+                    } else {
+                        form.target_form = std::is_same_v<Roof, GableRoof> ? RoofForm::gable_roof : RoofForm::hip_roof;
+                        form.length = entered("/length_m", roof.length);
+                    }
+                    form.span = entered("/span_m", roof.span);
+                    form.rise = entered("/rise_m", roof.rise);
+                    form.overhang = entered("/overhang_m", roof.overhang);
+                    form.thickness = entered("/thickness_m", roof.thickness);
+                    result.form = std::move(form);
+                }
 
                 RoofPoseEditIntent pose;
                 pose.roof_id = result.roof_id;
-                pose.x = changed_quantity("/base_position_m/0", source->base_position.x, roof.base_position.x);
-                pose.y = changed_quantity("/base_position_m/1", source->base_position.y, roof.base_position.y);
-                pose.z = changed_quantity("/base_position_m/2", source->base_position.z, roof.base_position.z);
-                if (roof.orientation_radians != source->orientation_radians) {
+                const auto& original_base = original_entity->properties.at("base_position_m");
+                pose.x = changed_quantity("/base_position_m/0", original_base.at(0).get<double>(), roof.base_position.x);
+                pose.y = changed_quantity("/base_position_m/1", original_base.at(1).get<double>(), roof.base_position.y);
+                pose.z = changed_quantity("/base_position_m/2", original_base.at(2).get<double>(), roof.base_position.z);
+                if (roof.orientation_radians != original_entity->properties.at("orientation_rad").get<double>()) {
                     if (!dirty.contains("buildingObjectOrientationDegrees") || !std::isfinite(roof.orientation_radians))
                         throw std::invalid_argument("The edited roof orientation lacks its finite angle input.");
                     // read_angle supplies radians from the finite UI scalar;
@@ -1844,7 +1887,7 @@ private:
             return;
         }
         const auto form = form_string(form_combo->currentData().toString());
-        if (original_object.has_value()) {
+        if (original_object.has_value() && !changing_roof_form()) {
             if (form == "sloped_roof_panel") {
                 if (const auto* original = original_as<SlopedRoofPanel>();
                     original != nullptr && !dirty.contains("buildingObjectRun") &&
@@ -1908,6 +1951,37 @@ private:
             return;
         }
         loading = true;
+        if (changing_roof_form()) {
+            const auto& properties = original_entity->properties;
+            const auto& base = properties.at("base_position_m");
+            set_coordinate("buildingObjectBaseX", "buildingObjectBaseY", "buildingObjectBaseZ",
+                           {base.at(0).get<double>(), base.at(1).get<double>(), base.at(2).get<double>()});
+            set_angle("buildingObjectOrientationDegrees", properties.at("orientation_rad").get<double>());
+            for (const auto* name : {"buildingObjectRun", "buildingObjectLength", "buildingObjectSpan",
+                                     "buildingObjectRise", "buildingObjectOverhang", "buildingObjectThickness"}) {
+                const auto target = quantity_pointers.find(name);
+                if (target == quantity_pointers.end()) continue;
+                const auto pointer = conversion_source_pointer(target->second);
+                const auto receipt = original_quantity_entries.find(pointer);
+                const auto* scalar = json_at_pointer(properties, pointer);
+                if (scalar && scalar->is_number() && std::isfinite(scalar->get<double>())) {
+                    if (receipt != original_quantity_entries.end()) {
+                        if (const auto known = receipt_for_value(receipt->second, scalar->get<double>()); known) {
+                            set_text(name, display_receipt_expression(known->quantity, metric));
+                            continue;
+                        }
+                    }
+                    // Keep the current physical dimension visible. This is a
+                    // new target input, parsed on submission, not a fabricated
+                    // preserved receipt for the original numeric-only field.
+                    set_text(name, display_number(scalar->get<double>()) + QStringLiteral(" m"));
+                }
+            }
+            loading = false;
+            dirty.clear();
+            refresh_pitch();
+            return;
+        }
         std::visit(
             [this](const auto& value) {
                 using Object = std::decay_t<decltype(value)>;
@@ -2199,7 +2273,8 @@ private:
 
     std::optional<double> read_length(const char* name, QString label, bool positive,
                                       double fallback) {
-        if (original_entity.has_value() && !dirty.contains(name)) {
+        const bool conversion = changing_roof_form();
+        if (original_entity.has_value() && !dirty.contains(name) && !conversion) {
             return fallback;
         }
         const auto found = fields.find(name);
@@ -2208,6 +2283,27 @@ private:
             return std::nullopt;
         }
         try {
+            const auto pointer = quantity_pointers.find(name);
+            if (conversion && !dirty.contains(name) && pointer != quantity_pointers.end()) {
+                if (pointer->second.starts_with("/base_position_m/")) {
+                    const auto* coordinate = json_at_pointer(original_entity->properties, pointer->second);
+                    if (!coordinate || !coordinate->is_number() || !std::isfinite(coordinate->get<double>()))
+                        throw std::invalid_argument("The original roof coordinate is unavailable.");
+                    return coordinate->get<double>();
+                }
+                const auto source_pointer = conversion_source_pointer(pointer->second);
+                const auto receipt = original_quantity_entries.find(source_pointer);
+                const auto* scalar = json_at_pointer(original_entity->properties, source_pointer);
+                if (receipt != original_quantity_entries.end() && scalar && scalar->is_number()) {
+                    if (const auto known = receipt_for_value(receipt->second, scalar->get<double>());
+                        known && found->second->text() == display_receipt_expression(known->quantity, metric)) {
+                        if (positive && known->quantity.metres <= geometry_tolerance)
+                            throw std::invalid_argument("The target dimension must be greater than zero.");
+                        parsed_quantities.insert_or_assign(pointer->second, known->quantity);
+                        return known->quantity.metres;
+                    }
+                }
+            }
             const auto quantity = parse_quantity(
                 found->second->text().toStdString(), metric ? Unit::metre : Unit::foot);
             if (!std::isfinite(quantity.metres) ||
@@ -2215,7 +2311,6 @@ private:
                 fail(QStringLiteral("%1 must be greater than zero.").arg(label));
                 return std::nullopt;
             }
-            const auto pointer = quantity_pointers.find(name);
             if (pointer != quantity_pointers.end()) {
                 parsed_quantities.insert_or_assign(pointer->second, quantity);
             }
@@ -2246,6 +2341,8 @@ private:
 
     std::optional<double> read_angle(const char* name, QString label, double fallback) {
         if (original_entity.has_value() && !dirty.contains(name)) {
+            if (changing_roof_form() && std::string_view(name) == "buildingObjectOrientationDegrees")
+                return original_entity->properties.at("orientation_rad").get<double>();
             return fallback;
         }
         const auto degrees = read_scalar(name, label, fallback * 180.0 / std::numbers::pi);

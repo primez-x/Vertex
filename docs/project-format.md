@@ -1,4 +1,43 @@
-# Vertex project formats v1 through v97
+# Vertex project formats v1 through v98
+
+## Typed proposed roof form conversion (v98)
+
+Native format 98 and JSON/assets extraction version 96 retain a conversion
+between sloped panel, gable and hip roofs in an active design alternative.
+The source-bound phase intent four and roof replacement record three retain
+their outer fields. A combined roof edit with conversion is strict version two:
+exactly `version`, `roof_id`, `profile`, `openings`, `pose` and `form`. `form`
+is nonnull and `profile` is null. Historical combined edits retain their exact
+five-field version-one wire and earlier floor. The floor follows retained
+direct, nested and composed proofs, including after Undo.
+
+The form component is strict version one with exactly `version`, `roof_id`,
+`target_form`, `length`, `span`, `rise`, `overhang` and `thickness`. All five
+target dimensions have exact quantity receipts. Length means panel run or
+gable/hip plan length. A hip ridge is shorter than this footprint dimension.
+Length, span and thickness are positive; overhang can
+be zero and a sloped panel can have zero rise. Gable/hip rise is positive.
+Dependent pitch derives from the target dimensions. A genuinely different
+known form is required; same-form size editing retains its profile contract.
+
+Conversion retires the source form's active run/length field and migrates its
+known receipt to the target pointer, retaining opaque receipt siblings.
+Unsupported affected receipts or inactive destination collisions refuse.
+Source pose, schema version, actual opening roster, context, materials and
+unrelated metadata remain retained. Form, optional opening edits and optional
+pose changes all stage against the same actual original and merge only owned
+deltas before final native admission. No intermediate roof becomes a source.
+
+The dialog supplies actual parsed target quantities or genuine preserved exact
+source inputs. Where no exact source input is available, the current physical
+dimension is shown as a shortest fixed explicit-metre target input and parsed
+on submission. It is not a fabricated receipt for the original numeric field.
+Unedited placement stays
+at the original position. Complete capture compares independent replay,
+including property/extension JSON representations. Ordinary/proposed commits
+admit the complete final map and affected joins; baseline conversion derives
+distinct proposed owners while retaining originals and other alternatives.
+This source implementation has not been compiled or exercised.
 
 ## Baseline-preserving roof demolition and surviving joins (v97)
 
@@ -124,7 +163,7 @@ The replacement record is version one with exactly `version`, `registry_id`,
 `alternative_id`, `seed_roof_ids`, `identities` and `roof_profiles`. Each profile
 has exactly `version`, `roof_id`, `length`, `span`, `rise`, `overhang` and
 `thickness`; absent dimensions are null. Length represents the horizontal run
-of a sloped panel or ridge length of a gable/hip roof. Quantities retain exact
+of a sloped panel or plan length of a gable/hip roof. Quantities retain exact
 entered expressions and units. Dependent pitch is reconstructed from the
 resulting rise and run or half-span. Equal values preserve source data exactly.
 

@@ -14,6 +14,71 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 typed roof form conversion implementation
+
+The properties dialog now supplies a typed change between sloped panel, gable
+and hip roofs, including combined opening and position changes. All five target
+dimensions come from actual parsed inputs or genuine preserved exact source
+quantities. Without exact source receipts the existing physical dimensions
+remain visible as shortest fixed explicit-metre target inputs for actual
+parsing. Unedited placement stays at the original position. Zero overhang and
+flat-panel rise remain supported.
+
+Form/profile fields and known run/length receipts migrate from actual source,
+with opaque siblings preserved and unsupported affected receipts refused. Each
+component stages against the same original, then complete final native
+admission checks the combined result. Same-form commands retain their earlier
+wire and behavior. Commit uses full-map typed replay for both same-form edits
+and conversion; baseline edits create independent proposed cohorts. Native
+98/extraction 96 retain inner combined edit two under replacement record three,
+including nested history after Undo. Original roofs/joins and other alternatives
+remain retained.
+
+Independent source review caught and corrected the locked roof Form selector,
+stale conversion pitch label and parser-incompatible generated input. The
+selector now permits the three supported roof forms, pitch follows actual
+target fields, and numeric-only source dimensions use the existing shortest
+fixed formatter. The reviewer approved the corrected bounded source slice.
+
+This is source implementation only. Compilation, dialog interaction, native
+geometry execution, Undo/Redo and save/reopen remain unverified. No builds,
+tests, probes, scripts, native jobs, launches, packages or installations run;
+the installed candidate stays unchanged. Alternative clone and exact typed
+transform producers, unsupported affected references and other non-wall family
+lifecycle work remain open.
+
+### October 8 selected ordinary/proposed roof removal implementation
+
+Cut/Delete now derive ordinary/proposed roof removal from explicitly selected
+active owners. Surviving neighbors remain, and affected joins are rebuilt using
+actual native contact components. The first surviving joined component retains
+its existing join ID; additional groups receive declared fresh join and bound
+overlay IDs. Isolated survivors inherit the admitted source join's effective
+material assignment. Only selected roofs and joins with no surviving joined
+component are removed, along with supported dependent dimensions.
+
+Qualified views, appearances, bound overlays, annotation overrides and actual
+phase membership update in the same source-derived candidate. Independent
+labels/symbols, unrelated rows and other alternatives remain retained. Empty
+view restrictions remain explicit. Unsupported affected references block the
+operation. Controller publication uses the complete candidate directly, so
+unregistered joins are not assigned to a different registry by augmentation.
+Source/selection authority is rechecked before Cut/Delete, and Cut publishes
+clipboard content only after successful document publication. Native geometry
+errors at Cut return an actionable error instead of escaping the handler.
+
+The ordinary removal uses existing entity/command schemas; the baseline
+alternative path retains the separate native 97 demolition contract below.
+Compilation and runtime behavior remain unverified. No tests, builds, probes,
+scripts, native jobs, launches, packages or installations run, and the installed
+candidate remains unchanged. Clone/transform producers, affected reference
+families and other non-wall lifecycle work remain open. The conversion source
+integration is recorded above.
+
+Independent source review approved the bounded ordinary/proposed removal slice,
+including affected-cohort admission, required-entity refusal, component slots,
+material inheritance, reference/membership updates and fenced publication.
+
 ### October 8 roof demolition and surviving join implementation
 
 Cut/Delete now prepare a source-bound roof demolition command before generic

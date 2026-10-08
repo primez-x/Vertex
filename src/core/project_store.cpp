@@ -357,7 +357,14 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (intent.is_object() && intent.value("version",0)==4) {
                     const auto replacement=intent.find("roof_replacement");
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==4) return 97U;
-                    if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==3) return 96U;
+                    if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==3) {
+                        const auto edits = replacement->find("roof_edits");
+                        if (edits != replacement->end() && edits->is_array() &&
+                            std::any_of(edits->begin(), edits->end(), [](const auto& edit) {
+                                return edit.is_object() && edit.value("version", 0) == 2;
+                            })) return 98U;
+                        return 96U;
+                    }
                     return replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==2 ? 95U : 94U;
                 }
                 if (intent.is_object() && intent.value("version",0)==3) return 90U;
@@ -2149,6 +2156,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 98 &&
          sqlite3_column_int(user_version.get(), 0) != 97 &&
          sqlite3_column_int(user_version.get(), 0) != 96 &&
          sqlite3_column_int(user_version.get(), 0) != 95 &&
@@ -2701,6 +2709,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=98)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 98 for typed proposed roof form conversion");
         if (required_format>=97)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 97 for baseline-preserving roof demolition");
         if (required_format>=96)

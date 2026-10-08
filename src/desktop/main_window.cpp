@@ -40,6 +40,7 @@
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_roof_demolition.hpp"
+#include "sketch/roof_removal.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
@@ -22618,9 +22619,9 @@ public:
                 if (!original || original->id != candidate.id || original->type != candidate.type)
                     throw std::runtime_error("Select the original object before applying this edit.");
                 bool typed_roof_edit=false;
-                if (candidate.type=="roof" && original->properties.at("form")==candidate.properties.at("form")) {
+                if (candidate.type=="roof") {
                     // Preserve the complete independently replayed edit, including
-                    // source pitch, empty rosters and stable-child receipts.
+                    // form conversion, source pitch, empty rosters and stable-child receipts.
                     const auto intent=capture_roof_edit(*original,candidate);
                     candidate=intent ? replay_roof_edit_entities(snapshot.entities(),{*intent}).at(original->id) : *original;
                     typed_roof_edit=true;
@@ -30202,7 +30203,7 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            if (const auto demolition = alternativeRoofDemolitionCommand(source, selected_ids, "Cut selected roofs")) {
+            if (const auto demolition = roofRemovalCommand(source, selected_ids, "Cut selected roofs")) {
                 const auto encoded = clipboardSelectionPayload(source);
                 const auto clipboard_text = QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size()));
                 auto* clipboard = QGuiApplication::clipboard();
@@ -30251,6 +30252,11 @@ public:
             clearError();
             refresh();
             return true;
+        } catch (const Standard_Failure& error) {
+            const auto* detail = error.GetMessageString();
+            setError(QStringLiteral("Cut: %1").arg(detail && *detail ? QString::fromUtf8(detail)
+                : QStringLiteral("The selected geometry could not be admitted.")));
+            return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Cut: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -30714,7 +30720,7 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            if (const auto demolition = alternativeRoofDemolitionCommand(source, selected_ids, "Demolish selected roofs")) {
+            if (const auto demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs")) {
                 if (!sourceEditAuthorityUnchanged(authority))
                     throw std::invalid_argument("The selected roofs or active design changed before demolition.");
                 if (!applyAuthoredCommand(*demolition)) return false;
@@ -41307,6 +41313,51 @@ private:
         command.message = message;
         command.phase_constraint_authoring_completion = true;
         command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source, Command{command});
+        return Command{std::move(command)};
+    }
+
+    std::optional<Command> roofRemovalCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& selected_ids, const std::string& message) {
+        if (const auto alternative = alternativeRoofDemolitionCommand(source, selected_ids, message)) return alternative;
+        if (selected_ids.empty() || !std::all_of(selected_ids.begin(), selected_ids.end(), [&](const auto& id) {
+                const auto found = source.entities().find(id);
+                return found != source.entities().end() && found->second.type == "roof";
+            })) return std::nullopt;
+        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids);
+        if (!plan.ready()) {
+            QStringList reasons;
+            for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
+                reasons.push_back(id_from(diagnostic.entity_id) + QStringLiteral(": ") + QString::fromStdString(diagnostic.reason));
+            throw std::invalid_argument(reasons.join(QStringLiteral("\n")).toStdString());
+        }
+        std::set<std::string, std::less<>> occupied;
+        for (const auto& record : source.history())
+            for (const auto& [id, entity] : record.entities) { (void)entity; occupied.insert(id); }
+        for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+        RoofRemovalAdditionalIdentities additional;
+        for (const auto& [original, count] : plan.additional_identity_counts) {
+            auto& copies = additional[original];
+            for (std::size_t index = 0; index < count; ++index) {
+                auto proposed = new_id("roof");
+                while (!occupied.insert(proposed).second) proposed = new_id("roof");
+                copies.push_back(std::move(proposed));
+            }
+        }
+        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional);
+        ApplyEntityChanges command{source.revision(), {}, {}, message};
+        for (const auto& [id, entity] : source.entities()) {
+            const auto after = replay.entities.find(id);
+            if (after == replay.entities.end()) command.entity_changes.push_back(EntityChange::erase(id));
+            else if (entity != after->second || entity.properties.dump() != after->second.properties.dump() ||
+                entity.extensions.dump() != after->second.extensions.dump())
+                command.entity_changes.push_back(EntityChange::upsert(after->second));
+        }
+        for (const auto& [id, entity] : replay.entities)
+            if (!source.entities().contains(id)) command.entity_changes.push_back(EntityChange::upsert(entity));
+        // The complete source-derived candidate already owns reference and
+        // registry updates. Generic augmentation must not register previously
+        // unregistered joins into an unrelated active design.
         (void)Document::preview_command(source, Command{command});
         return Command{std::move(command)};
     }

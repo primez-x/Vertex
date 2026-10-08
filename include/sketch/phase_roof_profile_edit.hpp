@@ -7,7 +7,7 @@ namespace sketch {
 
 struct RoofProfileEditIntent {
     std::string roof_id;
-    // Horizontal run for a sloped panel; ridge length for gable/hip roofs.
+    // Horizontal run for a sloped panel; plan length for gable/hip roofs.
     std::optional<Quantity> length;
     std::optional<Quantity> span;
     std::optional<Quantity> rise;

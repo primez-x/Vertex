@@ -2,6 +2,7 @@
 
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/phase_roof_form_edit.hpp"
 #include "sketch/phase_roof_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
@@ -504,10 +505,12 @@ Entities replay_roof_opening_entities(const Entities& source, const std::vector<
         (void)make_roof_shape(decode_roof_entity(resolve_vertical_placement(result, result.at(intent.roof_id))));
     return result;
 }
-Entity normalize_equivalent_roof_opening_inputs(const Entity& original, const Entity& candidate) {
+Entity normalize_equivalent_roof_opening_inputs(const Entity& original, const Entity& candidate, bool allow_form_change) {
     admit(original);
     admit(candidate);
-    auto normalized=normalize_equivalent_roof_inputs(original,candidate);
+    auto normalized = allow_form_change && original.properties.at("form") != candidate.properties.at("form")
+        ? normalize_equivalent_roof_form_inputs(original, candidate)
+        : normalize_equivalent_roof_inputs(original, candidate);
     const auto before=roster(original),after=roster(candidate);
     const auto old_positions=positions(before);
     for (std::size_t index=0;index<after.size();++index) {
@@ -523,11 +526,12 @@ Entity normalize_equivalent_roof_opening_inputs(const Entity& original, const En
     }
     return normalized;
 }
-std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& original, const Entity& candidate) {
+std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& original, const Entity& candidate, bool allow_form_change) {
     admit(original);
     if (exact(original, candidate)) return std::nullopt;
     admit(candidate);
-    if (original.id!=candidate.id || original.type!=candidate.type || original.properties.at("form")!=candidate.properties.at("form"))
+    if (original.id!=candidate.id || original.type!=candidate.type ||
+        (!allow_form_change && original.properties.at("form")!=candidate.properties.at("form")))
         invalid("Roof opening input inference cannot change its owner or form");
     const auto before = roster(original), after = roster(candidate);
     const auto old_positions = positions(before), new_positions = positions(after);

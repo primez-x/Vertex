@@ -44,10 +44,12 @@ struct RoofOpeningEditIntent {
 // Source-admitted staging defers the final envelope fit so a composite roof
 // resize/cut edit can be admitted once. It confers no candidate/source authority.
 [[nodiscard]] Entity stage_roof_opening_entity(const Entity& actual_source, const RoofOpeningEditIntent& intent);
+// Form-aware inference/normalization is reserved for complete composite replay;
+// standalone capture keeps the default same-form policy and gains no form authority.
 [[nodiscard]] std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(
-    const Entity& original, const Entity& candidate);
+    const Entity& original, const Entity& candidate, bool allow_form_change = false);
 [[nodiscard]] Entity normalize_equivalent_roof_opening_inputs(
-    const Entity& original, const Entity& candidate);
+    const Entity& original, const Entity& candidate, bool allow_form_change = false);
 
 // Captures actual roster changes only. Changed/new fields require exact child
 // input receipts, including their actual parsing default unit. The complete

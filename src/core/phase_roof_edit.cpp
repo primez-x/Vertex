@@ -52,9 +52,12 @@ void transfer(Json& target, const Json& staged, const std::string& key) {
     if (const auto value = field(staged, key)) target[key] = *value;
     else target.erase(key);
 }
-enum class Component { profile, openings, pose };
+enum class Component { profile, openings, pose, form };
 bool owns_property(Component component, const std::string& key) {
     switch (component) {
+    case Component::form:
+        if (key == "form") return true;
+        [[fallthrough]];
     case Component::profile:
         return key == "run_m" || key == "length_m" || key == "span_m" || key == "rise_m" ||
             key == "overhang_m" || key == "thickness_m" || key == "pitch_rad";
@@ -64,7 +67,7 @@ bool owns_property(Component component, const std::string& key) {
     return false;
 }
 bool owns_receipt(Component component, const std::string& pointer) {
-    if (component == Component::profile)
+    if (component == Component::profile || component == Component::form)
         return pointer == "/run_m" || pointer == "/length_m" || pointer == "/span_m" ||
             pointer == "/rise_m" || pointer == "/overhang_m" || pointer == "/thickness_m";
     if (component == Component::pose)
@@ -127,9 +130,15 @@ void admit_cohorts(const Entities& entities, const Ids& targets) {
 } // namespace
 
 nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent) {
-    if (!identity(intent.roof_id) || (!intent.profile && !intent.openings && !intent.pose))
+    if (!identity(intent.roof_id) || (!intent.profile && !intent.openings && !intent.pose && !intent.form))
         invalid("Roof edit requires a valid owner and a typed component");
+    if (intent.form && intent.profile) invalid("Roof conversion cannot also author a profile component");
     Json result{{"version", 1}, {"roof_id", intent.roof_id}, {"profile", nullptr}, {"openings", nullptr}, {"pose", nullptr}};
+    if (intent.form) {
+        if (intent.form->roof_id != intent.roof_id) invalid("Roof form component owner differs");
+        result["version"] = 2;
+        result["form"] = encode_roof_form_edit_intent(*intent.form);
+    }
     if (intent.profile) {
         if (intent.profile->roof_id != intent.roof_id) invalid("Roof profile component owner differs");
         result["profile"] = encode_roof_profile_edit_intent(*intent.profile);
@@ -146,12 +155,20 @@ nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent) {
     return result;
 }
 RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
-    if (!value.is_object() || value.size() != 5 || !value.contains("version") ||
-        !value.at("version").is_number_integer() || value.at("version") != 1 ||
+    if (!value.is_object() || !value.contains("version") ||
+        !value.at("version").is_number_integer() ||
         !value.contains("roof_id") || !value.contains("profile") || !value.contains("openings") || !value.contains("pose") ||
-        value.dump().size() > proof_limit) invalid("Roof edit must contain exactly the five version-one fields");
+        value.dump().size() > proof_limit) invalid("Roof edit fields or proof budget are invalid");
+    const bool conversion = value.at("version") == 2;
+    if (conversion) {
+        if (value.size() != 6 || !value.contains("form") || value.at("form").is_null() || !value.at("profile").is_null())
+            invalid("Roof conversion requires exactly six version-two fields with form and no profile");
+    } else if (value.at("version") != 1 || value.size() != 5 || value.contains("form")) {
+        invalid("Roof edit must contain exactly the five version-one fields");
+    }
     RoofEditIntent result;
     result.roof_id = value.at("roof_id").get<std::string>();
+    if (conversion) result.form = decode_roof_form_edit_intent(value.at("form"));
     if (!value.at("profile").is_null()) result.profile = decode_roof_profile_edit_intent(value.at("profile"));
     if (!value.at("openings").is_null()) result.openings = decode_roof_opening_edit_intent(value.at("openings"));
     if (!value.at("pose").is_null()) result.pose = decode_roof_pose_edit_intent(value.at("pose"));
@@ -163,6 +180,7 @@ Entity replay_roof_edit_entity(const Entity& source, const RoofEditIntent& inten
     if (source.id != intent.roof_id) invalid("Roof edit target differs from its actual source identity");
     validate_roof_profile_source_entity(source);
     auto result = source;
+    if (intent.form) merge_component(result, source, stage_roof_form_entity(source, *intent.form), Component::form);
     if (intent.profile) merge_component(result, source, stage_roof_profile_entity(source, *intent.profile), Component::profile);
     if (intent.openings) merge_component(result, source, stage_roof_opening_entity(source, *intent.openings), Component::openings);
     if (intent.pose) merge_component(result, source, stage_roof_pose_entity(source, *intent.pose), Component::pose);
@@ -207,12 +225,13 @@ std::optional<RoofEditIntent> capture_roof_edit(const Entity& original, const En
     validate_roof_profile_source_entity(candidate);
     RoofEditIntent intent;
     intent.roof_id = original.id;
-    intent.profile = infer_roof_profile_edit(original, candidate);
-    intent.openings = infer_roof_opening_edit(original, candidate);
-    intent.pose = infer_roof_pose_edit(original, candidate);
-    auto normalized = normalize_equivalent_roof_opening_inputs(original, candidate);
-    normalized = normalize_equivalent_roof_pose_inputs(original, normalized);
-    const auto expected = intent.profile || intent.openings || intent.pose ? replay_roof_edit_entity(original, intent) : original;
+    intent.form = infer_roof_form_edit(original, candidate);
+    if (!intent.form) intent.profile = infer_roof_profile_edit(original, candidate);
+    intent.openings = infer_roof_opening_edit(original, candidate, intent.form.has_value());
+    intent.pose = infer_roof_pose_edit(original, candidate, intent.form.has_value());
+    auto normalized = normalize_equivalent_roof_opening_inputs(original, candidate, intent.form.has_value());
+    normalized = normalize_equivalent_roof_pose_inputs(original, normalized, intent.form.has_value());
+    const auto expected = intent.form || intent.profile || intent.openings || intent.pose ? replay_roof_edit_entity(original, intent) : original;
     if (!exact(normalized, expected)) invalid("Roof candidate differs from independent combined typed replay");
     if (exact(expected, original)) return std::nullopt;
     return intent;

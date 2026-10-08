@@ -48,14 +48,16 @@ void validate_roof_pose_source_entity(const Entity& source);
 // Narrow input inference for composite capture: admit actual source/final
 // candidate and require exact changed coordinate inputs. Companion changes are
 // not authorized; a complete independent typed replay must account for them.
+// allow_form_change is reserved for composite capture with a separate form
+// intent; standalone capture keeps its historical same-form policy.
 [[nodiscard]] std::optional<RoofPoseEditIntent> infer_roof_pose_edit(
-    const Entity& original, const Entity& candidate);
+    const Entity& original, const Entity& candidate, bool allow_form_change = false);
 
 // Extend shared roof equivalence normalization with equal coordinate receipts.
 // Only understood, source-derived cores may be normalized; opaque siblings and
 // actual changes remain exact for the caller's complete replay comparison.
 [[nodiscard]] Entity normalize_equivalent_roof_pose_inputs(
-    const Entity& original, const Entity& candidate);
+    const Entity& original, const Entity& candidate, bool allow_form_change = false);
 
 // Changed coordinates require exact entered candidate receipts. Capture admits
 // both actual entities and compares the full candidate to independent replay,
