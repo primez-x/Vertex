@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 horizontal outline and canvas integration implementation
+
+Source now routes slab/floor/ceiling/foundation outer and hole vertex grips,
+rotation with uniform plan scaling, side/corner axis resizing, pure horizontal
+selection movement, numeric rigid/mirror controls and pure horizontal Site
+movement through actual-source geometry replay. The profile and vertical
+placement remain unchanged by plan operations. Shared-baseline edits derive
+proposed owners in the active alternative, retaining original owners and other
+alternatives. Preview aliases and selection follow the admitted proposed owner.
+
+Known changed coordinate/curve receipts retire verbatim into a bounded
+mathematical derivation archive; each recorded result is independently replayed.
+Historical operation owner IDs remain provenance, while opaque receipt siblings
+retain affected-reference checks. Exact no-ops preserve source payloads.
+Circular arcs remain analytical under rigid/uniform operations; nonuniform arc
+resizing remains a representation gap and explicitly refuses. Native 104/
+extraction 102 records these semantics across direct/wrapped retained history.
+
+Independent bounded source review approved this slice after correcting fresh
+proposed-owner projection and actual-candidate selection-frame refresh. Groups
+mixing shared-baseline and ordinary/proposed horizontal owners still refuse;
+that remains separate from mixed-family authoring. A modern wall-profile
+measurement/table dialog and independent horizontal-assembly copying are
+written and awaiting root integration. Horizontal 3D scale/Z and final product
+qualification also remain open.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran; installed candidate remains unchanged. Compilation and runtime behavior
+are unverified. This record does not certify production completion.
+
 ### October 8 horizontal layer-stack editing implementation
 
 Horizontal assemblies now have a table editor for adding, removing and

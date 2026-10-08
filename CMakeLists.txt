@@ -833,7 +833,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_roof_demolition.cpp src/core/roof_removal.cpp
     src/core/phase_roof_replacement.cpp
     src/core/phase_slab_profile_edit.cpp src/core/phase_slab_replacement.cpp src/core/phase_slab_demolition.cpp
-    src/core/slab_layer_stack_edit.cpp)
+    src/core/slab_layer_stack_edit.cpp src/core/slab_geometry_edit.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
   # Proposed profile replay must use the same hosted-assembly and fused-join
   # admission as native architectural authoring, rather than accept solids

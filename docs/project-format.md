@@ -1,4 +1,51 @@
-# Vertex project formats v1 through v103
+# Vertex project formats v1 through v104
+
+## Source-derived horizontal outline edits (v104)
+
+Native format 104 and JSON/assets extraction version 102 retain horizontal
+assembly vertex edits, rigid plan transforms with positive uniform plan scale,
+and positive axis resizing in a captured rotated frame. These operations retain
+the actual slab/floor/ceiling/foundation profile, thickness, elevation, layer
+inventory, materials and drawing context. Circular arcs retain analytical
+sweeps under rigid and uniform transformations. Unequal axis scaling of an arc
+refuses rather than silently changing its curve representation.
+
+The strict version-one geometry intent has exactly `version`, `slab_id`,
+`kind`, `vertex`, `transform` and `resize`. Exactly one operation is nonnull.
+`move_vertex` contains `vertex_index`, `proposed_position_m` and nullable
+`hole_index`. `transform_plan` contains `pivot_m`, `rotation_radians`,
+`flip_horizontal`, `flip_vertical`, `offset_m` and `uniform_scale`; scale
+occurs about that pivot before rotation/reflection and translation.
+`resize_plan` contains `scale_x`, `scale_y`, `anchor_m` and
+`frame_rotation_radians`. This records mathematical intent, not a fabricated
+entered measurement.
+
+Changed understood coordinate and sweep receipts validate against their actual
+source scalar and retire verbatim into `extensions.slab_geometry_derivations`.
+Its version-one envelope contains exactly `version` and `operations`; each
+operation contains `operation`, `source`, `result` and `receipts`. Source and
+result frames contain closed `boundary` and `holes` geometry. Each segment
+contains `start`, `end` and `sweep_radians`; live opaque segment siblings stay in
+the owner. Retired receipts use the exact `quantity_entries` object. Known
+bindings are `/boundary/I/start/0|1`, `/boundary/I/end/0|1`,
+`/boundary/I/sweep_radians` and their `/holes/H/I/...` equivalents. Unsupported
+affected bindings refuse; unchanged numbers and receipts remain exact.
+
+Each retained result is independently reconstructed from its recorded source
+and mathematical operation. The archived operation's `slab_id` is historical
+provenance, never a live owner binding or copy-remapping target. Opaque receipt
+siblings remain subject to affected-reference checks. The bounded archive
+cannot replace the actual live source used for a new edit.
+
+Shared-baseline geometry edits retain phase envelope five with exclusive
+version-three slab replacement. Its six fields are `version`, `registry_id`,
+`alternative_id`, `seed_slab_ids`, `identities` and `slab_geometry`. Source
+inspection establishes the changed targets, actual owner/layer/overlay roster,
+fresh mapping and saved active alternative. Baseline owners and other
+alternatives remain exact; supported presentation copies are additive.
+Direct/wrapped replacement proofs and retained geometry archives raise the
+reader floor throughout history, including Undo. Earlier profile/stack wires
+and their reader floors remain unchanged.
 
 ## Source-derived horizontal layer stacks (v103)
 

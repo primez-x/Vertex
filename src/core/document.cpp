@@ -484,6 +484,22 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid wall join entity: ") + error.what());
         }
     }
+    if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations")) {
+        try {
+            const auto& archive = entity.extensions.at("slab_geometry_derivations");
+            if (!archive.is_object() || !archive.contains("version") ||
+                !archive.at("version").is_number_integer() ||
+                (archive.at("version").is_number_unsigned() ? archive.at("version").get<std::uint64_t>() == 0 :
+                    archive.at("version").get<std::int64_t>() <= 0))
+                throw std::invalid_argument("Horizontal geometry derivation requires a positive version");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (archive.at("version") == 1) validate_slab_geometry_derivation(entity);
+#endif
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                std::string("invalid horizontal geometry derivation: ") + error.what());
+        }
+    }
     for (const auto* key : {"roof_rigid_transform_derivations", "roof_plan_resize_derivations"})
     if (entity.type == "roof" && entity.extensions.contains(key)) {
         try {

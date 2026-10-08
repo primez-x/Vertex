@@ -390,8 +390,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (intent.is_object() && intent.value("version",0)==6) return 102U;
                 if (intent.is_object() && intent.value("version",0)==5) {
                     const auto replacement = intent.find("slab_replacement");
-                    return replacement != intent.end() && replacement->is_object() &&
-                        replacement->value("version", 0) == 2 ? 103U : 101U;
+                    if (replacement != intent.end() && replacement->is_object()) {
+                        if (replacement->value("version", 0) == 3) return 104U;
+                        if (replacement->value("version", 0) == 2) return 103U;
+                    }
+                    return 101U;
                 }
                 if (intent.is_object() && intent.value("version",0)==4) {
                     const auto replacement=intent.find("roof_replacement");
@@ -564,6 +567,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (required<101 && (scientific_receipt(entity.properties) || scientific_receipt(entity.extensions))) required=101;
             if (entity.type == "slab" && entity.extensions.contains("slab_layer_stack_retirement"))
                 required = std::max(required, 103U);
+            if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations"))
+                required = std::max(required, 104U);
             if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations"))
                 required = std::max(required, 99U);
             if (entity.type == "roof" && entity.extensions.contains("roof_plan_resize_derivations"))
@@ -2210,6 +2215,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 104 &&
          sqlite3_column_int(user_version.get(), 0) != 103 &&
          sqlite3_column_int(user_version.get(), 0) != 102 &&
          sqlite3_column_int(user_version.get(), 0) != 101 &&
@@ -2768,6 +2774,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=104)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 104 for source-derived horizontal assembly outline edits and transformations");
         if (required_format>=103)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 103 for horizontal layer-stack authoring and retired entered measurements");
         if (required_format>=102)

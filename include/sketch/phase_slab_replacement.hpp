@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/phase_slab_profile_edit.hpp"
+#include "sketch/slab_geometry_edit.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 
 #include <map>
@@ -55,7 +56,8 @@ struct PhaseSlabReplacementResult {
     const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementPlan& plan,
     const PhaseSlabReplacementIdentityMap& identities,
     const std::vector<SlabProfileEditIntent>& slab_profiles,
-    const std::vector<SlabLayerStackEditIntent>& slab_stacks = {});
+    const std::vector<SlabLayerStackEditIntent>& slab_stacks = {},
+    const std::vector<SlabGeometryEditIntent>& slab_geometry = {});
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -64,11 +66,13 @@ struct PhaseSlabReplacementAuthoring {
     PhaseSlabReplacementIdentityMap identities;
     std::vector<SlabProfileEditIntent> slab_profiles;
     std::vector<SlabLayerStackEditIntent> slab_stacks;
+    std::vector<SlabGeometryEditIntent> slab_geometry;
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
 // identities and slab_profiles. Exclusive v2 replaces slab_profiles with
-// slab_stacks. Seeds must exactly match changed edit targets in either family.
+// slab_stacks; exclusive v3 uses slab_geometry. Geometry carries mathematical
+// intent only. Seeds must exactly match changed edit targets in every family.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(
@@ -90,5 +94,7 @@ struct PhaseSlabProfileReplacementRequest {
     const PhaseSlabReplacementEntities& source, const std::vector<SlabProfileEditIntent>& slab_profiles);
 [[nodiscard]] std::optional<PhaseSlabProfileReplacementRequest> phase_slab_layer_stack_replacement_request(
     const PhaseSlabReplacementEntities& source, const std::vector<SlabLayerStackEditIntent>& slab_stacks);
+[[nodiscard]] std::optional<PhaseSlabProfileReplacementRequest> phase_slab_geometry_replacement_request(
+    const PhaseSlabReplacementEntities& source, const std::vector<SlabGeometryEditIntent>& slab_geometry);
 
 } // namespace sketch
