@@ -2721,6 +2721,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_envelope_reservation=false;
     bool wall_stack_asset_reservation=false;
     bool hosted_slab_asset_reservation=false;
+    bool roof_mixed_asset_reservation=false;
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
@@ -2730,6 +2731,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
+            roof_mixed_asset_reservation=roof_mixed_asset_reservation || !replacement.ordinary_roof_edits.empty();
             complete_envelope_reservation=complete_envelope_reservation ||
                 !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty() || replacement.demolition;
             for (const auto& [original,id]:replacement.identities) {
@@ -2739,8 +2741,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 (void)original;
                 for (const auto& id : ids) { fresh.insert(id); nested_fresh.insert(id); }
             }
-            const auto opening_edits=replacement.roof_edits.empty() ? replacement.roof_opening_edits :
-                roof_edit_opening_intents(replacement.roof_edits);
+            auto roof_edits=replacement.roof_edits;
+            roof_edits.insert(roof_edits.end(),replacement.ordinary_roof_edits.begin(),replacement.ordinary_roof_edits.end());
+            const auto opening_edits=roof_edits.empty() ? replacement.roof_opening_edits :
+                roof_edit_opening_intents(roof_edits);
             for (const auto& id:new_roof_opening_identity_ids(source,opening_edits)) {
                 if (!fresh.insert(id).second)
                     throw std::invalid_argument("A new roof opening overlaps another fresh replacement identity: "+id);
@@ -2838,11 +2842,12 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("Proposed identity aliases an entity envelope field: "+std::string(key));
     for (std::size_t index=0;index<preceding_records;++index) {
         const auto& record=history.at(index);
-        if (wall_stack_asset_reservation || hosted_slab_asset_reservation) for (const auto& [id,asset]:record.assets) {
-            (void)asset;
-            if (fresh.contains(id))
-                throw std::invalid_argument("Proposed identity collides with a retained asset: "+id);
-        }
+        if (wall_stack_asset_reservation || hosted_slab_asset_reservation || roof_mixed_asset_reservation)
+            for (const auto& [id,asset]:record.assets) {
+                (void)asset;
+                if (fresh.contains(id))
+                    throw std::invalid_argument("Proposed identity collides with a retained asset: "+id);
+            }
         // A deliberately omitted fresh relationship copy is still a declared
         // identity in the recorded semantic operation. Undo cannot release it.
         if (record.boundary_constraint_changes)
@@ -2877,7 +2882,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                         for (const auto& id : ids) if (fresh.contains(id))
                             throw std::invalid_argument("Proposed identity was already reserved by retained roof split intent: " + id);
                     }
-                    const auto opening_edits=roof.roof_edits.empty() ? roof.roof_opening_edits : roof_edit_opening_intents(roof.roof_edits);
+                    auto roof_edits=roof.roof_edits;
+                    roof_edits.insert(roof_edits.end(),roof.ordinary_roof_edits.begin(),roof.ordinary_roof_edits.end());
+                    const auto opening_edits=roof_edits.empty() ? roof.roof_opening_edits : roof_edit_opening_intents(roof_edits);
                     for (const auto& edit:opening_edits)
                         for (const auto& upsert:edit.upserts)
                             if (fresh.contains(upsert.opening_id))
@@ -2886,7 +2893,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
-            if (hosted_slab_asset_reservation && entity.type=="assembly_model" && entity.properties.is_object()) {
+            if ((hosted_slab_asset_reservation || roof_mixed_asset_reservation) &&
+                entity.type=="assembly_model" && entity.properties.is_object()) {
                 const auto model=entity.properties.find("model");
                 if (model!=entity.properties.end() && model->is_object()) {
                     const auto instances=model->find("instances");

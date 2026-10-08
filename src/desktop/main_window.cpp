@@ -42046,7 +42046,8 @@ private:
         const std::map<std::string, Entity, std::less<>>& physical,
         std::vector<RoofEditIntent> edits, const std::string& message) {
         if (edits.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
-        const auto request = phase_roof_edit_replacement_request(source.entities(), edits);
+        const auto partition = partition_phase_roof_geometry_edits(source.entities(), edits);
+        const auto& request = partition.replacement;
         if (!request) {
             ApplyEntityChanges command{source.revision(), {}, {}, message};
             for (const auto& edit : edits)
@@ -42068,11 +42069,9 @@ private:
         replacement.registry_id = request->registry_id;
         replacement.alternative_id = request->alternative_id;
         replacement.seed_roof_ids = request->seed_roof_ids;
-        replacement.roof_edits = std::move(edits);
-        std::set<std::string, std::less<>> occupied;
-        for (const auto& record : source.history())
-            for (const auto& [id, entity] : record.entities) { (void)entity; occupied.insert(id); }
-        for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+        replacement.roof_edits = partition.baseline_roof_edits;
+        replacement.ordinary_roof_edits = partition.ordinary_roof_edits;
+        auto occupied = retainedSlabIdentityNames(source);
         for (const auto* ids : {&plan.required_entity_ids, &plan.required_child_ids})
             for (const auto& id : *ids) {
                 auto proposed = new_id("proposed");
@@ -42594,7 +42593,8 @@ private:
         }
         if (roof_edits.empty()) return Command{ApplyEntityChanges{source.revision(),{}, {},raw->message}};
         std::sort(roof_edits.begin(),roof_edits.end(),[](const auto& a,const auto& b) { return a.roof_id<b.roof_id; });
-        const auto request=phase_roof_edit_replacement_request(source.entities(),roof_edits);
+        const auto partition=partition_phase_roof_geometry_edits(source.entities(),roof_edits);
+        const auto& request=partition.replacement;
         if (!request) throw std::invalid_argument("The roof's active baseline membership changed before replacement.");
         const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
             request->registry_id,request->alternative_id);
@@ -42608,14 +42608,12 @@ private:
         replacement.registry_id=request->registry_id;
         replacement.alternative_id=request->alternative_id;
         replacement.seed_roof_ids=request->seed_roof_ids;
-        replacement.roof_edits=std::move(roof_edits);
+        replacement.roof_edits=partition.baseline_roof_edits;
+        replacement.ordinary_roof_edits=partition.ordinary_roof_edits;
         // Current and retained entity names are reserved before allocation;
         // replay and Document also check owned children, opaque retained names
         // and every declared replacement identity, including after Undo.
-        std::set<std::string,std::less<>> occupied;
-        for (const auto& record:source.history())
-            for (const auto& [id,entity]:record.entities) { (void)entity;occupied.insert(id); }
-        for (const auto& [id,asset]:source.assets()) { (void)asset;occupied.insert(id); }
+        auto occupied=retainedSlabIdentityNames(source);
         for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
             for (const auto& original:*ids) {
                 auto proposed=new_id("proposed");

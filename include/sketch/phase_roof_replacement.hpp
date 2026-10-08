@@ -46,16 +46,20 @@ struct PhaseRoofReplacementResult {
     const std::string& registry_id, const std::string& alternative_id);
 
 // Reinspects the full retained map, independently replays typed edits on source
-// owners, then derives copies. Only registry and qualified presentation owners
-// change in place. The enclosing Document reserves identities across history.
+// owners, then derives copies. Registry and qualified presentation owners change
+// in place; the opt-in ordinary combined list also changes actual ordinary roofs
+// with their existing IDs. The enclosing Document reserves identities across history.
 // Historical profile/opening slices remain separate. The combined roof edit
 // dialect composes profile, openings and pose against the same actual source.
+// A source join spanning baseline and ordinary roles has no qualified replacement
+// codec; complete baseline join cohorts and independent ordinary joins are admitted.
 [[nodiscard]] PhaseRoofReplacementResult replay_phase_roof_replacement(
     const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementPlan& plan,
     const PhaseRoofReplacementIdentityMap& identities,
     const std::vector<RoofProfileEditIntent>& roof_profiles,
     const std::vector<RoofOpeningEditIntent>& roof_opening_edits = {},
-    const std::vector<RoofEditIntent>& roof_edits = {});
+    const std::vector<RoofEditIntent>& roof_edits = {},
+    const std::vector<RoofEditIntent>& ordinary_roof_edits = {});
 
 struct PhaseRoofReplacementAuthoring {
     std::string registry_id;
@@ -70,6 +74,9 @@ struct PhaseRoofReplacementAuthoring {
     bool demolition{};
     // Exact additional component/overlay slots keyed by actual original IDs.
     std::map<std::string, std::vector<std::string>, std::less<>> demolition_additional_identities;
+    // Version five independently classifies both combined edit lists from the
+    // actual saved source. Ordinary owners retain their identities in place.
+    std::vector<RoofEditIntent> ordinary_roof_edits{};
 };
 
 // Version 1 retains exactly its six profile fields. Version 2 adds only
@@ -78,6 +85,8 @@ struct PhaseRoofReplacementAuthoring {
 // historical profile/opening arrays. Every dialect has an exact field set.
 // Version 4 contains exactly version, registry_id, alternative_id, seed_roof_ids,
 // identities, demolition:true, demolition_additional_identities.
+// Version 5 adds only ordinary_roof_edits to version 3's eight fields. Both
+// combined lists must be nonempty, historical arrays empty, and targets disjoint.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(
@@ -91,6 +100,18 @@ struct PhaseRoofProfileReplacementRequest {
     std::vector<std::string> seed_roof_ids;
     bool operator==(const PhaseRoofProfileReplacementRequest&) const = default;
 };
+
+struct PhaseRoofGeometryEditPartition {
+    std::vector<RoofEditIntent> baseline_roof_edits;
+    std::vector<RoofEditIntent> ordinary_roof_edits;
+    std::optional<PhaseRoofProfileReplacementRequest> replacement;
+};
+
+// Replay the complete actual typed edit group before classifying changed targets
+// from all saved registry memberships. Exact no-ops confer no role or identity
+// authority. Changed shared-baseline owners require one saved active alternative.
+[[nodiscard]] PhaseRoofGeometryEditPartition partition_phase_roof_geometry_edits(
+    const PhaseRoofReplacementEntities& source, const std::vector<RoofEditIntent>& roof_edits);
 
 // Source-equivalent edits return nullopt before callers allocate identities.
 // A shared-baseline request requires one actual saved active alternative and

@@ -414,6 +414,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 }
                 if (intent.is_object() && intent.value("version",0)==4) {
                     const auto replacement=intent.find("roof_replacement");
+                    if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==5) return 113U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==4) return 97U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==3) {
                         const auto edits = replacement->find("roof_edits");
@@ -2246,6 +2247,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 113 &&
          sqlite3_column_int(user_version.get(), 0) != 112 &&
          sqlite3_column_int(user_version.get(), 0) != 111 &&
          sqlite3_column_int(user_version.get(), 0) != 110 &&
@@ -2813,6 +2815,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=113)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 113 for mixed baseline and ordinary roof authoring");
         if (required_format>=112)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 112 for coordinated ordinary and proposed hosted horizontal movement");
         if (required_format>=111)

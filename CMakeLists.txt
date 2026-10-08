@@ -837,6 +837,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/slab_hosted_geometry_edit.cpp
     src/core/wall_layer_stack_edit.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
+  target_compile_definitions(sketch_architectural_document_adapter PRIVATE VERTEX_HAS_HORIZONTAL_AUTHORING)
   # Proposed profile replay must use the same hosted-assembly and fused-join
   # admission as native architectural authoring, rather than accept solids
   # that the architectural constructors would subsequently reject.

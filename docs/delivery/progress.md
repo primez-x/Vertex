@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 mixed roof roles and architectural floor-group source integration
+
+Roof group edits now derive actual changed baseline and ordinary/proposed roles
+before publication. Proposed baseline copies and same-ID ordinary roofs combine
+in one typed operation. Both canvas mathematical edits and captured property
+edits use this partition. Replacement five/native 113/extraction 111 retains
+the opt-in meaning without changing earlier saved authoring. New openings from
+both lists reserve history/asset/intent identities. Complete baseline join
+cohorts and independent ordinary joins are admitted; cross-role source joins
+still need a qualified join replacement interface.
+
+Ordinary architectural groups now route their horizontal members through the
+same actual-source geometry and hosted-component producer, using each original
+captured pivot/XYZ/scale/reflection operation. Other physical families retain
+their existing transforms, and one final Document publication admits the whole
+candidate. Shared-baseline mixed-family replacement remains separate. Independent
+source review approved this integrated slice with no actionable findings.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. The installed candidate remains unchanged; compilation,
+interaction and storage round trips remain unverified. No production
+acceptance, completion percentage or ETA is claimed.
+
 ### October 8 coordinated ordinary hosted movement source integration
 
 Ordinary horizontal plan/XYZ movement now derives attached component placements

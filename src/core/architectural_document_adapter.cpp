@@ -10,6 +10,9 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/wall_semantics.hpp"
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+#include "sketch/slab_hosted_geometry_edit.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -1776,6 +1779,10 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     std::set<std::string,std::less<>> selected;
     std::map<std::string,Intent,std::less<>> intents;
     std::vector<std::string> targets;
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+    std::vector<SlabGeometryEditIntent> slab_intents;
+    slab_intents.reserve(requested_targets.size());
+#endif
     targets.reserve(requested_targets.size());
     bool identity=true;
     for (const auto& target : requested_targets) {
@@ -1793,6 +1800,27 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         targets.push_back(id);
         intents.emplace(id,intent);
         identity=identity && intent.identity;
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+        if (found->second.type=="slab" && !intent.identity) {
+            // Replay the captured mathematical operation, never the affine
+            // translation or level compensation used by the other families.
+            const auto& transform=target.transform;
+            SlabGeometryEditIntent slab_intent;
+            slab_intent.slab_id=id;
+            if (transform.scale==1.0 && transform.offset.z==0.0) {
+                slab_intent.kind=SlabGeometryEditKind::transform_plan;
+                slab_intent.transform=PlanarTransform{{transform.pivot.x,transform.pivot.y},
+                    transform.rotation_z_radians,transform.flip_horizontal,transform.flip_vertical,
+                    {transform.offset.x,transform.offset.y}};
+            } else {
+                slab_intent.kind=SlabGeometryEditKind::transform_model;
+                slab_intent.model_transform=SlabModelTransform{transform.pivot,transform.offset,
+                    transform.rotation_z_radians,transform.scale,
+                    transform.flip_horizontal,transform.flip_vertical};
+            }
+            slab_intents.push_back(std::move(slab_intent));
+        }
+#endif
     }
     // Validate real descriptors even for identity intent. This group boundary
     // never admits the transaction lane's legacy transport-marker fallback.
@@ -1829,6 +1857,11 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             (void)decode_building_entity(effective);
         }
         const auto placement=entity.properties.find("vertical_placement");
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+        // The dedicated slab producer resolves raw/legacy elevation aliases
+        // and the actual level shift itself, including exact source no-ops.
+        if (entity.type=="slab") continue;
+#endif
         if (placement!=entity.properties.end() && placement->at("mode")=="level") {
             // A level's world shift is outside its raw object coordinates.
             // Keep the binding and compensate it in the local affine Z term:
@@ -1854,6 +1887,10 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         if (hosted_targets.contains(id)) continue;
         ArchitecturalOperation operation{ArchitecturalAction::transform,id};
         operation.transform=intents.at(id).affine;
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+        // Actual-map slab replay resolves its own model-space level shift.
+        if (source.entities().at(id).type!="slab")
+#endif
         if (const auto shift=level_shifts.find(id); shift!=level_shifts.end()) {
             operation.transform->z+=(operation.transform->scale-1.0)*shift->second;
             if (!std::isfinite(operation.transform->z))
@@ -1861,15 +1898,36 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         }
         operations.push_back(std::move(operation));
     }
+    auto candidate = copy_entities(source);
+    auto transaction_targets=targets;
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+    if (!slab_intents.empty()) {
+        candidate=replay_slab_geometry_with_hosted_entities(source.entities(),slab_intents);
+        // Hosted catalogs are actual-source consequences, not independently
+        // selected transform roots. Admit their identities without granting
+        // the helper authority over any other unselected entity family.
+        if (candidate.size()!=source.entities().size())
+            throw std::invalid_argument("Architectural slab replay changed the actual entity inventory.");
+        for (const auto& [id,after] : candidate) {
+            const auto found=source.entities().find(id);
+            if (found==source.entities().end() || after.id!=id || after.type!=found->second.type)
+                throw std::invalid_argument("Architectural slab replay changed an actual entity identity.");
+            if (after==found->second) continue;
+            if (selected.contains(id) && after.type=="slab") continue;
+            if (after.type!="assembly_model")
+                throw std::invalid_argument("Architectural slab replay changed an unrelated actual object.");
+            transaction_targets.push_back(id);
+        }
+    }
+#endif
     const auto transaction=ArchitecturalTransaction::create(transaction_id,std::to_string(source.revision()),
-        targets,std::move(operations),"Transform architectural group");
+        std::move(transaction_targets),std::move(operations),"Transform architectural group");
     // Creating the validated transaction also checks transaction/target lexical
     // identities on the no-op path without re-encoding any source metadata.
     if (identity) return {expected_revision,{}, {},"Transform architectural group"};
     // Construct final descriptors directly from the captured source. An
     // intermediate proper move could fail world/level admission even though
     // its reflected final position is valid; it must never be published.
-    auto candidate = copy_entities(source);
     for (const auto& operation : transaction.operations()) {
         const auto& id = operation.object_id;
         const auto& intent=intents.at(id);
@@ -1880,7 +1938,11 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         const auto& movement = *operation.transform;
         auto& after = candidate.at(id);
         if (before.type == "slab")
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+            continue; // Source-derived geometry, receipts and hosted motion are already complete.
+#else
             after = transform_slab_entity(before, movement, horizontal, vertical);
+#endif
         else if (before.type == "room")
             after = transform_room_entity(before, movement, horizontal, vertical);
         else if (before.type == "assembly_instance") {

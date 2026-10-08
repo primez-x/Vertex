@@ -136,6 +136,11 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 // Level-relative placements retain their bindings and share the world pivot.
 // A selected hosted railing requires its selected stair; selected/hidden
 // dependents follow the host once. Connected stair dimensions cannot scale.
+// Horizontal authoring replays slabs from the actual source and captured pivot,
+// retaining geometry derivations/retired receipts and moving actual hosted
+// catalog placements in the same final command. Affected catalogs are admitted
+// consequences, not selected transform roots. Ordinary admission retains the
+// saved-design guards; shared-baseline replacement requires its qualified lane.
 // Equivalent identity intent validates targets/transaction identity and returns
 // no history edit. Walls, joins and embedded assembly members are not targets.
 [[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
@@ -149,6 +154,8 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 // Equivalence allows 64 machine epsilons times each coefficient's magnitude
 // (with a unit floor) for frame-conversion roundoff, with equal reflection parity.
 // Identity targets retain their exact payload even in a mixed operation.
+// Each slab retains its original captured operation for actual-source replay;
+// another family's affine/level compensation never becomes slab edit intent.
 [[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
     const DocumentSnapshot& source, std::span<const ArchitecturalGroupTransformTarget> targets,
     const std::string& transaction_id, Revision expected_revision);

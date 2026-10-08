@@ -1,4 +1,28 @@
-# Vertex project formats v1 through v112
+# Vertex project formats v1 through v113
+
+## Mixed baseline and ordinary roof authoring (v113)
+
+Native format 113 and JSON/assets extraction version 111 retain roof replacement
+authoring version five through direct, wrapped and historical commands,
+including Undo. It has version three's eight fields plus `ordinary_roof_edits`:
+`version`, `registry_id`, `alternative_id`, `seed_roof_ids`, `identities`,
+`roof_profiles`, `roof_opening_edits`, `roof_edits` and `ordinary_roof_edits`.
+Both combined edit lists are nonempty and the historical profile/opening arrays
+are empty. Earlier replacement dialects keep their exact saved meaning.
+
+Actual full-map typed replay precedes role classification. Changed shared
+baseline targets receive proposed copies in the saved active alternative;
+ordinary/proposed targets retain their original IDs and receive actual derived
+edits in the same publication. Unchanged targets confer no replacement authority.
+Target lists are disjoint and independently checked against all saved registries.
+New opening identities from both lists remain reserved through history, assets
+and retained semantic intents. Source/final roofs and affected joins receive
+native, context and material admission.
+
+Complete baseline join cohorts and independent ordinary joins are supported.
+A source join spanning baseline and ordinary members still requires a separate
+qualified join replacement interface. Compilation, interaction and storage
+round trips remain unverified.
 
 ## Coordinated ordinary and proposed hosted movement (v112)
 
