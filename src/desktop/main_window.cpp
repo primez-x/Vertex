@@ -21910,7 +21910,7 @@ public:
             } else {
                 candidate.properties["layers"] = wall_layers_json(layers);
             }
-            const auto snapshot = m_document->snapshot();
+            const auto snapshot = authoringSnapshot();
             std::vector<const Entity*> openings;
             for (const auto& [id, entity] : snapshot.entities()) {
                 (void)id;
@@ -22013,7 +22013,7 @@ public:
                     candidate.properties["slope_rise"] = rise;
             }
             std::vector<const Entity*> openings;
-            const auto snapshot = m_document->snapshot();
+            const auto snapshot = authoringSnapshot();
             for (const auto& [id, entity] : snapshot.entities()) {
                 (void)id;
                 if (entity.type == "opening" &&
@@ -39162,6 +39162,33 @@ private:
         }
     }
 
+    static bool physicalWallProfileChanged(const Entity& original, const Entity& candidate) {
+        if (original.type != "wall" || candidate.type != "wall") return false;
+        auto before = json::object();
+        auto after = json::object();
+        for (const auto* field : {"height_m", "height", "thickness_m", "thickness", "layers",
+            "top_plane", "slope_rise_m", "slope_rise"}) {
+            if (original.properties.contains(field)) before[field] = original.properties.at(field);
+            if (candidate.properties.contains(field)) after[field] = candidate.properties.at(field);
+        }
+        return before.dump() != after.dump();
+    }
+
+    static bool isPhysicalWallProfileEdit(const Entity& original, const Entity& candidate) {
+        if (!physicalWallProfileChanged(original, candidate)) return false;
+        auto retained = original;
+        auto proposed = candidate;
+        for (const auto* field : {"height_m", "height", "thickness_m", "thickness", "layers",
+            "top_plane", "slope_rise_m", "slope_rise"}) {
+            retained.properties.erase(field);
+            proposed.properties.erase(field);
+        }
+        // A profile review cannot grant authority to an accompanying baseline,
+        // context, name, style, extension or identity edit.
+        return retained == proposed && retained.properties.dump() == proposed.properties.dump() &&
+            retained.extensions.dump() == proposed.extensions.dump();
+    }
+
     bool editSelectedProperties(json properties, const char* message) {
         const auto entity = selectedEntity();
         if (!entity.has_value()) {
@@ -39189,8 +39216,19 @@ private:
                     clearError();
                     return true;
                 }
-                if (!sourceEditAuthorityUnchanged(authority)) return false;
-                applyAuthoredCommand(command);
+                const auto original = source.entities().find(entity->id);
+                const auto proposed = preview.entities().find(entity->id);
+                if (original != source.entities().end() && proposed != preview.entities().end() &&
+                    isPhysicalWallProfileEdit(original->second, proposed->second)) {
+                    if (!applyWallProfileCommand(source, preview, command, entity->id, authority)) return false;
+                } else {
+                    if (original != source.entities().end() && proposed != preview.entities().end() &&
+                        physicalWallProfileChanged(original->second, proposed->second) &&
+                        affectedPhysicalWallRooms(source, preview.entities(), entity->id) != 0)
+                        throw std::invalid_argument("Edit wall height, thickness, slope or layers separately from geometry, context or metadata so affected rooms can be reviewed.");
+                    if (!sourceEditAuthorityUnchanged(authority)) return false;
+                    applyAuthoredCommand(command);
+                }
                 clearError();
                 refresh();
                 return true;
@@ -39837,6 +39875,34 @@ private:
         return ledger;
     }
 
+    bool applyWallProfileCommand(const DocumentSnapshot& source, const DocumentSnapshot& candidate,
+        const Command& command, const std::string& wall_id, const SourceEditAuthority& authority) {
+        const auto require_current = [&] {
+            if (!sourceEditAuthorityUnchanged(authority) || authority.selection.size() != 1 ||
+                authority.selection.front() != QString::fromStdString(wall_id) ||
+                hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The wall profile, project, selection or workspace changed. Reopen the wall editor.");
+        };
+        require_current();
+        if (affectedPhysicalWallRooms(source, candidate.entities(), wall_id) != 0) {
+            const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
+                wall_id, authority, owner);
+            if (!reviewed) {
+                clearError();
+                refreshInspector();
+                return false;
+            }
+            require_current();
+            // The reviewed wrapper already contains the exact augmented child.
+            // Publish it once through normal Site/workspace admission.
+            applyAuthoredCommand(*reviewed);
+        } else {
+            require_current();
+            applyAuthoredCommand(command);
+        }
+        return true;
+    }
+
     bool applyEntity(Entity entity, const char* message,
                      std::optional<Revision> expected_revision = std::nullopt) {
         if (!m_document->is_editable()) {
@@ -39845,6 +39911,32 @@ private:
             return false;
         }
         try {
+            if (entity.type == "wall" && m_selected_id == QString::fromStdString(entity.id)) {
+                const auto source = authoringSnapshot();
+                const auto original = source.entities().find(entity.id);
+                if (original != source.entities().end() &&
+                    physicalWallProfileChanged(original->second, entity)) {
+                    const auto profile_only = isPhysicalWallProfileEdit(original->second, entity);
+                    const auto authority = captureSourceEditAuthority(source);
+                    const auto wall_id = entity.id;
+                    const auto command = augmentAuthoredCommand(Command{ApplyEntityChanges{
+                        .expected_revision = expected_revision.value_or(source.revision()),
+                        .entity_changes = {EntityChange::upsert(std::move(entity))},
+                        .message = message,
+                    }}, source);
+                    const auto candidate = Document::preview_command(source, command);
+                    if (profile_only) {
+                        if (!applyWallProfileCommand(source, candidate, command, wall_id, authority)) return false;
+                    } else {
+                        if (affectedPhysicalWallRooms(source, candidate.entities(), wall_id) != 0)
+                            throw std::invalid_argument("Edit wall height, thickness, slope or layers separately from geometry, context or metadata so affected rooms can be reviewed.");
+                        if (!sourceEditAuthorityUnchanged(authority)) return false;
+                        applyAuthoredCommand(command);
+                    }
+                    clearError();
+                    return true;
+                }
+            }
             applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = expected_revision.value_or(m_document->revision()),
                 .entity_changes = {EntityChange::upsert(std::move(entity))},
@@ -45911,20 +46003,25 @@ private:
                 }
                 for (const auto& edit:value.dimension_placement_moves) targets.insert(edit.dimension_id);
                 if (!value.room_review_geometry_proof.is_null()) {
-                    // The core admits only a canonical direct ordinary wall or
-                    // curve child. Its complete footprint remains subject to
+                    // The core admits only a canonical direct wall geometry or
+                    // profile child. Its complete footprint remains subject to
                     // selection authority beneath the atomic room wrapper.
                     const auto geometry_command=command_from_json(value.room_review_geometry_proof);
                     (void)preview_physical_wall_room_review_geometry(source,geometry_command);
                     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
-                    if (!geometry) throw std::invalid_argument("The room review requires a direct wall geometry proof.");
-                    for (const auto& edit:geometry->wall_edits) targets.insert(edit.wall_id);
-                    for (const auto& edit:geometry->boundary_edits) targets.insert(edit.boundary_id);
-                    for (const auto& edit:geometry->exterior_source_edits) targets.insert(edit.boundary_id);
-                    for (const auto& edit:geometry->measured_stroke_edits) targets.insert(edit.stroke_id);
-                    changes(geometry->entity_changes);changes(geometry->physical_entity_changes);
-                    changes(geometry->supplemental_entity_changes);changes(geometry->selection_entity_changes);
-                    for (const auto& edit:geometry->dimension_placement_moves) targets.insert(edit.dimension_id);
+                    if (geometry) {
+                        for (const auto& edit:geometry->wall_edits) targets.insert(edit.wall_id);
+                        for (const auto& edit:geometry->boundary_edits) targets.insert(edit.boundary_id);
+                        for (const auto& edit:geometry->exterior_source_edits) targets.insert(edit.boundary_id);
+                        for (const auto& edit:geometry->measured_stroke_edits) targets.insert(edit.stroke_id);
+                        changes(geometry->entity_changes);changes(geometry->physical_entity_changes);
+                        changes(geometry->supplemental_entity_changes);changes(geometry->selection_entity_changes);
+                        for (const auto& edit:geometry->dimension_placement_moves) targets.insert(edit.dimension_id);
+                    } else if (const auto* profile=std::get_if<ApplyEntityChanges>(&geometry_command)) {
+                        changes(profile->entity_changes);
+                    } else {
+                        throw std::invalid_argument("The room review requires a direct wall geometry or profile proof.");
+                    }
                 }
                 if (!value.room_review_intent.is_null()) {
                     const auto review=decode_physical_wall_room_review_intent(value.room_review_intent);
@@ -54022,6 +54119,8 @@ public:
             return;
         }
         const auto context = captureModalContext();
+        std::optional<SourceEditAuthority> profile_authority;
+        if (wall && context.source) profile_authority = captureSourceEditAuthority(*context.source);
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(wall ? QStringLiteral("wallLayerDialog")
@@ -54087,7 +54186,8 @@ public:
                          &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
                          &dialog, [&] {
-                             if (!modalContextUnchanged(context)) {
+                             if (!modalContextUnchanged(context) ||
+                                 (wall && (!profile_authority || !sourceEditAuthorityUnchanged(*profile_authority)))) {
                                  status->setText(lastError());
                                  buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                                  return;

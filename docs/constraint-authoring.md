@@ -103,6 +103,14 @@ any commit and require room review for affected retained consumers. Cancellation
 leaves the original wall and rooms unchanged. The current review covers one
 resolved drawing context and plane; affected consumers outside it refuse.
 
+Wall height, thickness, sloped-top and assembly-layer edits use a profile-only completion
+instead of an artificial endpoint edit. The exact authored wall upsert retains
+all other fields; linked exterior measurement updates keep their existing
+source completion. Room review happens on this detached candidate before any
+publication. Envelope 26, native format 78 and extraction version 76 preserve
+the profile and reviewed rooms as one event. Missing exterior completion,
+unrelated payloads and mixed profile/geometry changes cannot borrow this lane.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

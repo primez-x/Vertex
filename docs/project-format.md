@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v77
+# Vertex project formats v1 through v78
+
+## Reviewed wall-profile and room changes (v78)
+
+Native format 78 and JSON/assets extraction version 76 retain
+boundary-constraint envelope 26. It uses the same original/derived source
+fences as envelopes 24/25, with one profile-only child. That child is either
+ordinary entity envelope 1 with one existing wall upsert and no assets, or
+boundary envelope 6/7 with one physical-wall upsert and qualified exterior
+measurement redraws. No baseline edit is invented to represent a profile.
+
+Only `height_m`, `height`, `thickness_m`, `thickness`, `layers`, `top_plane`,
+`slope_rise_m` and `slope_rise` may differ
+from the captured wall. Identity, required state, extensions, baseline, context
+and every other property remain exact. Other walls remain unchanged; new,
+removed or replaced physical source walls refuse. Raw profile children cannot
+leave linked exterior measurements stale. Completed children independently
+rederive their exact exterior redraws and full candidate before room authority
+is granted. The v7 child permits its source-completion flag for declared sloped
+top fields, while its supplemental entity/asset lanes remain empty. Asset or
+unrelated payload lanes cannot supply this completion.
+
+Admission replays the profile first, then the explicit room decisions against
+that exact result. Height/thickness/slope/layer changes, exterior measurements and
+rooms publish in one event. Undo restores all of them together. Mixed profile
+and geometry/metadata edits cannot borrow profile-only review authority.
+The declared outer dialect must agree with its child. The new reader floor
+applies to every retained revision, including undone and abandoned changes.
 
 ## Reviewed ordinary physical-wall and room changes (v77)
 

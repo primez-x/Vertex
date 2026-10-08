@@ -1024,6 +1024,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U157 — Change wall thickness and height**
   - Steps: Draw a wall and place a door and a window on it. Double-click the wall and change its thickness and height. Check the plan and 3D, Undo, Redo, and save/reopen. Try reducing the height below the top of its window, then apply a valid height.
+  - Room check: Define named rooms inside joined walls and record their clear dimensions and areas. Change one wall's thickness or height. Review the proposed room outlines, names, inside points and affected dimensions before accepting. Cancel once; the wall and rooms should remain unchanged. Apply, then Undo once and Redo; the wall profile, rooms and any linked exterior measurement should return together. Save and reopen and compare the accepted values in plan, 3D and Details.
   - Expected: Valid edits update plan and 3D together and retain the hosted objects. An invalid height gives an explanation and changes nothing; the subsequent valid edit still works. Undo restores the previous wall and openings in one step.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1035,11 +1036,13 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U159 — Create a sloped wall**
   - Steps: In a horizontal architectural plan, begin a sloped wall and cancel its uncommitted start with Undo. Repeat, place the second endpoint and enter its rise. Inspect plan and 3D, then Undo and Redo the completed wall. In Properties, try positive and negative Top rise on one straight and one curved wall, save and reopen, then set Top rise to zero.
+  - Room check: Define named rooms using the sloped wall, then change its Top rise. Review the proposed room/source changes before Apply. Cancel once, then apply a valid change. One Undo should restore both the top profile and rooms; Redo and save/reopen should retain your accepted choices and measurements.
   - Expected: The entered height/rise is visible in the correct direction. On a curved wall, Top rise follows the start-to-end chord and the top remains one plane across the curve. Setting it to zero flattens the wall.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U160 — Assign a wall material or layered assembly**
+  - Steps: Select a wall enclosing a named room. Open its layer editor and change the material layers while keeping their total thickness valid. Review the affected rooms, cancel once, then repeat and apply. Undo once, Redo, save and reopen; the layers and retained room decisions should return together.
   - Expected: The chosen material or construction is reflected in properties and relevant output.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

@@ -67,11 +67,20 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 [[nodiscard]] PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomCorrespondenceReport& report,
     const PhysicalWallRoomReviewIntent& intent);
-// A direct ordinary wall-edit or curve-construction command is admitted on a
+// A direct ordinary wall-edit, profile change or curve command is admitted on a
 // detached copy. Retained rooms remain available for correspondence review.
 // Only unwrapped ordinary wall-bearing v2/v3/v4/v5/v6/v7/v11 and direct
-// curve v23 proofs qualify; ordinary connected/source consequences retain
-// their existing child command authority.
+// curve v23 proofs qualify. Profile changes require one existing-wall raw v1
+// upsert or a completed v6/v7 physical upsert with exterior redraws. Ordinary
+// connected/source consequences retain their existing child command authority.
+[[nodiscard]] bool is_physical_wall_room_profile_review_command(const Command& command);
+// Source-dependent profile admission preserves exact identity, extensions and
+// every nonprofile property, including opaque geometry and drawing context.
+// The declared profile includes height, thickness, layers and sloped top fields.
+// Raw profile upserts refuse when linked exterior sources need completion.
+void validate_physical_wall_room_profile_review_source(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,const Command& command);
 [[nodiscard]] DocumentSnapshot preview_physical_wall_room_review_geometry(
     const DocumentSnapshot& source,const Command& geometry_command);
 // The report and intent belong to the detached geometry snapshot above. The

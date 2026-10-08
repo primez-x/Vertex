@@ -60,6 +60,10 @@ QComboBox* choice(QWidget* parent,const QString& name) {
     auto* result=new QComboBox(parent);result->setObjectName(name);result->addItem(QStringLiteral("Choose…"),QString{});return result;
 }
 std::string value(QComboBox* combo) { return combo->currentData().toString().toStdString(); }
+bool curve_proposal(const std::optional<Command>& predecessor) {
+    const auto* command=predecessor?std::get_if<ApplyBoundaryConstraintChanges>(&*predecessor):nullptr;
+    return command && command->curve_construction_completion;
+}
 } // namespace
 
 class PhysicalWallRoomReviewDialog::Impl {
@@ -132,7 +136,7 @@ public:
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalRoomReviewStatus"));status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
         apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));
-        apply->setText(predecessor?(std::get<ApplyBoundaryConstraintChanges>(*predecessor).curve_construction_completion?
+        apply->setText(predecessor?(curve_proposal(predecessor)?
             QStringLiteral("Apply curve and reviewed rooms"):QStringLiteral("Apply wall edit and reviewed rooms")):
             QStringLiteral("Apply reviewed rooms"));layout->addWidget(buttons);
         QObject::connect(apply,&QPushButton::clicked,dialog,[this]{dialog->accept();});
@@ -435,7 +439,7 @@ public:
                 reference_table->item(static_cast<int>(i),2)->setText(description);
             }
             require_current();candidate=std::move(command);candidate_snapshot=std::move(exact);error.clear();
-            status->setText(predecessor?(std::get<ApplyBoundaryConstraintChanges>(*predecessor).curve_construction_completion?
+            status->setText(predecessor?(curve_proposal(predecessor)?
                 QStringLiteral("The proposed curve and all room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."):
                 QStringLiteral("The proposed wall edit and all room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state.")):
                 QStringLiteral("All room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."));apply->setEnabled(true);

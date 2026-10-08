@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 reviewed wall height, thickness, slope and layers
+
+Direct wall height/thickness, sloped-top and assembly-layer edits now preview their exact
+authored command and route affected retained rooms to explicit review. Existing
+exterior measurement completion remains part of that same child. The room
+review publishes neither the proposed profile nor an intermediate room state;
+accepting commits one complete event. Cancel restores inspector values without
+changing source or history. Source, selection, workspace and pending-placement
+fences remain active, including in the wall-layer dialog.
+
+Envelope 26 retains a genuine profile-only wall upsert or its qualified exterior
+completion. Only eight declared height/thickness/slope/layer fields may change; other
+wall identity, geometry, context and opaque fields remain exact. Raw children
+cannot leave linked exterior measurements stale, and completed exterior redraws
+are independently reconstructed. Mixed profile/other edits affecting retained
+rooms refuse instead of bypassing review. Native format 78/extraction 76 retain
+this event throughout history.
+
+One resolved room context/plane remains the current review scope. Other wall
+mutation routes and multi-context consequences remain open. No builds, tests,
+probes, launches, packages or installations ran. Compilation, interactions,
+persistence and performance remain unverified; the installed candidate is
+unchanged.
+
 ### October 8 reviewed ordinary wall length and endpoint edits
 
 Detached room review now accepts ordinary physical-wall endpoint and length
@@ -2369,9 +2393,9 @@ passes. No installed ACL, profile or firewall was changed.
    remaining physical-wall mutation routes. Preserve the original snapshot
    fence and one complete geometry/room event. No intermediate wall or room
    commit, guessed classification, silent identity reassignment or reference
-   loss is permitted. Ordinary length/endpoint editing, explicit connected curve
-   construction and their atomic room reviews are recorded above; do not restart
-   them. Persisted tangent relations already exist in
+   loss is permitted. Wall profiles/sloped tops/layers, ordinary length/endpoint editing,
+   explicit connected curve construction and their atomic room reviews are
+   recorded above; do not restart them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent
    selection source changes are recorded above; do not restart them.

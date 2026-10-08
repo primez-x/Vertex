@@ -5,6 +5,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/wall_measurement.hpp"
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -480,7 +481,23 @@ PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(const DocumentS
 }
 
 namespace {
+bool profile_upsert(const std::vector<EntityChange>& changes) {
+    return changes.size()==1 && changes.front().kind==EntityChangeKind::upsert &&
+        changes.front().entity.type=="wall" && changes.front().entity_id==changes.front().entity.id;
+}
+bool exact_entity(const Entity& left,const Entity& right) {
+    return left==right && left.properties.dump()==right.properties.dump() && left.extensions.dump()==right.extensions.dump();
+}
+bool exact_entities(const Entities& left,const Entities& right) {
+    if (left.size()!=right.size()) return false;
+    for (const auto& [id,entity]:left) {
+        const auto found=right.find(id);
+        if (found==right.end() || !exact_entity(entity,found->second)) return false;
+    }
+    return true;
+}
 Json room_review_geometry_proof(const Command& geometry_command) {
+    if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if (!geometry || geometry->wall_edits.empty()) invalid("review requires a direct command with explicit wall edits");
     // Inspect typed lanes as well as the serialized discriminator: retained or
@@ -521,11 +538,86 @@ void require_room_review_curve(const DocumentSnapshot& source,const Command& cur
 }
 } // namespace
 
+bool is_physical_wall_room_profile_review_command(const Command& command) {
+    try {
+        const auto* raw=std::get_if<ApplyEntityChanges>(&command);
+        const auto* completed=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (raw) {
+            if (!profile_upsert(raw->entity_changes) || !raw->asset_changes.empty()) return false;
+        } else if (completed) {
+            if (!profile_upsert(completed->physical_entity_changes) || !completed->wall_edits.empty() ||
+                !completed->boundary_edits.empty() || !completed->entity_changes.empty() ||
+                !completed->exterior_source_completion || completed->exterior_source_edits.empty() ||
+                !completed->supplemental_entity_changes.empty() || !completed->supplemental_asset_changes.empty() ||
+                completed->supplemental_asset_reference_completion ||
+                completed->wall_split || completed->wall_merge || completed->exterior_corner_move ||
+                completed->exterior_segment_resize || completed->exterior_segment_arc ||
+                completed->rigid_wall_transform_completion || completed->rigid_group_completion || completed->rigid_group_transform ||
+                completed->joint_translation_completion || completed->joint_translation ||
+                completed->measured_source_completion || !completed->measured_stroke_edits.empty() ||
+                completed->dimension_placement_completion || !completed->dimension_placement_moves.empty() ||
+                completed->wall_dimension_completion || completed->disto_measurement_completion || completed->disto_measurement ||
+                completed->selection_completion || !completed->selection_entity_changes.empty() ||
+                completed->curve_construction_completion || completed->room_review_completion || !completed->room_review_intent.is_null() ||
+                completed->room_review_geometry_completion || !completed->room_review_geometry_proof.is_null()) return false;
+        } else return false;
+        const auto proof=command_to_json(command);
+        const int version=raw ? 1 : completed->supplemental_source_completion ? 7 : 6;
+        if (proof.dump().size()>1024*1024 || proof.at("version")!=version ||
+            proof.at("kind")!=(raw?"apply_entity_changes":"apply_boundary_constraint_changes")) return false;
+        return command_to_json(command_from_json(proof)).dump()==proof.dump();
+    } catch (const std::exception&) { return false; }
+}
+
+void validate_physical_wall_room_profile_review_source(const Entities& source,const Entities& candidate,const Command& command) {
+    if (!is_physical_wall_room_profile_review_command(command)) invalid("unsupported direct wall profile command");
+    const auto* raw=std::get_if<ApplyEntityChanges>(&command);
+    const auto& changes=raw?raw->entity_changes:std::get<ApplyBoundaryConstraintChanges>(command).physical_entity_changes;
+    const auto& proposed=changes.front().entity;
+    const auto previous=source.find(proposed.id),final=candidate.find(proposed.id);
+    if (previous==source.end() || previous->second.type!="wall" || final==candidate.end() ||
+        !exact_entity(final->second,proposed) || proposed.id!=previous->second.id ||
+        proposed.type!=previous->second.type || proposed.required!=previous->second.required ||
+        proposed.extensions.dump()!=previous->second.extensions.dump())
+        invalid("profile change requires one existing physical source wall with exact retained identity and extensions");
+    if (!previous->second.properties.is_object() || !proposed.properties.is_object()) invalid("malformed wall profile properties");
+    auto old_properties=previous->second.properties,new_properties=proposed.properties;
+    for (const auto* field:{"height_m","height","thickness_m","thickness","layers",
+        "top_plane","slope_rise_m","slope_rise"}) {
+        old_properties.erase(field);new_properties.erase(field);
+    }
+    if (old_properties.dump()!=new_properties.dump()) invalid("profile change cannot borrow geometry, context or other wall properties");
+    if (previous->second.properties.dump()==proposed.properties.dump()) invalid("wall profile command must change a declared profile field");
+    for (const auto& [id,entity]:source) {
+        if (entity.type!="wall" || id==proposed.id) continue;
+        const auto found=candidate.find(id);
+        if (found==candidate.end() || !exact_entity(entity,found->second)) invalid("profile review cannot change another physical source wall");
+    }
+    for (const auto& [id,entity]:candidate)
+        if (entity.type=="wall" && (!source.contains(id) || source.at(id).type!="wall"))
+            invalid("profile review cannot create or replace a physical source wall");
+    auto physical=source;physical.at(proposed.id)=proposed;
+    if (raw) {
+        if (!exact_entities(candidate,physical)) invalid("raw wall profile candidate contains unrelated changes");
+        if (!exterior_wall_measurement_source_updates(source,candidate).empty())
+            invalid("profile change requires completed exterior source redraws before room review");
+    } else {
+        const auto redraws=exterior_wall_measurement_source_updates(source,physical);
+        auto expected=std::get<ApplyBoundaryConstraintChanges>(command);expected.exterior_source_edits=redraws;
+        if (redraws.empty() || command_to_json(Command{expected}).dump()!=command_to_json(command).dump())
+            invalid("profile exterior redraws do not match the captured physical sources");
+        if (!exact_entities(candidate,edited_boundary_entities_batch(physical,redraws)))
+            invalid("completed wall profile candidate differs from its exact source redraws");
+    }
+}
+
 DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapshot& source,const Command& geometry_command) {
     if (!source.is_editable()) invalid("captured document is read-only");
     (void)room_review_geometry_proof(geometry_command);
     // The original child command owns all ordinary admission and consequences.
     auto derived=Document::preview_command(source,geometry_command);
+    if (is_physical_wall_room_profile_review_command(geometry_command))
+        validate_physical_wall_room_profile_review_source(source.entities(),derived.entities(),geometry_command);
     if (derived.assets()!=source.assets()) invalid("wall geometry review cannot change assets");
     for (const auto& [id,entity] : source.entities()) {
         if (entity.type!="wall") continue;
@@ -551,7 +643,9 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_af
     retained_intent.source_authoring_digest=document_authoring_source_digest_v2(source);
     retained_intent.source_saved_revision=source.saved_revision_optional();
     ApplyBoundaryConstraintChanges command;
-    command.expected_revision=source.revision();command.message=std::get<ApplyBoundaryConstraintChanges>(geometry_command).message;
+    command.expected_revision=source.revision();
+    if (const auto* raw=std::get_if<ApplyEntityChanges>(&geometry_command)) command.message=raw->message;
+    else command.message=std::get<ApplyBoundaryConstraintChanges>(geometry_command).message;
     command.room_review_completion=true;
     command.room_review_intent=encode_physical_wall_room_review_intent(retained_intent);
     command.room_review_geometry_completion=true;command.room_review_geometry_proof=command_to_json(geometry_command);
