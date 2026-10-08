@@ -309,6 +309,71 @@ void validate_input(const json& input,const Segment& baseline,const std::string&
             invalid("Curve construction receipt does not reproduce its baseline: "+id);
     }
 }
+constexpr std::size_t curve_edit_byte_limit=1024*1024;
+void validate_curve_edit_size(const json& value) {
+    if (value.dump().size()>curve_edit_byte_limit)
+        invalid("Wall curve construction proof exceeds the supported byte limit");
+}
+bool understood_curve_input_field(const std::string& key) {
+    for (const auto* field : {"version","construction","start","end","measure",
+            "normalized_measure","measure_value","clockwise","sweep","normalized_sweep","radians"})
+        if (key==field) return true;
+    return false;
+}
+void validate_preserved_curve_metadata(const json* source,const json& input) {
+    if (source) {
+        for (const auto& [key,value] : source->items())
+            if (!understood_curve_input_field(key) &&
+                (!input.contains(key) || input.at(key).dump()!=value.dump()))
+                invalid("Wall curve construction cannot discard or replace opaque input metadata");
+    }
+    for (const auto& [key,value] : input.items()) {
+        (void)value;
+        if (!understood_curve_input_field(key) && (!source || !source->contains(key)))
+            invalid("Wall curve construction cannot introduce opaque input metadata");
+    }
+}
+Segment explicit_curve_baseline(const json& input,const std::string& id) {
+    validate_curve_edit_size(input);
+    if (!input.is_object() || !input.contains("version") ||
+        !input.at("version").is_number_integer() || input.at("version")!=2)
+        invalid("Explicit wall curve construction requires version two input");
+    for (const auto* key : {"construction","measure","normalized_measure","sweep","normalized_sweep"})
+        if (!input.contains(key) || !input.at(key).is_string() ||
+            input.at(key).get_ref<const std::string&>().empty())
+            invalid("Explicit wall curve construction requires its entered and normalized expressions");
+    if (!input.contains("clockwise") || !input.at("clockwise").is_boolean())
+        invalid("Explicit wall curve construction requires its clockwise flag");
+    const auto start=point(input.at("start"),"Curve construction start");
+    const auto end=point(input.at("end"),"Curve construction end");
+    const auto value=finite_number(input.at("measure_value"),"Curve construction measure");
+    const auto& construction=input.at("construction").get_ref<const std::string&>();
+    const auto& measure=input.at("measure").get_ref<const std::string&>();
+    const auto& normalized=input.at("normalized_measure").get_ref<const std::string&>();
+    Segment expected;
+    if (construction=="angle") {
+        if (parse_angle(measure).radians!=value || parse_angle(normalized).radians!=value)
+            invalid("Explicit wall curve angle expressions do not reproduce their exact value");
+        expected=arc_from_chord_angle(start,end,value);
+    } else if (construction=="arc_length" || construction=="arc_height") {
+        bool matches=false;
+        for (const auto unit : {Unit::metre,Unit::foot}) {
+            try { matches=matches || parse_quantity(measure,unit).metres==value; }
+            catch (const std::exception&) {}
+        }
+        if (!matches || parse_quantity(normalized,Unit::metre).metres!=value)
+            invalid("Explicit wall curve length expressions do not reproduce their signed value");
+        expected=construction=="arc_length" ?
+            arc_from_chord_arc_length(start,end,std::abs(value),input.at("clockwise").get<bool>()) :
+            arc_from_chord_height(start,end,value);
+    } else invalid("Explicit wall curve construction has an unsupported kind");
+    if (finite_number(input.at("radians"),"Curve construction sweep")!=expected.sweep_radians ||
+        parse_angle(input.at("sweep").get_ref<const std::string&>()).radians!=expected.sweep_radians ||
+        parse_angle(input.at("normalized_sweep").get_ref<const std::string&>()).radians!=expected.sweep_radians)
+        invalid("Explicit wall curve sweep expressions do not reproduce their exact baseline");
+    validate_input(input,expected,id);
+    return expected;
+}
 json derived_angle_input(const json& source,const Segment& baseline) {
     auto result=source;
     const auto angle=angle_from_radians(baseline.sweep_radians);
@@ -640,7 +705,12 @@ Entity reconstruct_split_wall(const Entity& source,const Segment& baseline,doubl
 }
 
 void validate_constraint_wall_geometry_transition(const std::map<std::string,Entity,std::less<>>& before,
-    const std::map<std::string,Entity,std::less<>>& after,bool qualified,bool qualified_line_origin) {
+    const std::map<std::string,Entity,std::less<>>& after,bool qualified,bool qualified_line_origin,
+    const std::set<std::string,std::less<>>& curve_construction_owner_ids) {
+    for (const auto& id : curve_construction_owner_ids)
+        if (!qualified || !before.contains(id) || before.at(id).type!="wall" ||
+            !after.contains(id) || after.at(id).type!="wall")
+            invalid("Explicit wall curve construction requires its qualified existing owner: "+id);
     for (const auto& [id,source] : before) {
         const auto found=after.find(id);
         if (source.type!="wall" || found==after.end() || found->second.type!="wall") continue;
@@ -656,6 +726,28 @@ void validate_constraint_wall_geometry_transition(const std::map<std::string,Ent
             invalid("Wall edit cannot discard or rewrite its split input archive: "+id);
         if(!source.extensions.contains("wall_split_archive") && found->second.extensions.contains("wall_split_archive"))
             invalid("Wall split archive requires a typed source reconstruction: "+id);
+        if (curve_construction_owner_ids.contains(id)) {
+            const auto& candidate=found->second;
+            if (!candidate.extensions.contains("curve_input"))
+                invalid("Explicit wall curve construction requires its retained input: "+id);
+            ConstraintWallGeometryEdit edit{id,read_baseline(candidate),std::nullopt};
+            edit.version=6;
+            edit.curve_construction=candidate.extensions.at("curve_input");
+            const auto classification=candidate.properties.find("classification");
+            if (classification!=candidate.properties.end() &&
+                (!source.properties.contains("classification") ||
+                    source.properties.at("classification").dump()!=classification->dump())) {
+                if (!classification->is_string())
+                    invalid("Explicit wall curve construction classification must be a string: "+id);
+                edit.wall_classification=classification->get<std::string>();
+            }
+            const auto expected=replay_constraint_wall_edit(source,edit);
+            if (candidate.id!=expected.id || candidate.required!=expected.required ||
+                candidate.properties.dump()!=expected.properties.dump() ||
+                candidate.extensions.dump()!=expected.extensions.dump())
+                invalid("Explicit wall curve construction differs from its exact source reconstruction: "+id);
+            continue;
+        }
         // Legacy wall markers may contain only material/dimension metadata.
         // They have no curve provenance to rebase; do not promote them into
         // physical wall geometry during an unrelated entity edit.
@@ -788,7 +880,7 @@ void validate_edit(const ConstraintWallGeometryEdit& edit) {
     const auto baseline_length = std::hypot(b.end.x-b.start.x,b.end.y-b.start.y);
     const bool straight=edit.version==1 || edit.version==5;
     const bool rigid=edit.version==4 || edit.version==5;
-    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2 && edit.version!=3 && edit.version!=4 && edit.version!=5) ||
+    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2 && edit.version!=3 && edit.version!=4 && edit.version!=5 && edit.version!=6) ||
         (straight ? b.sweep_radians!=0.0 : b.sweep_radians==0.0) || !std::isfinite(b.sweep_radians) ||
         !std::isfinite(b.start.x) || !std::isfinite(b.start.y) ||
         !std::isfinite(b.end.x) || !std::isfinite(b.end.y) ||
@@ -798,6 +890,20 @@ void validate_edit(const ConstraintWallGeometryEdit& edit) {
     if (rigid != edit.rigid_transform.has_value())
         invalid("Selected rigid wall proof requires its exact transform and version four or five");
     if (edit.rigid_transform) (void)decode_rigid_transform(encode_rigid_transform(*edit.rigid_transform));
+    if (edit.version==6) {
+        if (!edit.curve_construction || edit.length_entry)
+            invalid("Explicit curve proof requires its construction input and no physical length entry");
+        if (!same_baseline(explicit_curve_baseline(*edit.curve_construction,edit.wall_id),b))
+            invalid("Explicit curve proof does not exactly reconstruct its supplied baseline");
+        if (edit.wall_classification && (edit.wall_classification->empty() ||
+            edit.wall_classification->size()>256 || edit.wall_classification->find('\0')!=std::string::npos))
+            invalid("Explicit curve proof classification must be a bounded nonempty string without NUL");
+        validate_curve_edit_size(json{{"version",6},{"wall_id",edit.wall_id},
+            {"baseline",baseline_json(b)},{"length_entry",nullptr},
+            {"curve_construction",*edit.curve_construction},
+            {"wall_classification",edit.wall_classification ? json(*edit.wall_classification) : json(nullptr)}});
+    } else if (edit.curve_construction || edit.wall_classification)
+        invalid("Curve construction and classification require wall proof version six");
     if (edit.version==3 && !edit.length_entry) invalid("Curved physical length proof requires an exact length entry");
     if (edit.length_entry) {
         if (edit.version==2) invalid("Curved endpoint edits cannot contain physical length entries");
@@ -820,6 +926,32 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
     if (source.id != edit.wall_id || source.type != "wall")
         invalid("Wall constraint edit owner is not its original wall");
     const auto old = read_baseline(source);
+    if (edit.version==6) {
+        if (old.sweep_radians==0.0)
+            invalid("Explicit curve proof requires an existing curved source wall");
+        (void)arc_from_chord_angle(old.start,old.end,old.sweep_radians);
+        validate_wall_curve_input(source);
+        validate_wall_length_input(source);
+        const auto input=source.extensions.find("curve_input");
+        validate_preserved_curve_metadata(input==source.extensions.end() ? nullptr : &*input,
+            *edit.curve_construction);
+        auto result=source;
+        const bool geometry_changed=!same_baseline(old,edit.baseline);
+        const bool input_changed=input==source.extensions.end() ||
+            input->dump()!=edit.curve_construction->dump();
+        if (geometry_changed) {
+            clear_wall_length_input(result);
+            set_baseline(result,edit.baseline);
+        }
+        if (geometry_changed || input_changed) {
+            result.extensions["curve_input"]=*edit.curve_construction;
+            preserve_wall_curve_construction(result,source);
+        }
+        if (edit.wall_classification) result.properties["classification"]=*edit.wall_classification;
+        validate_wall_curve_input(result);
+        validate_wall_length_input(result);
+        return result;
+    }
     if (edit.version==4 || edit.version==5) {
         const bool straight=edit.version==5;
         if (straight ? old.sweep_radians!=0.0 : old.sweep_radians==0.0)
@@ -893,14 +1025,23 @@ nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edi
     json result={{"wall_id",edit.wall_id},{"baseline",b},{"length_entry",receipt}};
     if (edit.version>=2) result["version"]=edit.version;
     if (edit.version==4 || edit.version==5) result["rigid_transform"]=encode_rigid_transform(*edit.rigid_transform);
+    if (edit.version==6) {
+        result["curve_construction"]=*edit.curve_construction;
+        result["wall_classification"]=edit.wall_classification ? json(*edit.wall_classification) : json(nullptr);
+        validate_curve_edit_size(result);
+    }
     return result;
 }
 
 ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& value) {
     if (value.contains("version")) {
         if (value.at("version")==4 || value.at("version")==5) exact_fields(value,{"version","wall_id","baseline","length_entry","rigid_transform"});
+        else if (value.at("version")==6) {
+            exact_fields(value,{"version","wall_id","baseline","length_entry","curve_construction","wall_classification"});
+            validate_curve_edit_size(value);
+        }
         else exact_fields(value,{"version","wall_id","baseline","length_entry"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5))
+        if (!value.at("version").is_number_integer() || (value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6))
             invalid("Unsupported wall constraint proof version");
     } else exact_fields(value,{"wall_id","baseline","length_entry"});
     exact_fields(value.at("baseline"),{"start","end","sweep_radians"});
@@ -909,6 +1050,14 @@ ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& val
     ConstraintWallGeometryEdit result{temporary.id,read_baseline(temporary),std::nullopt};
     result.version=value.contains("version") ? value.at("version").get<std::uint64_t>() : 1;
     if (result.version==4 || result.version==5) result.rigid_transform=decode_rigid_transform(value.at("rigid_transform"));
+    if (result.version==6) {
+        result.curve_construction=value.at("curve_construction");
+        const auto& classification=value.at("wall_classification");
+        if (!classification.is_null()) {
+            if (!classification.is_string()) invalid("Explicit curve proof classification must be a string or null");
+            result.wall_classification=classification.get<std::string>();
+        }
+    }
     const auto& entry = value.at("length_entry");
     if (!entry.is_null()) {
         exact_fields(entry,{"original_expression","entered_unit","exact_metres"});

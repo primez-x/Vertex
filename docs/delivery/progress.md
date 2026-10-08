@@ -14,6 +14,22 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 connected curved-wall editing
+
+Explicit angle, signed arc length and signed height edits now carry a v6
+source-derived wall proof through connected authoring, command envelope 23 and
+native format 75/extraction 73. The selected new sweep is prepared before
+tangent relations, endpoints stay exact and compatible neighbors solve. Source
+review corrected contact preservation, unrelated metadata lanes and history
+dispatch. Construction archives and opaque input remain source-owned.
+
+The properties editor shows original/proposed geometry and arc lengths before
+Apply. A 120 ms debounce runs one immutable solve off the UI thread and retains
+only the latest input. Cancellation or changed source retires Apply authority;
+classification-only edits retain their existing geometry. No builds, tests,
+probes, launches, packages or installations ran. Compilation and all runtime
+behavior remain unverified; the installed candidate is unchanged.
+
 ### October 8 connected rigid geometry and live callouts
 
 The connected geometry lane now carries per-owner rotation/reflection operators
@@ -2300,12 +2316,14 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Route explicit curved-wall construction edits through the connected solve,
-   preserving the new selected sweep/endpoints and construction receipt while
-   tangent-related neighbors solve in the same event. The current curved-wall
-   properties editor commits a raw existing-wall replacement and does not use
-   connected preview. Persisted tangent relations already exist in the codec,
-   solver and dialog; do not reimplement them as a missing enum/UI feature.
+1. Compose the proposed curved-wall edit with explicit physical-room
+   correspondence review in one command. The existing room review works against
+   an already changed source; extend it to review a detached curve candidate
+   while retaining the original snapshot fence. No intermediate room or curve
+   commit, guessed classification, silent identity reassignment or reference
+   loss is permitted. Connected curve authoring/properties source work is
+   recorded above; do not restart it. Persisted tangent relations already exist
+   in the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent
    selection source changes are recorded above; do not restart them.
    Numerical preview typing already uses a 120 ms debounce and immediately

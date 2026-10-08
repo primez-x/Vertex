@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v74
+# Vertex project formats v1 through v75
+
+## Explicit connected curve construction (v75)
+
+Native format 75 and JSON/assets extraction version 73 retain
+boundary-constraint envelope 23. Its true `curve_construction_completion`
+marker wraps one bounded endpoint/source proof and survives optional outer
+selection completion 22. The wrapped command retains the same revision and
+message. Missing or contradictory mode markers cannot acquire construction
+authority during document admission.
+
+Wall proof version 6 records `wall_id`, the exact proposed `baseline`, a null
+`length_entry`, version-2 `curve_construction`, and nullable
+`wall_classification`. It reconstructs an existing curved wall from its chord
+endpoints and entered angle, signed arc length or signed height. Entered and
+normalized expressions must reproduce the retained value and signed sweep.
+Opaque construction fields retain their original values; unrelated wall
+properties remain source-owned. Changed geometry invalidates only understood
+physical-length receipts. Construction changes append to the original archive;
+an exact unchanged construction does not append a duplicate operation.
+
+The selected construction is prepared before persistent tangent relations
+are converted into solver requests. Both selected endpoints are pinned to the
+request. Connected neighbors retain their signed sweeps and solve through their
+endpoints, subject to fixed anchors, original physical contacts, topology and
+hosted-opening checks. Holding connected walls fixed refuses incompatible
+requests rather than breaking their relationships. Source-derived measurements
+are reconstructed through their existing qualified source lanes. A physical
+room that requires a separate correspondence decision still requires explicit
+repair.
+
+Document admission independently replays every version-6 wall from the original
+entity and compares its complete result. Only those verified owner IDs receive
+explicit construction authority; other walls keep the preceding endpoint-only
+rules. The marker or version-6 fields anywhere in retained history raise the
+reader floor, including undone and abandoned revisions. Older proof versions
+retain their existing meanings.
 
 ## Connected rigid owner edits (v74)
 

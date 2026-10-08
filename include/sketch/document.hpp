@@ -171,6 +171,11 @@ struct ConstraintWallGeometryEdit {
     // and explicit top-plane basis. Dependent endpoint edits retain versions one
     // through three.
     std::optional<PlanarTransform> rigid_transform;
+    // Version six reconstructs an existing curved wall from its explicit
+    // version-two construction receipt. Other wall fields remain source-owned;
+    // an optional classification can accompany this same curve edit.
+    std::optional<nlohmann::json> curve_construction;
+    std::optional<std::string> wall_classification;
 };
 
 // An exterior analytical corner edit is replayed through the physical source
@@ -388,6 +393,9 @@ struct ApplyBoundaryConstraintChanges {
     std::vector<EntityChange> selection_entity_changes;
     // Retain the envelope even when the ordinary lane is empty.
     bool selection_completion{};
+    // Envelope twenty-three retains explicit curved-wall construction proofs
+    // alongside their connected endpoint and source redraw consequences.
+    bool curve_construction_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

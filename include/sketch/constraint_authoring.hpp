@@ -81,6 +81,14 @@ struct WallGeometryMoveIntent {
     bool complete_saved_dimensions{};
 };
 
+// Independently replay an explicit construction for an existing curved wall.
+// Both selected endpoints and its signed sweep are fixed inputs to the solve;
+// connected owners retain their sweeps and solve through endpoint coordinates.
+struct WallCurveConstructionIntent {
+    ConstraintWallGeometryEdit edit;
+    bool move_connected_walls{true};
+};
+
 // Keep the selected boundary's existing anchored/local-chain resize semantics;
 // solve only other owners reached through explicit persisted relations.
 struct BoundaryResizeIntent {
@@ -154,6 +162,7 @@ struct ConstraintAuthoringIntent {
     std::optional<ExteriorSegmentArcIntent> exterior_segment_arc;
     // One translation pins all selected lanes in the same hard-connected solve.
     std::optional<JointTranslationIntent> joint_translation;
+    std::optional<WallCurveConstructionIntent> wall_curve_construction;
 };
 
 struct ConstraintWallChange {

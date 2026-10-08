@@ -62,13 +62,28 @@ codec and document command validation must also cover nested endpoint bindings
 and prevent deletion of referenced geometry without an explicit compound edit.
 
 The supported relations in the existing adapter are horizontal, vertical,
-coincident, endpoint distance, parallel, perpendicular, fixed anchor and physical
-curve length. Endpoint distance and direction relationships retain their
+coincident, endpoint distance, parallel, perpendicular, fixed anchor, physical
+curve length and tangent. Endpoint distance and direction relationships retain their
 point/chord meanings. Curve length applies to opposite endpoints of one genuine
 curved wall, measured segment or identified edge and preserves its signed sweep.
-Tangent relationships and general planar-constraint-to-level propagation remain
-required work. The existing explicit level graph/editor is a separate implemented
-slice; point solving never flattens a curved wall.
+Version-5 tangent bindings identify the actual incident child and contact
+endpoint. They require coincident contacts and opposing outward analytical
+tangents, including curved walls and identified measured edges. General
+planar-constraint-to-level propagation remains required work. The existing
+explicit level graph/editor is a separate implemented slice; point solving
+never flattens a curved wall.
+
+Explicit reconstruction of an existing curved wall is a separate authoring
+intent. Version-6 wall proof retains its entered angle, signed arc length or
+height and exact chord endpoints. The selected new sweep is fixed before
+tangent relations are constructed; related owners retain their own sweeps.
+Both selected endpoints remain exact while compatible connected geometry solves.
+The proposed wall, connected changes and preserved source are shown before
+Apply. The document independently replays the selected construction and its
+source-owned metadata, then completes qualified measurement consumers in one
+event. Outer envelope 23, native format 75 and extraction version 73 retain this
+authority through history. Incompatible locks, hosted openings, ambiguous
+source consumers or physical rooms requiring explicit repair refuse the edit.
 
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent

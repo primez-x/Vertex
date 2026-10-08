@@ -338,7 +338,8 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         static_cast<unsigned>(result.measured_stroke_resize.has_value()) +
         static_cast<unsigned>(result.measured_stroke_vertex_move.has_value()) +
         static_cast<unsigned>(result.measured_stroke_transform.has_value()) +
-        static_cast<unsigned>(result.joint_translation.has_value());
+        static_cast<unsigned>(result.joint_translation.has_value()) +
+        static_cast<unsigned>(result.wall_curve_construction.has_value());
     const bool shared_rigid_lanes = coordinate_intents == 2 &&
         result.wall_geometry_move && result.measured_stroke_transform;
     if (coordinate_intents > 1 && !shared_rigid_lanes)
@@ -478,6 +479,12 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         (void)encode_exterior_segment_resize(*result.exterior_segment_resize);
     }
     if (result.exterior_segment_arc) (void)encode_exterior_segment_arc(*result.exterior_segment_arc);
+    if (result.wall_curve_construction) {
+        auto& edit = result.wall_curve_construction->edit;
+        if (edit.version != 6 || !edit.curve_construction || edit.rigid_transform || edit.length_entry)
+            invalid("Wall curve construction requires an explicit version-six construction proof");
+        edit = decode_constraint_wall_edit(encode_constraint_wall_edit(edit));
+    }
     if (result.wall_resize.has_value()) {
         if (result.wall_resize->wall_id.empty()) {
             invalid("Wall resize id cannot be empty");
@@ -548,6 +555,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         }
     }
     if (!result.wall_resize.has_value() && !result.wall_geometry_move.has_value() &&
+        !result.wall_curve_construction &&
         !result.boundary_resize.has_value() &&
         !result.boundary_vertex_move.has_value() &&
         !result.exterior_corner_move.has_value() &&
@@ -661,7 +669,8 @@ bool points_exact(Vec2 first, Vec2 second) {
 }
 
 std::map<std::string,Vec2,std::less<>> joint_temporary_pins(
-    const ConstraintSolveRequest& request,const std::map<std::string,Vec2,std::less<>>& targets) {
+    const ConstraintSolveRequest& request,const std::map<std::string,Vec2,std::less<>>& targets,
+    std::string_view operation = "Joint translation") {
     // Saved coincidence and tangent contacts already identify one physical
     // point. Give that class one temporary coordinate pin, while preserving
     // every saved relation and checking every selected target after solving.
@@ -689,16 +698,16 @@ std::map<std::string,Vec2,std::less<>> joint_temporary_pins(
         const Vec2 position{anchor->x,anchor->y};
         const auto [found,inserted]=saved.emplace(root(anchor->point),position);
         if (!inserted && !points_exact(found->second,position))
-            invalid("Joint translation has incompatible saved fixed positions at a shared contact");
+            invalid(std::string(operation) + " has incompatible saved fixed positions at a shared contact");
     }
     std::map<std::string,std::pair<std::string,Vec2>,std::less<>> classes;
     for (const auto& [id,position]:targets) {
         const auto representative=root(id);
         const auto [found,inserted]=classes.emplace(representative,std::pair{id,position});
         if (!inserted && !points_exact(found->second.second,position))
-            invalid("Joint translation has incompatible exact selected targets at a shared contact");
+            invalid(std::string(operation) + " has incompatible exact selected targets at a shared contact");
         if (const auto fixed=saved.find(representative);fixed!=saved.end() && !points_exact(fixed->second,position))
-            invalid("Joint translation conflicts with a saved fixed position");
+            invalid(std::string(operation) + " conflicts with a saved fixed position");
     }
     std::map<std::string,Vec2,std::less<>> pins;
     for (const auto& [representative,target]:classes)
@@ -1117,11 +1126,22 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         const auto organization = organize_project(snapshot.entities());
         const auto before_constraints = decode_supported_constraints(snapshot.entities());
         auto candidate = snapshot.entities();
+        std::optional<Entity> constructed_wall;
+        if (intent.wall_curve_construction) {
+            const auto& edit = intent.wall_curve_construction->edit;
+            constructed_wall = replay_constraint_wall_edit(require_wall(snapshot.entities(), edit.wall_id), edit);
+            candidate.at(edit.wall_id) = *constructed_wall;
+        }
         std::optional<Entities> exterior_physical;
         std::set<std::string, std::less<>> exterior_physical_ids, exterior_owner_ids;
         std::set<std::string, std::less<>> exterior_ring_ids;
         std::vector<ExteriorCornerPhysicalContact> exterior_contacts;
         std::vector<ExteriorCornerPhysicalContact> exterior_t_contacts;
+        if (intent.wall_curve_construction) {
+            exterior_contacts = exterior_corner_physical_contact_graph(snapshot.entities());
+            for (const auto& contact : exterior_contacts)
+                if (contact.station != 0 && contact.station != 1) exterior_t_contacts.push_back(contact);
+        }
         if (exterior_edit) {
             const auto ring_ids = exterior_corner_perimeter_ids(snapshot.entities(),snapshot.entities().at(exterior_boundary_id));
             exterior_ring_ids.insert(ring_ids.begin(),ring_ids.end());
@@ -1203,6 +1223,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         if (intent.wall_resize.has_value()) {
             seeds.insert(intent.wall_resize->wall_id);
         }
+        if (intent.wall_curve_construction)
+            seeds.insert(intent.wall_curve_construction->edit.wall_id);
         if (intent.wall_geometry_move.has_value()) {
             for (const auto& target : intent.wall_geometry_move->targets) {
                 (void)require_wall(candidate, target.wall_id);
@@ -1322,9 +1344,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 !organization.drawing_context(wall_id).has_value()) {
                 invalid("Affected owner has an unresolved explicit drawing context: " + wall_id);
             }
-            if (intent.joint_translation && wall_entity.properties.contains("wall_measurement_source")) {
+            if ((intent.joint_translation || intent.wall_curve_construction) &&
+                wall_entity.properties.contains("wall_measurement_source")) {
                 if (!wall_measurement_source_current(snapshot.entities(),snapshot.entities().at(wall_id)))
-                    invalid("Joint connected physical measured boundary is stale and requires explicit repair");
+                    invalid("Connected physical measured boundary is stale and requires explicit repair");
                 // Its transient solver coordinates constrain the connected
                 // solve, but only final physical walls authorize its redraw.
                 // Final persisted relations validate that independent redraw.
@@ -1420,7 +1443,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 const auto position = endpoint_position(baseline, role);
                 point_bindings.emplace(id, binding);
                 positions.emplace(id, position);
-                const auto initial = exterior_edit
+                const auto initial = exterior_edit || (intent.wall_curve_construction &&
+                    intent.wall_curve_construction->edit.wall_id == wall_id)
                     ? endpoint_position(read_baseline(owner->second),role) : position;
                 request.points.push_back({id, initial.x, initial.y});
             }
@@ -1519,6 +1543,22 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (edge == boundary.segments.end()) invalid("Derived exterior corner lineage is missing");
                     add_fixed(binding, edge->segment.start);
                 } else if (!move_exterior_related)
+                    add_fixed(binding, position);
+            }
+        } else if (intent.wall_curve_construction) {
+            const auto& construction = *intent.wall_curve_construction;
+            const auto& edit = construction.edit;
+            add_fixed({edit.wall_id, WallEndpointRole::start}, edit.baseline.start);
+            add_fixed({edit.wall_id, WallEndpointRole::end}, edit.baseline.end);
+            const auto coordinate_component = connected_from(edit.wall_id);
+            if (has_upsert && intent.relation_anchor &&
+                !coordinate_component.contains(intent.relation_anchor->owner_id))
+                invalid("Relation anchor is outside the constructed wall component");
+            for (const auto& [id, position] : positions) {
+                const auto& binding = point_bindings.at(id);
+                if (binding.owner_id == edit.wall_id) continue;
+                if (!construction.move_connected_walls || !coordinate_component.contains(binding.owner_id) ||
+                    snapshot.entities().at(binding.owner_id).extensions.contains("physical_wall_room"))
                     add_fixed(binding, position);
             }
         } else if (intent.wall_geometry_move.has_value()) {
@@ -1722,12 +1762,14 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         }
         if (has_upsert && intent.relation_anchor.has_value() &&
             (intent.wall_resize.has_value() || intent.wall_geometry_move.has_value() ||
+             intent.wall_curve_construction ||
              boundary_edit || !selected_stroke_edits.empty())) {
             const auto& anchor = *intent.relation_anchor;
             add_fixed(anchor, positions.at(resolve(anchor)));
         }
 
-        if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion) {
+        if ((intent.joint_translation && intent.joint_translation->per_owner_rigid_completion) ||
+            intent.wall_curve_construction) {
             for (const auto& [id, relation] : constraints) {
                 (void)id;
                 if (relation.relation != ConstraintRelationKind::fixed_anchor || relation.bindings.empty() ||
@@ -1736,7 +1778,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 const auto point = resolve(binding);
                 const auto target = fixed_points.find(point);
                 if (target != fixed_points.end() && !points_exact(target->second,*relation.anchor))
-                    invalid("Rigid joint selected target conflicts with an unchanged fixed anchor");
+                    invalid("Selected geometry target conflicts with an unchanged fixed anchor");
                 add_fixed(binding,*relation.anchor);
             }
             for (auto& point : request.points) {
@@ -1748,7 +1790,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         std::map<std::string, Vec2, std::less<>> solved_points;
         {
             std::size_t temporary_index = 0;
-            const auto temporary_pins=intent.joint_translation ? joint_temporary_pins(request,fixed_points) : fixed_points;
+            const auto temporary_pins = intent.joint_translation ? joint_temporary_pins(request,fixed_points) :
+                intent.wall_curve_construction ? joint_temporary_pins(request,fixed_points,"Wall curve construction") : fixed_points;
             for (const auto& [id, position] : temporary_pins) {
                 const auto temporary_id = unique_temporary_id(persistent_ids, temporary_index++);
                 request.constraints.push_back(FixedAnchorConstraint{temporary_id, id, position.x, position.y});
@@ -1773,6 +1816,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         }
 
         const auto coincident_points = canonicalize_coincident_points(request, positions, solved_points);
+        if (intent.wall_curve_construction)
+            for (const auto& [id, position] : fixed_points)
+                if (!points_exact(solved_points.at(id), position))
+                    invalid("Wall curve construction did not preserve every exact endpoint target");
         if (intent.joint_translation && (intent.joint_translation->per_owner_translation_completion || intent.joint_translation->per_owner_rigid_completion))
             for (const auto& [id, position] : fixed_points)
                 if (!points_exact(solved_points.at(id), position))
@@ -1792,6 +1839,15 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         std::set<std::string,std::less<>> selected_rigid_ids;
         for (const auto& wall_id : affected_walls) {
             const auto old = old_baselines.at(wall_id);
+            if (intent.wall_curve_construction && intent.wall_curve_construction->edit.wall_id == wall_id) {
+                // Keep the source-qualified replay intact, including receipt-only
+                // changes. Do not rebase its construction through an endpoint proof.
+                candidate.at(wall_id) = *constructed_wall;
+                validate_constraint_wall_host(wall_id, candidate);
+                if (candidate.at(wall_id) != snapshot.entities().at(wall_id))
+                    result.changed_walls_.push_back({wall_id, old, intent.wall_curve_construction->edit.baseline});
+                continue;
+            }
             const auto rigid_transform=selected_wall_rigid_transform(intent,wall_id);
             Segment proposed{
                 solved_points.at(point_id({wall_id, WallEndpointRole::start})),
@@ -1960,6 +2016,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             validate_joint_rigid_topology(snapshot.entities(),candidate,*intent.joint_translation);
         else validate_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids);
         if (exterior_edit) validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
+        if (intent.wall_curve_construction)
+            validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
         if (intent.exterior_segment_resize)
             validate_exterior_segment_resize_result(snapshot.entities(),candidate,*intent.exterior_segment_resize);
         if (intent.exterior_segment_arc)
@@ -2020,7 +2078,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
 
         result.accepted_ = true;
         result.candidate_entities_ = std::move(candidate);
-        if (result.measured_source_completion_ || intent.joint_translation ||
+        if (result.measured_source_completion_ || intent.joint_translation || intent.wall_curve_construction ||
             (intent.wall_geometry_move && intent.wall_geometry_move->complete_saved_dimensions)) {
             if (snapshot.retained && !intent.joint_translation) {
                 const auto completed=Document::preview_command(*snapshot.retained,command_for(*snapshot.retained,result));
@@ -2102,6 +2160,13 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 const auto proposed = decode_identified_boundary_entity(after->second);
                 if (original != proposed) result.changed_boundaries_.push_back({original,proposed});
             }
+        }
+        if (intent.wall_curve_construction) {
+            if (result.candidate_entities_.at(intent.wall_curve_construction->edit.wall_id) != *constructed_wall)
+                invalid("Source completion did not preserve the exact selected wall construction");
+            for (const auto& [id, owner] : snapshot.entities())
+                if (owner.extensions.contains("physical_wall_room") && result.candidate_entities_.at(id) != owner)
+                    invalid("Wall curve construction requires explicit repair of the affected physical-wall room");
         }
         if (snapshot.retained) {
             result.candidate_digest_ = entity_map_digest(result.candidate_entities_);
@@ -2456,6 +2521,12 @@ Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision
                     command.exterior_segment_resize ? command.exterior_segment_resize->boundary_id : command.exterior_segment_arc->boundary_id;
                 const auto ids = exterior_corner_perimeter_ids(current,current.at(owner_id));
                 if (std::find(ids.begin(),ids.end(),wall.wall_id) != ids.end()) continue;
+            }
+            if (recomputed.normalized_intent_.wall_curve_construction &&
+                recomputed.normalized_intent_.wall_curve_construction->edit.wall_id == wall.wall_id) {
+                command.wall_edits.push_back(recomputed.normalized_intent_.wall_curve_construction->edit);
+                command.curve_construction_completion = true;
+                continue;
             }
             const auto& resize = recomputed.normalized_intent_.wall_resize;
             const bool resized = resize && resize->wall_id == wall.wall_id;

@@ -1429,11 +1429,12 @@ void validate_constraint_change(const std::map<std::string, Entity, std::less<>>
                                 bool qualified_curve_edits=false,
                                 bool validate_curve_provenance=true,
                                 bool qualified_rigid_transform=false,
-                                const std::set<std::string,std::less<>>& verified_rigid_wall_ids={}) {
+                                const std::set<std::string,std::less<>>& verified_rigid_wall_ids={},
+                                const std::set<std::string,std::less<>>& curve_construction_owner_ids={}) {
     try {
         validate_constraint_transition(before, after, qualified_rigid_transform, verified_rigid_wall_ids);
         if (validate_curve_provenance)
-            validate_constraint_wall_geometry_transition(before,after,qualified_curve_edits);
+            validate_constraint_wall_geometry_transition(before,after,qualified_curve_edits,false,curve_construction_owner_ids);
     }
     catch (const std::exception& error) {
         document_error(DocumentErrorCode::constraint_violation, error.what());
@@ -2135,6 +2136,33 @@ static void validate_wall_dimension_completion(const ApplyBoundaryConstraintChan
             throw std::invalid_argument("Wall callout completion cannot borrow a different or partial measured-stroke transform");
 }
 
+static bool has_curve_construction_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.curve_construction_completion ||
+        std::any_of(command.wall_edits.begin(),command.wall_edits.end(),[](const auto& edit) {
+            return edit.version == 6 || edit.curve_construction.has_value() || edit.wall_classification.has_value();
+        });
+}
+
+static void validate_curve_construction_completion(const ApplyBoundaryConstraintChanges& command) {
+    const bool constructed = std::any_of(command.wall_edits.begin(),command.wall_edits.end(),[](const auto& edit) {
+        return edit.version == 6 || edit.curve_construction.has_value() || edit.wall_classification.has_value();
+    });
+    if (!command.curve_construction_completion && !constructed) return;
+    if (!command.curve_construction_completion || !constructed)
+        throw std::invalid_argument("Curve construction requires its retained mode and explicit wall proof");
+    if (command.wall_split || command.wall_merge || command.exterior_corner_move || command.exterior_segment_resize ||
+        command.exterior_segment_arc || has_rigid_group_completion(command) || has_joint_translation_completion(command) ||
+        has_room_review_completion(command) || command.wall_dimension_completion || has_rigid_wall_transform(command) ||
+        has_dimension_placement_completion(command) || has_disto_measurement_completion(command))
+        throw std::invalid_argument("Curve construction cannot borrow another geometric intent");
+    if (!command.physical_entity_changes.empty() || has_supplemental_source_completion(command) ||
+        command.supplemental_asset_reference_completion)
+        throw std::invalid_argument("Curve construction cannot borrow raw physical, supplemental or asset edits");
+    for (const auto& edit : command.wall_edits)
+        if ((edit.curve_construction || edit.wall_classification) && edit.version != 6)
+            throw std::invalid_argument("Curve construction fields require wall proof version six");
+}
+
 static void complete_dimension_placements(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const ApplyBoundaryConstraintChanges& command) {
     for (const auto& move : command.dimension_placement_moves) {
@@ -2355,7 +2383,7 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
     // Both original-source lanes and their union are validated during complete
     // reconstruction; applying a child's partial authority to the union is unsafe.
     if (has_selection_completion(command)) return;
-    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); }
+    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_curve_construction_completion(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation, error.what()); }
     if (has_disto_measurement_completion(command)) {
         if (!command.disto_measurement_completion || !command.disto_measurement)
@@ -2396,6 +2424,14 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
         return;
     }
     std::set<std::string,std::less<>> rigid_ids;
+    std::set<std::string,std::less<>> curve_construction_ids;
+    for (const auto& edit : command.wall_edits) if (edit.version == 6) {
+        const auto found = before.find(edit.wall_id);
+        if (found == before.end() || !after.contains(edit.wall_id) ||
+            !exact_entity_payload(replay_constraint_wall_edit(found->second,edit),after.at(edit.wall_id)))
+            document_error(DocumentErrorCode::constraint_violation,"Curve construction differs from independently reconstructed source");
+        curve_construction_ids.insert(edit.wall_id);
+    }
     for(const auto& edit:command.wall_edits)if(edit.version==4 || edit.version==5) {
         const auto found=before.find(edit.wall_id);
         if(found==before.end() || !after.contains(edit.wall_id) ||
@@ -2404,7 +2440,7 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
         rigid_ids.insert(edit.wall_id);
     }
     if (!has_exterior_source_completion(command)) {
-        validate_constraint_change(before, after, true, true, false, rigid_ids);
+        validate_constraint_change(before, after, true, true, false, rigid_ids,curve_construction_ids);
         return;
     }
     try {
@@ -2454,7 +2490,7 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
             else typed_before.erase(id);
         }
         validate_constraint_wall_geometry_transition(ordinary_before, after, false);
-        validate_constraint_wall_geometry_transition(typed_before, after, true);
+        validate_constraint_wall_geometry_transition(typed_before, after, true,false,curve_construction_ids);
     } catch (const std::exception& error) {
         document_error(DocumentErrorCode::constraint_violation, error.what());
     }
@@ -2999,6 +3035,10 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         else if (!prepared_rigid_geometry) validate_constraint_edit_topology(source,result,rigid_wall_ids);
     }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    if (command.curve_construction_completion) {
+        try { validate_exterior_corner_physical_contacts(source,result); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     if (source_completion) {
         try {
             if (command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc) validate_exterior_corner_physical_contacts(source, result);
@@ -3826,7 +3866,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
         } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     }
-    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_wall_dimension_completion(command); }
+    try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_wall_dimension_completion(command);
+        validate_curve_construction_completion(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     if (has_disto_measurement_completion(command)) {
         try {
@@ -5241,7 +5282,7 @@ nlohmann::json command_to_json(const Command& command) {
                             throw std::invalid_argument("Selection completion requires unique supported nonwall upserts");
                     const auto proof = command_to_json(Command{without_selection_completion(typed)});
                     const auto version = proof.at("version").get<int>();
-                    if (version < 1 || version > 21)
+                    if (version < 1 || (version > 21 && version != 23))
                         throw std::invalid_argument("Selection completion requires one preceding typed proof");
                     auto encoded = nlohmann::json{{"version",22},{"kind","apply_boundary_constraint_changes"},
                         {"expected_revision",typed.expected_revision},{"message",typed.message},
@@ -5267,6 +5308,24 @@ nlohmann::json command_to_json(const Command& command) {
                         {"wall_dimension_completion",true},{"proof",std::move(proof)}};
                     if (encoded.dump().size() > 1024 * 1024)
                         throw std::invalid_argument("Wall callout completion exceeds the persisted proof budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
+            if (typed.curve_construction_completion) {
+                try {
+                    validate_curve_construction_completion(typed);
+                    auto original = typed;
+                    original.curve_construction_completion = false;
+                    auto proof = command_to_json(Command{original});
+                    if (proof.at("version").get<int>() < 2 || proof.at("version").get<int>() > 11 ||
+                        proof.at("version") == 8 || proof.at("version") == 10)
+                        throw std::invalid_argument("Curve construction requires its existing endpoint/source proof");
+                    auto encoded = nlohmann::json{{"version",23},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"curve_construction_completion",true},{"proof",std::move(proof)}};
+                    if (encoded.dump().size() > 1024*1024)
+                        throw std::invalid_argument("Curve construction exceeds the persisted proof budget");
                     return encoded;
                 } catch (const DocumentError&) { throw; }
                 catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
@@ -5582,7 +5641,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -5685,6 +5744,30 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 23) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","curve_construction_completion","proof"},
+                    DocumentErrorCode::invalid_entity,"serialized curve construction completion");
+                if (value.dump().size() > 1024 * 1024 || !value.at("curve_construction_completion").is_boolean() ||
+                    !value.at("curve_construction_completion").get<bool>())
+                    throw std::invalid_argument("Curve construction mode or proof budget is invalid");
+                const auto& proof = value.at("proof");
+                if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
+                    proof.at("version").get<std::int64_t>() < 2 || proof.at("version").get<std::int64_t>() > 11 ||
+                    proof.at("version") == 8 || proof.at("version") == 10 ||
+                    !proof.contains("kind") || proof.at("kind") != kind)
+                    throw std::invalid_argument("Curve construction requires one unnested endpoint/source proof");
+                const auto decoded = command_from_json(proof, asset_resolver);
+                const auto* original = std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+                if (!original || original->curve_construction_completion ||
+                    original->expected_revision != command_revision(value.at("expected_revision"),"Curve construction revision") ||
+                    !value.at("message").is_string() || value.at("message") != proof.at("message"))
+                    throw std::invalid_argument("Curve construction must retain its original command identity");
+                auto result = *original;
+                result.curve_construction_completion = true;
+                validate_curve_construction_completion(result);
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 22) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","selection_completion","proof","selection_entity_changes"},
                     DocumentErrorCode::invalid_entity,"serialized selection completion");
@@ -5694,7 +5777,8 @@ Command command_from_json(const nlohmann::json& value,
                     throw std::invalid_argument("Selection completion mode or proof budget is invalid");
                 const auto& proof = value.at("proof");
                 if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
-                    proof.at("version").get<std::int64_t>() < 1 || proof.at("version").get<std::int64_t>() > 21 ||
+                    proof.at("version").get<std::int64_t>() < 1 ||
+                    (proof.at("version").get<std::int64_t>() > 21 && proof.at("version") != 23) ||
                     !proof.contains("kind") || proof.at("kind") != kind)
                     throw std::invalid_argument("Selection completion requires one preceding unnested typed proof");
                 const auto decoded = command_from_json(proof, asset_resolver);
@@ -6876,7 +6960,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || record.boundary_constraint_changes->wall_merge || has_exterior_source_completion(*record.boundary_constraint_changes) ||
             has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes) ||
             has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes) ||
-            has_disto_measurement_completion(*record.boundary_constraint_changes) || has_selection_completion(*record.boundary_constraint_changes)))
+            has_disto_measurement_completion(*record.boundary_constraint_changes) || has_selection_completion(*record.boundary_constraint_changes) ||
+            has_curve_construction_completion(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),

@@ -1,5 +1,6 @@
 #pragma once
 #include "sketch/document.hpp"
+#include <set>
 
 namespace sketch {
 [[nodiscard]] Entity reconstruct_split_wall(const Entity& source, const Segment& baseline,
@@ -11,6 +12,10 @@ void validate_wall_split_archive(const Entity& wall);
 // its retained construction archive and physical receipt independently.
 // Version five verifies a straight rigid transform and rebases its physical
 // receipt and explicit top-plane basis without changing curve proof dialects.
+// Version six independently reconstructs an existing curve from its exact v2
+// entered construction, preserving opaque input and source-owned wall fields.
+// Only changed geometry invalidates the known physical length receipt; an
+// exact unchanged construction does not append a duplicate archive operation.
 [[nodiscard]] Entity replay_constraint_wall_edit(
     const Entity& source, const ConstraintWallGeometryEdit& edit);
 [[nodiscard]] nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edit);
@@ -43,11 +48,14 @@ void preserve_wall_curve_construction(Entity& candidate,const Entity& source);
 [[nodiscard]] Entity reconstruct_exterior_segment_arc_wall(const Entity& source, const Segment& baseline);
 // Endpoint-only deformations require typed replay. Full independently
 // validated constructions may append without changing prior provenance.
+// Explicit version-six owner IDs require qualified replay and an exact match
+// to construction from their source wall. Other owners retain legacy rules.
 void validate_constraint_wall_geometry_transition(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     bool qualified_curve_edits = false,
-    bool qualified_line_origin_curve_edits = false);
+    bool qualified_line_origin_curve_edits = false,
+    const std::set<std::string, std::less<>>& curve_construction_owner_ids = {});
 void validate_constraint_wall_host(const std::string& wall_id,
     const std::map<std::string, Entity, std::less<>>& entities);
 }

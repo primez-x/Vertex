@@ -37,6 +37,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
+#include "sketch/desktop/constraint_preview_canvas.hpp"
 #include "sketch/desktop/physical_wall_room_review_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/drawing_input_panel.hpp"
@@ -198,6 +199,8 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QTimer>
+#include <QThreadPool>
+#include <QRunnable>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTreeWidget>
@@ -21740,6 +21743,74 @@ public:
                                                        sweep_expression, expected_revision);
     }
 
+    ConstraintWallGeometryEdit curvedWallConstructionEdit(
+        const Entity& source, Vec2 start, Vec2 end, const QString& construction,
+        const QString& measure, std::optional<QString> classification = std::nullopt) const {
+        if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+            !std::isfinite(end.x) || !std::isfinite(end.y) ||
+            std::hypot(end.x - start.x, end.y - start.y) <= 1e-7)
+            throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
+        const auto expression = measure.trimmed();
+        if (expression.isEmpty()) throw std::invalid_argument("Wall arc defining measure is required.");
+        auto kind = construction.trimmed().toLower();
+        if (kind == QStringLiteral("sweep")) kind = QStringLiteral("angle");
+        if (kind == QStringLiteral("arc-length") || kind == QStringLiteral("length"))
+            kind = QStringLiteral("arc_length");
+        else if (kind == QStringLiteral("arc-height") || kind == QStringLiteral("height"))
+            kind = QStringLiteral("arc_height");
+        if (kind != QStringLiteral("angle") && kind != QStringLiteral("arc_length") &&
+            kind != QStringLiteral("arc_height"))
+            throw std::invalid_argument("Wall arc construction must be angle, arc_length, or arc_height.");
+        Segment baseline;
+        std::string normalized_measure;
+        double stored_measure{};
+        bool clockwise{};
+        if (kind == QStringLiteral("angle")) {
+            const auto angle = parse_angle(expression.toUtf8().toStdString());
+            baseline = arc_from_chord_angle(start, end, angle.radians);
+            normalized_measure = angle.normalized_expression;
+            stored_measure = angle.radians;
+        } else {
+            const auto quantity = parse_quantity(expression.toUtf8().toStdString(),
+                m_metric_units ? Unit::metre : Unit::foot);
+            if (!std::isfinite(quantity.metres) || quantity.metres == 0.0)
+                throw std::invalid_argument("Wall arc measure must be finite and nonzero.");
+            stored_measure = quantity.metres;
+            normalized_measure = format_quantity(quantity, Unit::metre);
+            if (kind == QStringLiteral("arc_length")) {
+                clockwise = quantity.metres < 0.0;
+                baseline = arc_from_chord_arc_length(start, end, std::abs(quantity.metres), clockwise);
+            } else baseline = arc_from_chord_height(start, end, quantity.metres);
+        }
+        // Retain source-owned opaque keys; the core independently checks this
+        // receipt and preserves the original derivation archive on replay.
+        auto input = source.extensions.value("curve_input", json::object());
+        if (!input.is_object()) input = json::object();
+        const auto angle = angle_from_radians(baseline.sweep_radians);
+        input["version"] = 2;
+        input["construction"] = kind.toStdString();
+        input["measure"] = expression.toStdString();
+        input["normalized_measure"] = normalized_measure;
+        input["measure_value"] = stored_measure;
+        input["clockwise"] = clockwise;
+        input["start"] = point_json(start);
+        input["end"] = point_json(end);
+        input["sweep"] = kind == QStringLiteral("angle")
+            ? expression.toStdString() : angle.original_expression;
+        input["normalized_sweep"] = angle.normalized_expression;
+        input["radians"] = baseline.sweep_radians;
+        ConstraintWallGeometryEdit edit;
+        edit.wall_id = source.id;
+        edit.baseline = baseline;
+        edit.version = 6;
+        edit.curve_construction = std::move(input);
+        if (classification) {
+            const auto value = classification->trimmed();
+            edit.wall_classification = value.isEmpty() ? std::string("interior") : value.toStdString();
+        }
+        return edit;
+    }
+
     bool editSelectedCurvedWallFromConstruction(
         Vec2 start, Vec2 end, const QString& construction, const QString& measure,
         std::optional<Revision> expected_revision = std::nullopt,
@@ -21751,9 +21822,12 @@ public:
                 throw std::invalid_argument("This document is read-only.");
             if (revision != m_document->revision())
                 throw std::invalid_argument("The project changed while the curved wall was being edited. Reopen its properties.");
-            const auto selected = selectedEntity();
-            if (!selected || selected->type != "wall")
+            const auto snapshot = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(snapshot);
+            const auto found = snapshot.entities().find(m_selected_id.toStdString());
+            if (found == snapshot.entities().end() || found->second.type != "wall")
                 throw std::invalid_argument("Select a curved wall before editing its curve.");
+            const auto* selected = &found->second;
             const auto current_baseline = read_required_segment(selected->properties, "baseline");
             if (!current_baseline || std::abs(current_baseline->sweep_radians) <= 1e-7)
                 throw std::invalid_argument("The selected wall is straight; use wall dimensions and constraints instead.");
@@ -21761,86 +21835,23 @@ public:
             // Classification-only input never reconstructs geometry or adds a
             // chord receipt to a wall originally authored by its tangent.
             if (!preserve_curve_input) {
-                if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
-                    !std::isfinite(end.x) || !std::isfinite(end.y) ||
-                    std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
-                    throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
+                const auto edit = curvedWallConstructionEdit(*selected, start, end,
+                    construction, measure, classification);
+                candidate = replay_constraint_wall_edit(*selected, edit);
+                if (candidate != *selected) {
+                    ConstraintAuthoringIntent intent;
+                    intent.wall_curve_construction = WallCurveConstructionIntent{edit, true};
+                    intent.message = "Edit curved wall and connected geometry";
+                    const auto preview = preview_constraint_authoring(snapshot, intent);
+                    requireAcceptedConstraintPreview(preview);
+                    if (!sourceEditAuthorityCurrent(authority))
+                        throw std::invalid_argument("The curved wall source or editing context changed. Reopen its properties.");
+                    applyConstraintPreview(preview);
+                    clearError();
+                    m_selected_id = QString::fromStdString(selected->id);
+                    refresh();
+                    return true;
                 }
-                const auto expression = measure.trimmed();
-                if (expression.isEmpty()) throw std::invalid_argument("Wall arc defining measure is required.");
-                auto construction_key = construction.trimmed().toLower();
-                if (construction_key == QStringLiteral("sweep")) construction_key = QStringLiteral("angle");
-                if (construction_key == QStringLiteral("arc-length") || construction_key == QStringLiteral("length"))
-                    construction_key = QStringLiteral("arc_length");
-                else if (construction_key == QStringLiteral("arc-height") || construction_key == QStringLiteral("height"))
-                    construction_key = QStringLiteral("arc_height");
-                if (construction_key != QStringLiteral("angle") &&
-                    construction_key != QStringLiteral("arc_length") &&
-                    construction_key != QStringLiteral("arc_height")) {
-                    throw std::invalid_argument(
-                        "Wall arc construction must be angle, arc_length, or arc_height.");
-                }
-                Segment baseline;
-                std::string normalized_measure;
-                double stored_measure = 0.0;
-                bool clockwise = false;
-                if (construction_key == QStringLiteral("angle")) {
-                    const auto angle = parse_angle(expression.toUtf8().toStdString());
-                    baseline = arc_from_chord_angle(start, end, angle.radians);
-                    normalized_measure = angle.normalized_expression;
-                    stored_measure = angle.radians;
-                } else {
-                    const auto quantity = parse_quantity(
-                        expression.toUtf8().toStdString(), m_metric_units ? Unit::metre : Unit::foot);
-                    if (!std::isfinite(quantity.metres) || quantity.metres == 0.0)
-                        throw std::invalid_argument("Wall arc measure must be finite and nonzero.");
-                    stored_measure = quantity.metres;
-                    normalized_measure = format_quantity(quantity, Unit::metre);
-                    if (construction_key == QStringLiteral("arc_length")) {
-                        clockwise = quantity.metres < 0.0;
-                        baseline = arc_from_chord_arc_length(start, end,
-                                                             std::abs(quantity.metres), clockwise);
-                    } else {
-                        baseline = arc_from_chord_height(start, end, quantity.metres);
-                    }
-                }
-                const auto& original_baseline=selected->properties.at("baseline");
-                if (original_baseline.at("start")!=point_json(baseline.start) ||
-                    original_baseline.at("end")!=point_json(baseline.end) ||
-                    original_baseline.at("sweep_radians")!=baseline.sweep_radians)
-                    clear_wall_length_input(candidate);
-                auto& stored_baseline = candidate.properties["baseline"];
-                stored_baseline["start"] = point_json(baseline.start);
-                stored_baseline["end"] = point_json(baseline.end);
-                stored_baseline["sweep_radians"] = baseline.sweep_radians;
-                if (const auto plane = candidate.properties.find("top_plane");
-                    plane != candidate.properties.end()) {
-                    const auto gradient = parse_wall_top_plane(*plane);
-                    const auto rise = gradient.x * (baseline.end.x - baseline.start.x) +
-                                      gradient.y * (baseline.end.y - baseline.start.y);
-                    if (!std::isfinite(rise))
-                        throw std::invalid_argument("Wall top plane rise exceeds the supported range.");
-                    candidate.properties["slope_rise_m"] = rise;
-                    if (candidate.properties.contains("slope_rise"))
-                        candidate.properties["slope_rise"] = rise;
-                }
-                auto curve_input = candidate.extensions.value("curve_input", json::object());
-                if (!curve_input.is_object()) curve_input = json::object();
-                curve_input["version"] = 2;
-                curve_input["construction"] = construction_key.toStdString();
-                curve_input["measure"] = expression.toStdString();
-                curve_input["normalized_measure"] = normalized_measure;
-                curve_input["measure_value"] = stored_measure;
-                curve_input["clockwise"] = clockwise;
-                curve_input["start"] = point_json(start);
-                curve_input["end"] = point_json(end);
-                const auto derived_sweep = angle_from_radians(baseline.sweep_radians);
-                curve_input["sweep"] = construction_key == QStringLiteral("angle")
-                    ? expression.toStdString() : derived_sweep.original_expression;
-                curve_input["normalized_sweep"] = derived_sweep.normalized_expression;
-                curve_input["radians"] = baseline.sweep_radians;
-                candidate.extensions["curve_input"] = std::move(curve_input);
-                preserve_wall_curve_construction(candidate, *selected);
             }
             if (classification) {
                 const auto value = classification->trimmed();
@@ -21848,7 +21859,6 @@ public:
                     ? std::string("interior") : value.toStdString();
             }
 
-            const auto snapshot = m_document->snapshot();
             std::vector<const Entity*> openings;
             for (const auto& [id, entity] : snapshot.entities()) {
                 (void)id;
@@ -21861,6 +21871,8 @@ public:
             if (!read_document_wall(candidate, openings, wall, diagnostic))
                 throw std::invalid_argument(diagnostic);
             validate_wall_semantics(wall);
+            if (!sourceEditAuthorityCurrent(authority))
+                throw std::invalid_argument("The curved wall source or editing context changed. Reopen its properties.");
             if (candidate == *selected) {
                 clearError();
                 return true;
@@ -53919,7 +53931,16 @@ private:
             return;
         }
 
-        const auto selected = selectedEntity();
+        const auto context = captureModalContext();
+        if (!context.source) {
+            setError(QStringLiteral("The editing source is unavailable. Reopen the curved wall editor."));
+            return;
+        }
+        const auto& source = *context.source;
+        const auto authority = captureSourceEditAuthority(source);
+        const auto selected_source = source.entities().find(context.selected_id.toStdString());
+        const std::optional<Entity> selected = selected_source == source.entities().end()
+            ? std::nullopt : std::optional<Entity>{selected_source->second};
         std::optional<Segment> existing_baseline;
         if (selected && selected->type == "wall") {
             if (const auto baseline = read_required_segment(selected->properties, "baseline");
@@ -53928,22 +53949,21 @@ private:
             }
         }
         const bool editing = existing_baseline.has_value();
-        const auto context = captureModalContext();
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("curvedWallDialog"));
         dialog.setWindowTitle(editing ? QStringLiteral("Edit curved wall")
                                       : QStringLiteral("Draw curved wall"));
         dialog.setModal(true);
-        dialog.resize(520, 360);
+        dialog.resize(editing ? 640 : 520, editing ? 720 : 360);
 
         auto* layout = new QVBoxLayout(&dialog);
         layout->setContentsMargins(20, 18, 20, 16);
         layout->setSpacing(12);
         auto* help = new QLabel(
             editing
-                ? QStringLiteral("Edit the selected analytical circular wall. Change its model-space "
-                                 "endpoints or defining angle, arc length, or arc height, then apply the validated result.")
+                ? QStringLiteral("Change the wall's endpoints or defining angle, arc length, or arc height. "
+                                 "Review the current and proposed connected geometry before applying.")
                 : QStringLiteral("Create an analytical circular wall from two model-space endpoints. "
                                  "Choose a sweep angle, arc length, or arc height; signed angles and heights follow the chord orientation, "
                                  "and a signed arc length selects clockwise orientation."),
@@ -54053,6 +54073,20 @@ private:
         form->addRow(QStringLiteral("Classification"), classification);
         layout->addLayout(form);
 
+        QCheckBox* move_connected = nullptr;
+        ConstraintPreviewCanvas* preview_canvas = nullptr;
+        if (editing) {
+            move_connected = new QCheckBox(QStringLiteral("Move connected walls"), &dialog);
+            move_connected->setObjectName(QStringLiteral("curvedWallMoveConnected"));
+            move_connected->setChecked(true);
+            move_connected->setToolTip(QStringLiteral(
+                "Clear to hold connected owners fixed; conflicting edits will be refused."));
+            layout->addWidget(move_connected);
+            preview_canvas = new ConstraintPreviewCanvas(&dialog);
+            preview_canvas->setObjectName(QStringLiteral("curvedWallPreviewCanvas"));
+            layout->addWidget(preview_canvas, 1);
+        }
+
         const auto refresh_measure_label = [construction, measure_label, sweep] {
             const auto kind = construction->currentData().toString();
             const auto is_angle = kind == QStringLiteral("angle");
@@ -54070,69 +54104,328 @@ private:
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("curvedWallStatus"));
         status->setWordWrap(true);
-        status->setText(editing
-            ? QStringLiteral("The current wall and hosted openings are revalidated before the edit is saved.")
-            : QStringLiteral("The endpoints and selected analytical measure are validated before the wall is added."));
+        if (!editing)
+            status->setText(QStringLiteral("Enter chord endpoints and choose an angle, arc length or height."));
         layout->addWidget(status);
 
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
         buttons->setObjectName(QStringLiteral("curvedWallButtons"));
         layout->addWidget(buttons);
+        auto* apply_button = buttons->button(QDialogButtonBox::Apply);
+        std::optional<ConstraintAuthoringPreview> retained_preview;
+        bool metadata_ready = false;
+        bool no_model_change = false;
+        bool stale = false;
+        struct CurvePreviewResult {
+            std::optional<ConstraintAuthoringPreview> preview;
+            std::string error;
+        };
+        std::uint64_t input_generation{};
+        std::uint64_t running_generation{};
+        std::optional<ConstraintAuthoringIntent> pending_intent;
+        std::optional<std::future<CurvePreviewResult>> running_result;
+        std::vector<WallPreviewDrawing> original_drawing;
+        if (editing) {
+            try {
+                // Display the same source contact/relation component used by
+                // construction authoring, including neighbors held fixed.
+                std::map<std::string, std::set<std::string>> adjacency;
+                for (const auto& [id, entity] : source.entities()) {
+                    (void)id;
+                    if (entity.type != "constraint") continue;
+                    const auto decoded = decode_constraint_entity(entity);
+                    if (!decoded.constraint) continue;
+                    for (const auto& first : decoded.constraint->bindings)
+                        for (const auto& second : decoded.constraint->bindings)
+                            adjacency[first.owner_id].insert(second.owner_id);
+                }
+                for (const auto& contact : exterior_corner_physical_contact_graph(source.entities())) {
+                    adjacency[contact.owner].insert(contact.host);
+                    adjacency[contact.host].insert(contact.owner);
+                }
+                std::set<std::string> connected;
+                std::vector<std::string> pending{selected->id};
+                while (!pending.empty()) {
+                    const auto id = std::move(pending.back());
+                    pending.pop_back();
+                    if (!connected.insert(id).second) continue;
+                    for (const auto& neighbor : adjacency[id]) pending.push_back(neighbor);
+                }
+                for (const auto& id : connected) {
+                    const auto found = source.entities().find(id);
+                    if (found == source.entities().end() || found->second.type != "wall") continue;
+                    const auto baseline = read_required_segment(found->second.properties, "baseline");
+                    if (baseline) {
+                        (void)segment_bounds(*baseline);
+                        original_drawing.push_back({QString::fromStdString(id), *baseline, *baseline});
+                    }
+                }
+            } catch (const std::exception&) {
+                // The solver supplies the actual refusal for unsupported
+                // source geometry; keep the selected original visible.
+                original_drawing.clear();
+                try {
+                    (void)segment_bounds(*existing_baseline);
+                    original_drawing.push_back({QString::fromStdString(selected->id),
+                        *existing_baseline, *existing_baseline});
+                } catch (const std::exception&) {}
+            }
+            preview_canvas->setWalls(original_drawing);
+        }
+        const auto read_coordinates = [&] {
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto coordinate = [&](QLineEdit* field, const char* label,
+                                         const QString& initial_text, double original) {
+                const auto expression = field->text().trimmed();
+                if (expression.isEmpty())
+                    throw std::invalid_argument(std::string(label) + " is required.");
+                // Untouched rounded text never replaces the exact source double.
+                if (editing && expression == initial_text.trimmed()) return original;
+                const auto value = parse_quantity(expression.toStdString(), unit).metres;
+                if (!std::isfinite(value))
+                    throw std::invalid_argument(std::string(label) + " must be finite.");
+                return value;
+            };
+            return std::pair{Vec2{coordinate(start_x, "Start X", x_text, start.x),
+                                  coordinate(start_y, "Start Y", y_text, start.y)},
+                             Vec2{coordinate(end_x, "End X", end_x_text, end.x),
+                                  coordinate(end_y, "End Y", end_y_text, end.y)}};
+        };
+        const auto unchanged_curve_input = [&] {
+            return start_x->text().trimmed() == x_text.trimmed() &&
+                start_y->text().trimmed() == y_text.trimmed() &&
+                end_x->text().trimmed() == end_x_text.trimmed() &&
+                end_y->text().trimmed() == end_y_text.trimmed() &&
+                construction->currentData().toString() == initial_construction &&
+                sweep->text().trimmed() == initial_sweep.trimmed();
+        };
+        const auto display_preview = [&](ConstraintAuthoringPreview preview) {
+            requireAcceptedConstraintPreview(preview);
+            auto drawing = original_drawing;
+            for (const auto& change : preview.changed_walls()) {
+                const auto id = QString::fromStdString(change.wall_id);
+                const auto found = std::find_if(drawing.begin(), drawing.end(),
+                    [&](const auto& wall) { return wall.id == id; });
+                if (found != drawing.end()) found->after = change.proposed_baseline;
+                else drawing.push_back({id, change.old_baseline, change.proposed_baseline});
+            }
+            for (const auto& change : preview.changed_boundaries())
+                for (std::size_t i = 0; i < change.before.segments.size(); ++i)
+                    drawing.push_back({QString::fromStdString(change.before.id),
+                        change.before.segments.at(i).segment, change.after.segments.at(i).segment});
+            for (const auto& change : preview.changed_measured_strokes())
+                for (std::size_t i = 0; i < change.before.edges.size(); ++i)
+                    drawing.push_back({QString::fromStdString(change.stroke_id),
+                        change.before.edges.at(i).segment, change.after.edges.at(i).segment});
+            preview_canvas->setWalls(std::move(drawing));
+            const auto proposed = read_required_segment(
+                preview.candidate_entities().at(selected->id).properties, "baseline");
+            if (!proposed) throw std::invalid_argument("The proposed curved wall has no baseline.");
+            const auto connected_changes = std::count_if(preview.changed_walls().begin(),
+                preview.changed_walls().end(), [&](const auto& wall) { return wall.wall_id != selected->id; });
+            status->setText(QStringLiteral("Arc length: %1 to %2. %3 connected wall changes.")
+                .arg(format_length(segment_length(*existing_baseline), context.metric_units),
+                     format_length(segment_length(*proposed), context.metric_units))
+                .arg(connected_changes));
+            status->setStyleSheet(QString());
+            retained_preview = std::move(preview);
+            apply_button->setEnabled(true);
+        };
+        const auto start_solver = [&] {
+            if (running_result || !pending_intent || stale) return;
+            auto intent = std::move(*pending_intent);
+            pending_intent.reset();
+            try {
+                auto completion = std::make_shared<std::promise<CurvePreviewResult>>();
+                auto future = completion->get_future();
+                // No widget or controller references enter this job. The promise
+                // future does not wait on destruction when the dialog is canceled.
+                auto* work = QRunnable::create(
+                    [captured_source = source, intent = std::move(intent), completion] {
+                        CurvePreviewResult result;
+                        try {
+                            result.preview = preview_constraint_authoring(captured_source, intent);
+                        } catch (const std::exception& error) {
+                            result.error = error.what();
+                        } catch (...) {
+                            result.error = "The connected curve preview could not be prepared.";
+                        }
+                        completion->set_value(std::move(result));
+                    });
+                QThreadPool::globalInstance()->start(work);
+                running_result = std::move(future);
+                running_generation = input_generation;
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
+                status->setStyleSheet(QStringLiteral("color:#b42318;"));
+                apply_button->setEnabled(false);
+            }
+        };
+        const auto update_preview = [&] {
+            retained_preview.reset();
+            pending_intent.reset();
+            metadata_ready = false;
+            no_model_change = false;
+            apply_button->setEnabled(false);
+            preview_canvas->setWalls(original_drawing);
+            try {
+                if (stale || !sourceEditAuthorityUnchanged(authority)) {
+                    stale = true;
+                    throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                }
+                const auto [first, second] = read_coordinates();
+                auto candidate = *selected;
+                if (unchanged_curve_input()) {
+                    if (classification->text().trimmed() != initial_classification.trimmed()) {
+                        const auto value = classification->text().trimmed();
+                        candidate.properties["classification"] = value.isEmpty()
+                            ? std::string("interior") : value.toStdString();
+                    }
+                    std::vector<const Entity*> openings;
+                    for (const auto& [id, entity] : source.entities()) {
+                        (void)id;
+                        if (entity.type == "opening" &&
+                            entity.properties.value("wall_id", std::string{}) == selected->id)
+                            openings.push_back(&entity);
+                    }
+                    Wall wall;
+                    std::string diagnostic;
+                    if (!read_document_wall(candidate, openings, wall, diagnostic))
+                        throw std::invalid_argument(diagnostic);
+                    validate_wall_semantics(wall);
+                    metadata_ready = true;
+                    no_model_change = candidate == *selected;
+                    status->setText(no_model_change ? QStringLiteral("No changes to apply.")
+                        : QStringLiteral("Classification change only; connected geometry stays in place."));
+                } else {
+                    const auto edit = curvedWallConstructionEdit(*selected, first, second,
+                        construction->currentData().toString(), sweep->text(), classification->text());
+                    candidate = replay_constraint_wall_edit(*selected, edit);
+                    no_model_change = candidate == *selected;
+                    if (no_model_change) {
+                        status->setText(QStringLiteral("No changes to apply."));
+                    } else {
+                        ConstraintAuthoringIntent intent;
+                        intent.wall_curve_construction = WallCurveConstructionIntent{
+                            edit, move_connected->isChecked()};
+                        intent.message = "Edit curved wall and connected geometry";
+                        pending_intent = std::move(intent);
+                        status->setText(QStringLiteral("Updating preview…"));
+                        status->setStyleSheet(QString());
+                        start_solver();
+                        return;
+                    }
+                }
+                status->setStyleSheet(QString());
+                apply_button->setEnabled(true);
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
+                status->setStyleSheet(QStringLiteral("color:#b42318;"));
+            }
+        };
+        QTimer preview_debounce(&dialog);
+        preview_debounce.setSingleShot(true);
+        preview_debounce.setInterval(120);
+        QObject::connect(&preview_debounce, &QTimer::timeout, &dialog, update_preview);
+        const auto schedule_preview = [&] {
+            if (!editing) return;
+            ++input_generation;
+            retained_preview.reset();
+            pending_intent.reset();
+            metadata_ready = false;
+            no_model_change = false;
+            apply_button->setEnabled(false);
+            preview_canvas->setWalls(original_drawing);
+            if (!stale) {
+                status->setText(QStringLiteral("Updating preview…"));
+                status->setStyleSheet(QString());
+                preview_debounce.start();
+            }
+        };
+        if (editing) {
+            for (auto* field : {start_x, start_y, end_x, end_y, sweep, classification})
+                QObject::connect(field, &QLineEdit::textChanged, &dialog, schedule_preview);
+            QObject::connect(construction, &QComboBox::currentIndexChanged, &dialog, schedule_preview);
+            QObject::connect(move_connected, &QCheckBox::toggled, &dialog, schedule_preview);
+        }
+        QTimer solver_poll(&dialog);
+        solver_poll.setInterval(30);
+        QObject::connect(&solver_poll, &QTimer::timeout, &dialog, [&] {
+            if (!running_result || running_result->wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+                return;
+            CurvePreviewResult result;
+            try { result = running_result->get(); }
+            catch (const std::exception& error) { result.error = error.what(); }
+            catch (...) { result.error = "The connected curve preview could not be prepared."; }
+            running_result.reset();
+            if (!stale && running_generation == input_generation) {
+                try {
+                    if (!sourceEditAuthorityUnchanged(authority)) {
+                        stale = true;
+                        throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                    }
+                    if (!result.preview)
+                        throw std::invalid_argument(result.error.empty()
+                            ? "The connected curve preview could not be prepared." : result.error);
+                    display_preview(std::move(*result.preview));
+                } catch (const std::exception& error) {
+                    retained_preview.reset();
+                    apply_button->setEnabled(false);
+                    preview_canvas->setWalls(original_drawing);
+                    status->setText(QString::fromUtf8(error.what()));
+                    status->setStyleSheet(QStringLiteral("color:#b42318;"));
+                }
+            }
+            start_solver();
+        });
+        if (editing) solver_poll.start();
+        QTimer source_watch(&dialog);
+        source_watch.setInterval(400);
+        QObject::connect(&source_watch, &QTimer::timeout, &dialog, [&] {
+            if (stale || (sourceEditAuthorityContextCurrent(authority) && modalContextUnchanged(context))) return;
+            stale = true;
+            ++input_generation;
+            preview_debounce.stop();
+            retained_preview.reset();
+            pending_intent.reset();
+            metadata_ready = false;
+            no_model_change = false;
+            apply_button->setEnabled(false);
+            if (preview_canvas) preview_canvas->setWalls(original_drawing);
+            status->setText(QStringLiteral("The editing source or context changed. Reopen the curved wall editor."));
+            status->setStyleSheet(QStringLiteral("color:#b42318;"));
+        });
+        source_watch.start();
         QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
                          &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
                          &dialog, [&] {
                              try {
-                                 if (!modalContextUnchanged(context)) {
-                                     status->setText(lastError());
-                                     return;
+                                 if (stale || !sourceEditAuthorityUnchanged(authority)) {
+                                     stale = true;
+                                     apply_button->setEnabled(false);
+                                     throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
                                  }
-                                 const auto unit = m_metric_units ? Unit::metre : Unit::foot;
-                                 const auto read_coordinate = [&](QLineEdit* field, const char* label,
-                                                                  const QString& initial_text, double original) {
-                                     const auto expression = field->text().trimmed();
-                                     if (expression.isEmpty())
-                                         throw std::invalid_argument(std::string(label) + " is required.");
-                                     // Display rounding is presentation only. Changing another
-                                     // field must not re-enter untouched model coordinates.
-                                     if (editing && expression == initial_text.trimmed()) return original;
-                                     const auto value = parse_quantity(expression.toStdString(), unit).metres;
-                                     if (!std::isfinite(value))
-                                         throw std::invalid_argument(std::string(label) + " must be finite.");
-                                     return value;
-                                 };
-                                 const Vec2 first{
-                                     read_coordinate(start_x, "Start X", x_text, start.x),
-                                     read_coordinate(start_y, "Start Y", y_text, start.y)};
-                                 const Vec2 second{
-                                     read_coordinate(end_x, "End X", end_x_text, end.x),
-                                     read_coordinate(end_y, "End Y", end_y_text, end.y)};
-                                 if (sweep->text().trimmed().isEmpty())
-                                     throw std::invalid_argument("Curve measure is required.");
-                                 const auto construction_key = construction->currentData().toString();
                                  if (editing) {
-                                     const bool unchanged_curve_input =
-                                         start_x->text().trimmed() == x_text.trimmed() &&
-                                         start_y->text().trimmed() == y_text.trimmed() &&
-                                         end_x->text().trimmed() == end_x_text.trimmed() &&
-                                         end_y->text().trimmed() == end_y_text.trimmed() &&
-                                         construction_key == initial_construction &&
-                                         sweep->text().trimmed() == initial_sweep.trimmed();
-                                     if (unchanged_curve_input &&
-                                         classification->text().trimmed() == initial_classification.trimmed()) {
+                                     if (retained_preview) {
+                                         requireAcceptedConstraintPreview(*retained_preview);
+                                         applyConstraintPreview(*retained_preview);
                                          clearError();
-                                         dialog.accept();
-                                         return;
-                                     }
-                                     if (!editSelectedCurvedWallFromConstruction(
-                                             first, second, construction_key, sweep->text(),
-                                             context.revision, classification->text(), unchanged_curve_input)) {
-                                         status->setText(lastError());
-                                         return;
-                                     }
+                                         m_selected_id = QString::fromStdString(selected->id);
+                                         refresh();
+                                     } else if (no_model_change) clearError();
+                                     else if (metadata_ready && unchanged_curve_input()) {
+                                         if (!editSelectedCurvedWallFromConstruction(start, end,
+                                                 initial_construction, initial_sweep, context.revision,
+                                                 classification->text(), true)) {
+                                             status->setText(lastError());
+                                             return;
+                                         }
+                                     } else throw std::invalid_argument("Wait for a valid curve preview before applying.");
                                  } else {
+                                     const auto [first, second] = read_coordinates();
                                      const auto id = createCurvedWallFromConstruction(
-                                         first, second, construction_key, sweep->text(),
+                                         first, second, construction->currentData().toString(), sweep->text(),
                                          classification->text(), context.revision);
                                      if (id.isEmpty()) {
                                          status->setText(lastError());
@@ -54146,6 +54439,7 @@ private:
                                  status->setText(message);
                              }
                          });
+        if (editing) update_preview();
         dialog.exec();
     }
 

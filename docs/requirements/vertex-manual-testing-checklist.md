@@ -2010,6 +2010,7 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U318 — Edit a curved wall's classification**
   - Steps: In Imperial, create a curved wall with **Draw curved wall** and add a hosted opening, a name and another wall property. Select the wall and open **Edit curve…** in Properties. Change only Classification and Apply; compare the exact endpoints, sweep and arc length before and after. Reopen **Edit curve…**, change both the curve measure and Classification, and Apply once. Undo once, then Redo. Repeat the workflow in Metric.
   - Expected: Changing only Classification in **Edit curve…** leaves the exact curve geometry unchanged. Changing the curve and Classification together is one undoable operation: one Undo restores both previous values, and Redo restores both new values. Hosted openings remain attached, and the wall name and other properties are retained in both unit systems.
+  - Connected curve check: Join a straight wall smoothly to a curved wall and add a Tangent relationship in **Dimensions and constraints**. Open **Edit curve…** on the curve. Change its angle, then its signed height or arc length. Compare the original and proposed curve and connected walls before Apply. Cancel once and check that nothing moved. Apply a compatible change, then Undo, Redo, save and reopen; the curve entry and smooth junction must remain. Repeat with connected movement disabled and with a fixed neighbor; an incompatible edit explains the conflict and changes nothing.
   - Result: Not tested
   - Notes: ______________________________
 
