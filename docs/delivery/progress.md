@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 atomic curved-wall and room review
+
+The curved-wall editor now opens room correspondence against its detached
+proposal. Changed physical-wall consumers require explicit retained/new/retired
+room choices before Apply. The original wall and rooms remain unchanged while
+the nested review is open or cancelled; accepting commits both in one event.
+Room dimensions, names, classifications, references and relationship decisions
+retain their existing review workflow. Input or source changes retire the
+proposal and its Apply authority immediately.
+
+Command envelope 24 independently replays its bounded direct curve proof,
+then the reviewed room decisions. Full source/history/save authority binds the
+original project; room lineage binds the derived geometry actually reviewed.
+Source review found and corrected an omitted nested physical-room transition
+guard, so unrelated source-bound room outlines cannot borrow the curve lane.
+Native format 76/extraction 74 retain this event throughout history.
+
+This completion currently covers explicit curve construction in one resolved
+room context and plane. Other wall editing routes and reviews spanning multiple
+contexts remain separate gaps. No builds, tests, probes, launches, packages or
+installations ran. Compilation and runtime behavior remain unverified; the
+installed candidate is unchanged.
+
 ### October 8 connected curved-wall editing
 
 Explicit angle, signed arc length and signed height edits now carry a v6
@@ -2316,14 +2339,14 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Compose the proposed curved-wall edit with explicit physical-room
-   correspondence review in one command. The existing room review works against
-   an already changed source; extend it to review a detached curve candidate
-   while retaining the original snapshot fence. No intermediate room or curve
-   commit, guessed classification, silent identity reassignment or reference
-   loss is permitted. Connected curve authoring/properties source work is
-   recorded above; do not restart it. Persisted tangent relations already exist
-   in the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
+1. Extend detached room-consequence review to ordinary physical-wall length
+   and endpoint editing. Preserve the original snapshot fence and one complete
+   geometry/room event. No intermediate wall or room commit, guessed
+   classification, silent identity reassignment or reference loss is permitted.
+   Explicit connected curve construction and its atomic room review source
+   work are recorded above; do not restart them. Reviews spanning multiple
+   contexts/planes remain open. Persisted tangent relations already exist in
+   the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent
    selection source changes are recorded above; do not restart them.
    Numerical preview typing already uses a 120 ms debounce and immediately

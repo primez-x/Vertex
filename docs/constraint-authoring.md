@@ -85,6 +85,14 @@ event. Outer envelope 23, native format 75 and extraction version 73 retain this
 authority through history. Incompatible locks, hosted openings, ambiguous
 source consumers or physical rooms requiring explicit repair refuse the edit.
 
+Room correspondence can accompany a valid proposed curve through a separate
+reviewed completion. The report uses the detached curve geometry, while the
+final intent retains the original document's complete source fence. Admission
+first independently replays the curve, then rederives all explicit room,
+reference and relationship decisions on that result. Neither preparation
+commits an intermediate state. Envelope 24, native format 76 and extraction
+version 74 protect the composed event; one Undo restores curve and rooms.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

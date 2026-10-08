@@ -177,7 +177,8 @@ public:
     // Per-owner rigid geometry groups require v73 in all retained history.
     // Per-owner connected rigid operations require v74 in all retained history.
     // Explicit connected curve construction requires v75 in all retained history.
-    static constexpr std::uint32_t format_version = 75;
+    // Reviewed curve/physical-room composition requires v76 in all retained history.
+    static constexpr std::uint32_t format_version = 76;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

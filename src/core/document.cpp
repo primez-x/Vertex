@@ -1967,8 +1967,13 @@ static bool has_joint_translation_completion(const ApplyBoundaryConstraintChange
     return command.joint_translation_completion || command.joint_translation.has_value();
 }
 
+static bool has_room_review_geometry_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.room_review_geometry_completion || !command.room_review_geometry_proof.is_null();
+}
+
 static bool has_room_review_completion(const ApplyBoundaryConstraintChanges& command) {
-    return command.room_review_completion || !command.room_review_intent.is_null();
+    return command.room_review_completion || !command.room_review_intent.is_null() ||
+        has_room_review_geometry_completion(command);
 }
 
 static void validate_room_aware_wall_split_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -2021,7 +2026,8 @@ static void validate_room_review_mode(const ApplyBoundaryConstraintChanges& comm
         command.measured_source_completion || command.dimension_placement_completion ||
         command.rigid_group_completion || command.rigid_group_transform || command.wall_split || command.wall_merge ||
         command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
-        has_joint_translation_completion(command))
+        has_joint_translation_completion(command) || command.wall_dimension_completion ||
+        command.curve_construction_completion || has_disto_measurement_completion(command))
         throw std::invalid_argument("Room review cannot borrow another command's edit authority");
 }
 
@@ -2161,6 +2167,25 @@ static void validate_curve_construction_completion(const ApplyBoundaryConstraint
     for (const auto& edit : command.wall_edits)
         if ((edit.curve_construction || edit.wall_classification) && edit.version != 6)
             throw std::invalid_argument("Curve construction fields require wall proof version six");
+}
+
+static ApplyBoundaryConstraintChanges room_review_curve_command(const ApplyBoundaryConstraintChanges& command) {
+    validate_room_review_mode(command,true);
+    if (!command.room_review_geometry_completion || command.room_review_geometry_proof.is_null() ||
+        has_selection_completion(command))
+        throw std::invalid_argument("Curve room review requires its explicit geometry mode and proof");
+    const auto& proof=command.room_review_geometry_proof;
+    if (!proof.is_object() || !proof.contains("version") || proof.at("version")!=23 ||
+        !proof.contains("kind") || proof.at("kind")!="apply_boundary_constraint_changes" ||
+        proof.dump().size()>1024*1024)
+        throw std::invalid_argument("Room review requires one bounded direct curve construction proof");
+    const auto decoded=command_from_json(proof);
+    const auto* curve=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+    if (!curve || !curve->curve_construction_completion ||
+        curve->expected_revision!=command.expected_revision || curve->message!=command.message)
+        throw std::invalid_argument("Curve room review must retain the original curve command identity");
+    validate_curve_construction_completion(*curve);
+    return *curve;
 }
 
 static void complete_dimension_placements(const std::map<std::string, Entity, std::less<>>& source,
@@ -3883,7 +3908,33 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             validate_room_review_mode(command, true);
             (void)command_to_json(Command{command});
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
-            const auto replay=replay_physical_wall_room_review(source,command.room_review_intent);
+            auto reviewed_source=source;
+            if (has_room_review_geometry_completion(command)) {
+                const auto curve=room_review_curve_command(command);
+                reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,curve,retained_replay);
+                validate_completed_constraint_change(source,reviewed_source,curve,retained_replay);
+                validate_physical_room_source_transition(source,reviewed_source,nullptr,&curve);
+                (void)validate_state(reviewed_source,source_assets);
+                const auto intent=decode_physical_wall_room_review_intent(command.room_review_intent);
+                std::set<std::string> changed_walls,reviewed_rooms;
+                for (const auto& [id,entity] : source)
+                    if (entity.type=="wall" && entity.properties.at("baseline")!=reviewed_source.at(id).properties.at("baseline"))
+                        changed_walls.insert(id);
+                for (const auto& decision : intent.retained) reviewed_rooms.insert(decision.room_id);
+                const auto organization=organize_project(source);
+                for (const auto& [id,entity] : source) {
+                    if (!is_physical_wall_room(entity)) continue;
+                    const auto context=organization.drawing_context(id);
+                    if (!context || !context->complete())
+                        throw std::invalid_argument("Curve room review requires resolved retained room contexts");
+                    const auto lineage=validate_retained_physical_wall_room_lineage(entity,*context);
+                    const bool affected=std::any_of(lineage.source_owner_ids.begin(),lineage.source_owner_ids.end(),
+                        [&](const auto& wall) { return changed_walls.contains(wall); });
+                    if (affected && !reviewed_rooms.contains(id))
+                        throw std::invalid_argument("Curve room review must include every affected retained room; another context or plane needs separate review");
+                }
+            }
+            const auto replay=replay_physical_wall_room_review(reviewed_source,command.room_review_intent);
             validate_boundary_identity_transition(history,source,replay.entities);
             (void)validate_constraint_integrity(replay.entities);
             return replay.entities;
@@ -5361,13 +5412,19 @@ nlohmann::json command_to_json(const Command& command) {
             if (has_room_review_completion(typed)) {
                 try {
                     validate_room_review_mode(typed,false);
+                    const bool geometry=has_room_review_geometry_completion(typed);
+                    if (geometry) (void)room_review_curve_command(typed);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     if (!typed.room_review_intent.is_null())
                         (void)decode_physical_wall_room_review_intent(typed.room_review_intent);
 #endif
-                    auto encoded=nlohmann::json{{"version",18},{"kind","apply_boundary_constraint_changes"},
+                    auto encoded=nlohmann::json{{"version",geometry ? 24 : 18},{"kind","apply_boundary_constraint_changes"},
                         {"expected_revision",typed.expected_revision},{"message",typed.message},
                         {"room_review_completion",true},{"room_review_intent",typed.room_review_intent}};
+                    if (geometry) {
+                        encoded["room_review_geometry_completion"]=true;
+                        encoded["room_review_geometry_proof"]=typed.room_review_geometry_proof;
+                    }
                     if (encoded.dump().size()>1024*1024)
                         throw std::invalid_argument("Room review exceeds the persisted intent budget");
                     return encoded;
@@ -5641,7 +5698,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23 && value.at("version") != 24) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -5860,8 +5917,13 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18) {
-                command_exact_fields(value,{"version","kind","expected_revision","message","room_review_completion","room_review_intent"},
+            if (value.at("version")==18 || value.at("version")==24) {
+                const bool geometry=value.at("version")==24;
+                if (geometry)
+                    command_exact_fields(value,{"version","kind","expected_revision","message","room_review_completion","room_review_intent",
+                        "room_review_geometry_completion","room_review_geometry_proof"},
+                        DocumentErrorCode::invalid_entity,"serialized curve and physical-room review");
+                else command_exact_fields(value,{"version","kind","expected_revision","message","room_review_completion","room_review_intent"},
                     DocumentErrorCode::invalid_entity,"serialized physical-room review");
                 if (value.dump().size()>1024*1024 || !value.at("room_review_completion").is_boolean() ||
                     !value.at("room_review_completion").get<bool>())
@@ -5874,6 +5936,14 @@ Command command_from_json(const nlohmann::json& value,
                 result.message=ordinary.message;
                 result.room_review_completion=true;
                 result.room_review_intent=value.at("room_review_intent");
+                if (geometry) {
+                    if (!value.at("room_review_geometry_completion").is_boolean() ||
+                        !value.at("room_review_geometry_completion").get<bool>())
+                        throw std::invalid_argument("Curve room review requires its explicit geometry mode");
+                    result.room_review_geometry_completion=true;
+                    result.room_review_geometry_proof=value.at("room_review_geometry_proof");
+                    (void)room_review_curve_command(result);
+                }
                 (void)command_to_json(Command{result});
                 return result;
             }

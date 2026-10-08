@@ -76,8 +76,11 @@ public:
         std::map<std::string,QCheckBox*,std::less<>> memberships;std::vector<QCheckBox*> relations;
     };
     PhysicalWallRoomReviewDialog* dialog;
+    DocumentSnapshot original_source;
     DocumentSnapshot source;
+    std::optional<Command> predecessor;
     std::function<DocumentSnapshot()> current_source;
+    std::string original_digest;
     std::string source_digest;
     bool metric;
     QComboBox* walls{};PlanCanvas* canvas{};QLabel* status{};QPushButton* apply{};
@@ -96,7 +99,9 @@ public:
     bool invalidated{};
 
     Impl(PhysicalWallRoomReviewDialog* owner,DocumentSnapshot captured,std::string wall_id,bool metric_units,
-        std::function<DocumentSnapshot()> current):dialog(owner),source(std::move(captured)),current_source(std::move(current)),
+        std::function<DocumentSnapshot()> current,std::optional<Command> curve):dialog(owner),original_source(std::move(captured)),
+        source(curve?preview_physical_wall_room_review_curve(original_source,*curve):original_source),predecessor(std::move(curve)),
+        current_source(std::move(current)),original_digest(document_snapshot_digest(original_source)),
         source_digest(document_snapshot_digest(source)),metric(metric_units) {
         dialog->setObjectName(QStringLiteral("physicalRoomReviewDialog"));dialog->setWindowTitle(QStringLiteral("Review rooms from walls"));dialog->resize(1100,900);
         auto* layout=new QVBoxLayout(dialog);
@@ -126,7 +131,8 @@ public:
         tabs->addTab(graph_table,QStringLiteral("Room relationships"));layout->addWidget(tabs,2);
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalRoomReviewStatus"));status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
-        apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));apply->setText(QStringLiteral("Apply reviewed rooms"));layout->addWidget(buttons);
+        apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));
+        apply->setText(predecessor?QStringLiteral("Apply curve and reviewed rooms"):QStringLiteral("Apply reviewed rooms"));layout->addWidget(buttons);
         QObject::connect(apply,&QPushButton::clicked,dialog,[this]{dialog->accept();});
         QObject::connect(buttons,&QDialogButtonBox::rejected,dialog,[this]{dialog->reject();});
         QObject::connect(walls,&QComboBox::currentIndexChanged,dialog,[this]{reset();});
@@ -136,11 +142,11 @@ public:
         reset();
     }
     bool is_current() const {
-        try { return !invalidated && current_source && source.is_editable() && document_snapshot_digest(current_source())==source_digest; }
+        try { return !invalidated && current_source && original_source.is_editable() && document_snapshot_digest(current_source())==original_digest; }
         catch (...) { return false; }
     }
     void require_current() const {
-        if (!source.is_editable()) throw std::invalid_argument("This project is read-only: "+source.read_only_reason());
+        if (!original_source.is_editable()) throw std::invalid_argument("This project is read-only: "+original_source.read_only_reason());
         if (!is_current()) throw std::invalid_argument("The complete project source changed. Cancel and start a new review.");
     }
     void fail(QString reason) {
@@ -391,11 +397,21 @@ public:
             f.pick->setEnabled(!action.empty() && action!="unclassified");f.pick->setText(f.point?QStringLiteral("Interior chosen · pick again"):QStringLiteral("Pick inside"));
         }
         try {
-            const auto decisions=intent();const auto prepared=prepare_physical_wall_room_review(source,*report,decisions);
-            ApplyBoundaryConstraintChanges command;command.expected_revision=source.revision();command.message="Review physical rooms";
-            command.room_review_completion=true;command.room_review_intent=prepared.intent;
-            auto exact=Document::preview_command(source,command);
-            if (exact.entities()!=prepared.entities || exact.assets()!=source.assets()) throw std::invalid_argument("The complete room preview differs from the prepared decisions.");
+            const auto decisions=intent();
+            ApplyBoundaryConstraintChanges command;
+            auto exact=[&]() {
+                if (predecessor) {
+                    auto prepared=prepare_physical_wall_room_review_after_curve(original_source,*predecessor,*report,decisions);
+                    command=std::move(prepared.command);return std::move(prepared.snapshot);
+                }
+                const auto prepared=prepare_physical_wall_room_review(source,*report,decisions);
+                command.expected_revision=source.revision();command.message="Review physical rooms";
+                command.room_review_completion=true;command.room_review_intent=prepared.intent;
+                auto reviewed=Document::preview_command(source,command);
+                if (reviewed.entities()!=prepared.entities || reviewed.assets()!=source.assets())
+                    throw std::invalid_argument("The complete room preview differs from the prepared decisions.");
+                return reviewed;
+            }();
             for (std::size_t i=0;i<references.size();++i) {
                 const auto& reference=references[i];QString description=QStringLiteral("Removed together on Apply");
                 if (value(reference.decision)=="keep") {
@@ -417,7 +433,9 @@ public:
                 reference_table->item(static_cast<int>(i),2)->setText(description);
             }
             require_current();candidate=std::move(command);candidate_snapshot=std::move(exact);error.clear();
-            status->setText(QStringLiteral("All room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."));apply->setEnabled(true);
+            status->setText(predecessor?
+                QStringLiteral("The proposed curve and all room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."):
+                QStringLiteral("All room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."));apply->setEnabled(true);
         } catch (const std::exception& e) {fail(QString::fromUtf8(e.what()));}
         scene();
     }
@@ -458,7 +476,7 @@ public:
     bool submit() {
         update();if (!candidate || !candidate_snapshot) return false;
         try {
-            require_current();const auto exact=Document::preview_command(source,*candidate);
+            require_current();const auto exact=Document::preview_command(original_source,*candidate);
             if (exact.entities()!=candidate_snapshot->entities() || exact.assets()!=candidate_snapshot->assets()) throw std::invalid_argument("The accepted room preview changed. Review it again.");
             require_current();accepted=candidate;return true;
         } catch (const std::exception& e) {fail(QString::fromUtf8(e.what()));return false;}
@@ -466,8 +484,8 @@ public:
 };
 
 PhysicalWallRoomReviewDialog::PhysicalWallRoomReviewDialog(DocumentSnapshot source,std::string selected_wall_id,bool metric_units,
-    std::function<DocumentSnapshot()> current_source,QWidget* parent):QDialog(parent),
-    m_impl(std::make_unique<Impl>(this,std::move(source),std::move(selected_wall_id),metric_units,std::move(current_source))) {}
+    std::function<DocumentSnapshot()> current_source,QWidget* parent,std::optional<Command> predecessor):QDialog(parent),
+    m_impl(std::make_unique<Impl>(this,std::move(source),std::move(selected_wall_id),metric_units,std::move(current_source),std::move(predecessor))) {}
 PhysicalWallRoomReviewDialog::~PhysicalWallRoomReviewDialog()=default;
 const std::optional<ApplyBoundaryConstraintChanges>& PhysicalWallRoomReviewDialog::acceptedCommand() const {return m_impl->accepted;}
 QString PhysicalWallRoomReviewDialog::lastError() const {return m_impl->error;}

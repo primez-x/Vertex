@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v75
+# Vertex project formats v1 through v76
+
+## Reviewed curve and physical-room changes (v76)
+
+Native format 76 and JSON/assets extraction version 74 retain
+boundary-constraint envelope 24. It contains true `room_review_completion` and
+`room_review_geometry_completion` markers, an explicit `room_review_intent`,
+and one `room_review_geometry_proof`. The geometry proof must be a direct
+curve-construction envelope 23 with the same original revision and message.
+Recursive room/selection wrappers, arbitrary geometry commands and raw top-level
+edit lanes cannot supply this authority. The complete proof is bounded to 1 MiB.
+
+Preparation first admits the proposed curve on a detached source, then presents
+physical-room correspondence against that geometry. Retained/new/retired room
+identities, classifications, interior witnesses, child mappings, dimensions,
+constraints and relationship removals remain explicit reviewed decisions.
+Preparation publishes neither the intermediate curve nor the rooms.
+
+The retained room intent's full snapshot, authoring-history and save hashes bind
+the original source. Its entity-map digest binds the independently replayed
+curve candidate that produced the room report. This distinction permits one
+atomic event without retaining a fictitious intermediate history event or
+recursively forking history during load. Admission replays the curve first,
+rederives the room decisions on its resulting map, checks final identity
+lifetimes and validates the full state. Undo restores both together.
+
+Room-only envelope 18 and curve-only envelope 23 retain their meanings. Either
+new marker or geometry-proof presence anywhere in retained history raises the
+reader floor, including undone and abandoned revisions. Removing the curve proof
+cannot reinterpret its reviewed entity map as an ordinary room-only source.
 
 ## Explicit connected curve construction (v75)
 

@@ -45849,6 +45849,22 @@ private:
                     for (const auto& id:value.joint_translation->dimension_ids) targets.insert(id);
                 }
                 for (const auto& edit:value.dimension_placement_moves) targets.insert(edit.dimension_id);
+                if (!value.room_review_geometry_proof.is_null()) {
+                    // Decode the retained direct curve command before using
+                    // any of its footprint as selection admission authority.
+                    const auto curve_command=command_from_json(value.room_review_geometry_proof);
+                    const auto* curve=std::get_if<ApplyBoundaryConstraintChanges>(&curve_command);
+                    if (!curve || !curve->curve_construction_completion ||
+                        curve->room_review_geometry_completion || !curve->room_review_geometry_proof.is_null())
+                        throw std::invalid_argument("The room review requires a direct curve construction proof.");
+                    for (const auto& edit:curve->wall_edits) targets.insert(edit.wall_id);
+                    for (const auto& edit:curve->boundary_edits) targets.insert(edit.boundary_id);
+                    for (const auto& edit:curve->exterior_source_edits) targets.insert(edit.boundary_id);
+                    for (const auto& edit:curve->measured_stroke_edits) targets.insert(edit.stroke_id);
+                    changes(curve->entity_changes);changes(curve->physical_entity_changes);
+                    changes(curve->supplemental_entity_changes);changes(curve->selection_entity_changes);
+                    for (const auto& edit:curve->dimension_placement_moves) targets.insert(edit.dimension_id);
+                }
                 if (!value.room_review_intent.is_null()) {
                     const auto review=decode_physical_wall_room_review_intent(value.room_review_intent);
                     targets.insert(review.selected_wall_id);
@@ -54112,12 +54128,24 @@ private:
         buttons->setObjectName(QStringLiteral("curvedWallButtons"));
         layout->addWidget(buttons);
         auto* apply_button = buttons->button(QDialogButtonBox::Apply);
+        QPushButton* review_rooms_button = nullptr;
+        if (editing) {
+            review_rooms_button = buttons->addButton(QStringLiteral("Review rooms…"), QDialogButtonBox::ActionRole);
+            review_rooms_button->setObjectName(QStringLiteral("curvedWallReviewRooms"));
+            review_rooms_button->setToolTip(QStringLiteral(
+                "Review room identities and references with the displayed curve edit before applying both together."));
+            review_rooms_button->setEnabled(false);
+        }
         std::optional<ConstraintAuthoringPreview> retained_preview;
+        bool retained_room_review_available = false;
+        std::size_t retained_affected_rooms{};
         bool metadata_ready = false;
         bool no_model_change = false;
         bool stale = false;
         struct CurvePreviewResult {
             std::optional<ConstraintAuthoringPreview> preview;
+            bool room_review_available = false;
+            std::size_t affected_rooms{};
             std::string error;
         };
         std::uint64_t input_generation{};
@@ -54199,7 +54227,8 @@ private:
                 construction->currentData().toString() == initial_construction &&
                 sweep->text().trimmed() == initial_sweep.trimmed();
         };
-        const auto display_preview = [&](ConstraintAuthoringPreview preview) {
+        const auto display_preview = [&](ConstraintAuthoringPreview preview,
+                                         bool room_review_available, std::size_t affected_rooms) {
             requireAcceptedConstraintPreview(preview);
             auto drawing = original_drawing;
             for (const auto& change : preview.changed_walls()) {
@@ -54227,8 +54256,16 @@ private:
                 .arg(format_length(segment_length(*existing_baseline), context.metric_units),
                      format_length(segment_length(*proposed), context.metric_units))
                 .arg(connected_changes));
+            if (affected_rooms != 0)
+                status->setText(status->text() + QStringLiteral(" %1 affected rooms require review before applying.")
+                    .arg(static_cast<qulonglong>(affected_rooms)));
             status->setStyleSheet(QString());
             retained_preview = std::move(preview);
+            retained_room_review_available = room_review_available;
+            retained_affected_rooms = affected_rooms;
+            review_rooms_button->setEnabled(room_review_available);
+            apply_button->setText(affected_rooms != 0 ? QStringLiteral("Review rooms and apply…")
+                                                      : QStringLiteral("Apply"));
             apply_button->setEnabled(true);
         };
         const auto start_solver = [&] {
@@ -54241,13 +54278,62 @@ private:
                 // No widget or controller references enter this job. The promise
                 // future does not wait on destruction when the dialog is canceled.
                 auto* work = QRunnable::create(
-                    [captured_source = source, intent = std::move(intent), completion] {
+                    [captured_source = source, selected_wall_id = selected->id,
+                     intent = std::move(intent), completion] {
                         CurvePreviewResult result;
                         try {
                             result.preview = preview_constraint_authoring(captured_source, intent);
+                            if (result.preview->accepted()) {
+                                std::set<std::string> changed_owners;
+                                for (const auto& change : result.preview->changed_walls()) {
+                                    const auto& before = change.old_baseline;
+                                    const auto& after = change.proposed_baseline;
+                                    // Classification and curve-input receipts
+                                    // alone do not change the physical region.
+                                    if (before.start.x != after.start.x || before.start.y != after.start.y ||
+                                        before.end.x != after.end.x || before.end.y != after.end.y ||
+                                        before.sweep_radians != after.sweep_radians)
+                                        changed_owners.insert(change.wall_id);
+                                }
+                                const auto organization = organize_project(captured_source);
+                                const auto selected_context = organization.drawing_context(selected_wall_id);
+                                result.room_review_available = selected_context && selected_context->complete();
+                                if (!changed_owners.empty()) {
+                                    std::vector<DrawingContext> changed_contexts;
+                                    bool unresolved_changed_context = false;
+                                    for (const auto& owner_id : changed_owners) {
+                                        const auto owner_context = organization.drawing_context(owner_id);
+                                        if (!owner_context || !owner_context->complete()) unresolved_changed_context = true;
+                                        else changed_contexts.push_back(*owner_context);
+                                    }
+                                    for (const auto& [id, entity] : captured_source.entities()) {
+                                        if (!is_physical_wall_room(entity)) continue;
+                                        const auto room_context = organization.drawing_context(id);
+                                        if (!room_context || !room_context->complete())
+                                            throw std::invalid_argument("A retained room has unresolved drawing context; resolve it before changing physical walls.");
+                                        // A separate resolved drawing context
+                                        // cannot share this physical region.
+                                        if (!unresolved_changed_context &&
+                                            std::none_of(changed_contexts.begin(), changed_contexts.end(),
+                                                [&](const auto& changed_context) { return changed_context == *room_context; }))
+                                            continue;
+                                        const auto lineage = validate_retained_physical_wall_room_lineage(entity, *room_context);
+                                        const auto affected = std::any_of(lineage.source_owner_ids.begin(),
+                                            lineage.source_owner_ids.end(), [&](const auto& owner_id) {
+                                                return changed_owners.contains(owner_id);
+                                            });
+                                        if (!affected) continue;
+                                        if (!result.room_review_available || *room_context != *selected_context)
+                                            throw std::invalid_argument("The connected edit affects rooms outside the selected wall's resolved review context.");
+                                        ++result.affected_rooms;
+                                    }
+                                }
+                            }
                         } catch (const std::exception& error) {
+                            result.preview.reset();
                             result.error = error.what();
                         } catch (...) {
+                            result.preview.reset();
                             result.error = "The connected curve preview could not be prepared.";
                         }
                         completion->set_value(std::move(result));
@@ -54259,10 +54345,15 @@ private:
                 status->setText(QString::fromUtf8(error.what()));
                 status->setStyleSheet(QStringLiteral("color:#b42318;"));
                 apply_button->setEnabled(false);
+                review_rooms_button->setEnabled(false);
             }
         };
         const auto update_preview = [&] {
             retained_preview.reset();
+            retained_room_review_available = false;
+            retained_affected_rooms = 0;
+            review_rooms_button->setEnabled(false);
+            apply_button->setText(QStringLiteral("Apply"));
             pending_intent.reset();
             metadata_ready = false;
             no_model_change = false;
@@ -54331,6 +54422,10 @@ private:
             if (!editing) return;
             ++input_generation;
             retained_preview.reset();
+            retained_room_review_available = false;
+            retained_affected_rooms = 0;
+            review_rooms_button->setEnabled(false);
+            apply_button->setText(QStringLiteral("Apply"));
             pending_intent.reset();
             metadata_ready = false;
             no_model_change = false;
@@ -54367,9 +54462,12 @@ private:
                     if (!result.preview)
                         throw std::invalid_argument(result.error.empty()
                             ? "The connected curve preview could not be prepared." : result.error);
-                    display_preview(std::move(*result.preview));
+                    display_preview(std::move(*result.preview), result.room_review_available, result.affected_rooms);
                 } catch (const std::exception& error) {
                     retained_preview.reset();
+                    retained_room_review_available = false;
+                    retained_affected_rooms = 0;
+                    review_rooms_button->setEnabled(false);
                     apply_button->setEnabled(false);
                     preview_canvas->setWalls(original_drawing);
                     status->setText(QString::fromUtf8(error.what()));
@@ -54379,14 +54477,14 @@ private:
             start_solver();
         });
         if (editing) solver_poll.start();
-        QTimer source_watch(&dialog);
-        source_watch.setInterval(400);
-        QObject::connect(&source_watch, &QTimer::timeout, &dialog, [&] {
-            if (stale || (sourceEditAuthorityContextCurrent(authority) && modalContextUnchanged(context))) return;
+        const auto invalidate_source = [&] {
             stale = true;
             ++input_generation;
             preview_debounce.stop();
             retained_preview.reset();
+            retained_room_review_available = false;
+            retained_affected_rooms = 0;
+            if (review_rooms_button) review_rooms_button->setEnabled(false);
             pending_intent.reset();
             metadata_ready = false;
             no_model_change = false;
@@ -54394,20 +54492,78 @@ private:
             if (preview_canvas) preview_canvas->setWalls(original_drawing);
             status->setText(QStringLiteral("The editing source or context changed. Reopen the curved wall editor."));
             status->setStyleSheet(QStringLiteral("color:#b42318;"));
+        };
+        QTimer source_watch(&dialog);
+        source_watch.setInterval(400);
+        QObject::connect(&source_watch, &QTimer::timeout, &dialog, [&] {
+            if (stale || (sourceEditAuthorityCurrent(authority) && modalContextUnchanged(context))) return;
+            invalidate_source();
         });
         source_watch.start();
         QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
                          &dialog, &QDialog::reject);
+        const auto review_curve_rooms = [&] {
+            if (!retained_preview || !retained_room_review_available || pending_intent ||
+                preview_debounce.isActive() || stale)
+                throw std::invalid_argument("Wait for a valid curve preview in a resolved room context before reviewing rooms.");
+            if (!sourceEditAuthorityUnchanged(authority)) {
+                invalidate_source();
+                throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+            }
+            requireAcceptedConstraintPreview(*retained_preview);
+            const auto generation = input_generation;
+            // The direct curve proof belongs to the actual original source.
+            // The room dialog displays its detached result and returns one
+            // composite command; no intermediate curve edit is published.
+            const auto curve_command = constraint_authoring_verified_command(source, *retained_preview, nullptr);
+            const auto current_source = [&] {
+                if (!sourceEditAuthorityUnchanged(authority)) {
+                    invalidate_source();
+                    throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                }
+                if (stale || generation != input_generation || !retained_preview ||
+                    hasPendingPlacementEdit() ||
+                    m_boundary_session || m_linework_drawing || m_pending_wall_start)
+                    throw std::invalid_argument("The curve proposal, project or workspace changed. Reopen the curved wall editor.");
+                return authoringSnapshot();
+            };
+            PhysicalWallRoomReviewDialog room_dialog(source, selected->id, context.metric_units,
+                current_source, &dialog, curve_command);
+            styleDialog(room_dialog);
+            if (room_dialog.exec() != QDialog::Accepted) return false;
+            if (!room_dialog.acceptedCommand() || fullSnapshotDigest(current_source()) != authority.source_digest)
+                throw std::invalid_argument("The complete curve and room review source changed. Reopen the editor.");
+            (void)Document::preview_command(source, *room_dialog.acceptedCommand());
+            applyDocumentCommand(*room_dialog.acceptedCommand());
+            clearError();
+            m_selected_id = QString::fromStdString(selected->id);
+            refresh();
+            dialog.accept();
+            return true;
+        };
+        if (review_rooms_button)
+            QObject::connect(review_rooms_button, &QPushButton::clicked, &dialog, [&] {
+                try { (void)review_curve_rooms(); }
+                catch (const std::exception& error) {
+                    const auto message = QString::fromUtf8(error.what());
+                    setError(QStringLiteral("Curved wall room review: %1").arg(message));
+                    status->setText(message);
+                    status->setStyleSheet(QStringLiteral("color:#b42318;"));
+                }
+            });
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
                          &dialog, [&] {
                              try {
                                  if (stale || !sourceEditAuthorityUnchanged(authority)) {
-                                     stale = true;
-                                     apply_button->setEnabled(false);
+                                     invalidate_source();
                                      throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
                                  }
                                  if (editing) {
                                      if (retained_preview) {
+                                         if (retained_affected_rooms != 0) {
+                                             (void)review_curve_rooms();
+                                             return;
+                                         }
                                          requireAcceptedConstraintPreview(*retained_preview);
                                          applyConstraintPreview(*retained_preview);
                                          clearError();

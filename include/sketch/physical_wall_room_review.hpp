@@ -55,6 +55,10 @@ struct ReplayedPhysicalWallRoomReview {
 struct PreparedPhysicalWallRoomReview : ReplayedPhysicalWallRoomReview {
     nlohmann::json intent;
 };
+struct PreparedPhysicalWallRoomReviewAfterCurve {
+    ApplyBoundaryConstraintChanges command;
+    DocumentSnapshot snapshot;
+};
 [[nodiscard]] nlohmann::json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent& intent);
 [[nodiscard]] PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const nlohmann::json& value);
 // Detached preparation binds the complete captured state, including history,
@@ -62,6 +66,18 @@ struct PreparedPhysicalWallRoomReview : ReplayedPhysicalWallRoomReview {
 [[nodiscard]] PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomCorrespondenceReport& report,
     const PhysicalWallRoomReviewIntent& intent);
+// A direct curve-construction command is ordinarily admitted on a detached
+// copy. Its retained rooms remain available for explicit correspondence review.
+[[nodiscard]] DocumentSnapshot preview_physical_wall_room_review_curve(
+    const DocumentSnapshot& source,const Command& curve_command);
+// The report and intent belong to the detached curve snapshot above. The
+// returned single command is independently previewed against the original
+// source; neither preparation publishes the intermediate curve state. Retained
+// full-snapshot/history/save hashes bind the original source, while the room
+// entity-map hash retains the derived geometry that was actually reviewed.
+[[nodiscard]] PreparedPhysicalWallRoomReviewAfterCurve prepare_physical_wall_room_review_after_curve(
+    const DocumentSnapshot& source,const Command& curve_command,
+    const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent);
 // Pure rederivation for a dedicated typed atomic command. This checks the exact
 // preceding entity map, not its enclosing history/assets; command authority must
 // separately bind those and enforce identity lifetimes. No Document or preview.

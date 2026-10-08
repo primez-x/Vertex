@@ -478,4 +478,38 @@ PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(const DocumentS
     auto replayed=replay_physical_wall_room_review(source.entities(),encoded);
     return {std::move(replayed),std::move(encoded)};
 }
+
+DocumentSnapshot preview_physical_wall_room_review_curve(const DocumentSnapshot& source,const Command& curve_command) {
+    if (!source.is_editable()) invalid("captured document is read-only");
+    const auto* curve=std::get_if<ApplyBoundaryConstraintChanges>(&curve_command);
+    if (!curve || !curve->curve_construction_completion) invalid("review requires a direct curve construction command");
+    const auto proof=command_to_json(curve_command);
+    if (proof.at("version")!=23 || proof.at("kind")!="apply_boundary_constraint_changes")
+        invalid("review requires an unwrapped curve construction command");
+    auto derived=Document::preview_command(source,curve_command);
+    if (derived.assets()!=source.assets()) invalid("curve review cannot change assets");
+    return derived;
+}
+
+PreparedPhysicalWallRoomReviewAfterCurve prepare_physical_wall_room_review_after_curve(const DocumentSnapshot& source,
+    const Command& curve_command,const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent) {
+    const auto derived=preview_physical_wall_room_review_curve(source,curve_command);
+    const auto prepared=prepare_physical_wall_room_review(derived,report,intent);
+    auto retained_intent=decode_physical_wall_room_review_intent(prepared.intent);
+    // The report was reviewed against the detached curve geometry. The final
+    // single event must bind the actual original history/save state, while the
+    // entity-map digest continues to bind that independently replayed geometry.
+    retained_intent.source_snapshot_digest=document_snapshot_digest(source);
+    retained_intent.source_authoring_digest=document_authoring_source_digest_v2(source);
+    retained_intent.source_saved_revision=source.saved_revision_optional();
+    ApplyBoundaryConstraintChanges command;
+    command.expected_revision=source.revision();command.message=std::get<ApplyBoundaryConstraintChanges>(curve_command).message;
+    command.room_review_completion=true;
+    command.room_review_intent=encode_physical_wall_room_review_intent(retained_intent);
+    command.room_review_geometry_completion=true;command.room_review_geometry_proof=command_to_json(curve_command);
+    auto exact=Document::preview_command(source,command);
+    if (exact.entities()!=prepared.entities || exact.assets()!=derived.assets())
+        invalid("complete curve and room preview differs from the prepared decisions");
+    return {std::move(command),std::move(exact)};
+}
 } // namespace sketch
