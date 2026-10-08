@@ -50,6 +50,9 @@ public:
     // Existing alternatives and the active selection are preserved.  The
     // candidate is checked against the registry before it can be persisted.
     [[nodiscard]] ModelPhases with_alternative(RemodelingAlternative alternative) const;
+    // Replaces an existing exact ID through canonical validation, preserving
+    // the registry, other alternatives and active selection. Unknown IDs refuse.
+    [[nodiscard]] ModelPhases with_updated_alternative(RemodelingAlternative replacement) const;
     [[nodiscard]] const std::vector<std::string>& entity_ids() const noexcept;
     [[nodiscard]] const std::vector<std::string>& baseline_ids() const noexcept;
     [[nodiscard]] const std::vector<RemodelingAlternative>& alternatives() const noexcept;

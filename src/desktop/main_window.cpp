@@ -3703,11 +3703,21 @@ std::set<std::string, std::less<>> visible_project_entities_with_phase(
     auto visible = visible_project_entities(snapshot, filter);
     if (const auto phases = decode_phase_model(snapshot)) {
         const auto active_state = phases->model.active_state();
+        std::set<std::string,std::less<>> inactive;
         for (const auto& id : phases->model.entity_ids()) {
             const auto state = active_state.find(id);
             if (state == active_state.end() || state->second == ModelPhase::demolished) {
                 visible.erase(id);
+                inactive.insert(id);
             }
+        }
+        // Hosted doors/windows cannot outlive an inactive semantic wall in
+        // plan, native geometry or schedules. Ordinary layer filters retain
+        // their separate presentation choices; no phase membership is edited.
+        for (const auto& [id,entity]:snapshot.entities()) {
+            if (entity.type!="opening") continue;
+            const auto wall=read_string(entity.properties,"wall_id");
+            if (wall && inactive.contains(*wall)) visible.erase(id);
         }
     }
     return visible;
@@ -14645,12 +14655,15 @@ public:
             return false;
         }
         try {
+            if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("Finish or cancel the current drawing or placement before changing design phases.");
             const auto source = authoringSnapshot();
             const auto record = decode_phase_model(source);
             if (!record) throw std::invalid_argument("Create a design phase record before selecting an alternative.");
             const auto trimmed = alternative_id.trimmed();
             const std::optional<std::string> selected = trimmed.isEmpty()
                 ? std::nullopt : std::optional<std::string>(trimmed.toStdString());
+            if (record->model.active_alternative()==selected) { clearError(); return true; }
             const auto command = model_phase_selection_command(
                 source, record->entity_id, selected, source.revision());
             (void)Document::preview_command(source, Command{command});
@@ -14695,14 +14708,15 @@ public:
             setError(QStringLiteral("This document is read-only."));
             return;
         }
-        if (!ensureModelPhaseRecord()) return;
         try {
+            if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("Finish or cancel the current drawing or placement before editing alternatives.");
             QDialog dialog(owner);
             styleDialog(dialog);
             dialog.setObjectName(QStringLiteral("remodelingAlternativesDialog"));
             dialog.setWindowTitle(QStringLiteral("Design phases and alternatives"));
             dialog.setModal(true);
-            dialog.resize(620, 540);
+            dialog.resize(900, 620);
             auto* layout = new QVBoxLayout(&dialog);
 
             auto* phase = new QComboBox(&dialog);
@@ -14715,14 +14729,32 @@ public:
             auto* name = new QLineEdit(&dialog);
             name->setObjectName(QStringLiteral("remodelingAlternativeName"));
             name->setPlaceholderText(QStringLiteral("Example: Kitchen remodel"));
-            layout->addWidget(new QLabel(QStringLiteral("New alternative name"), &dialog));
+            auto* name_label=new QLabel(QStringLiteral("New alternative name"),&dialog);
+            layout->addWidget(name_label);
             layout->addWidget(name);
 
             auto* demolition = new QListWidget(&dialog);
             demolition->setObjectName(QStringLiteral("remodelingDemolitionList"));
-            demolition->setSelectionMode(QAbstractItemView::NoSelection);
-            layout->addWidget(new QLabel(QStringLiteral("Demolish baseline objects in the new alternative"), &dialog));
-            layout->addWidget(demolition, 1);
+            demolition->setSelectionMode(QAbstractItemView::SingleSelection);
+            layout->addWidget(new QLabel(QStringLiteral("Baseline objects to demolish"), &dialog));
+            auto* demolition_editor=new QSplitter(Qt::Horizontal,&dialog);
+            demolition_editor->addWidget(demolition);
+            auto* demolition_preview=new PlanCanvas(demolition_editor);
+            demolition_preview->setObjectName(QStringLiteral("remodelingDemolitionPreview"));
+            demolition_preview->setAccessibleName(QStringLiteral("Baseline plan and demolition choices"));
+            demolition_preview->setToolTip(QStringLiteral(
+                "Select a baseline object in the list or plan. Red dashed objects are marked for demolition, including doors and windows hosted on a marked wall."));
+            demolition_preview->setSelectionTransformEnabled(false,false);
+            demolition_preview->setSelectionAxisResizeEnabled(false);
+            demolition_preview->setGridEnabled(false);
+            demolition_preview->setSnapEnabled(false);
+            demolition_preview->setOverviewMapEnabled(false);
+            demolition_preview->setMetricUnits(m_metric_units);
+            demolition_preview->setMinimumSize(320,180);
+            demolition_editor->addWidget(demolition_preview);
+            demolition_editor->setStretchFactor(0,1);
+            demolition_editor->setStretchFactor(1,2);
+            layout->addWidget(demolition_editor,1);
 
             auto* status = new QLabel(&dialog);
             status->setObjectName(QStringLiteral("remodelingAlternativesStatus"));
@@ -14762,15 +14794,94 @@ public:
             apply->setObjectName(QStringLiteral("applyRemodelingPhase"));
             auto* create = new QPushButton(QStringLiteral("Create alternative"), &dialog);
             create->setObjectName(QStringLiteral("createRemodelingAlternative"));
+            auto* save = new QPushButton(QStringLiteral("Save changes"), &dialog);
+            save->setObjectName(QStringLiteral("saveRemodelingAlternative"));
+            save->setEnabled(false);
             auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
             close->setDefault(true);
             buttons->addStretch(1);
             buttons->addWidget(apply);
             buttons->addWidget(create);
+            buttons->addWidget(save);
             buttons->addWidget(close);
             layout->addLayout(buttons);
 
             std::optional<PhaseModelRecord> record;
+            std::optional<DocumentSnapshot> editing_source;
+            std::optional<SourceEditAuthority> editing_authority;
+            std::optional<DocumentSnapshot> baseline_source;
+            std::optional<SnapshotPlanScene> demolition_scene;
+            std::string demolition_scope;
+            PlanSceneCaches demolition_caches;
+            const auto draft_record_id=new_id("model-phases");
+            const auto require_editing_source = [&] {
+                if (!editing_source || !editing_authority || !sourceEditAuthorityCurrent(*editing_authority))
+                    throw std::invalid_argument("The project or phase changed. Close and reopen the alternatives editor.");
+                if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                    throw std::invalid_argument("Finish or cancel the current drawing or placement before editing alternatives.");
+            };
+            const auto selected_demolition_ids = [&] {
+                std::vector<std::string> result;
+                for (int index=0;index<demolition->count();++index) {
+                    const auto* item=demolition->item(index);
+                    if (item->checkState()==Qt::Checked)
+                        result.push_back(item->data(Qt::UserRole).toString().toStdString());
+                }
+                return result;
+            };
+            const auto refresh_demolition_preview = [&] {
+                try {
+                    require_editing_source();
+                    if (!baseline_source) return;
+                    const auto focused=demolition->currentItem()
+                        ? demolition->currentItem()->data(Qt::UserRole).toString() : QString{};
+                    const auto organization=projectOrganization(*baseline_source);
+                    const auto context=organization->drawing_context(focused.toStdString());
+                    const auto scope=context ? context->floor_id : m_active_layer_id.toStdString();
+                    const bool changed_scope=!demolition_scene || demolition_scope!=scope;
+                    if (changed_scope) {
+                        SnapshotPlanSceneOptions options;
+                        options.metric_units=m_metric_units;
+                        options.label_font=demolition_preview->font();
+                        options.label_device=demolition_preview;
+                        const auto floor=context ? context : organization->drawing_context(m_active_layer_id.toStdString());
+                        if (floor) {
+                            options.active_context=*floor;
+                            options.scope_id=floor->floor_id;
+                            options.scope_property_id=floor->property_id;
+                            options.scope_building_id=floor->building_id;
+                        }
+                        demolition_scene=projectSnapshotPlanScene(*baseline_source,options,demolition_caches);
+                        demolition_scope=scope;
+                    }
+                    const auto ids=selected_demolition_ids();
+                    std::set<std::string> removed(ids.begin(),ids.end());
+                    for (const auto& [id,entity]:baseline_source->entities()) {
+                        if (entity.type!="opening") continue;
+                        const auto host=read_string(entity.properties,"wall_id");
+                        if (host && removed.contains(*host)) removed.insert(id);
+                    }
+                    auto geometry=demolition_scene->geometry;
+                    for (auto& entity:geometry) {
+                        entity.selected=entity.id==focused;
+                        if (!removed.contains(entity.id.toStdString())) continue;
+                        entity.stroke_color=QColor(196,55,55);
+                        entity.dark_stroke_color=QColor(255,135,135);
+                        entity.fill_color=QColor(196,55,55,32);
+                        entity.dashed_stroke=true;
+                        entity.preserve_selected_stroke=true;
+                    }
+                    demolition_preview->setEntities(std::move(geometry));
+                    demolition_preview->setLabels(demolition_scene->labels);
+                    demolition_preview->setReferences(demolition_scene->references);
+                    if (changed_scope) demolition_preview->fitView();
+                } catch (const std::exception& error) {
+                    demolition_preview->setEntities({});
+                    demolition_preview->setLabels({});
+                    demolition_preview->setReferences({});
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            };
             const auto phase_selection = [](const QComboBox* combo)
                 -> std::optional<std::string> {
                 if (combo == nullptr || combo->currentIndex() < 0) return std::nullopt;
@@ -14826,7 +14937,8 @@ public:
                 refresh_comparison();
             };
             const auto refresh_selection = [&] {
-                if (!record) return;
+                if (!record || !editing_source) return;
+                const QSignalBlocker demolition_blocker(demolition);
                 const auto selected = phase->currentData().toString().toStdString();
                 const auto found = selected.empty()
                     ? record->model.alternatives().end()
@@ -14834,6 +14946,9 @@ public:
                                    record->model.alternatives().end(),
                         [&](const auto& candidate) { return candidate.id == selected; });
                 demolition->clear();
+                const bool existing=found!=record->model.alternatives().end();
+                name_label->setText(existing ? QStringLiteral("Alternative name") : QStringLiteral("New alternative name"));
+                save->setEnabled(existing);
                 name->setText(found == record->model.alternatives().end()
                                   ? QString{} : QString::fromStdString(found->name));
                 std::set<std::string, std::less<>> selected_demolitions;
@@ -14841,23 +14956,49 @@ public:
                     selected_demolitions.insert(found->demolished_ids.begin(),
                                                 found->demolished_ids.end());
                 }
-                const auto snapshot = authoringSnapshot();
+                const auto& snapshot = *editing_source;
                 for (const auto& id : record->model.baseline_ids()) {
                     const auto entity = snapshot.entities().find(id);
-                    const auto type = entity == snapshot.entities().end()
-                        ? QStringLiteral("object")
-                        : QString::fromStdString(entity->second.type);
-                    auto* item = new QListWidgetItem(
-                        QStringLiteral("%1  ·  %2").arg(type, id_from(id)), demolition);
+                    auto label=entity==snapshot.entities().end() ? QStringLiteral("Object")
+                        : QString::fromStdString(read_string(entity->second.properties,"name").value_or(entity->second.type));
+                    if (label.trimmed().isEmpty())
+                        label=entity==snapshot.entities().end() ? QStringLiteral("Object") : QString::fromStdString(entity->second.type);
+                    label.replace(QLatin1Char('_'),QLatin1Char(' '));
+                    if (!label.isEmpty()) label=label.left(1).toUpper()+label.mid(1);
+                    if (entity!=snapshot.entities().end() && entity->second.type=="wall")
+                        if (const auto axis=read_required_segment(entity->second.properties,"baseline"))
+                            label+=QStringLiteral(" - ")+PlanCanvas::drawingLengthText(segment_length(*axis),m_metric_units);
+                    if (const auto context=projectOrganization(snapshot)->drawing_context(id)) {
+                        const auto floor=snapshot.entities().find(context->floor_id);
+                        if (floor!=snapshot.entities().end())
+                            label+=QStringLiteral(" / ")+QString::fromStdString(
+                                read_string(floor->second.properties,"name").value_or("Floor"));
+                    }
+                    auto* item = new QListWidgetItem(label, demolition);
+                    item->setToolTip(id_from(id));
                     item->setData(Qt::UserRole, id_from(id));
                     item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
                     item->setCheckState(selected_demolitions.contains(id)
                                             ? Qt::Checked : Qt::Unchecked);
                 }
+                if (demolition->count()>0) demolition->setCurrentRow(0);
+                refresh_demolition_preview();
             };
             const auto refresh_dialog = [&] {
-                record = decode_phase_model(authoringSnapshot());
-                if (!record) return;
+                editing_source=authoringSnapshot();
+                editing_authority=captureSourceEditAuthority(*editing_source);
+                record = decode_phase_model(*editing_source);
+                if (!record) {
+                    const auto ids=phase_model_entity_ids(*editing_source);
+                    // Opening or cancelling the editor never creates history.
+                    // The first real alternative publishes its registry once.
+                    record=PhaseModelRecord{draft_record_id,ModelPhases::create(ids,ids,{})};
+                }
+                baseline_source=editing_source;
+                if (const auto stored=decode_phase_model(*editing_source); stored && stored->model.active_alternative())
+                    baseline_source=Document::preview_command(*editing_source,Command{model_phase_selection_command(
+                        *editing_source,stored->entity_id,std::nullopt,editing_source->revision())});
+                demolition_scene.reset(); demolition_scope.clear();
                 const QSignalBlocker blocker(phase);
                 phase->clear();
                 phase->addItem(QStringLiteral("Existing baseline"), QString{});
@@ -14884,13 +15025,30 @@ public:
                              [&](int) { refresh_comparison(); });
             QObject::connect(comparison_right, &QComboBox::currentIndexChanged, &dialog,
                              [&](int) { refresh_comparison(); });
+            QObject::connect(demolition,&QListWidget::currentItemChanged,&dialog,
+                [&](QListWidgetItem*,QListWidgetItem*) { refresh_demolition_preview(); });
+            QObject::connect(demolition,&QListWidget::itemChanged,&dialog,
+                [&](QListWidgetItem*) { refresh_demolition_preview(); });
+            demolition_preview->setEntityClicked([&](QString id) {
+                for (int index=0;index<demolition->count();++index)
+                    if (demolition->item(index)->data(Qt::UserRole).toString()==id) {
+                        demolition->setCurrentRow(index); break;
+                    }
+            });
             QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
-                if (!phase->count()) return;
-                if (selectRemodelingAlternative(phase->currentData().toString())) {
-                    refresh_dialog();
-                    status->setText(QStringLiteral("Active phase saved through document history."));
-                } else {
-                    status->setText(lastError());
+                try {
+                    if (!phase->count()) return;
+                    require_editing_source();
+                    const auto selected=phase->currentData().toString();
+                    if (selected.isEmpty() && !decode_phase_model(*editing_source)) {
+                        clearError(); status->setText(QStringLiteral("Existing baseline selected.")); return;
+                    }
+                    if (selectRemodelingAlternative(selected)) {
+                        refresh_dialog();
+                        status->setText(QStringLiteral("Phase applied."));
+                    } else status->setText(lastError());
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
                 }
             });
             QObject::connect(create, &QPushButton::clicked, &dialog, [&] {
@@ -14898,31 +15056,61 @@ public:
                     const auto alternative_name = name->text().trimmed();
                     if (alternative_name.isEmpty())
                         throw std::invalid_argument("Enter a name for the new alternative.");
-                    const auto source = authoringSnapshot();
+                    require_editing_source();
+                    const auto& source = *editing_source;
                     const auto current = decode_phase_model(source);
-                    if (!current) throw std::invalid_argument("The design phase record is unavailable.");
+                    if (!record) throw std::invalid_argument("The design phase record is unavailable.");
                     RemodelingAlternative candidate;
                     candidate.id = new_id("alternative");
                     candidate.name = alternative_name.toStdString();
                     const auto candidate_id = candidate.id;
-                    for (int index = 0; index < demolition->count(); ++index) {
-                        const auto* item = demolition->item(index);
-                        if (item->checkState() == Qt::Checked)
-                            candidate.demolished_ids.push_back(item->data(Qt::UserRole).toString().toStdString());
-                    }
-                    const auto updated = current->model.with_alternative(std::move(candidate));
+                    candidate.demolished_ids=selected_demolition_ids();
+                    const auto updated = record->model.with_alternative(std::move(candidate));
                     const auto selected = updated.with_active(candidate_id);
-                    auto entity = source.entities().at(current->entity_id);
+                    auto entity = current ? source.entities().at(current->entity_id)
+                        : Entity::create("model_phases",{{"model",record->model.to_json()}});
+                    entity.id=record->entity_id;
                     entity.properties["model"] = selected.to_json();
                     const ApplyEntityChanges command{
                         source.revision(), {EntityChange::upsert(std::move(entity))}, {},
                         "Create remodeling alternative"};
                     (void)Document::preview_command(source, Command{command});
+                    require_editing_source();
                     applyDocumentCommand(Command{command});
                     clearError();
                     refresh();
                     refresh_dialog();
                     status->setText(QStringLiteral("Alternative created and selected."));
+                } catch (const std::exception& error) {
+                    setError(QStringLiteral("Design phase: %1").arg(QString::fromUtf8(error.what())));
+                    status->setText(lastError());
+                }
+            });
+            QObject::connect(save, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    require_editing_source();
+                    const auto alternative_id=phase_selection(phase);
+                    if (!alternative_id || !record)
+                        throw std::invalid_argument("Choose an existing alternative to edit.");
+                    const auto alternative_name=name->text().trimmed();
+                    if (alternative_name.isEmpty()) throw std::invalid_argument("Enter an alternative name.");
+                    const auto& source=*editing_source;
+                    const auto command=model_phase_alternative_update_command(source,record->entity_id,
+                        *alternative_id,alternative_name.toStdString(),selected_demolition_ids(),source.revision());
+                    const auto& original=source.entities().at(record->entity_id);
+                    const bool changed=command.entity_changes.size()!=1 || command.entity_changes.front().entity!=original;
+                    if (changed) {
+                        (void)Document::preview_command(source,Command{command});
+                        require_editing_source();
+                        applyDocumentCommand(Command{command});
+                        refresh();
+                    }
+                    clearError();
+                    refresh_dialog();
+                    // Saving a non-active alternative must not select it.
+                    const auto edited=phase->findData(id_from(*alternative_id));
+                    if (edited>=0) phase->setCurrentIndex(edited);
+                    status->setText(changed ? QStringLiteral("Alternative saved.") : QStringLiteral("No changes to save."));
                 } catch (const std::exception& error) {
                     setError(QStringLiteral("Design phase: %1").arg(QString::fromUtf8(error.what())));
                     status->setText(lastError());

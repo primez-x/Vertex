@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 editable remodeling alternatives and demolition preview
+
+The alternative manager now edits an existing name and demolition selection
+without replacing its proposed members, identity, other alternatives or active
+choice. Opening/closing it creates no phase metadata or history; the first actual
+Create action adds the registry and alternative together. Applying the current
+phase or saving unchanged fields is a no-op. Drawing/placement guards and the
+captured full source, workspace/recovery and editing-context authority fence
+publication.
+
+A real baseline floor-plan preview identifies list choices on the drawing,
+switches floors for the focused object, and marks checked objects and their
+hosted openings with red dashed outlines. Shared phase visibility removes doors
+and windows when the host wall is demolished or inactive, including native model,
+schedule and sheet consumers. Baseline data and stored opening memberships are
+preserved. Ordinary layer filtering retains its separate presentation behavior.
+
+Independent source review found and approved corrections for disabled preview
+picking and selected demolition ink. Focus uses the normal selection frame while
+retaining red marks; dashed SVG components keep their pinned artwork and receive
+their actual footprint outline. No further required source defect or obvious
+compile inconsistency was proved. No builds, tests, probes, launches, packages or
+installations run; compilation, interaction, persistence and Undo remain
+unverified. The installed candidate is unchanged. Phase-specific room variants
+and their facts, dimensions and appraisal consequences remain open.
+
 ### October 8 canvas wall-group rotation and mirrored room consequences
 
 The source now exposes a rotation grip for an unambiguous physical wall group in

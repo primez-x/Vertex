@@ -183,6 +183,9 @@ struct CanvasEntity {
     // snap_segments, this is not clipped and never contributes snap targets.
     // The visible vertex handles still determine which endpoints can be edited.
     std::optional<Segment> endpoint_baseline;
+    // Read-only comparison previews retain semantic ink (for example red
+    // demolition marks) while the normal selection frame indicates focus.
+    bool preserve_selected_stroke{false};
 };
 
 // A geometry presentation is distinct from its semantic model owner. Embedded

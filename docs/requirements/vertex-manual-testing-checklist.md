@@ -1262,11 +1262,16 @@ drawing; switching modes does not change existing geometry.
 ## Remodeling alternatives
 
 - [ ] **U191 — Create an alternative to the existing design**
+  - Steps: Open **Design phases and alternatives** and close it without creating anything. Reopen it, enter a name and click **Create alternative**. Switch back to **Existing baseline** with **Apply phase**, then return to the new alternative.
+  - Cancel and history check: Opening or closing the manager adds no Undo entry. Creating the first alternative is one Undo step; Undo and Redo restore its name, phase record and active choice together. Applying the already displayed phase adds no extra Undo step.
   - Expected: The original existing design remains available.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U192 — Mark objects existing, demolished or proposed**
+  - Steps: Choose an existing alternative. Select a wall in the demolition list, then click it in the preview. Check the wall: it and its hosted doors/windows have red dashed outlines. Select an object on another floor: the preview switches to that floor. Change the alternative's name and checked objects, then click **Save changes**. Click **Apply phase** separately to display it.
+  - Preservation check: Add a proposed wall while the alternative is active. Reopen the manager, edit its name and demolition choices, and save. The proposed wall remains assigned to that alternative. Editing a different alternative must not switch the displayed phase or lose proposals in either alternative. Saving unchanged values adds no Undo step.
+  - Source check: Begin drawing a wall or placing a symbol, then try to open the manager or switch phases. Finish or cancel that placement before changing phases. If the source changes while the editor is open, its old form must refuse to save.
   - Expected: The selected phase is visibly meaningful.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1282,6 +1287,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U195 — Check phase-specific quantities and schedules**
+  - Steps: Add a hosted door and window to an existing wall. Mark the wall demolished in an alternative and apply it. Check the plan, 3D view, door/window schedule and a sheet that uses those views. Return to the baseline.
+  - Expected visibility: Hosted doors and windows disappear with their demolished or inactive host and return with the baseline, without deleting their original data.
   - Expected: Counts and totals correspond to the displayed phase or alternative.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

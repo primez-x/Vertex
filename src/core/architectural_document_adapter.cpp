@@ -1628,6 +1628,23 @@ ApplyEntityChanges model_phase_selection_command(const DocumentSnapshot& source,
     return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Select remodeling alternative"};
 }
 
+ApplyEntityChanges model_phase_alternative_update_command(const DocumentSnapshot& source,
+    const std::string& entity_id, const std::string& alternative_id, std::string name,
+    std::vector<std::string> demolished_ids, Revision expected_revision) {
+    auto entity = semantic_entity(source, entity_id, "model_phases", expected_revision);
+    const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+    const auto& alternatives = phases.alternatives();
+    const auto found = std::find_if(alternatives.begin(), alternatives.end(),
+        [&](const auto& candidate) { return candidate.id == alternative_id; });
+    if (found == alternatives.end())
+        throw std::invalid_argument("unknown remodeling alternative: " + alternative_id);
+    RemodelingAlternative replacement = *found;
+    replacement.name = std::move(name);
+    replacement.demolished_ids = std::move(demolished_ids);
+    entity.properties["model"] = phases.with_updated_alternative(std::move(replacement)).to_json();
+    return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Update remodeling alternative"};
+}
+
 ApplyEntityChanges architectural_transaction_command(const DocumentSnapshot& source,
                                                      const ArchitecturalTransaction& transaction,
                                                      Revision expected_revision) {

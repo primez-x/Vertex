@@ -91,6 +91,12 @@ struct RailingEndpointEdit {
 [[nodiscard]] ApplyEntityChanges model_phase_selection_command(
     const DocumentSnapshot& source, const std::string& entity_id,
     std::optional<std::string> alternative, Revision expected_revision);
+// Edits only the existing alternative's name and demolished baseline members;
+// its identity, proposed members and active selection are retained.
+[[nodiscard]] ApplyEntityChanges model_phase_alternative_update_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    const std::string& alternative_id, std::string name,
+    std::vector<std::string> demolished_ids, Revision expected_revision);
 
 // Converts a validated architectural transaction into the existing typed
 // Document command boundary. It preserves unrelated measurement entities and

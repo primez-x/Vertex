@@ -92,6 +92,16 @@ ModelPhases ModelPhases::with_alternative(RemodelingAlternative alternative) con
     return create(entity_ids_, baseline_ids_, std::move(alternatives), active_);
 }
 
+ModelPhases ModelPhases::with_updated_alternative(RemodelingAlternative replacement) const {
+    auto alternatives = alternatives_;
+    const auto found = std::find_if(alternatives.begin(), alternatives.end(),
+        [&](const auto& candidate) { return candidate.id == replacement.id; });
+    if (found == alternatives.end())
+        throw std::invalid_argument("unknown remodeling alternative: " + replacement.id);
+    *found = std::move(replacement);
+    return create(entity_ids_, baseline_ids_, std::move(alternatives), active_);
+}
+
 const std::vector<std::string>& ModelPhases::entity_ids() const noexcept { return entity_ids_; }
 
 const std::vector<std::string>& ModelPhases::baseline_ids() const noexcept { return baseline_ids_; }

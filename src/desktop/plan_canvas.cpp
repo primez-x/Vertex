@@ -8730,13 +8730,14 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
     const auto custom_stroke = entity.stroke_color.isValid() &&
         entity.stroke_color != color_for(entity, true) &&
         entity.stroke_color != QColor(Qt::black);
-    const auto color = !output && entity.selected
+    const auto color = !output && entity.selected && !entity.preserve_selected_stroke
         ? default_color
         : !output && !light_surface
             ? (entity.dark_stroke_color.isValid() ? entity.dark_stroke_color
                 : custom_stroke ? entity.stroke_color : default_color)
             : entity.stroke_color.isValid() ? entity.stroke_color : default_color;
 
+    bool svg_painted=false;
     if (entity.svg_symbol.has_value()) {
         const auto& symbol = *entity.svg_symbol;
         // Artwork is pinned per instance. The catalog ID alone is therefore
@@ -8796,7 +8797,10 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
             painter.translate(-footprint.center());
             renderer->render(&painter, symbol.view_box);
             painter.restore();
-            return;
+            if (!entity.dashed_stroke) return;
+            // A derived comparison mark outlines the actual retained
+            // footprint without replacing or tinting the pinned artwork.
+            svg_painted=true;
         }
     }
     const auto pattern = entity.line_pattern;
@@ -8815,7 +8819,7 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
                                             pixels_per_mm, default_pixels_per_mm);
     pen.setCosmetic(stroke.cosmetic);
     pen.setWidthF(stroke.width);
-    if (entity.filled) {
+    if (entity.filled && !svg_painted) {
         const auto fresh_fill = geometry ? std::optional<QPainterPath>{} : closed_entity_path(entity);
         const auto& fill_path = geometry ? geometry->fill : fresh_fill;
         if (fill_path) {
