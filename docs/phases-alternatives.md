@@ -75,10 +75,8 @@ preparation, schedules and sheet consumers receive that set. Ordinary layer
 visibility remains a separate presentation choice. Opening membership, original
 wall geometry and baseline data are retained for the other alternatives.
 
-This editing and preview batch is source implementation only; no new build or
-runtime qualification has run. Phase-specific room replacement, room facts,
-associative annotation and appraisal consequences remain separate work. A
-demolition choice must not be represented by globally deleting or rewriting a
+These changes are source implementation only; no new build or runtime
+qualification has run. A demolition choice never globally deletes or rewrites a
 shared baseline room.
 
 Explicit physical-wall phase discovery evaluates a named registry and
@@ -102,8 +100,41 @@ unresolved roster owners refuse; bounded analytical overlap uncertainty remains
 visible. Other alternatives' rooms are not silently added to the roster. Its
 ordinary payload is marked as an explicit phase evaluation and cannot borrow
 ordinary destructive retain/retire acceptance. These pure APIs support the
-separate phase-variant command still being implemented; no new persisted command
-dialect or format floor is introduced by this analytical slice.
+separate phase-variant command described below. The analytical APIs themselves
+do not introduce a persisted command dialect.
+
+Creating or changing an alternative with affected room planes opens a dedicated
+room review. Each listed floor shows the previous outlines and actual current
+clear spaces. Every previous room must be shared unchanged or preserved in the
+baseline and superseded in this alternative. Each current space must share an
+exact unchanged owner, become a proposed room, or remain unclassified. New rooms
+require explicit name, classification, factor and a picked interior point. No
+overlap guess transfers facts. Baseline dimensions, relationships and opaque
+references receive individual preservation confirmations.
+
+One accepted envelope-33 event owns the registry change and every room decision.
+Cancel publishes nothing. Original baseline owners and topology remain exact;
+proposed owners receive new identities and actual detected geometry/source
+lineage. Save changes does not select another alternative. Returning to baseline
+retrieves original records; switching an already complete design does not force
+new room choices. Name-only changes have no geometric review.
+
+Acknowledged baseline references are omitted from shared visible IDs while their
+reviewed bindings still refer to inactive baseline room/edge/vertex identities
+in that same alternative. Position/style edits retain this association; explicit
+retargeting can remove it. Original records are preserved for baseline display.
+This visibility does not itself copy constraints or companions into a proposal.
+Editing/replacing an existing changed proposed room and phase-aware constraint
+solving remain follow-up work.
+
+Preparation and replay share actual plane/room coverage and dependent discovery.
+The GUI retains its complete source and workspace/edit context throughout modal
+review. Document admission and history restoration verify source authority and
+fresh identity lifetimes. Global destination-component admission prevents
+near-identical requested elevations from duplicating one actual room area.
+Native reader 84/extraction 82 is required throughout retained history. All phase
+membership consumers now share the same model-role admission, including terrain,
+measured linework and wall/roof joins.
 
 `to_json` returns a detached canonical JSON object tagged `sketch.model_phases`,
 version 1. Registry IDs, baseline IDs, alternative IDs and member IDs are sorted;

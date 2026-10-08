@@ -381,6 +381,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_document PRIVATE sketch_physical_clear_kernel)
   target_sources(sketch_document PRIVATE src/core/physical_wall_spaces.cpp
     src/core/physical_wall_phase.cpp
+    src/core/physical_wall_phase_review.cpp
     src/core/physical_wall_room.cpp src/core/physical_wall_room_review.cpp
     src/core/physical_room_dimension_source.cpp src/architecture/physical_wall_room_merge.cpp
     src/architecture/physical_wall_room_split.cpp)
@@ -1038,6 +1039,7 @@ if(SKETCH_BUILD_DESKTOP)
   add_library(sketch_desktop src/desktop/main_window.cpp src/desktop/sketch_pdf_output.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/physical_wall_room_review_dialog.cpp
+    src/desktop/physical_wall_phase_room_review_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
     src/desktop/text_library_panel.cpp
     src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp

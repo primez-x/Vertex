@@ -5,6 +5,7 @@
 #include "sketch/floor_reference.hpp"
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/physical_wall_room_review.hpp"
+#include "sketch/physical_wall_phase_review.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/area_type_presets.hpp"
 
@@ -39,6 +40,7 @@
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/constraint_preview_canvas.hpp"
 #include "sketch/desktop/physical_wall_room_review_dialog.hpp"
+#include "sketch/desktop/physical_wall_phase_room_review_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/drawing_input_panel.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
@@ -3483,11 +3485,7 @@ bool is_architectural_entity(std::string_view type) {
 }
 
 bool is_phase_model_entity(std::string_view type) {
-    return type == "building" || type == "floor" || type == "wall" || type == "opening" ||
-           type == "room" || type == "room_boundary" || type == "measurement_boundary" ||
-           type == "boundary" || type == "slab" || type == "roof" || type == "stair" || type == "railing" ||
-           type == "column" || type == "beam" || type == "assembly_model" || type == "assembly_instance" ||
-           type == "terrain_surface";
+    return is_model_phase_entity_type(type);
 }
 
 struct PhaseModelRecord {
@@ -3718,6 +3716,56 @@ std::set<std::string, std::less<>> visible_project_entities_with_phase(
             if (entity.type!="opening") continue;
             const auto wall=read_string(entity.properties,"wall_id");
             if (wall && inactive.contains(*wall)) visible.erase(id);
+        }
+        if (phases->model.active_alternative()) {
+            std::set<std::string> inactive_room_tokens;
+            for (const auto& id:inactive) {
+                const auto found=snapshot.entities().find(id);
+                if (found==snapshot.entities().end() || !is_physical_wall_room(found->second)) continue;
+                inactive_room_tokens.insert(id);
+                for (const auto& edge:decode_identified_boundary_entity(found->second).segments) {
+                    inactive_room_tokens.insert(edge.segment_id);
+                    inactive_room_tokens.insert(edge.start_vertex_id);
+                    inactive_room_tokens.insert(edge.end_vertex_id);
+                }
+            }
+            // Exact reviewed acknowledgements preserve baseline bindings.
+            // Their visibility follows the still-inactive bound identities;
+            // editing an annotation's style/position does not lose its scope,
+            // while explicitly retargeting it removes that old association.
+            const auto mentions_inactive=[&](const nlohmann::json& value,const std::set<std::string>& reviewed) {
+                std::vector<const nlohmann::json*> pending{&value};
+                while (!pending.empty()) {
+                    const auto* current=pending.back(); pending.pop_back();
+                    if (current->is_string()) {
+                        const auto& token=current->get_ref<const std::string&>();
+                        if (reviewed.contains(token) && inactive_room_tokens.contains(token)) return true;
+                    } else if (current->is_object()) {
+                        for (const auto& [key,child]:current->items()) {
+                            if (reviewed.contains(key) && inactive_room_tokens.contains(key)) return true;
+                            pending.push_back(&child);
+                        }
+                    } else if (current->is_array()) {
+                        for (const auto& child:*current) pending.push_back(&child);
+                    }
+                }
+                return false;
+            };
+            if (!inactive_room_tokens.empty())
+                for (const auto& revision:snapshot.history()) {
+                    if (revision.revision>snapshot.revision() || !revision.boundary_constraint_changes) continue;
+                    const auto& command=*revision.boundary_constraint_changes;
+                    if (!command.phase_room_review_completion || command.phase_room_review_intent.is_null()) continue;
+                    const auto intent=decode_physical_wall_phase_room_review_intent(command.phase_room_review_intent);
+                    if (intent.registry_id!=phases->entity_id || intent.alternative_id!=phases->model.active_alternative()) continue;
+                    for (const auto& acknowledgement:intent.baseline_only_acknowledgements) {
+                        const auto found=snapshot.entities().find(acknowledgement.entity_id);
+                        if (found==snapshot.entities().end()) continue;
+                        const std::set<std::string> reviewed(acknowledgement.referenced_ids.begin(),acknowledgement.referenced_ids.end());
+                        if (mentions_inactive(found->second.properties,reviewed) || mentions_inactive(found->second.extensions,reviewed))
+                            visible.erase(found->first);
+                    }
+                }
         }
     }
     return visible;
@@ -14649,6 +14697,65 @@ public:
         }
     }
 
+    std::optional<Command> reviewRemodelingRoomChanges(const DocumentSnapshot& source,
+        const ApplyEntityChanges& registry_command,const PhysicalWallPhaseSelection& destination,
+        const SourceEditAuthority& authority,QWidget* parent) {
+        if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
+        if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+            throw std::invalid_argument("Finish or cancel the current drawing or placement before reviewing rooms.");
+        const auto inventory=inspect_physical_wall_phase_room_review(source,registry_command,destination);
+        if (inventory.intent.planes.empty()) return Command{registry_command};
+        // Returning to the baseline retrieves the original records. Existing
+        // stale measurements remain withheld by the ordinary room resolver.
+        if (!destination.alternative_id) return Command{registry_command};
+        const auto original=source.entities().find(destination.registry_id);
+        if (original!=source.entities().end() && registry_command.entity_changes.size()==1) {
+            const auto& proposed=registry_command.entity_changes.front().entity;
+            auto original_model=original->second.properties.at("model");
+            auto proposed_model=proposed.properties.at("model");
+            original_model.erase("active_alternative"); proposed_model.erase("active_alternative");
+            // An already resolved design needs no new room choices merely to
+            // display it. Every detected space must have one current owner.
+            if (original_model==proposed_model) {
+                auto entities=source.entities(); entities[destination.registry_id]=proposed;
+                const auto roster=physical_wall_phase_room_roster(entities,destination);
+                const std::set<std::string> active(roster.active_room_ids.begin(),roster.active_room_ids.end());
+                bool complete=true;
+                for (const auto& phase_report:inventory.reports) {
+                    const auto& report=phase_report.correspondence;
+                    std::set<std::string> matched;
+                    for (const auto& candidate:report.fresh) {
+                        const PhysicalWallSpace space{candidate.baseline_face_index,candidate.boundary,candidate.holes,
+                            candidate.area_square_metres,candidate.source_lineage};
+                        std::vector<std::string> owners;
+                        for (const auto& retained:report.retained)
+                            if (active.contains(retained.room.id) &&
+                                physical_wall_room_lineage_matches_current_inventory(retained.room,report.context,space))
+                                owners.push_back(retained.room.id);
+                        if (!candidate.diagnostic.empty() || owners.size()!=1 || !matched.insert(owners.front()).second) {
+                            complete=false; break;
+                        }
+                    }
+                    for (const auto& retained:report.retained)
+                        if (active.contains(retained.room.id) && !matched.contains(retained.room.id)) complete=false;
+                    if (!complete) break;
+                }
+                if (complete) return Command{registry_command};
+            }
+        }
+        PhysicalWallPhaseRoomReviewDialog dialog(source,registry_command,destination,m_metric_units,
+            [this,authority] {
+                if (!sourceEditAuthorityCurrent(authority) || hasPendingPlacementEdit() ||
+                    m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                    throw std::invalid_argument("The project or drawing changed. Reopen the room review.");
+                return authoringSnapshot();
+            },parent);
+        styleDialog(dialog);
+        if (dialog.exec()!=QDialog::Accepted || !dialog.acceptedCommand()) return std::nullopt;
+        if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
+        return Command{*dialog.acceptedCommand()};
+    }
+
     [[nodiscard]] bool selectRemodelingAlternative(const QString& alternative_id) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -14666,8 +14773,12 @@ public:
             if (record->model.active_alternative()==selected) { clearError(); return true; }
             const auto command = model_phase_selection_command(
                 source, record->entity_id, selected, source.revision());
-            (void)Document::preview_command(source, Command{command});
-            applyDocumentCommand(Command{command});
+            const auto authority=captureSourceEditAuthority(source);
+            const auto reviewed=reviewRemodelingRoomChanges(source,command,{record->entity_id,selected},authority,owner);
+            if (!reviewed) { clearError(); return false; }
+            (void)Document::preview_command(source,*reviewed);
+            if (!sourceEditAuthorityUnchanged(authority)) return false;
+            applyDocumentCommand(*reviewed);
             clearError();
             refresh();
             return true;
@@ -15046,7 +15157,7 @@ public:
                     if (selectRemodelingAlternative(selected)) {
                         refresh_dialog();
                         status->setText(QStringLiteral("Phase applied."));
-                    } else status->setText(lastError());
+                    } else status->setText(lastError().isEmpty() ? QStringLiteral("Phase change cancelled.") : lastError());
                 } catch (const std::exception& error) {
                     status->setText(QString::fromUtf8(error.what()));
                 }
@@ -15074,9 +15185,12 @@ public:
                     const ApplyEntityChanges command{
                         source.revision(), {EntityChange::upsert(std::move(entity))}, {},
                         "Create remodeling alternative"};
-                    (void)Document::preview_command(source, Command{command});
+                    const auto reviewed=reviewRemodelingRoomChanges(source,command,
+                        {record->entity_id,candidate_id},*editing_authority,&dialog);
+                    if (!reviewed) { status->setText(QStringLiteral("Alternative creation cancelled.")); return; }
+                    (void)Document::preview_command(source,*reviewed);
                     require_editing_source();
-                    applyDocumentCommand(Command{command});
+                    applyDocumentCommand(*reviewed);
                     clearError();
                     refresh();
                     refresh_dialog();
@@ -15100,9 +15214,20 @@ public:
                     const auto& original=source.entities().at(record->entity_id);
                     const bool changed=command.entity_changes.size()!=1 || command.entity_changes.front().entity!=original;
                     if (changed) {
-                        (void)Document::preview_command(source,Command{command});
+                        const auto before=ModelPhases::from_json(original.properties.at("model"));
+                        const auto after=ModelPhases::from_json(command.entity_changes.front().entity.properties.at("model"));
+                        const auto old_row=std::find_if(before.alternatives().begin(),before.alternatives().end(),
+                            [&](const auto& row){return row.id==*alternative_id;});
+                        const auto new_row=std::find_if(after.alternatives().begin(),after.alternatives().end(),
+                            [&](const auto& row){return row.id==*alternative_id;});
+                        const bool name_only=old_row!=before.alternatives().end() && new_row!=after.alternatives().end() &&
+                            old_row->demolished_ids==new_row->demolished_ids && old_row->proposed_ids==new_row->proposed_ids;
+                        const auto reviewed=name_only ? std::optional<Command>(Command{command}) :
+                            reviewRemodelingRoomChanges(source,command,{record->entity_id,*alternative_id},*editing_authority,&dialog);
+                        if (!reviewed) { status->setText(QStringLiteral("Alternative changes cancelled.")); return; }
+                        (void)Document::preview_command(source,*reviewed);
                         require_editing_source();
-                        applyDocumentCommand(Command{command});
+                        applyDocumentCommand(*reviewed);
                         refresh();
                     }
                     clearError();

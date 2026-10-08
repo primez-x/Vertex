@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v83
+# Vertex project formats v1 through v84
+
+## Baseline-preserving room alternatives (v84)
+
+Native format 84 and JSON/assets extraction version 82 retain exclusive
+`apply_boundary_constraint_changes` envelope 33. Its version-one
+`phase_room_review_intent` binds the complete original snapshot, authoring
+history, saved revision, entity map and registry entity. The canonical child
+upserts only the named phase registry. Replay independently derives explicit
+phase inventories, required context/planes, original-room coverage and current
+clear spaces before applying reviewed assignments.
+
+Unchanged rooms share original identities and facts. Superseded baseline rooms
+and children remain intact; only their target-alternative demolition membership
+changes. Proposed rooms receive fresh owner/edge/vertex identities, actual
+detected outlines/holes/source lineage and explicitly reviewed name,
+classification and factor. Unclassified candidates remain unassigned. Incoming
+saved references, including opaque identity mentions, require complete exact
+baseline-preservation acknowledgements. No reference copy or retargeting is
+implied. Existing changed proposed rooms require a later explicit editing lane.
+
+Competing geometry, raw-entity, asset and ordinary room-review authorities refuse.
+Fresh identities cannot reuse retained-history owners or recognized boundary and
+linework children. Requested planes cannot claim the same actual supporting
+component twice. The floor covers all retained history, including after Undo,
+deletion or abandoned edits. Terrain membership in a phase registry also requires
+format 84. Earlier projects keep their existing minimum reader.
+
+This source batch has not been compiled or qualified in the installed app.
 
 ## Joint wall movement and room review (v83)
 

@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version 82 retains baseline-preserving room alternatives and requires
+native reader 84. Exclusive command envelope 33 includes its exact original
+source/registry bindings, explicit room decisions and baseline-reference
+acknowledgements. Original baseline geometry and facts remain present alongside
+distinct proposed owners. The floor covers every retained revision, including
+undone or abandoned commands; extraction cannot lower it by inspecting only the
+current drawing. Phase registries containing terrain members also require this
+floor. Earlier projects retain their previous extraction floor.
+
 Exchange version 66 retains assembly transform reflection parity and stair
 properties version 4, requiring native reader 68. Mirror parity is an optional
 strict boolean on root, part, nested override and legacy placement transforms.

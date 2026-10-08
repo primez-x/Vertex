@@ -4,12 +4,15 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sketch {
 
 enum class ModelPhase { existing, demolished, proposed };
 [[nodiscard]] std::string phase_name(ModelPhase phase);
+// Shared admission for phase membership, document validation and authoring.
+[[nodiscard]] bool is_model_phase_entity_type(std::string_view type) noexcept;
 
 struct RemodelingAlternative {
     std::string id;

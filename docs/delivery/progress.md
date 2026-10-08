@@ -14,6 +14,41 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 atomic room variants in remodeling alternatives
+
+Exclusive envelope 33 now prepares and replays an actual phase-registry change
+with complete room decisions in one event. Existing baseline room entities,
+facts and children remain exact; target demolition membership supersedes them
+without global deletion. New proposed rooms receive fresh topology, actual
+detected clear geometry/holes/source lineage and explicit name/classification/
+factor. Sharing requires unchanged physical inventory and outline; unclassified
+spaces remain deliberately unassigned. Required plane/owner/candidate coverage
+and exact baseline-dependent acknowledgements are rederived from the source.
+
+The new Qt review is connected to alternative creation, demolition changes and
+selection of incomplete designs. It shows actual previous/current outlines,
+per-floor decisions, interior picks and individually confirmed baseline
+references. Cancel publishes nothing. Complete existing designs can switch
+display without new room assignments; baseline retrieval and name-only edits
+keep their direct paths. Source/history/save, workspace/recovery/edit context and
+retained-history fresh identity guards fence acceptance and restoration.
+
+Shared phase visibility suppresses acknowledged baseline references while their
+reviewed identities remain inactive in that same alternative. Original data
+remains available in the baseline. Membership admission is shared across
+document validation, discovery and GUI authoring, including terrain, measured
+linework and joins. Native 84/extraction 82 floors cover every retained event
+and terrain phase membership. Independent core review found a duplicate-area
+path through near-identical requested planes; component admission now keys actual
+supporting sources and exact regions across all rows before any disposition.
+
+Integrated source review approved the corrected batch without a required P1/P2
+finding or obvious source-level compile defect. No builds, tests, probes, launches,
+packages or installations run. Compilation, modal interaction, calculation
+display, persistence and Undo remain unverified; the installed candidate stays
+unchanged. Existing proposed-room retirement/redefinition, ordinary active-room
+review rosters and phase-aware companion/constraint authoring remain open.
+
 ### October 8 explicit phase inventories and room correspondence
 
 Pure context/plane discovery now accepts an explicit phase registry/alternative
@@ -36,9 +71,10 @@ reports cannot enter ordinary destructive room-command preparation.
 Root reviewed the integrated source and registered the new phase source in the
 document target. No builds, tests, probes, launches, packages or installations
 run. Compilation, calculation display, interaction and persistence remain
-unverified. The installed candidate stays unchanged. The separate atomic
-phase-variant command, companion scope and controller review remain in progress;
-no new persisted dialect or format floor is claimed for this analytical slice.
+unverified. The installed candidate stays unchanged. The analytical slice itself
+introduced no persisted dialect or format floor; the subsequent phase-variant
+command and controller integration are recorded above. Companion editing remains
+open.
 
 ### October 8 editable remodeling alternatives and demolition preview
 

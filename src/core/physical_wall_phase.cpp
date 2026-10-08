@@ -2,7 +2,6 @@
 #include "sketch/physical_wall_room_data.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <set>
 #include <stdexcept>
@@ -18,15 +17,6 @@ void check_identity(const std::string& id, const Entity& entity) {
     if (id.empty() || std::all_of(id.begin(), id.end(), [](unsigned char c) { return std::isspace(c); }) ||
         entity.id != id)
         reject("entity key must resolve to its actual nonblank identity: " + id);
-}
-// Match the document's model_phases reference admission. A registry may own
-// architectural members beyond the walls/rooms needed by this analysis.
-bool model_role(std::string_view type) {
-    static constexpr std::array<std::string_view, 19> roles{
-        "building", "floor", "wall", "opening", "room", "room_boundary",
-        "slab", "roof", "stair", "railing", "column", "beam", "assembly_model",
-        "boundary", "measurement_boundary", "wall_join", "roof_join", "measurement_linework", "assembly_instance"};
-    return std::find(roles.begin(), roles.end(), type) != roles.end();
 }
 } // namespace
 
@@ -52,7 +42,7 @@ std::vector<PhysicalWallPhaseState> physical_wall_phase_states(
                 if (member == entities.end())
                     reject("registry " + id + " references missing model entity " + member_id);
                 check_identity(member_id, member->second);
-                if (!model_role(member->second.type))
+                if (!is_model_phase_entity_type(member->second.type))
                     reject("registry " + id + " reference is not an architectural model entity: " + member_id);
                 if (member->second.type == "wall" || is_physical_wall_room(member->second)) {
                     const auto [owner, inserted] = physical_ownership.emplace(member_id, id);

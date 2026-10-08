@@ -160,6 +160,15 @@ wall or room state is published. Cancel preserves the drawing and clipboard;
 successful Cut writes its prepared clipboard payload after the complete event.
 Mixed selections and semantic phase demolition keep their separate contracts.
 
+Semantic alternative changes use separate exclusive envelope 33 with native
+84/extraction 82. Its actual phase inventory and complete room decisions preserve
+baseline owners rather than using ordinary destructive retirement. Proposed
+rooms have fresh topology, explicitly reviewed facts and interior witnesses;
+saved baseline references require individual acknowledgement. Geometry, assets
+and other command lanes cannot borrow this authority. Returning to baseline
+retrieves original records; a complete existing alternative can switch display
+without another room-assignment event.
+
 Connected wall-group movement uses its intact joint envelope 17 before room
 review. Shared translations, saved per-owner offsets and rigid operators retain
 their actual selected source identities and independently replayed constraint

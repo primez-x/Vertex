@@ -1271,6 +1271,8 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U192 — Mark objects existing, demolished or proposed**
   - Steps: Choose an existing alternative. Select a wall in the demolition list, then click it in the preview. Check the wall: it and its hosted doors/windows have red dashed outlines. Select an object on another floor: the preview switches to that floor. Change the alternative's name and checked objects, then click **Save changes**. Click **Apply phase** separately to display it.
   - Preservation check: Add a proposed wall while the alternative is active. Reopen the manager, edit its name and demolition choices, and save. The proposed wall remains assigned to that alternative. Editing a different alternative must not switch the displayed phase or lose proposals in either alternative. Saving unchanged values adds no Undo step.
+  - Room check: Start with named rooms defined from physical walls. Change demolition choices that affect them. In the room review, choose what happens to every previous room and clear space on each listed floor. Create a proposed room with an entered name, classification, factor and picked interior point, or deliberately leave a space unclassified. Confirm each listed baseline reference, then apply. Repeat and Cancel before applying.
+  - Expected room behavior: The baseline keeps its original rooms and facts. New room definitions belong only to the edited alternative. Cancel changes nothing; one Undo restores the alternative and all its room choices together. A changed existing proposed room must explain that it needs a separate edit rather than silently discarding it.
   - Source check: Begin drawing a wall or placing a symbol, then try to open the manager or switch phases. Finish or cancel that placement before changing phases. If the source changes while the editor is open, its old form must refuse to save.
   - Expected: The selected phase is visibly meaningful.
   - Result: Not tested
@@ -1290,11 +1292,13 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U195 — Check phase-specific quantities and schedules**
   - Steps: Add a hosted door and window to an existing wall. Mark the wall demolished in an alternative and apply it. Check the plan, 3D view, door/window schedule and a sheet that uses those views. Return to the baseline.
   - Expected visibility: Hosted doors and windows disappear with their demolished or inactive host and return with the baseline, without deleting their original data.
+  - Baseline-reference check: Add a saved dimension to a baseline room, then supersede that room through the alternative room review. Confirm that dimension's baseline preservation. It disappears in that alternative and returns in the baseline. Changing only its style or position preserves this association; assigning it to a different active room removes the old association.
   - Expected: Counts and totals correspond to the displayed phase or alternative.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U196 — Save and reopen alternatives**
+  - Steps: Save a project with both original baseline rooms and reviewed proposed rooms. Close and reopen it, switch between designs, and compare each room's name, classification, factor, outline and dimensions. Undo and Redo the original alternative-room change after reopening.
   - Expected: Their names, membership and active choice are retained.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

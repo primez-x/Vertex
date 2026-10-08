@@ -37,6 +37,7 @@
 #include "sketch/stair_attachment_integrity.hpp"
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
 #include "sketch/physical_wall_room_review.hpp"
+#include "sketch/physical_wall_phase_review.hpp"
 #endif
 #include "sketch/joint_translation_replay.hpp"
 
@@ -1257,12 +1258,8 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                         document_error(DocumentErrorCode::dangling_reference,
                                        "model phases " + id + " references missing entity " + member_id);
                     }
-                    static constexpr std::array<std::string_view, 19> model_roles{
-                        "building", "floor", "wall", "opening", "room", "room_boundary",
-                        "slab", "roof", "stair", "railing", "column", "beam", "assembly_model",
-                        "boundary", "measurement_boundary", "wall_join", "roof_join", "measurement_linework", "assembly_instance"};
                     const auto& type = entities.at(member_id).type;
-                    if (std::find(model_roles.begin(), model_roles.end(), type) == model_roles.end()) {
+                    if (!is_model_phase_entity_type(type)) {
                         document_error(DocumentErrorCode::invalid_entity,
                                        "model phases " + id + " reference " + member_id +
                                        " is not an architectural model entity");
@@ -1967,6 +1964,10 @@ static bool has_joint_translation_completion(const ApplyBoundaryConstraintChange
     return command.joint_translation_completion || command.joint_translation.has_value();
 }
 
+static bool has_phase_room_review_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.phase_room_review_completion || !command.phase_room_review_intent.is_null();
+}
+
 static bool has_room_review_geometry_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.room_review_geometry_completion || !command.room_review_geometry_proof.is_null();
 }
@@ -1986,6 +1987,25 @@ static std::vector<nlohmann::json> room_review_intents(const ApplyBoundaryConstr
 static bool has_room_review_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.room_review_completion || !command.room_review_intent.is_null() ||
         has_room_review_geometry_completion(command) || has_room_review_batch_completion(command);
+}
+
+static void validate_phase_room_review_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!has_phase_room_review_completion(command)) return;
+    if (!command.phase_room_review_completion || command.phase_room_review_intent.is_null())
+        throw std::invalid_argument("Phase room review requires its explicit mode and complete intent");
+    if (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
+        !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
+        !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
+        !command.measured_stroke_edits.empty() || !command.dimension_placement_moves.empty() ||
+        !command.selection_entity_changes.empty() || command.selection_completion ||
+        command.exterior_source_completion || command.supplemental_source_completion ||
+        command.supplemental_asset_reference_completion || command.rigid_wall_transform_completion ||
+        command.measured_source_completion || command.dimension_placement_completion ||
+        command.rigid_group_completion || command.rigid_group_transform || command.wall_split || command.wall_merge ||
+        command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
+        has_joint_translation_completion(command) || has_room_review_completion(command) ||
+        command.wall_dimension_completion || command.curve_construction_completion || has_disto_measurement_completion(command))
+        throw std::invalid_argument("Phase room review cannot borrow another edit or asset authority");
 }
 
 static void validate_room_aware_wall_split_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -2502,6 +2522,13 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_phase_room_review_completion(command)) {
+        try { validate_phase_room_review_mode(command); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        // Complete replay preserves every original constraint and admits the
+        // final state; the ordinary wall edit validator has no partial lane here.
+        return;
+    }
     // Both original-source lanes and their union are validated during complete
     // reconstruction; applying a child's partial authority to the union is unsafe.
     if (has_selection_completion(command)) return;
@@ -2938,6 +2965,41 @@ static void validate_room_review_lifetime(const nlohmann::json& encoded,
                     throw std::invalid_argument("Room review child identity was already used in retained history: "+id);
         }
     }
+}
+
+static void validate_phase_room_review_lifetime(const nlohmann::json& encoded,
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
+    const auto intent=decode_physical_wall_phase_room_review_intent(encoded);
+    std::set<std::string,std::less<>> fresh;
+    const auto reserve=[&](const std::string& id) {
+        if (!is_valid_identifier(id) || !fresh.insert(id).second)
+            throw std::invalid_argument("Phase room review fresh identities are invalid or overlap");
+    };
+    if (!intent.source_registry_entity_digest) reserve(intent.registry_id);
+    for (const auto& plane:intent.planes)
+        for (const auto& decision:plane.fresh) {
+            if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed) continue;
+            reserve(decision.room_id);
+            for (const auto& id:decision.fresh_ids.segment_ids) reserve(id);
+            for (const auto& id:decision.fresh_ids.vertex_ids) reserve(id);
+        }
+    for (std::size_t index=0;index<preceding_records;++index)
+        for (const auto& [id,entity]:history[index].entities) {
+            if (fresh.contains(id))
+                throw std::invalid_argument("Phase room identity was already used in retained history: "+id);
+            if (entity.type=="measurement_linework") {
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                if (decoded.supported())
+                    for (const auto& edge:decoded.model->edges)
+                        if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
+                            throw std::invalid_argument("Phase room child identity was already used in retained linework: "+id);
+            }
+            if (!can_recognize_boundary_entity_type(entity.type) ||
+                inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1) continue;
+            for (const auto& edge:decode_identified_boundary_entity(entity).segments)
+                if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
+                    throw std::invalid_argument("Phase room child identity was already used in retained history: "+id);
+        }
 }
 #endif
 
@@ -3952,6 +4014,22 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const std::map<std::string, Entity, std::less<>>& source,
     const std::map<std::string, Asset, std::less<>>& source_assets,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_phase_room_review_completion(command)) {
+        try {
+            validate_phase_room_review_mode(command);
+            (void)command_to_json(Command{command});
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            const auto replay=replay_physical_wall_phase_room_review(source,command.phase_room_review_intent);
+            validate_boundary_identity_transition(history,source,replay.entities);
+            (void)validate_constraint_integrity(replay.entities);
+            (void)validate_state(replay.entities,source_assets);
+            return replay.entities;
+#else
+            throw std::invalid_argument("Phase room review requires the production physical-wall engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     if (has_selection_completion(command)) {
         try {
             (void)command_to_json(Command{command});
@@ -5446,6 +5524,28 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_phase_room_review_completion(typed)) {
+                try {
+                    validate_phase_room_review_mode(typed);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                    const auto intent=decode_physical_wall_phase_room_review_intent(typed.phase_room_review_intent);
+                    if (intent.expected_revision!=typed.expected_revision ||
+                        encode_physical_wall_phase_room_review_intent(intent).dump()!=typed.phase_room_review_intent.dump())
+                        throw std::invalid_argument("Phase room review must retain its canonical source intent");
+                    if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
+                        throw std::invalid_argument("Serialized phase room review message is invalid");
+                    auto encoded=nlohmann::json{{"version",33},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"phase_room_review_completion",true},{"phase_room_review_intent",typed.phase_room_review_intent}};
+                    if (encoded.dump().size()>1024*1024)
+                        throw std::invalid_argument("Phase room review exceeds the persisted proof budget");
+                    return encoded;
+#else
+                    throw std::invalid_argument("Phase room review requires the production physical-wall engine");
+#endif
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_room_review_batch_completion(typed)) {
                 try { validate_room_review_mode(typed,false); }
                 catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
@@ -5835,7 +5935,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23 && value.at("version") != 24 && value.at("version") != 25 && value.at("version") != 26 && value.at("version") != 27 && value.at("version") != 28) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23 && value.at("version") != 24 && value.at("version") != 25 && value.at("version") != 26 && value.at("version") != 27 && value.at("version") != 28 && value.at("version") != 33) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -5938,6 +6038,22 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==33) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "phase_room_review_completion","phase_room_review_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized phase room review");
+                if (value.dump().size()>1024*1024 || !value.at("phase_room_review_completion").is_boolean() ||
+                    !value.at("phase_room_review_completion").get<bool>() || !value.at("message").is_string())
+                    throw std::invalid_argument("Phase room review mode, message or proof budget is invalid");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Phase room review revision");
+                result.message=value.at("message").get<std::string>();
+                result.phase_room_review_completion=true;
+                result.phase_room_review_intent=value.at("phase_room_review_intent");
+                if (command_to_json(Command{result}).dump()!=value.dump())
+                    throw std::invalid_argument("Phase room review requires its canonical envelope");
+                return result;
+            }
             if (value.at("version") == 23) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","curve_construction_completion","proof"},
                     DocumentErrorCode::invalid_entity,"serialized curve construction completion");
@@ -6897,6 +7013,18 @@ Revision Document::apply(const Command& command) {
                 validate_action(next.action);
                 if(typed_command.wall_split)validate_wall_split_lifetime(*typed_command.wall_split,history_,history_.size());
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                if (has_phase_room_review_completion(typed_command)) {
+                    validate_phase_room_review_mode(typed_command);
+                    const auto captured=snapshot();
+                    const auto intent=decode_physical_wall_phase_room_review_intent(typed_command.phase_room_review_intent);
+                    if (intent.expected_revision!=current.revision ||
+                        intent.source_snapshot_digest!=document_snapshot_digest(captured) ||
+                        intent.source_authoring_digest!=document_authoring_source_digest_v2(captured) ||
+                        intent.source_saved_revision!=captured.saved_revision_optional() ||
+                        intent.source_entities_digest!=entity_map_digest(current.entities))
+                        document_error(DocumentErrorCode::stale_revision,"Phase room review source snapshot changed");
+                    validate_phase_room_review_lifetime(typed_command.phase_room_review_intent,history_,history_.size());
+                }
                 if (has_room_review_completion(typed_command)) {
                     validate_room_review_mode(typed_command,true);
                     const auto captured=snapshot();
@@ -7193,6 +7321,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || record.boundary_constraint_changes->wall_merge || has_exterior_source_completion(*record.boundary_constraint_changes) ||
             has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes) ||
             has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes) ||
+            has_phase_room_review_completion(*record.boundary_constraint_changes) ||
             has_disto_measurement_completion(*record.boundary_constraint_changes) || has_selection_completion(*record.boundary_constraint_changes) ||
             has_curve_construction_completion(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
@@ -7368,6 +7497,16 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 try {
                     if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history(),index);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                    if (has_phase_room_review_completion(proof)) {
+                        validate_phase_room_review_mode(proof);
+                        const auto intent=decode_physical_wall_phase_room_review_intent(proof.phase_room_review_intent);
+                        if (intent.expected_revision!=previous.revision ||
+                            intent.source_authoring_digest!=document_authoring_source_digest_v2_at_revision(snapshot,previous.revision) ||
+                            intent.source_snapshot_digest!=document_snapshot_digest_at_revision(snapshot,previous.revision,intent.source_saved_revision) ||
+                            intent.source_entities_digest!=entity_map_digest(previous.entities))
+                            throw std::invalid_argument("Phase room review retained source authority changed");
+                        validate_phase_room_review_lifetime(proof.phase_room_review_intent,snapshot.history(),index);
+                    }
                     if (has_room_review_completion(proof)) {
                         validate_room_review_mode(proof,true);
                         const auto first=decode_physical_wall_room_review_intent(proof.room_review_intent);

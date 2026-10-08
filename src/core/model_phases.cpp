@@ -1,6 +1,7 @@
 #include "sketch/model_phases.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <set>
 #include <stdexcept>
@@ -25,6 +26,14 @@ void exact_keys(const nlohmann::json& value, const std::set<std::string>& keys) 
         if (!value.contains(key)) throw std::invalid_argument("missing phases JSON field: " + key);
 }
 }  // namespace
+
+bool is_model_phase_entity_type(std::string_view type) noexcept {
+    static constexpr std::array<std::string_view,20> roles{
+        "building","floor","wall","opening","room","room_boundary","slab","roof","stair","railing",
+        "column","beam","assembly_model","boundary","measurement_boundary","wall_join","roof_join",
+        "measurement_linework","assembly_instance","terrain_surface"};
+    return std::find(roles.begin(),roles.end(),type)!=roles.end();
+}
 
 std::string phase_name(ModelPhase phase) {
     switch (phase) {

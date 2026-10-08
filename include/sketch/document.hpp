@@ -410,6 +410,11 @@ struct ApplyBoundaryConstraintChanges {
     // the cumulative detached room state; full authority stays original.
     bool room_review_batch_completion{};
     std::vector<nlohmann::json> room_review_additional_intents;
+    // Envelope thirty-three preserves baseline owners and reconstructs
+    // reviewed proposed rooms under an explicit phase registry/alternative.
+    // This lane is exclusive; it never borrows ordinary room retirement.
+    nlohmann::json phase_room_review_intent=nullptr;
+    bool phase_room_review_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
