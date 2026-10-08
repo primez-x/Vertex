@@ -1,4 +1,25 @@
-# Vertex project formats v1 through v68
+# Vertex project formats v1 through v69
+
+## Combined live area-callout rotation (v69)
+
+Native format 69 and JSON/assets extraction version 67 retain annotation state
+version 11. Combined `target_kind: "area"` presentation records may now carry
+the finite `plan_label_rotation_radians` model angle. Versions 1 through 10
+reject that combined rotation field; separated name/calculation callouts retain
+their version-8 contract. Model-plan symbols remain supported in versions 10
+and 11. Encoding selects version 11 only when a combined rotation is present.
+Known combined rotation markers and version-11 states raise the reader floor
+in every retained revision, including deleted, undone and abandoned records.
+
+Callout placement changes preserve the semantic owner and derived text. The
+stored `plan_label_offset_m` is the desired absolute model position minus the
+candidate owner's analytical label anchor. Appearance, visibility and unknown
+record fields remain intact. Missing nonidentity providers use an isolated
+annotation-only container; identity placement creates no records or upgrades.
+Absent separated-role offsets retain the generated defaults `(0, .18)` and
+`(0, -.18)` metres. Creating a placement provider does not introduce a paper
+text height. Combined callouts without authored offsets keep automatic
+collision-aware placement and default upright behavior.
 
 ## Architectural reflections (v68)
 

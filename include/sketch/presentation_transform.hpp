@@ -15,6 +15,25 @@ struct PresentationAnnotationTarget {
 };
 
 inline constexpr std::size_t maximum_presentation_group_targets = 1000;
+// A 4096-entity numerical dependency graph can contain two generated role
+// callouts per area even when only its physical roots were explicitly selected.
+inline constexpr std::size_t maximum_area_callout_placement_targets = 8192;
+
+// Generated text and quantities stay derived from the closed area owner. The
+// position is absolute canonical source-model XY, independent of view frames.
+struct AreaCalloutPlacement {
+    std::string owner_id;
+    std::string role; // area (combined), area_name, area_calculation
+    Vec2 position;
+    double rotation_radians{};
+};
+
+// Changes only placement/rotation of the unique exact owner/role provider.
+// Missing nonidentity roles share one fresh annotation-only container. Identity
+// intent never creates providers or upgrades legacy annotation states.
+[[nodiscard]] ApplyEntityChanges area_callout_placement_command(
+    const DocumentSnapshot& source, std::span<const AreaCalloutPlacement> placements,
+    std::string_view fresh_annotation_owner_id, Revision expected_revision);
 
 // Atomic rigid edit of selected label/symbol children and reference owners.
 // The caller must qualify one compatible stored position AND orientation frame

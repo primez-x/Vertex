@@ -78,6 +78,7 @@ struct PresentationOverride {
     bool inherit_appearance{false};
     // Automatic wall-length or live area-role callouts, independent of geometry.
     std::optional<double> paper_text_height_mm;
+    // Combined area rotation requires v11; separated area roles retain v8+.
     std::optional<double> plan_label_rotation_radians;
     // Explicit imported callouts use style.text_height_metres in model space.
     // False retains legacy paper-height selection even with a styled callout.
@@ -189,7 +190,8 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>&);
     const std::vector<SymbolDefinition>&, std::string pinned_svg = {});
 [[nodiscard]] nlohmann::json encode_annotation_state(
     const AnnotationState&, const std::vector<SymbolDefinition>&);
-// Model-plan symbols select v10; extended styles remain admitted in v9/v10.
+// Combined area rotation selects v11. Model-plan symbols select v10; extended
+// styles remain admitted in v9 and later, including model-plan symbols in v11.
 // Roles or noncenter alignment select v8; legacy states retain their previous
 // conditional version. Before v8, even an explicit centered alignment key is
 // refused. In v8, omitted alignment retains the centered legacy default.

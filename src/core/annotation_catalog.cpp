@@ -1143,7 +1143,7 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         check(!o.paper_text_height_mm || ((o.target_kind == "wall_dimension" || area_role(o.target_kind)) &&
               std::isfinite(*o.paper_text_height_mm) && *o.paper_text_height_mm > 0.0 && *o.paper_text_height_mm <= 100.0),
               "Callout paper text height must be greater than zero and at most 100 mm");
-        check(!o.plan_label_rotation_radians || ((o.target_kind == "wall_dimension" || area_role(o.target_kind)) &&
+        check(!o.plan_label_rotation_radians || ((o.target_kind == "area" || o.target_kind == "wall_dimension" || area_role(o.target_kind)) &&
               std::isfinite(*o.plan_label_rotation_radians)),
               "Callout label rotation must be finite");
         check(!o.use_model_text_height || ((o.target_kind == "wall_dimension" || area_role(o.target_kind)) &&
@@ -1160,6 +1160,8 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
         [](const auto& label){return label.model_plan;});
     const auto model_plan_symbols = std::any_of(state.symbols.begin(),state.symbols.end(),
         [](const auto& symbol){return symbol.model_plan;});
+    const auto combined_area_rotation = std::any_of(state.overrides.begin(),state.overrides.end(),
+        [](const auto& value){return value.target_kind == "area" && value.plan_label_rotation_radians.has_value();});
     const auto wall_dimensions = std::any_of(state.overrides.begin(),state.overrides.end(),
         [](const auto& value){return value.target_kind == "wall_dimension" ||
             value.paper_text_height_mm.has_value() || value.plan_label_rotation_radians.has_value();});
@@ -1171,7 +1173,7 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
     const auto aligned = extended || std::any_of(state.labels.begin(),state.labels.end(),[](const auto& l){return l.style.text_alignment!="center";}) ||
         std::any_of(state.symbols.begin(),state.symbols.end(),[](const auto& s){return s.style.text_alignment!="center";}) ||
         std::any_of(state.overrides.begin(),state.overrides.end(),[](const auto& o){return area_role(o.target_kind)||o.style.text_alignment!="center";});
-    json j{{"version",model_plan_symbols ? 10 : extended ? 9 : aligned ? 8 : svg_palettes ? 7 : wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
+    json j{{"version",combined_area_rotation ? 11 : model_plan_symbols ? 10 : extended ? 9 : aligned ? 8 : svg_palettes ? 7 : wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) {
         json label{{"id",l.id},{"template_id",l.template_id},{"content",l.content},
@@ -1212,7 +1214,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                   (j.at("version") == 1 || j.at("version") == 2 ||
                    j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5 ||
                    j.at("version") == 6 || j.at("version") == 7 || j.at("version") == 8 || j.at("version") == 9 ||
-                   j.at("version") == 10),
+                   j.at("version") == 10 || j.at("version") == 11),
               "Unsupported annotation version");
         const bool pinned = j.at("version") != 1;
         const bool independent_transform = j.at("version").get<int>() >= 3;
@@ -1238,8 +1240,8 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
             const bool has_palette = s.contains("svg_palette");
             const bool has_model_plan = s.contains("model_plan");
             check(!has_palette || j.at("version").get<int>() >= 7, "SVG palette requires annotation version 7 or later");
-            check(!has_model_plan || (j.at("version") == 10 && s.at("model_plan").is_boolean()),
-                  "Plan-anchored symbols require annotation version 10 and a boolean mode");
+            check(!has_model_plan || (j.at("version").get<int>() >= 10 && s.at("model_plan").is_boolean()),
+                  "Plan-anchored symbols require annotation version 10 or later and a boolean mode");
             check(s.is_object() && s.size() == (independent_transform ? 11 : pinned ? 7 : 5) +
                       (has_palette ? 1 : 0) + (has_model_plan ? 1 : 0),
                   "Invalid symbol instance keys");
@@ -1325,8 +1327,10 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                 value.use_model_text_height = o.at("use_model_text_height").get<bool>();
             }
             if (o.contains("plan_label_rotation_radians")) {
-                check(j.at("version").get<int>() >= 6 && o.at("plan_label_rotation_radians").is_number(),
-                      "Wall dimension label rotation requires annotation version 6 and a number");
+                const int minimum_version = value.target_kind == "area" ? 11 : area_role(value.target_kind) ? 8 : 6;
+                check((value.target_kind == "area" || value.target_kind == "wall_dimension" || area_role(value.target_kind)) &&
+                      j.at("version").get<int>() >= minimum_version && o.at("plan_label_rotation_radians").is_number(),
+                      "Callout label rotation requires its supported target/schema version and a number");
                 value.plan_label_rotation_radians = o.at("plan_label_rotation_radians").get<double>();
             }
             state.overrides.push_back(std::move(value));

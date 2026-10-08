@@ -4089,7 +4089,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
                       << label.color << label.bold << label.italic << label.fill_color
                       << label.fill_pattern << label.show_background << label.avoid_components
                       << label.plan_only << label.selection_type << label.font_family << label.model_plan
-                      << label.wall_dimension_manual_rotation << label.text_alignment << label.callout_role;
+                      << label.derived_label_manual_rotation << label.text_alignment << label.callout_role;
             signature << label.fill_opacity.has_value();
             if (label.fill_opacity) signature << *label.fill_opacity;
             point_key(label.position);
@@ -7239,6 +7239,17 @@ std::vector<CanvasEntityPresentationIdentity> PlanCanvas::selectedEntityPresenta
     for (const auto index : m_selected_entity_indices) {
         const auto& entity = m_entities[index];
         result.push_back({entity.id, entity.presentation_key, entity.type});
+    }
+    return result;
+}
+
+std::vector<CanvasLabelPresentationIdentity> PlanCanvas::selectedLabelPresentations() const {
+    std::vector<CanvasLabelPresentationIdentity> result;
+    for (const auto& label : m_labels) {
+        if (!label.selected || !drawable_label(label)) continue;
+        const CanvasLabelPresentationIdentity identity{label.id, label.callout_role, label.selection_type};
+        if (std::find(result.begin(), result.end(), identity) == result.end())
+            result.push_back(identity);
     }
     return result;
 }

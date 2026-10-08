@@ -1,5 +1,6 @@
 #include "sketch/presentation_transform.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/boundary_entity.hpp"
 
 #include <cmath>
 #include <map>
@@ -74,6 +75,76 @@ void upgrade_axes(Entity& entity, const AnnotationState& state) {
                                "flip_horizontal", "flip_vertical"})
             if (!symbols[i].contains(key)) symbols[i][key] = encoded.at("symbols")[i].at(key);
     raw["version"] = 3;
+}
+
+// Promote only required wire fields, retaining raw styles, sibling records and
+// opaque metadata. The original decoded defaults pin legacy symbol artwork.
+void upgrade_callout_schema(Entity& entity, const AnnotationState& state, int version) {
+    auto& raw = entity.properties.at("state");
+    if (raw.at("version").get<int>() >= version) return;
+    upgrade_axes(entity, state);
+    raw["version"] = version;
+}
+
+Boundary callout_boundary(const Entity& entity) {
+    require(can_recognize_boundary_entity_type(entity.type) || entity.type == "room",
+            "An area callout requires a closed boundary or native room owner.");
+    if (can_recognize_boundary_entity_type(entity.type)) {
+        const auto version = inspect_boundary_entity_version(entity);
+        require(version.format != BoundaryEntityFormat::unsupported_version,
+                "The area callout boundary version is unsupported.");
+        if (version.format == BoundaryEntityFormat::identified_v1)
+            return boundary_geometry(decode_identified_boundary_entity(entity));
+    }
+    // Keep this analytical admission available in the core-only build too:
+    // there is no derived solid construction or legacy identity allocation.
+    const auto ring = [](const nlohmann::json& raw) {
+        require(raw.is_array() && !raw.empty() && raw.size() <= 100000,
+                "The area callout boundary must be a bounded nonempty segment array.");
+        const auto number = [](const nlohmann::json& value) {
+            require(value.is_number(), "Area callout boundary coordinates and sweeps must be numeric.");
+            const auto result = value.get<double>();
+            require(std::isfinite(result), "Area callout boundary coordinates and sweeps must be finite.");
+            return result;
+        };
+        const auto point = [&](const nlohmann::json& value) {
+            require(value.is_array() && value.size() == 2, "Area callout boundary points require two coordinates.");
+            return Vec2{number(value[0]), number(value[1])};
+        };
+        Boundary result;
+        result.reserve(raw.size());
+        for (const auto& edge : raw) {
+            require(edge.is_object() && edge.contains("start") && edge.contains("end") && edge.contains("sweep_radians"),
+                    "The area callout boundary segment is incomplete.");
+            result.push_back({point(edge.at("start")), point(edge.at("end")), number(edge.at("sweep_radians"))});
+        }
+        require(validate_boundary(result).empty(), "The area callout boundary must be valid and closed.");
+        return result;
+    };
+    const auto& properties = entity.properties;
+    require(properties.is_object(), "The area callout owner properties must be an object.");
+    const bool boundary = properties.contains("boundary"), segments = properties.contains("segments");
+    require(boundary != segments, "The area callout owner requires one unambiguous boundary.");
+    auto result = ring(properties.at(boundary ? "boundary" : "segments"));
+    if (entity.type == "room" && properties.contains("holes")) {
+        const auto& raw_holes = properties.at("holes");
+        require(raw_holes.is_array() && raw_holes.size() <= 100000, "Room holes must be a bounded array.");
+        std::vector<Boundary> holes;
+        holes.reserve(raw_holes.size());
+        for (const auto& hole : raw_holes) holes.push_back(ring(hole));
+        require(!validate_boundary_holes(result, holes), "The room callout footprint has invalid holes.");
+    }
+    return result;
+}
+
+Vec2 default_callout_offset(std::string_view role) {
+    return {0.0, role == "area_name" ? 0.18 : role == "area_calculation" ? -0.18 : 0.0};
+}
+
+double canonical_callout_rotation(double rotation) {
+    const auto result = std::remainder(rotation, 2.0 * std::numbers::pi);
+    // The two half-turn endpoints represent the same baseline orientation.
+    return result == std::numbers::pi ? -std::numbers::pi : result;
 }
 
 ApplyEntityChanges changed(Revision revision, Entity entity, const char* message) {
@@ -161,6 +232,137 @@ double rigid_orientation(double rotation, const PlanarTransform& linear) {
 }
 
 }  // namespace
+
+ApplyEntityChanges area_callout_placement_command(const DocumentSnapshot& source,
+    std::span<const AreaCalloutPlacement> placements, std::string_view fresh_annotation_owner_id,
+    Revision expected_revision) {
+    check_source(source, expected_revision);
+    require(!placements.empty() && placements.size() <= maximum_area_callout_placement_targets,
+            "Area callout placement requires between one and 8192 targets.");
+    using Target = std::pair<std::string, std::string>;
+    struct Request {
+        Vec2 anchor;
+        Vec2 position;
+        Vec2 offset;
+        double rotation{};
+    };
+    std::map<Target, Request> requests;
+    for (const auto& placement : placements) {
+        require(!placement.owner_id.empty() && placement.owner_id.size() <= 256,
+                "Area callout owner IDs must be bounded and nonempty.");
+        require(placement.role == "area" || placement.role == "area_name" || placement.role == "area_calculation",
+                "The area callout role is unsupported.");
+        require(std::isfinite(placement.position.x) && std::isfinite(placement.position.y) &&
+                    std::isfinite(placement.rotation_radians), "Area callout placement must be finite.");
+        const auto found = source.entities().find(placement.owner_id);
+        require(found != source.entities().end(), "The area callout owner no longer exists.");
+        const auto anchor = area_label_anchor(callout_boundary(found->second));
+        const Vec2 offset{placement.position.x - anchor.x, placement.position.y - anchor.y};
+        require(std::isfinite(offset.x) && std::isfinite(offset.y), "The area callout offset must be finite.");
+        const auto rotation = canonical_callout_rotation(placement.rotation_radians);
+        require(requests.emplace(Target{placement.owner_id, placement.role},
+                    Request{anchor, placement.position, offset, rotation}).second,
+                "The area callout placement contains a duplicate owner/role target.");
+    }
+
+    struct Provider { std::string entity_id; std::size_t index{}; };
+    std::map<Target, Provider> providers;
+    std::map<std::string, AnnotationState> states;
+    std::set<std::string, std::less<>> occupied;
+    for (const auto& [id, entity] : source.entities()) {
+        occupied.insert(id);
+        if (entity.type == kAnnotationEntityType) {
+            auto state = decode_annotation_entity(entity);
+            for (const auto& label : state.labels) occupied.insert(label.id);
+            for (const auto& symbol : state.symbols) occupied.insert(symbol.id);
+            for (std::size_t index = 0; index < state.overrides.size(); ++index) {
+                const auto& value = state.overrides[index];
+                Target target{value.target_id, value.target_kind};
+                if (!requests.contains(target)) continue;
+                require(providers.emplace(std::move(target), Provider{id, index}).second,
+                        "The area callout has ambiguous override providers across annotation owners.");
+            }
+            states.emplace(id, std::move(state));
+        }
+        // Stable topology identities also occupy the source namespace. Opaque
+        // metadata is retained and never interpreted as an identity provider.
+        if (can_recognize_boundary_entity_type(entity.type) || entity.type == "measurement_linework") {
+            const auto collect_edges = [&](const nlohmann::json& edges) {
+                if (!edges.is_array()) return;
+                for (const auto& edge : edges) if (edge.is_object())
+                    for (const auto* key : {"segment_id", "start_vertex_id", "end_vertex_id"})
+                        if (edge.contains(key) && edge.at(key).is_string())
+                            occupied.insert(edge.at(key).get<std::string>());
+            };
+            if (entity.properties.contains("boundary_model_version") && entity.properties.contains("segments"))
+                collect_edges(entity.properties.at("segments"));
+            if (entity.type == "measurement_linework" && entity.properties.contains("model") &&
+                entity.properties.at("model").is_object() && entity.properties.at("model").contains("edges"))
+                collect_edges(entity.properties.at("model").at("edges"));
+        }
+    }
+    for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+
+    std::map<std::string, Entity> edits;
+    AnnotationState missing;
+    for (const auto& [target, request] : requests) {
+        const auto provider = providers.find(target);
+        const PresentationOverride* current = provider == providers.end() ? nullptr :
+            &states.at(provider->second.entity_id).overrides.at(provider->second.index);
+        const auto current_offset = current && current->plan_label_offset ?
+            *current->plan_label_offset : default_callout_offset(target.second);
+        const auto current_rotation = canonical_callout_rotation(current ?
+            current->plan_label_rotation_radians.value_or(0.0) : 0.0);
+        // Comparing the absolute effective position also avoids introducing a
+        // subtraction round-trip edit at a large source-model origin.
+        const bool same_position = (request.offset.x == current_offset.x && request.offset.y == current_offset.y) ||
+            (request.position.x == request.anchor.x + current_offset.x &&
+             request.position.y == request.anchor.y + current_offset.y);
+        const bool same_rotation = request.rotation == current_rotation;
+        if (same_position && same_rotation) continue;
+        if (!current) {
+            PresentationOverride value;
+            value.target_kind = target.second;
+            value.target_id = target.first;
+            value.style.text_height_metres = 0.20;
+            value.inherit_appearance = true;
+            if (!same_position) value.plan_label_offset = request.offset;
+            if (!same_rotation) value.plan_label_rotation_radians = request.rotation;
+            missing.overrides.push_back(std::move(value));
+            continue;
+        }
+        const auto& location = provider->second;
+        auto [edit, inserted] = edits.try_emplace(location.entity_id, source.entities().at(location.entity_id));
+        (void)inserted;
+        int required_version = target.second == "area" ? 4 : 8;
+        if (!same_rotation && target.second == "area") required_version = 11;
+        upgrade_callout_schema(edit->second, states.at(location.entity_id), required_version);
+        auto& raw = edit->second.properties.at("state").at("overrides").at(location.index);
+        if (!same_position) raw["plan_label_offset_m"] = nlohmann::json::array({request.offset.x, request.offset.y});
+        if (!same_rotation) raw["plan_label_rotation_radians"] = request.rotation;
+    }
+
+    ApplyEntityChanges command{expected_revision, {}, {}, "Place generated area callouts"};
+    for (auto& [id, entity] : edits) {
+        (void)id;
+        validate_annotation_entity(entity);
+        command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+    }
+    if (!missing.overrides.empty()) {
+        require(!fresh_annotation_owner_id.empty() && fresh_annotation_owner_id.size() <= 256 &&
+                    fresh_annotation_owner_id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:") == std::string_view::npos,
+                "The fresh annotation owner ID must be a bounded stable token.");
+        require(!occupied.contains(fresh_annotation_owner_id), "The fresh annotation owner ID is already occupied.");
+        auto entity = make_annotation_entity(std::string(fresh_annotation_owner_id), missing);
+        validate_annotation_entity(entity);
+        command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+    }
+    if (command.entity_changes.empty()) return {expected_revision, {}, {}, {}};
+    // Admission is detached and atomic; the source is never changed by this
+    // command factory, including when any relationship or entity guard refuses.
+    (void)Document::preview_command(source, command);
+    return command;
+}
 
 ApplyEntityChanges presentation_group_transform_command(const DocumentSnapshot& source,
     std::span<const PresentationAnnotationTarget> annotations,

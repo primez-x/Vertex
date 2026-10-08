@@ -195,6 +195,14 @@ struct CanvasEntityPresentationIdentity {
     bool operator==(const CanvasEntityPresentationIdentity&) const = default;
 };
 
+// Derived labels may share their owner ID while presenting distinct roles.
+struct CanvasLabelPresentationIdentity {
+    QString id;
+    QString callout_role;
+    QString selection_type;
+    bool operator==(const CanvasLabelPresentationIdentity&) const = default;
+};
+
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
 // part of the committed drawing and therefore render in both screen and
 // fit-to-content output.
@@ -248,9 +256,9 @@ struct CanvasLabel {
     // Authored model-space plan anchor; unlike derived plan_only labels,
     // these remain selectable and have normal annotation transform handles.
     bool model_plan{false};
-    // Wall text with an explicit world angle keeps that authored orientation;
-    // automatically derived angles stay upright after named-plan projection.
-    bool wall_dimension_manual_rotation{false};
+    // Generated wall/area text with an explicit model angle keeps that authored
+    // baseline through named-plan projection. Automatic text stays upright.
+    bool derived_label_manual_rotation{false};
     // Horizontal text anchor in the label's local axes. Center preserves
     // historical labels; left/right put the corresponding text edge at position.
     QString text_alignment{QStringLiteral("center")};
@@ -416,6 +424,7 @@ public:
     // list is valid until the next scene or selection update.
     [[nodiscard]] const QStringList& selectedIds() const;
     [[nodiscard]] std::vector<CanvasEntityPresentationIdentity> selectedEntityPresentations() const;
+    [[nodiscard]] std::vector<CanvasLabelPresentationIdentity> selectedLabelPresentations() const;
     // Screen-only retained selection caption. It is painted inside the canvas
     // and is intentionally excluded from print/export rendering.
     void setSelectionCaption(QString caption);

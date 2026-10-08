@@ -4082,7 +4082,10 @@ std::vector<CanvasLabel> area_callout_labels(const Entity& entity,const Boundary
                 }
                 if (value.plan_label_offset) label.plan_label_offset=value.plan_label_offset;
                 if (value.paper_text_height_mm) label.paper_height_mm=*value.paper_text_height_mm;
-                if (value.plan_label_rotation_radians) label.rotation_radians=*value.plan_label_rotation_radians;
+                if (value.plan_label_rotation_radians) {
+                    label.rotation_radians=*value.plan_label_rotation_radians;
+                    label.derived_label_manual_rotation=true;
+                }
             }
         }
         result.push_back(std::move(label));
@@ -4141,7 +4144,7 @@ CanvasLabel wall_dimension_label(const std::string& id,const Segment& baseline,
         if (value.paper_text_height_mm) label.paper_height_mm=*value.paper_text_height_mm;
         if (value.plan_label_rotation_radians) {
             label.rotation_radians=*value.plan_label_rotation_radians;
-            label.wall_dimension_manual_rotation=true;
+            label.derived_label_manual_rotation=true;
         }
         if (value.plan_label_offset) {
             label.position={midpoint->x+value.plan_label_offset->x,midpoint->y+value.plan_label_offset->y};
@@ -4165,11 +4168,12 @@ void project_plan_model_labels(std::vector<CanvasLabel>& labels,
         if (label.plan_only || label.model_plan || (found != snapshot.entities().end() && found->second.type == "dimension")) {
             label.position = project_plan_point(label.position, frame);
             if (label.leader_start) label.leader_start=project_plan_point(*label.leader_start,frame);
-            if (found!=snapshot.entities().end() && (found->second.type=="wall" || found->second.type=="measurement_linework")) {
+            if (label.derived_label_manual_rotation ||
+                (found!=snapshot.entities().end() && (found->second.type=="wall" || found->second.type=="measurement_linework"))) {
                 const auto right=plan_view_right(frame),up=plan_view_up(frame);
                 const auto x=std::cos(label.rotation_radians),y=std::sin(label.rotation_radians);
                 label.rotation_radians=std::atan2(up.x*x+up.y*y,right.x*x+right.y*y);
-                if (!label.wall_dimension_manual_rotation) {
+                if (!label.derived_label_manual_rotation) {
                     while (label.rotation_radians>std::numbers::pi/2) label.rotation_radians-=std::numbers::pi;
                     while (label.rotation_radians<=-std::numbers::pi/2) label.rotation_radians+=std::numbers::pi;
                 }
@@ -7261,7 +7265,7 @@ public:
                         const auto moved=transform_point({gesture.scale*offset->x,gesture.scale*offset->y},linear);
                         after["plan_label_offset_m"]=json::array({moved.x,moved.y});
                     }
-                    if (area_callout_role(before.at("target_kind").get<std::string>()) &&
+                    if ((before.at("target_kind")=="area" || area_callout_role(before.at("target_kind").get<std::string>())) &&
                         before.contains("plan_label_rotation_radians")) {
                         const auto angle=before.at("plan_label_rotation_radians").get<double>();
                         const auto direction=transform_point({std::cos(angle),std::sin(angle)},linear);
@@ -7540,6 +7544,113 @@ public:
         return command;
     }
 
+    static Command completeAreaCalloutTransform(const DocumentSnapshot& source, Command command,
+        const PlanarTransform& transform,
+        const std::map<std::string,std::string,std::less<>>* copy_ids = nullptr) {
+        const auto angle=std::remainder(transform.rotation_radians,2.0*std::numbers::pi);
+        const bool linear_identity=(!transform.flip_horizontal && !transform.flip_vertical && angle==0.0) ||
+            (transform.flip_horizontal && transform.flip_vertical && std::abs(angle)==std::numbers::pi);
+        if (linear_identity && transform.offset.x==0.0 && transform.offset.y==0.0) return command;
+        const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
+        if (ordinary && ordinary->entity_changes.empty()) return command;
+        const auto candidate=Document::preview_command(source,command);
+        using Target=std::pair<std::string,std::string>;
+        std::map<Target,PresentationOverride> presentations;
+        std::set<Target> conflicts;
+        for (const auto& [id,entity] : source.entities()) {
+            (void)id;
+            if (entity.type!=kAnnotationEntityType) continue;
+            for (const auto& value : decode_annotation_entity(entity).overrides) {
+                if (value.target_kind!="area" && !area_callout_role(value.target_kind)) continue;
+                const Target key{value.target_id,value.target_kind};
+                if (!presentations.emplace(key,value).second) conflicts.insert(key);
+            }
+        }
+        const auto matching_point=[](Vec2 a,Vec2 b) {
+            return std::hypot(a.x-b.x,a.y-b.y)<=default_geometry_tolerance_metres;
+        };
+        const auto rigid_match=[&](const Boundary& before,const Boundary& after) {
+            if (before.empty() || before.size()!=after.size()) return false;
+            for (std::size_t index=0;index<before.size();++index) {
+                const auto expected=transform_segment(before[index],transform);
+                const auto& actual=after[index];
+                if (!matching_point(expected.start,actual.start) || !matching_point(expected.end,actual.end) ||
+                    std::abs(expected.sweep_radians-actual.sweep_radians)>1e-12) return false;
+            }
+            return true;
+        };
+        const PlanarTransform linear{{},transform.rotation_radians,
+            transform.flip_horizontal,transform.flip_vertical,{}};
+        const bool oriented=!linear_identity;
+        std::vector<AreaCalloutPlacement> placements;
+        for (const auto& [id,entity] : source.entities()) {
+            if (!is_closed_boundary_entity(entity.type) && entity.type!="room") continue;
+            std::string target_id=id;
+            if (copy_ids) {
+                const auto copied=copy_ids->find(id);
+                if (copied==copy_ids->end()) continue;
+                target_id=copied->second;
+            }
+            const auto proposed=candidate.entities().find(target_id);
+            if (proposed==candidate.entities().end() || proposed->second.type!=entity.type ||
+                (!copy_ids && proposed->second==entity)) continue;
+            const auto before=read_boundary(entity.properties);
+            const auto after=read_boundary(proposed->second.properties);
+            // A partially solved/deformed consequence keeps its own automatic
+            // anchor. Only a proved shared rigid replay receives this operator.
+            if (!rigid_match(before,after)) continue;
+            const auto anchor=area_label_anchor(before);
+            const bool separated=presentations.contains({id,"area_name"}) ||
+                presentations.contains({id,"area_calculation"});
+            const std::vector<std::string> roles=separated ?
+                std::vector<std::string>{"area_name","area_calculation"} : std::vector<std::string>{"area"};
+            for (const auto& role : roles) {
+                if (conflicts.contains({id,role}))
+                    throw std::invalid_argument("A transformed area has conflicting label presentation records.");
+                const auto value=presentations.find({id,role});
+                // Combined labels without an authored offset still use
+                // collision-aware automatic placement. Do not freeze their
+                // nominal interior anchor as an explicit displayed position.
+                if (role=="area" && (value==presentations.end() || !value->second.plan_label_offset)) continue;
+                const Vec2 fallback{0.0,role=="area_name" ? .18 : role=="area_calculation" ? -.18 : 0.0};
+                const auto offset=value!=presentations.end() ? value->second.plan_label_offset.value_or(fallback) : fallback;
+                const auto rotation=value!=presentations.end() ? value->second.plan_label_rotation_radians.value_or(0.0) : 0.0;
+                const auto position=transform_point({anchor.x+offset.x,anchor.y+offset.y},transform);
+                const auto direction=oriented ? transform_point({std::cos(rotation),std::sin(rotation)},linear) : Vec2{};
+                placements.push_back({target_id,role,position,oriented ? std::atan2(direction.y,direction.x) : rotation});
+            }
+        }
+        if (placements.empty()) return command;
+        const auto placement=area_callout_placement_command(candidate,placements,new_id("annotations"),candidate.revision());
+        if (placement.entity_changes.empty()) return command;
+        const auto merge=[&](std::vector<EntityChange>& changes) {
+            for (const auto& change : placement.entity_changes) {
+                if (change.kind!=EntityChangeKind::upsert || change.entity.type!=kAnnotationEntityType)
+                    throw std::invalid_argument("An area callout edit must retain its annotation-only contract.");
+                const auto existing=std::find_if(changes.begin(),changes.end(),[&](const auto& value) {
+                    return value.entity.id==change.entity.id;
+                });
+                if (existing==changes.end()) changes.push_back(change);
+                else {
+                    if (existing->kind!=EntityChangeKind::upsert)
+                        throw std::invalid_argument("The transformed label provider is being removed by another edit.");
+                    *existing=change;
+                }
+            }
+        };
+        if (auto* entity_command=std::get_if<ApplyEntityChanges>(&command)) merge(entity_command->entity_changes);
+        else if (auto* boundary_command=std::get_if<TransformBoundaries>(&command)) merge(boundary_command->entity_changes);
+        else if (auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command)) {
+            merge(proof->supplemental_entity_changes);
+            proof->supplemental_source_completion=true;
+        } else throw std::invalid_argument("The source geometry command cannot retain live callout placement atomically.");
+        const auto complete=Document::preview_command(source,command);
+        for (const auto& change : placement.entity_changes)
+            if (complete.entities().at(change.entity.id)!=change.entity)
+                throw std::invalid_argument("The complete transform changed a reviewed live callout placement.");
+        return command;
+    }
+
     static Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
         const QStringList& root_ids, const PlanarTransform& transform,
         std::vector<EntityChange> supplemental_changes = {}) {
@@ -7636,7 +7747,7 @@ public:
                         moved=transform_point(*offset,linear);
                     }
                     std::optional<double> angle;
-                    if (area_callout_role(owned.at("target_kind").get<std::string>()) && owned.contains("plan_label_rotation_radians")) {
+                    if ((owned.at("target_kind")=="area" || area_callout_role(owned.at("target_kind").get<std::string>())) && owned.contains("plan_label_rotation_radians")) {
                         const auto original_angle=owned.at("plan_label_rotation_radians").get<double>();
                         const auto direction=transform_point({std::cos(original_angle),std::sin(original_angle)},linear);
                         angle=std::atan2(direction.y,direction.x);
@@ -7696,7 +7807,7 @@ public:
                 }
                 proof->supplemental_source_completion = !proof->supplemental_entity_changes.empty();
                 (void)Document::preview_command(source,command);
-                return command;
+                return completeAreaCalloutTransform(source,std::move(command),transform);
             }
             // A reflection may leave every axis and callout unchanged while
             // reversing opening artwork. That ordinary, geometry-free case
@@ -7711,7 +7822,7 @@ public:
         }
         std::vector<EntityChange> changes;
         for (auto& [id,entity] : supplemental) changes.push_back(EntityChange::upsert(std::move(entity)));
-        const Command command=completeMeasuredAreaConsequences(source, completeOrdinaryMeasuredDimensionMovement(source,transformations.empty()
+        Command command=completeMeasuredAreaConsequences(source, completeOrdinaryMeasuredDimensionMovement(source,transformations.empty()
             ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Rotate measured strokes"}}
             : Command{TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),
                 "Transform areas with deductions and source walls",!wall_targets.empty(),!stroke_targets.targets.empty()}},transform));
@@ -7719,7 +7830,7 @@ public:
         for (const auto& entity : graph)
             if (is_closed_boundary_entity(entity.type) && !wall_measurement_source_current(candidate,candidate.entities().at(entity.id)))
                 throw std::invalid_argument("The transformed exterior no longer matches its supporting walls. The transform was not applied.");
-        return command;
+        return completeAreaCalloutTransform(source,std::move(command),transform);
     }
 
     static ApplyEntityChanges makeUnownedBoundaryTranslationCommand(
@@ -8531,7 +8642,7 @@ public:
                         const auto moved = transform_point(*offset,linear);
                         record["plan_label_offset_m"] = json::array({moved.x,moved.y});
                     }
-                    if (area_callout_role(record.at("target_kind").get<std::string>()) && record.contains("plan_label_rotation_radians")) {
+                    if ((record.at("target_kind")=="area" || area_callout_role(record.at("target_kind").get<std::string>())) && record.contains("plan_label_rotation_radians")) {
                         const auto angle=record.at("plan_label_rotation_radians").get<double>();
                         const auto direction=transform_point({std::cos(angle),std::sin(angle)},linear);
                         record["plan_label_rotation_radians"]=std::atan2(direction.y,direction.x);
@@ -8556,6 +8667,7 @@ public:
                 revokeCopiedAppraisalObservation(entity,found->second);
             } else throw std::invalid_argument("A required selection copy dependency is unsupported: " + entity.type);
         for (auto& [id,entity] : copied) command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+        command = std::get<ApplyEntityChanges>(completeAreaCalloutTransform(source,Command{std::move(command)},transform,&identities));
         command = validateIndependentAreaCopy(source,std::move(command));
         const auto candidate = Document::preview_command(source,command);
         validate_architectural_geometry_changes(source,candidate);
@@ -11240,6 +11352,7 @@ public:
         const auto primary_render_id = m_selected_id;
         auto* selection_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
         const auto selection_presentations = selection_canvas->selectedEntityPresentations();
+        const auto selection_labels = selection_canvas->selectedLabelPresentations();
         const auto selection_font=selection_canvas->font();
         const auto selection_dpi_x=selection_canvas->logicalDpiX();
         const auto selection_dpi_y=selection_canvas->logicalDpiY();
@@ -11528,11 +11641,20 @@ public:
                 selection_diagnostic = QString::fromUtf8(error.what());
             }
         }
+        if (!group && supported_selection && original && is_closed_boundary_entity(original->type)) {
+            try {
+                presentation_scene=projectSnapshotPlanScene(source,presentation_options,presentation_caches);
+            } catch (const std::exception& error) {
+                supported_selection=false;
+                selection_diagnostic=QString::fromUtf8(error.what());
+            }
+        }
         const auto site_generation = m_site_edit_generation;
         const auto site_publication_generation = m_site_publication_generation;
         const auto context_current = [&] {
             if (!sourceEditAuthorityUnchanged(authority)) return false;
-            if (group && selection_canvas->selectedEntityPresentations() != selection_presentations) {
+            if (group && (selection_canvas->selectedEntityPresentations() != selection_presentations ||
+                selection_canvas->selectedLabelPresentations() != selection_labels)) {
                 setError(QStringLiteral("The selected presentations changed. Reopen Transform to review the complete selection."));
                 return false;
             }
@@ -11638,6 +11760,7 @@ public:
                 if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
                 if (m_boundary_session) throw std::invalid_argument("Finish or cancel the active boundary before transforming the selection.");
                 if (!context_current()) throw std::invalid_argument(lastError().toStdString());
+                std::optional<PlanarTransform> shared_callout_transform;
                 auto candidate = [&]() -> std::pair<Command, std::string> {
                     if (!group) return makeSelectedTransformCommand(source,*original,rotation->text(),
                         flip_horizontal->isChecked(),flip_vertical->isChecked(),offset_x->text(),offset_y->text(),clone->isChecked());
@@ -11663,6 +11786,7 @@ public:
                     const PlanarTransform transform{*group_pivot, angle * std::numbers::pi / 180.0,
                         horizontal, vertical,
                         {offset(offset_x->text()), offset(offset_y->text())}};
+                    shared_callout_transform=transform;
                     const ArchitecturalGroupTransform physical_transform{{group_pivot->x,group_pivot->y,0.0},
                         {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0,
                         transform.flip_horizontal,transform.flip_vertical};
@@ -11925,6 +12049,9 @@ public:
                     }
                     return {std::move(command),primary_render_id.toStdString()};
                 }();
+                if (shared_callout_transform)
+                    candidate.first=completeAreaCalloutTransform(source,std::move(candidate.first),*shared_callout_transform,
+                        clone->isChecked() ? &candidate_copy_ids : nullptr);
                 const auto copy_intent = group && clone->isChecked() ?
                     std::optional<ApplyEntityChanges>{std::get<ApplyEntityChanges>(candidate.first)} : std::nullopt;
                 candidate.first = augmentAuthoredCommand(candidate.first, source);
@@ -12143,6 +12270,24 @@ public:
                 if (group && clone->isChecked())
                     for (auto& id : proposed_geometry) id = id_from(candidate_copy_ids.at(id.toStdString()));
                 add_graph(proposed, group ? proposed_geometry : QStringList{id_from(candidate.second)}, true);
+                if (!group && presentation_scene) {
+                    PlanSceneCaches caches;
+                    proposed_scene=projectSnapshotPlanScene(proposed,presentation_options,caches);
+                    const auto add_area_labels=[&](const SnapshotPlanScene& scene,bool selected) {
+                        std::set<QString> emitted;
+                        for (const auto& existing : labels)
+                            if (existing.selected==selected) emitted.insert(plan_label_instance_key(existing));
+                        for (auto label : scene.all_labels) {
+                            if (!label.avoid_components || !preview_ids[selected ? 1 : 0].contains(label.id.toStdString()) ||
+                                !emitted.insert(plan_label_instance_key(label)).second) continue;
+                            label.selected=selected;
+                            label.color=selected ? QColor(35,115,190) : QColor(140,148,158);
+                            labels.push_back(std::move(label));
+                        }
+                    };
+                    add_area_labels(*presentation_scene,false);
+                    add_area_labels(*proposed_scene,true);
+                }
                 if (group) {
                     // Geometry commands supply their full solved consequence
                     // graph above. Add authored artwork and its canonical
@@ -23424,12 +23569,16 @@ public:
             const auto candidate_area_presentations=area_callout_presentations(candidate);
             const auto candidate_physical_rooms=physical_wall_room_checks(candidate_snapshot);
             std::map<QString,Vec2> candidate_label_offsets;
+            std::map<QString,double> candidate_label_rotations;
             for (const auto& [id,owner]:candidate) {
                 if (owner.type!="annotation_state") continue;
                 for (const auto& override:decode_annotation_entity(owner).overrides) {
                     if ((override.target_kind=="area" || area_callout_role(override.target_kind)) && override.plan_label_offset)
                         candidate_label_offsets.insert_or_assign(id_from(override.target_id)+QChar(0x1f)+
                             (override.target_kind=="area" ? QString{} : QString::fromStdString(override.target_kind)),*override.plan_label_offset);
+                    if ((override.target_kind=="area" || area_callout_role(override.target_kind)) && override.plan_label_rotation_radians)
+                        candidate_label_rotations.insert_or_assign(id_from(override.target_id)+QChar(0x1f)+
+                            (override.target_kind=="area" ? QString{} : QString::fromStdString(override.target_kind)),*override.plan_label_rotation_radians);
                 }
             }
             for (const auto& [id,value]:area_values) {
@@ -23441,6 +23590,11 @@ public:
                         return plan_label_instance_key(existing)==plan_label_instance_key(label);})) continue;
                     if (const auto offset=candidate_label_offsets.find(plan_label_instance_key(label));offset!=candidate_label_offsets.end())
                         label.plan_label_offset=offset->second;
+                    if (const auto rotation=candidate_label_rotations.find(plan_label_instance_key(label));rotation!=candidate_label_rotations.end())
+                    {
+                        label.rotation_radians=rotation->second;
+                        label.derived_label_manual_rotation=true;
+                    }
                     if(view_context) label.position=project_plan_point(label.position,view_context->frame);
                     candidate_labels.push_back(std::move(label));
                 }
@@ -23537,7 +23691,7 @@ public:
                     proposed.rotation_radians=refreshed.rotation_radians;
                     proposed.automatic_linear_placement=refreshed.automatic_linear_placement;
                     proposed.leader_start=refreshed.leader_start;
-                    proposed.wall_dimension_manual_rotation=refreshed.wall_dimension_manual_rotation;
+                    proposed.derived_label_manual_rotation=refreshed.derived_label_manual_rotation;
                     if (view_context) {
                         std::vector<CanvasLabel> projected{std::move(proposed)};
                         project_plan_model_labels(projected,candidate_snapshot,view_context->frame);
@@ -23571,6 +23725,8 @@ public:
                 } else if (label.avoid_components &&
                            (can_recognize_boundary_entity_type(entity.type) || entity.type=="room")) {
                     auto proposed=label;
+                    proposed.derived_label_manual_rotation=false;
+                    proposed.rotation_radians=0.0;
                     if (const auto offset=candidate_label_offsets.find(plan_label_instance_key(label));offset!=candidate_label_offsets.end())
                         proposed.plan_label_offset=offset->second;
                     // Deductions can change an unchanged parent's net value.
@@ -23598,10 +23754,15 @@ public:
                         proposed.text_height_metres=matching->text_height_metres;
                         proposed.paper_height_mm=matching->paper_height_mm;
                         proposed.rotation_radians=matching->rotation_radians;
+                        proposed.derived_label_manual_rotation=matching->derived_label_manual_rotation;
                         proposed.text_alignment=matching->text_alignment;
                         if (label.callout_role.isEmpty())
                             if (const auto offset=candidate_label_offsets.find(plan_label_instance_key(label));offset!=candidate_label_offsets.end())
                                 proposed.plan_label_offset=offset->second;
+                    }
+                    if (const auto rotation=candidate_label_rotations.find(plan_label_instance_key(label));rotation!=candidate_label_rotations.end()) {
+                        proposed.rotation_radians=rotation->second;
+                        proposed.derived_label_manual_rotation=true;
                     }
                     if (label.avoid_components) {
                         auto* label_obstacles=&candidate_label_obstacles;
@@ -23610,10 +23771,10 @@ public:
                             if (frame==site_input->frames.auxiliary.end()) { withhold_label(label); continue; }
                             label_obstacles=&site_label_obstacles.forFrame(frame->second);
                         }
-                        const auto footprint=label_footprints.find(plan_label_instance_key(label));
-                        if (!appraisal_label && footprint==label_footprints.end()) return std::nullopt;
-                        const auto text_size = appraisal_label
-                            ? plan_area_label_footprint(proposed,label_font,&label_device) : footprint->second;
+                        // Candidate angles are in canonical model axes here.
+                        // A retained viewport footprint can have an earlier
+                        // angle or a different named-plan basis.
+                        const auto text_size=plan_area_label_footprint(proposed,label_font,&label_device);
                         std::vector<Bounds2> obstacles;
                         auto label_boundary=read_boundary(entity.properties);
                         if (is_physical_wall_room(entity)) {
@@ -23666,6 +23827,8 @@ public:
                         if (view_context) {
                             proposed.position = project_plan_point(proposed.position,view_context->frame);
                             if (proposed.leader_start) proposed.leader_start=project_plan_point(*proposed.leader_start,view_context->frame);
+                            if (proposed.derived_label_manual_rotation)
+                                proposed.rotation_radians=project_plan_angle(proposed.rotation_radians,view_context->frame);
                         }
                     }
                     result.labels.push_back(std::move(proposed));
@@ -43761,14 +43924,21 @@ private:
                             continue;
                         }
                     }
-                    if (override.target_kind=="area" && override.plan_label_offset) {
+                    if (override.target_kind=="area" &&
+                        (override.plan_label_offset || override.plan_label_rotation_radians)) {
                         for (auto& label:all_labels) {
                             if (label.avoid_components && label.callout_role.isEmpty() && label.id.toStdString()==override.target_id) {
-                                const auto anchor=label.position;
-                                if (!std::isfinite(anchor.x+override.plan_label_offset->x) ||
-                                    !std::isfinite(anchor.y+override.plan_label_offset->y))
-                                    throw std::invalid_argument("Resolved plan label position is not finite.");
-                                label.plan_label_offset=override.plan_label_offset;
+                                if (override.plan_label_offset) {
+                                    const auto anchor=label.position;
+                                    if (!std::isfinite(anchor.x+override.plan_label_offset->x) ||
+                                        !std::isfinite(anchor.y+override.plan_label_offset->y))
+                                        throw std::invalid_argument("Resolved plan label position is not finite.");
+                                    label.plan_label_offset=override.plan_label_offset;
+                                }
+                                if (override.plan_label_rotation_radians) {
+                                    label.rotation_radians=*override.plan_label_rotation_radians;
+                                    label.derived_label_manual_rotation=true;
+                                }
                             }
                         }
                     }
@@ -45055,7 +45225,7 @@ private:
             stream << QStringLiteral("label") << label.text << label.rotation_radians << label.scale
                 << label.text_height_metres << label.paper_height_mm << label.color << label.bold << label.italic
                 << label.fill_color << label.fill_pattern << label.show_background << label.font_family
-                << label.avoid_components << label.plan_only << label.model_plan << label.wall_dimension_manual_rotation;
+                << label.avoid_components << label.plan_only << label.model_plan << label.derived_label_manual_rotation;
             stream << label.callout_role << label.text_alignment;
             stream << label.fill_opacity.has_value();
             if (label.fill_opacity) stream << *label.fill_opacity;

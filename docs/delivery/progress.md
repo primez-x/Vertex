@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 live area-callout placement through transforms
+
+Shared rigid geometry transforms and independent copies now retain authored
+combined callout positions and separated name/calculation callouts through the
+candidate owner's analytical anchor. Only rigidly matching dependent areas
+receive the same operator; partial solved geometry retains its own placement.
+Text and quantities remain derived. The annotation-only placement command
+preserves raw styles, visibility, sibling artwork and unknown record fields,
+refuses conflicting providers and creates isolated fresh providers when needed.
+Identity requests do not introduce records or schema upgrades. Copy uses the
+explicit fresh owner map and retains the original providers.
+
+Annotation version 11 adds combined area-callout model rotation. Native format
+69 and extraction version 67 protect it throughout retained history. Authored
+wall/area/room baselines now share named-plan angle projection. Automatic
+combined callouts retain collision-aware placement and default upright behavior;
+fresh role providers retain model-height defaults. Fast previews measure the
+candidate canonical text footprint, and single-area numerical previews now
+include their generated labels. Typed label selection identities participate
+in numerical modal fences without changing existing picking behavior.
+
+Independent source review accepted this scope after corrections to automatic
+placement, plan angles, candidate footprints and missing-provider typography.
+No build, test, probe, native job, launch, package or installation ran. Runtime,
+compilation, history/reopen, interaction and output remain unverified. Manual
+checks remain Not tested. Standalone generated-callout picking, typed Site
+body/profile collision editing and production qualification remain required work.
+
 ### October 7 embedded assemblies in numerical selection edits
 
 Geometric instances embedded in a component catalog now join walls, measured
