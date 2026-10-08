@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v110
+# Vertex project formats v1 through v111
+
+## Proposed horizontal assemblies with hosted components (v111)
+
+Native format 111 and JSON/assets extraction version 109 retain horizontal
+replacement authoring version five, including retained, wrapped and undone
+phase commands. Its exact ten fields are `version`, `registry_id`,
+`alternative_id`, `seed_slab_ids`, `identities`, `slab_profiles`, `slab_stacks`,
+`slab_geometry`, `ordinary_geometry` and `hosted_instance_identities`.
+Exactly one primary edit family is nonempty; ordinary edits accompany only
+geometry. Qualified hosted rows are sorted objects with `catalog_id`,
+`instance_id` and `proposed_instance_id`. Versions one through four retain
+their existing wire rules.
+
+Actual source discovery derives each affected catalog and its selected hosted
+instances. The allocator reserves entity, child, qualified component and
+presentation identities throughout history and assets. Replay creates a
+private catalog containing only the seed-hosted instances, with fresh instance
+and host identities. Original catalogs and their unrelated instances remain
+exact. Only seed horizontal owners acquire demolition membership; copied
+owners and catalogs acquire proposed membership in the selected alternative.
+
+XYZ and rigid plan operations compose the copied placements with the actual
+host transformation. Profile, stack and outline edits retain placement while
+legacy host-based geometry follows its changed host. The final native candidate
+is admitted against actual hosts, definitions, materials, overrides and context.
+Nonunit plan scaling of hosted components currently refuses because a 3D
+similarity would incorrectly scale profile height. Compilation, interaction
+and storage round trips remain unqualified.
 
 ## Spatial hosted assembly placements (v110)
 
@@ -34,8 +62,8 @@ before one source-bound creation command. Version-five catalogs in retained
 history raise the reader floor even after Undo.
 
 This is source implementation. Compilation, interaction and storage round trips
-remain unqualified. Shared-baseline hosted replacement is a separate typed
-authoring extension being integrated after independent copying.
+remain unqualified. Shared-baseline hosted replacement uses the separate typed
+authoring extension described above.
 
 ## Horizontal assembly model transforms (v109)
 

@@ -2720,6 +2720,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     std::set<std::string,std::less<>> nested_fresh;
     bool complete_envelope_reservation=false;
     bool wall_stack_asset_reservation=false;
+    bool hosted_slab_asset_reservation=false;
+    std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -2750,6 +2752,13 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             complete_envelope_reservation=true;
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
+            }
+            hosted_slab_asset_reservation=hosted_slab_asset_reservation || !replacement.hosted_instance_identities.empty();
+            for (const auto& [original,id]:replacement.hosted_instance_identities) {
+                if (!fresh.insert(id).second)
+                    throw std::invalid_argument("A proposed hosted component overlaps another fresh replacement identity: "+id);
+                nested_fresh.insert(id);
+                proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
             }
             for (const auto& stack : replacement.slab_stacks) {
                 Slab original; std::string diagnostic;
@@ -2811,6 +2820,15 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
 #endif
     }
+    if (!proposed_hosted_instances.empty()) {
+        const auto presentations=embedded_assembly_presentation_ids(candidate);
+        for (const auto& qualified:proposed_hosted_instances) {
+            const auto& alias=presentations.at(qualified);
+            if (!fresh.insert(alias).second)
+                throw std::invalid_argument("A proposed component presentation overlaps another fresh identity: "+alias);
+            nested_fresh.insert(alias);
+        }
+    }
     if (fresh.empty()) return;
     if (fresh.size()>4096) throw std::invalid_argument("Active design fresh identity budget exceeded");
     if (complete_envelope_reservation)
@@ -2819,10 +2837,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("Proposed identity aliases an entity envelope field: "+std::string(key));
     for (std::size_t index=0;index<preceding_records;++index) {
         const auto& record=history.at(index);
-        if (wall_stack_asset_reservation) for (const auto& [id,asset]:record.assets) {
+        if (wall_stack_asset_reservation || hosted_slab_asset_reservation) for (const auto& [id,asset]:record.assets) {
             (void)asset;
             if (fresh.contains(id))
-                throw std::invalid_argument("Wall stack identity collides with a retained asset: "+id);
+                throw std::invalid_argument("Proposed identity collides with a retained asset: "+id);
         }
         // A deliberately omitted fresh relationship copy is still a declared
         // identity in the recorded semantic operation. Undo cannot release it.
@@ -2845,6 +2863,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 if (!intent.slab_replacement.is_null()) {
                     const auto slab = decode_phase_slab_replacement_authoring(intent.slab_replacement);
                     require_unused(slab.identities);
+                    require_unused(slab.hosted_instance_identities);
                     for (const auto& stack : slab.slab_stacks)
                         for (const auto& row : stack.layers) if (fresh.contains(row.layer_id))
                             throw std::invalid_argument("Slab layer identity was already reserved by retained intent: " + row.layer_id);
@@ -2866,6 +2885,19 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
+            if (hosted_slab_asset_reservation && entity.type=="assembly_model" && entity.properties.is_object()) {
+                const auto model=entity.properties.find("model");
+                if (model!=entity.properties.end() && model->is_object()) {
+                    const auto instances=model->find("instances");
+                    if (instances!=model->end() && instances->is_array())
+                        for (const auto& instance:*instances)
+                            if (instance.is_object() && instance.contains("id") && instance.at("id").is_string()) {
+                                const auto alias=id+":instance:"+instance.at("id").get<std::string>();
+                                if (fresh.contains(alias))
+                                    throw std::invalid_argument("A proposed component identity was reserved by a retained presentation: "+alias);
+                            }
+                }
+            }
             if (!nested_fresh.empty()) {
                 if (complete_envelope_reservation && nested_fresh.contains(entity.type))
                     throw std::invalid_argument("Proposed identity aliases a retained entity type: "+entity.type);

@@ -42440,6 +42440,11 @@ private:
                 while (!occupied->insert(proposed).second) proposed = new_id("proposed");
                 replacement.identities.emplace(original, std::move(proposed));
             }
+        for (const auto& original : plan.required_hosted_instance_ids) {
+            auto proposed = new_id("proposed-component");
+            while (!occupied->insert(proposed).second) proposed = new_id("proposed-component");
+            replacement.hosted_instance_identities.emplace(original, std::move(proposed));
+        }
         ConstraintAuthoringIntent semantic;
         semantic.message = message;
         auto intent = make_phase_constraint_authoring_intent(source, semantic);

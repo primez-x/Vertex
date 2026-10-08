@@ -1,14 +1,17 @@
 #include "sketch/phase_slab_replacement.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/slab_clone.hpp"
 
 #include <algorithm>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -66,6 +69,15 @@ Strings occupied_strings(const PhaseSlabReplacementEntities& source) {
             reject("source must contain actual identified entity envelopes");
         strings.values.insert(id); strings.values.insert(entity.type);
         strings.read(entity.properties); strings.read(entity.extensions);
+        // Presentation identities are synthesized from two qualified IDs and
+        // therefore are not otherwise present in the raw string reservation.
+        if (entity.type == "assembly_model" && entity.properties.contains("model")) {
+            const auto& model = entity.properties.at("model");
+            if (model.is_object() && model.contains("instances") && model.at("instances").is_array())
+                for (const auto& instance : model.at("instances"))
+                    if (instance.is_object() && instance.contains("id") && instance.at("id").is_string())
+                        strings.read(Json(id + ":instance:" + instance.at("id").get<std::string>()));
+        }
     }
     return strings;
 }
@@ -129,6 +141,51 @@ void admit_slabs(const PhaseSlabReplacementEntities& source, const Ids& owners) 
     }
 }
 
+bool has_hosted_instances(const PhaseSlabReplacementEntities& source, const Ids& owners) {
+    // occupied_strings bounds the complete source before this scratch scan.
+    // This selects discovery only; raw slots never grant copy authority.
+    for (const auto& [id, entity] : source) {
+        (void)id;
+        if (entity.type != "assembly_model" || !entity.properties.contains("model")) continue;
+        const auto& model = entity.properties.at("model");
+        if (!model.is_object() || !model.contains("instances") || !model.at("instances").is_array()) continue;
+        for (const auto& row : model.at("instances")) {
+            if (!row.is_object() || !row.contains("placement") || !row.at("placement").is_object()) continue;
+            const auto& placement = row.at("placement");
+            if (placement.contains("host_entity_id") && placement.at("host_entity_id").is_string() &&
+                owners.contains(placement.at("host_entity_id").get_ref<const std::string&>())) return true;
+        }
+    }
+    return false;
+}
+
+AssemblyTransform hosted_world_transform(const SlabGeometryEditIntent& intent) {
+    AssemblyPoint3 pivot, offset;
+    double angle{}, scale{1};
+    bool horizontal{}, vertical{};
+    if (intent.kind == SlabGeometryEditKind::transform_model) {
+        const auto& t = *intent.model_transform;
+        pivot = {t.pivot_m.x, t.pivot_m.y, t.pivot_m.z};
+        offset = {t.offset_m.x, t.offset_m.y, t.offset_m.z};
+        angle = t.rotation_radians; scale = t.uniform_scale;
+        horizontal = t.flip_horizontal; vertical = t.flip_vertical;
+    } else {
+        if (intent.uniform_scale != 1)
+            reject("hosted plan scaling requires a physical XY-only placement codec; 3D similarity would change profile Z");
+        const auto& t = *intent.transform;
+        pivot = {t.pivot.x, t.pivot.y, 0}; offset = {t.offset.x, t.offset.y, 0};
+        angle = t.rotation_radians; horizontal = t.flip_horizontal; vertical = t.flip_vertical;
+    }
+    // Slab operations reflect after yaw. Assembly transforms reflect local Y
+    // before yaw, so convert parity/order before evaluating the pivot shift.
+    AssemblyTransform result{{}, std::remainder((horizontal ? std::numbers::pi : 0) +
+        (horizontal != vertical ? -angle : angle), 2 * std::numbers::pi), scale, horizontal != vertical};
+    const auto mapped_pivot = transform_assembly_point(pivot, result);
+    result.translation_m = {(pivot.x - mapped_pivot.x) + offset.x,
+        (pivot.y - mapped_pivot.y) + offset.y, (pivot.z - mapped_pivot.z) + offset.z};
+    return result;
+}
+
 // Remove only qualified live identity slots. Quantity-entry paths use actual
 // layer indices, so renaming a layer never changes its receipt pointer/value.
 Entity opaque_remainder(Entity entity) {
@@ -153,6 +210,11 @@ Entity opaque_remainder(Entity entity) {
     if (entity.type == "slab" && p.contains("layers")) {
         (void)actual_slab(entity);
         for (auto& layer : p.at("layers")) layer.erase("id");
+    } else if (entity.type == "assembly_model") {
+        (void)AssemblyModel::from_json(p.at("model"));
+        // Admission scratch only: authored placements are retained verbatim.
+        for (auto& row : p.at("model").at("instances"))
+            if (row.contains("placement")) row.at("placement").erase("host_entity_id");
     } else if (entity.type == "model_phases") {
         (void)ModelPhases::from_json(p.at("model"));
         p.erase("model");
@@ -331,6 +393,15 @@ PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
                 scope.inactive_owner_ids.contains(id) || member == memberships.end() || member->second != registry_id)
                 reject("seed must be an active actual baseline slab in the selected registry: " + id);
         }
+        Ids required_entities = owners;
+        if (has_hosted_instances(source, owners)) {
+            // Reuse the bounded actual-host/native admission producer, without
+            // importing its additive presentation replay into replacement.
+            const auto hosted = inspect_slab_clone_plan(source, plan.seed_slab_ids);
+            for (const auto& item : hosted.diagnostics) diagnostic(plan, item.entity_id, item.reason);
+            required_entities.insert(hosted.required_entity_ids.begin(), hosted.required_entity_ids.end());
+            plan.required_hosted_instance_ids = hosted.required_hosted_instance_ids;
+        }
         Ids children, ambiguous;
         std::map<std::string, std::string, std::less<>> child_owners;
         const auto reserve_child = [&](const std::string& child, const std::string& owner, bool required) {
@@ -356,7 +427,8 @@ PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
         }
         for (const auto& child : children) if (ambiguous.contains(child))
             diagnostic(plan, child, "copied child identity aliases another retained owner or actual entity");
-        if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
+        if (required_entities.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_replacements)
+            reject("replacement entity/child/hosted budget exceeded");
         Ids affected = owners; affected.insert(children.begin(), children.end());
         for (const auto& [id, entity] : source) {
             try {
@@ -370,7 +442,7 @@ PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
         }
         try { admit_slabs(source, owners); }
         catch (const std::exception& error) { diagnostic(plan, registry_id, "source slab admission failed: " + std::string(error.what())); }
-        plan.required_entity_ids.assign(owners.begin(), owners.end());
+        plan.required_entity_ids.assign(required_entities.begin(), required_entities.end());
         plan.required_child_ids.assign(children.begin(), children.end());
         std::sort(plan.diagnostics.begin(), plan.diagnostics.end(), [](const auto& a, const auto& b) {
             return std::pair{a.entity_id, a.reason} < std::pair{b.entity_id, b.reason};
@@ -383,7 +455,8 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
     const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementPlan& plan,
     const PhaseSlabReplacementIdentityMap& identities, const std::vector<SlabProfileEditIntent>& profiles,
     const std::vector<SlabLayerStackEditIntent>& stacks, const std::vector<SlabGeometryEditIntent>& geometry,
-    const std::vector<SlabGeometryEditIntent>& ordinary_geometry) {
+    const std::vector<SlabGeometryEditIntent>& ordinary_geometry,
+    const PhaseSlabReplacementHostedInstanceIdentityMap& hosted_instance_identities) {
     try {
         const bool profile_edit = !profiles.empty(), stack_edit = !stacks.empty(), geometry_edit = !geometry.empty();
         if ((profile_edit + stack_edit + geometry_edit) != 1)
@@ -426,6 +499,7 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
         if (identities.size() != expected.size()) reject("requires complete exact entity/child mapping");
+        if (plan.required_entity_ids.size() > maximum_entities - source.size()) reject("final entity budget exceeded");
         const auto occupied = occupied_strings(source);
         Ids fresh;
         for (const auto& [old_id, new_id] : identities) {
@@ -433,6 +507,18 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             if (!expected.contains(old_id)) reject("mapping contains an unrequested source identity: " + old_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh identity collision: " + new_id);
         }
+        const std::set<PhaseSlabReplacementHostedInstanceKey> expected_instances(
+            plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
+        if (hosted_instance_identities.size() != expected_instances.size()) reject("requires exact qualified hosted instance mapping");
+        for (const auto& [key, new_id] : hosted_instance_identities) {
+            if (!expected_instances.contains(key)) reject("unrequested qualified hosted instance mapping");
+            identity(new_id);
+            if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh hosted identity collision: " + new_id);
+        }
+        // Material bindings deliberately retain the actual material catalog.
+        // Catalog identity discovery grants no blanket reference remapping.
+        Ids affected = seeds;
+        affected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
         Ids new_layers;
         for (const auto& stack : stacks) {
             const auto before = actual_slab(source.at(stack.slab_id));
@@ -445,18 +531,18 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
                 new_layers.insert(row.layer_id);
             }
             const auto remainder = opaque_remainder(physical.at(stack.slab_id));
-            if (touches(remainder.properties, expected) || touches(remainder.extensions, expected))
+            if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                 reject("proposed stack metadata has an unqualified affected reference: " + stack.slab_id);
         }
         for (const auto& intent : all_geometry) {
             const auto remainder = opaque_remainder(physical.at(intent.slab_id));
-            if (touches(remainder.properties, expected) || touches(remainder.extensions, expected))
+            if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                 reject("proposed geometry metadata has an unqualified affected reference: " + intent.slab_id);
         }
         admit_slabs(physical, seeds);
-        PhaseSlabReplacementResult result{source, identities, {}};
+        PhaseSlabReplacementResult result{source, identities, {}, hosted_instance_identities};
         for (const auto& id : ordinary_targets) result.entities.at(id) = physical.at(id);
-        for (const auto& id : plan.required_entity_ids) {
+        for (const auto& id : seeds) {
             auto copy = physical.at(id);
             copy.id = identities.at(id);
             if (copy.properties.contains("layers")) for (auto& layer : copy.properties.at("layers")) {
@@ -469,19 +555,62 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             const auto copy_id = copy.id;
             if (!result.entities.emplace(copy_id, std::move(copy)).second) reject("copy insertion collides");
         }
+        if (!expected_instances.empty()) {
+            const auto hosted_plan = inspect_slab_clone_plan(source, plan.seed_slab_ids);
+            PhaseSlabReplacementIdentityMap clone_ids;
+            for (const auto& id : hosted_plan.required_entity_ids) clone_ids.emplace(id, identities.at(id));
+            for (const auto& id : hosted_plan.required_child_ids) clone_ids.emplace(id, identities.at(id));
+            const auto hosted_copies = replay_slab_clone(source, hosted_plan, clone_ids, hosted_instance_identities);
+            for (const auto& id : plan.required_entity_ids) {
+                if (seeds.contains(id)) continue;
+                auto copy = hosted_copies.entities.at(identities.at(id));
+                std::map<std::string, AssemblyTransform, std::less<>> transforms;
+                const auto catalog = AssemblyModel::from_json(source.at(id).properties.at("model"));
+                for (const auto& instance : catalog.instances()) {
+                    if (!instance.placement || !expected_instances.contains({id, instance.id})) continue;
+                    const auto intent = std::find_if(geometry.begin(), geometry.end(), [&](const auto& edit) {
+                        return edit.slab_id == instance.placement->host_entity_id;
+                    });
+                    if (intent != geometry.end() && (intent->kind == SlabGeometryEditKind::transform_model ||
+                        intent->kind == SlabGeometryEditKind::transform_plan))
+                        transforms.emplace(instance.id, hosted_world_transform(*intent));
+                }
+                if (!transforms.empty()) {
+                    const auto transformed = transform_hosted_assembly_model(source.at(id).properties.at("model"), transforms);
+                    auto& copied_model = copy.properties.at("model");
+                    // A needed XYZ schema upgrade also supplies its required
+                    // empty legacy nesting fields. Keep that admitted envelope
+                    // while retaining only the exact qualified selected rows.
+                    copied_model = transformed;
+                    copied_model.at("instances") = Json::array();
+                    for (const auto& row : transformed.at("instances")) {
+                        const PhaseSlabReplacementHostedInstanceKey key{id, row.at("id").get<std::string>()};
+                        if (!expected_instances.contains(key)) continue;
+                        auto changed = row;
+                        changed.at("id") = hosted_instance_identities.at(key);
+                        remap_field(changed.at("placement"), "host_entity_id", identities);
+                        copied_model.at("instances").push_back(std::move(changed));
+                    }
+                }
+                const auto copy_id = copy.id;
+                if (!result.entities.emplace(copy_id, std::move(copy)).second) reject("hosted catalog copy insertion collides");
+            }
+        }
         const auto model = ModelPhases::from_json(source.at(plan.registry_id).properties.at("model"));
         auto model_ids = model.entity_ids(); auto alternatives = model.alternatives();
         const auto target = std::find_if(alternatives.begin(), alternatives.end(), [&](const auto& a) { return a.id == plan.alternative_id; });
         if (target == alternatives.end()) reject("target alternative disappeared");
         for (const auto& id : plan.required_entity_ids) {
-            model_ids.push_back(identities.at(id)); target->proposed_ids.push_back(identities.at(id)); target->demolished_ids.push_back(id);
+            model_ids.push_back(identities.at(id)); target->proposed_ids.push_back(identities.at(id));
+            if (seeds.contains(id)) target->demolished_ids.push_back(id);
         }
         const auto final_model = ModelPhases::create(model_ids, model.baseline_ids(), alternatives, model.active_alternative());
         auto raw = source.at(plan.registry_id).properties.at("model");
         for (const auto& id : plan.required_entity_ids) raw.at("entity_ids").push_back(identities.at(id));
         for (auto& alternative : raw.at("alternatives")) if (alternative.at("id") == plan.alternative_id)
             for (const auto& id : plan.required_entity_ids) {
-                alternative.at("proposed_ids").push_back(identities.at(id)); alternative.at("demolished_ids").push_back(id);
+                alternative.at("proposed_ids").push_back(identities.at(id));
+                if (seeds.contains(id)) alternative.at("demolished_ids").push_back(id);
             }
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json())
             reject("retained registry reconstruction differs from typed update");
@@ -492,6 +621,48 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
         copies.insert(ordinary_targets.begin(), ordinary_targets.end());
         admit_slabs(result.entities, copies);
         (void)constraint_phase_scope(result.entities);
+        if (!expected_instances.empty()) {
+            const auto original_presentations=embedded_assembly_presentation_ids(source);
+            const auto final_presentations=embedded_assembly_presentation_ids(result.entities);
+            for (const auto& [key,alias]:original_presentations)
+                if (final_presentations.at(key)!=alias)
+                    reject("replacement changed an original component's presentation identity");
+            for (const auto& [key,new_id]:hosted_instance_identities) {
+                const auto& alias=final_presentations.at({identities.at(key.first),new_id});
+                if (occupied.values.contains(alias) || fresh.contains(alias))
+                    reject("proposed component presentation identity collides with source or a fresh identity");
+            }
+            std::vector<std::string> proposed_owners;
+            for (const auto& id : seeds) proposed_owners.push_back(identities.at(id));
+            const auto final_plan = inspect_slab_clone_plan(result.entities, proposed_owners);
+            if (!final_plan.ready()) reject("proposed hosted geometry has unresolved actual dependencies");
+            std::set<PhaseSlabReplacementHostedInstanceKey> proposed_instances;
+            for (const auto& [key, new_id] : hosted_instance_identities)
+                proposed_instances.emplace(identities.at(key.first), new_id);
+            if (std::set<PhaseSlabReplacementHostedInstanceKey>(final_plan.required_hosted_instance_ids.begin(),
+                final_plan.required_hosted_instance_ids.end()) != proposed_instances)
+                reject("final proposed hosted roster differs from actual qualified source replay");
+            for (const auto& id : plan.required_entity_ids) {
+                if (seeds.contains(id)) continue;
+                const auto original = AssemblyModel::from_json(source.at(id).properties.at("model"));
+                const auto proposed = AssemblyModel::from_json(result.entities.at(identities.at(id)).properties.at("model"));
+                for (const auto& instance : original.instances()) {
+                    const PhaseSlabReplacementHostedInstanceKey key{id, instance.id};
+                    if (!expected_instances.contains(key)) continue;
+                    const auto found = std::find_if(proposed.instances().begin(), proposed.instances().end(), [&](const auto& row) {
+                        return row.id == hosted_instance_identities.at(key);
+                    });
+                    if (found == proposed.instances().end() || !instance.placement || !found->placement ||
+                        found->placement->host_entity_id != identities.at(instance.placement->host_entity_id) ||
+                        found->type_id != instance.type_id || found->property_overrides != instance.property_overrides ||
+                        found->material_overrides != instance.material_overrides || found->quantity_overrides != instance.quantity_overrides ||
+                        found->root_transform != instance.root_transform || found->nested_overrides != instance.nested_overrides)
+                        reject("proposed hosted component differs from its exact actual source host/type/overrides");
+                }
+            }
+            for (const auto& id : plan.required_entity_ids) if (!exact(result.entities.at(id), source.at(id)))
+                reject("replacement changed an original slab or source catalog");
+        }
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());
         return result;
     } catch (const Json::exception& error) { reject(std::string("malformed typed replay: ") + error.what()); }
@@ -533,12 +704,15 @@ nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacemen
     const bool stack_edit = !authoring.slab_stacks.empty();
     const bool geometry_edit = !authoring.slab_geometry.empty();
     const bool mixed_geometry = !authoring.ordinary_geometry.empty();
+    const bool hosted_edit = !authoring.hosted_instance_identities.empty();
     if (authoring.seed_slab_ids.empty() || authoring.seed_slab_ids.size() > maximum_replacements ||
         authoring.identities.empty() || authoring.identities.size() > maximum_replacements ||
         authoring.slab_profiles.size() > maximum_replacements || authoring.slab_stacks.size() > maximum_replacements ||
         authoring.slab_geometry.size() > maximum_replacements ||
         authoring.ordinary_geometry.size() > maximum_replacements ||
         authoring.slab_geometry.size() + authoring.ordinary_geometry.size() > maximum_replacements ||
+        authoring.hosted_instance_identities.size() > maximum_replacements ||
+        authoring.identities.size() + authoring.hosted_instance_identities.size() > maximum_replacements ||
         (mixed_geometry && !geometry_edit) ||
         (profile_edit + stack_edit + geometry_edit) != 1)
         reject("authoring requires bounded nonempty seeds, mapping and exactly one edit family");
@@ -550,11 +724,26 @@ nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacemen
     }
     for (const auto& id : seeds) if (!authoring.identities.contains(id)) reject("authoring seed has no proposed identity");
     const auto* family = geometry_edit ? "slab_geometry" : stack_edit ? "slab_stacks" : "slab_profiles";
-    Json result{{"version", mixed_geometry ? 4 : geometry_edit ? 3 : stack_edit ? 2 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+    Json result{{"version", hosted_edit ? 5 : mixed_geometry ? 4 : geometry_edit ? 3 : stack_edit ? 2 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
         {"seed_slab_ids", authoring.seed_slab_ids}, {"identities", authoring.identities}, {family, Json::array()}};
-    if (mixed_geometry) result["ordinary_geometry"] = Json::array();
+    if (mixed_geometry || hosted_edit) result["ordinary_geometry"] = Json::array();
+    if (hosted_edit) {
+        for (const auto* key : {"slab_profiles", "slab_stacks", "slab_geometry"}) result[key] = Json::array();
+        result["hosted_instance_identities"] = Json::array();
+    }
     auto bytes = result.dump().size();
     if (bytes > maximum_authoring_bytes) reject("authoring byte budget exceeded");
+    for (const auto& [key, new_id] : authoring.hosted_instance_identities) {
+        identity(key.first); identity(new_id);
+        if (key.second.empty() || key.second.size() > maximum_authoring_bytes ||
+            !authoring.identities.contains(key.first) || seeds.contains(key.first) ||
+            new_id == key.second || !fresh.insert(new_id).second)
+            reject("authoring hosted identities require qualified mapped catalogs and injective fresh instance IDs");
+        Json row{{"catalog_id", key.first}, {"instance_id", key.second}, {"proposed_instance_id", new_id}};
+        const auto added = row.dump().size() + (result.at("hosted_instance_identities").empty() ? 0 : 1);
+        if (added > maximum_authoring_bytes - bytes) reject("authoring byte budget exceeded");
+        bytes += added; result.at("hosted_instance_identities").push_back(std::move(row));
+    }
     auto& rows = result.at(family);
     const auto append = [&](const auto& intent, Json encoded) {
         if (!seeds.contains(intent.slab_id) || !targets.insert(intent.slab_id).second)
@@ -588,14 +777,28 @@ PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(const nloh
     try {
         if (!value.is_object() || !value.contains("version") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) ||
-            value.size() != (value.at("version") == 4 ? 7 : 6) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 &&
+                value.at("version") != 4 && value.at("version") != 5) ||
+            value.size() != (value.at("version") == 5 ? 10 : value.at("version") == 4 ? 7 : 6) ||
             !value.contains("registry_id") || !value.contains("alternative_id") || !value.contains("seed_slab_ids") ||
             !value.contains("identities") || !value.at("identities").is_object() || !value.at("seed_slab_ids").is_array())
             reject("authoring must contain exactly its supported versioned fields");
-        const bool stack_edit = value.at("version") == 2;
-        const bool mixed_geometry = value.at("version") == 4;
-        const bool geometry_edit = value.at("version") == 3 || mixed_geometry;
+        const bool hosted_edit = value.at("version") == 5;
+        if (hosted_edit) {
+            for (const auto* key : {"slab_profiles", "slab_stacks", "slab_geometry", "ordinary_geometry", "hosted_instance_identities"})
+                if (!value.contains(key) || !value.at(key).is_array() || value.at(key).size() > maximum_replacements)
+                    reject("v5 authoring requires all bounded typed arrays");
+            if (value.at("hosted_instance_identities").empty() ||
+                ((!value.at("slab_profiles").empty()) + (!value.at("slab_stacks").empty()) +
+                    (!value.at("slab_geometry").empty())) != 1 ||
+                (!value.at("ordinary_geometry").empty() && value.at("slab_geometry").empty()) ||
+                value.at("slab_geometry").size() + value.at("ordinary_geometry").size() > maximum_replacements ||
+                value.at("identities").size() + value.at("hosted_instance_identities").size() > maximum_replacements)
+                reject("v5 requires qualified hosted identities and exactly one exclusive primary family");
+        }
+        const bool stack_edit = value.at("version") == 2 || (hosted_edit && !value.at("slab_stacks").empty());
+        const bool mixed_geometry = value.at("version") == 4 || (hosted_edit && !value.at("ordinary_geometry").empty());
+        const bool geometry_edit = value.at("version") == 3 || mixed_geometry || (hosted_edit && !value.at("slab_geometry").empty());
         const auto* family = geometry_edit ? "slab_geometry" : stack_edit ? "slab_stacks" : "slab_profiles";
         if (!value.contains(family) || !value.at(family).is_array())
             reject("authoring edit family must exactly match its version");
@@ -615,6 +818,15 @@ PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(const nloh
         result.alternative_id = value.at("alternative_id").get<std::string>();
         result.seed_slab_ids = value.at("seed_slab_ids").get<std::vector<std::string>>();
         result.identities = value.at("identities").get<PhaseSlabReplacementIdentityMap>();
+        if (hosted_edit) for (const auto& row : value.at("hosted_instance_identities")) {
+            if (!row.is_object() || row.size() != 3 || !row.contains("catalog_id") || !row.contains("instance_id") ||
+                !row.contains("proposed_instance_id") || !row.at("catalog_id").is_string() ||
+                !row.at("instance_id").is_string() || !row.at("proposed_instance_id").is_string())
+                reject("qualified hosted identity rows must have exactly three string fields");
+            const PhaseSlabReplacementHostedInstanceKey key{row.at("catalog_id").get<std::string>(), row.at("instance_id").get<std::string>()};
+            if (!result.hosted_instance_identities.emplace(key, row.at("proposed_instance_id").get<std::string>()).second)
+                reject("duplicate qualified hosted identity row");
+        }
         if (geometry_edit) for (const auto& intent : value.at(family))
             result.slab_geometry.push_back(decode_slab_geometry_edit_intent(intent));
         else if (stack_edit) for (const auto& stack : value.at(family))
@@ -636,7 +848,7 @@ PhaseSlabReplacementEntities replay_phase_slab_replacement_authoring(
     if (canonical != encoded || canonical.dump() != encoded.dump()) reject("authoring typed round trip differs");
     const auto plan = inspect_phase_slab_replacement_plan(source, authoring.seed_slab_ids, authoring.registry_id, authoring.alternative_id);
     return replay_phase_slab_replacement(source, plan, authoring.identities, authoring.slab_profiles,
-        authoring.slab_stacks, authoring.slab_geometry, authoring.ordinary_geometry).entities;
+        authoring.slab_stacks, authoring.slab_geometry, authoring.ordinary_geometry, authoring.hosted_instance_identities).entities;
 }
 
 } // namespace sketch

@@ -14,6 +14,27 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 proposed horizontal hosted-component source integration
+
+Design-alternative edits now discover and allocate qualified components with
+their actual seed floors/slabs/ceilings/foundations. Source replay derives a
+private proposed catalog containing only those hosted instances and preserves
+the original catalog and unrelated components. Only seed owners receive
+demolition membership. XYZ and rigid plan operations compose copied placements;
+profile and stack edits keep the actual placement and host relationship.
+
+Replacement authoring five and native 111/extraction 109 retain the qualified
+mapping throughout history, including Undo and wrapped commands. Document
+publication reserves component and presentation identities across retained
+entities, opaque metadata and assets. Independent source review approved the
+integrated source changes with no additional findings.
+Ordinary hosted movement and hosted nonunit plan scaling remain open.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. The installed candidate remains unchanged; compilation,
+interaction and storage round trips remain unverified. No production
+acceptance, completion percentage or ETA is claimed.
+
 ### October 8 spatial hosted-component copying source integration
 
 Horizontal copying now discovers actual attached assembly catalogs and
