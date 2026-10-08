@@ -50,7 +50,7 @@ Wall read_wall(const Entity& entity) {
 PhysicalWallSpaces discover_spaces(
     const std::map<std::string,Entity,std::less<>>& entities,
     std::string_view selected_wall_id, const DrawingContext* supplied_context,
-    double effective_elevation_m) {
+    double effective_elevation_m, const PhysicalWallPhaseSelection* selection=nullptr) {
     try {
         const auto selected=entities.find(selected_wall_id);
         if (!supplied_context && (selected==entities.end() || selected->second.type!="wall"))
@@ -83,23 +83,32 @@ PhysicalWallSpaces discover_spaces(
                 reject("source snapshots exceed the lineage entry/byte budget");
             source_snapshot_bytes+=bytes;
         };
-        for (const auto& [id,entity]:entities) {
-            if (entity.type!="model_phases") continue;
-            const auto phases=ModelPhases::from_json(entity.properties.at("model"));
-            const auto active=phases.active_state();
-            const std::set<std::string,std::less<>> registered(phases.entity_ids().begin(),phases.entity_ids().end());
+        const auto capture_phase=[&](const std::string& id,
+            const std::optional<std::string>& alternative,
+            const std::vector<std::string>& registered,
+            const std::map<std::string,ModelPhase,std::less<>>& active) {
             Json relevant=Json::array();
             for (const auto& owner:context_owners) {
-                if (!registered.contains(owner)) continue;
+                if (!std::binary_search(registered.begin(),registered.end(),owner)) continue;
                 const auto state=active.find(owner);
                 if (state==active.end() || state->second==ModelPhase::demolished) inactive.insert(owner);
                 Json record{{"owner_id",owner},{"active_state",state==active.end() ? "absent" : phase_name(state->second)}};
                 snapshot_budget(record); relevant.push_back(std::move(record));
             }
             if (!relevant.empty()) {
-                Json record{{"id",id},{"active_alternative",phases.active_alternative() ? Json(*phases.active_alternative()) : Json(nullptr)},
+                Json record{{"id",id},{"active_alternative",alternative ? Json(*alternative) : Json(nullptr)},
                     {"owners",std::move(relevant)}};
                 snapshot_budget(record); phase_models.push_back(std::move(record));
+            }
+        };
+        if (selection) {
+            for (const auto& phase:physical_wall_phase_states(entities,*selection))
+                capture_phase(phase.registry_id,phase.alternative_id,phase.registered_entity_ids,phase.states);
+        } else {
+            for (const auto& [id,entity]:entities) {
+                if (entity.type!="model_phases") continue;
+                const auto phases=ModelPhases::from_json(entity.properties.at("model"));
+                capture_phase(id,phases.active_alternative(),phases.entity_ids(),phases.active_state());
             }
         }
         if (!supplied_context && inactive.contains(selected->first)) reject("selected wall is inactive in the semantic phase");
@@ -184,5 +193,12 @@ PhysicalWallSpaces detect_physical_wall_spaces(
     const std::map<std::string,Entity,std::less<>>& entities,
     const DrawingContext& context, double effective_elevation_m) {
     return discover_spaces(entities,{},&context,effective_elevation_m);
+}
+
+PhysicalWallSpaces detect_physical_wall_spaces(
+    const std::map<std::string,Entity,std::less<>>& entities,
+    const DrawingContext& context, double effective_elevation_m,
+    const PhysicalWallPhaseSelection& selection) {
+    return discover_spaces(entities,{},&context,effective_elevation_m,&selection);
 }
 } // namespace sketch

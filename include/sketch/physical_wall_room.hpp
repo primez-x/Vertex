@@ -3,6 +3,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/measurement_area_graph.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/physical_wall_phase.hpp"
 
 #include <map>
 #include <optional>
@@ -10,6 +11,7 @@
 #include <vector>
 
 namespace sketch {
+struct PhysicalWallSpace;
 struct PhysicalWallRoomCheck {
     bool current{};
     std::string diagnostic;
@@ -25,6 +27,13 @@ struct PhysicalWallRoomLineageCheck {
 // without a document or fresh-source comparison. Malformed evidence rejects.
 [[nodiscard]] PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
     const Entity& room,const DrawingContext& context);
+// Predicate over caller-admitted fresh phase detection. Both captured-v1
+// lineages and analytical regions are validated; only semantic_phases may
+// differ. Exact physical inventory, selected source, context/plane and clear
+// geometry must survive. Malformed evidence throws; this grants no command
+// authority and neither updates nor transfers the retained owner's facts.
+[[nodiscard]] bool physical_wall_room_lineage_matches_current_inventory(
+    const Entity& room,const DrawingContext& context,const PhysicalWallSpace& fresh);
 // Current values are rederived from physical walls, never claimed persisted
 // areas. Malformed/future/stale owners receive diagnostics and empty geometry.
 // Detection is cached within this call; no caller-owned document is modified.
@@ -89,6 +98,18 @@ struct PhysicalWallRoomCorrespondenceReport {
     // Deterministic room-ID/candidate-index order. Includes uncertain proposals
     // so they cannot silently become new/retired claims.
     std::vector<PhysicalWallRoomOverlap> overlaps;
+    // Transient analytical phase reports must never borrow the ordinary
+    // destructive retain/retire command's acceptance authority.
+    bool explicit_phase_evaluation{false};
+};
+// A distinct analytical report for an explicitly selected destination phase
+// and exact old owner roster. The ordinary payload remains detached evidence;
+// it must not be admitted as an ordinary room command or identity transfer.
+struct PhasePhysicalWallRoomCorrespondenceReport {
+    PhysicalWallPhaseSelection destination_selection;
+    std::vector<std::string> retained_room_ids;
+    std::string source_entities_digest;
+    PhysicalWallRoomCorrespondenceReport correspondence;
 };
 // Detached review evidence for one physical context/plane. Exact planar region
 // intersections include holes and circular arcs; surviving boundary-source
@@ -101,6 +122,20 @@ struct PhysicalWallRoomCorrespondenceReport {
     const DocumentSnapshot& source,std::string_view selected_wall_id);
 [[nodiscard]] PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(
     const DocumentSnapshot& source,const DrawingContext& context,double effective_elevation_m);
+// Does not expand the supplied roster with other or inactive alternative
+// owners. Original owner evidence/facts are retained even when the destination
+// phase differs; duplicate, missing, nonphysical, foreign or unresolved roster
+// selections reject. Empty destination detection and an empty roster are valid.
+[[nodiscard]] PhasePhysicalWallRoomCorrespondenceReport phase_physical_wall_room_correspondence(
+    const DocumentSnapshot& source,const DrawingContext& context,double effective_elevation_m,
+    const PhysicalWallPhaseSelection& destination_selection,const std::vector<std::string>& retained_room_ids);
+// Pure command replay uses the actual entity map and its digest, without
+// constructing a synthetic document/history. Snapshot provenance is absent;
+// the enclosing typed command must bind its original full snapshot separately.
+[[nodiscard]] PhasePhysicalWallRoomCorrespondenceReport phase_physical_wall_room_correspondence(
+    const std::map<std::string,Entity,std::less<>>& entities,const DrawingContext& context,
+    double effective_elevation_m,const PhysicalWallPhaseSelection& destination_selection,
+    const std::vector<std::string>& retained_room_ids);
 [[nodiscard]] bool physical_wall_room_correspondence_is_current(
     const PhysicalWallRoomCorrespondenceReport& report,const DocumentSnapshot& source);
 // Captured-snapshot preparation. Indices belong only to freshly detected

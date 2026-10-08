@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 explicit phase inventories and room correspondence
+
+Pure context/plane discovery now accepts an explicit phase registry/alternative
+without changing the document's saved selection. Actual member identities/types
+and unique physical wall/room ownership are admitted before discovery. Other
+registries retain their saved selections; emitted lineage records the evaluated
+choices. Deterministic active/inactive room rosters and a distinct explicit-roster
+phase correspondence report support preserved baseline and alternative owners.
+Original analytical geometry and resource bounds remain in use; an empty
+destination needs no invented source wall.
+
+Current room checks now survive phase bookkeeping alone when independently
+detected active wall inventory, actual selected source, context/plane, exact
+clear outline and holes remain unchanged. Both original and fresh lineage are
+admitted; only semantic phase metadata may differ. Physically changed support
+still withholds the old value. Original room descriptors and facts remain intact.
+Ordinary repair/replay retains exact lineage authority. Transient explicit phase
+reports cannot enter ordinary destructive room-command preparation.
+
+Root reviewed the integrated source and registered the new phase source in the
+document target. No builds, tests, probes, launches, packages or installations
+run. Compilation, calculation display, interaction and persistence remain
+unverified. The installed candidate stays unchanged. The separate atomic
+phase-variant command, companion scope and controller review remain in progress;
+no new persisted dialect or format floor is claimed for this analytical slice.
+
 ### October 8 editable remodeling alternatives and demolition preview
 
 The alternative manager now edits an existing name and demolition selection

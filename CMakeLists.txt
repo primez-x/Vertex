@@ -380,6 +380,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_sources(sketch_document PRIVATE src/core/physical_wall_space_source.cpp)
   target_link_libraries(sketch_document PRIVATE sketch_physical_clear_kernel)
   target_sources(sketch_document PRIVATE src/core/physical_wall_spaces.cpp
+    src/core/physical_wall_phase.cpp
     src/core/physical_wall_room.cpp src/core/physical_wall_room_review.cpp
     src/core/physical_room_dimension_source.cpp src/architecture/physical_wall_room_merge.cpp
     src/architecture/physical_wall_room_split.cpp)

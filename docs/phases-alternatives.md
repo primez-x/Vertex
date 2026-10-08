@@ -81,6 +81,30 @@ associative annotation and appraisal consequences remain separate work. A
 demolition choice must not be represented by globally deleting or rewriting a
 shared baseline room.
 
+Explicit physical-wall phase discovery evaluates a named registry and
+alternative without changing its saved selection. It admits actual registry and
+member identities and model types, refuses overlapping ownership of physical
+walls/rooms, retains other registries' saved selections, and records the exact
+evaluated phase in source lineage. Context/plane discovery can return an actual
+empty destination without inventing a wall. A separate room roster identifies
+active and inactive original owners deterministically.
+
+Current room values may remain qualified when only phase bookkeeping changes.
+The resolver independently discovers the current active walls, admits original
+and fresh evidence, and requires identical physical inventory, selected source,
+context/plane, clear boundary and holes. Only the validated `semantic_phases`
+field may differ. Changed physical support remains stale. This comparison does
+not rewrite the original descriptor, transfer facts or authorize a repair.
+
+Phase correspondence has a distinct report containing the explicit destination
+selection and exact old-room roster. Missing, duplicate, malformed, foreign or
+unresolved roster owners refuse; bounded analytical overlap uncertainty remains
+visible. Other alternatives' rooms are not silently added to the roster. Its
+ordinary payload is marked as an explicit phase evaluation and cannot borrow
+ordinary destructive retain/retire acceptance. These pure APIs support the
+separate phase-variant command still being implemented; no new persisted command
+dialect or format floor is introduced by this analytical slice.
+
 `to_json` returns a detached canonical JSON object tagged `sketch.model_phases`,
 version 1. Registry IDs, baseline IDs, alternative IDs and member IDs are sorted;
 the active selection is persisted as a string or null. `from_json` rejects unknown

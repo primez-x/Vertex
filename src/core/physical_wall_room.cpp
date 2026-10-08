@@ -68,6 +68,14 @@ bool same_boundary(const Boundary& a,const Boundary& b) {
 bool same_holes(const std::vector<Boundary>& a,const std::vector<Boundary>& b) {
     return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),same_boundary);
 }
+bool same_physical_inventory_lineage(const Json& retained,const Json& fresh) {
+    if (!retained.is_object() || !fresh.is_object()) return false;
+    auto retained_inventory=retained;
+    auto current_inventory=fresh;
+    retained_inventory.erase("semantic_phases");
+    current_inventory.erase("semantic_phases");
+    return retained_inventory==current_inventory;
+}
 Json geometry_json(const Boundary& boundary) {
     Json result=Json::array();
     for (const auto& edge:boundary) result.push_back({{"start",{edge.start.x,edge.start.y}},
@@ -156,7 +164,23 @@ PhysicalWallRoomCheck check_room(const Entity& entity,DetectionCache& cache) {
         const auto& detection=cache.get(descriptor.selected_wall_id);
         const auto context=cache.organization().drawing_context(entity.id);
         if (!context || !context->complete() || *context!=detection.context) invalid("room drawing context differs from its physical sources");
-        const auto& space=matching_space(detection,descriptor.source_lineage);
+        const PhysicalWallSpace* current_space=nullptr;
+        if (std::any_of(detection.spaces.begin(),detection.spaces.end(),[&](const auto& space) {
+            return space.source_lineage==descriptor.source_lineage;
+        })) current_space=&matching_space(detection,descriptor.source_lineage);
+        else {
+            // Current-value resolution may survive phase bookkeeping alone.
+            // The inexpensive inventory comparison only bounds candidate
+            // work; the strict predicate independently admits both evidences.
+            for (const auto& candidate:detection.spaces) {
+                if (!same_physical_inventory_lineage(descriptor.source_lineage,candidate.source_lineage) ||
+                    !physical_wall_room_lineage_matches_current_inventory(entity,*context,candidate)) continue;
+                if (current_space) invalid("source inventory ambiguously matches multiple clear components");
+                current_space=&candidate;
+            }
+            if (!current_space) invalid("physical source evidence changed; redefine this room explicitly");
+        }
+        const auto& space=*current_space;
         const auto geometry=boundary_geometry(decode_identified_boundary_entity(entity));
         if (!same_boundary(geometry,space.boundary)) invalid("identified room outer differs from physical clear geometry");
         if (!same_holes(descriptor.holes,space.holes)) invalid("inline room holes differ from physical clear geometry");
@@ -291,13 +315,8 @@ struct CorrespondenceBudget {
         if (value>maximum_cache_charge-bytes) throw CorrespondenceBudgetFailure("correspondence exceeds aggregate evidence budget");
         bytes+=value;
     }
-    void geometry(const Boundary& outer,const std::vector<Boundary>& holes) {
-        std::size_t count=outer.size();
+    void geometry_edge_count(std::size_t count) {
         if (count>maximum_returned_edges) throw CorrespondenceBudgetFailure("correspondence region exceeds the edge budget");
-        for (const auto& hole:holes) {
-            if (hole.size()>maximum_returned_edges-count) throw CorrespondenceBudgetFailure("correspondence region exceeds the edge budget");
-            count+=hole.size();
-        }
         if (count>maximum_returned_edges-edges) throw CorrespondenceBudgetFailure("correspondence exceeds aggregate returned-edge budget");
         edges+=count;
         const auto pairs=count ? count*(count-1)/2 : 0;
@@ -306,6 +325,15 @@ struct CorrespondenceBudget {
             throw CorrespondenceBudgetFailure("correspondence exceeds aggregate geometry-contact budget");
         contacts+=pairs*2;
         charge(count*sizeof(Segment));
+    }
+    void geometry(const Boundary& outer,const std::vector<Boundary>& holes) {
+        std::size_t count=outer.size();
+        if (count>maximum_returned_edges) throw CorrespondenceBudgetFailure("correspondence region exceeds the edge budget");
+        for (const auto& hole:holes) {
+            if (hole.size()>maximum_returned_edges-count) throw CorrespondenceBudgetFailure("correspondence region exceeds the edge budget");
+            count+=hole.size();
+        }
+        geometry_edge_count(count);
     }
 };
 double correspondence_tolerance(double area) { return std::max(1e-9,std::abs(area)*1e-9); }
@@ -617,17 +645,88 @@ PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
     catch (const Standard_Failure& e) { invalid(std::string("retained room planar validation failed: ")+e.what()); }
 }
 
+bool physical_wall_room_lineage_matches_current_inventory(
+    const Entity& room,const DrawingContext& context,const PhysicalWallSpace& fresh) {
+    try {
+        // Original evidence is admitted in its captured phase, independently
+        // of the caller's fresh phase selection or current active registry.
+        (void)validate_retained_physical_wall_room_lineage(room,context);
+        const auto descriptor=decode_physical_wall_room_descriptor(room);
+        CorrespondenceBudget budget;
+        const auto fresh_source=fresh.source_lineage.at("physical_sources").at(0).at("owner_id").get<std::string>();
+        const auto lineage=correspondence_lineage(fresh.source_lineage,fresh_source,context,budget);
+        budget.geometry(fresh.boundary,fresh.holes);
+        if (fresh.boundary.empty()) invalid("fresh room outline is empty");
+        const auto region=correspondence_region(fresh.boundary,fresh.holes,fresh.boundary.front().start);
+        if (!std::isfinite(fresh.area_square_metres) ||
+            std::abs(region.area-fresh.area_square_metres)>correspondence_tolerance(region.area))
+            invalid("fresh detection area disagrees with its analytical comparison region");
+        if (!lineage.owners.contains(descriptor.selected_wall_id)) return false;
+        // Both complete objects were strictly admitted before removing this
+        // one field. No source, placement, topology or other metadata is lost.
+        return same_physical_inventory_lineage(descriptor.source_lineage,fresh.source_lineage) &&
+            same_boundary(boundary_geometry(decode_identified_boundary_entity(room)),fresh.boundary) &&
+            same_holes(descriptor.holes,fresh.holes);
+    } catch (const Json::exception&) { invalid("room inventory evidence contains malformed value types"); }
+    catch (const Standard_Failure& e) { invalid(std::string("room inventory planar validation failed: ")+e.what()); }
+}
+
 namespace {
-PhysicalWallRoomCorrespondenceReport correspondence_report(const DocumentSnapshot& source,
-    PhysicalWallSpaces detection,std::string_view selected_wall_id,double elevation,Vec2 origin) {
+PhysicalWallRoomCorrespondenceReport correspondence_report(
+    const std::map<std::string,Entity,std::less<>>& entities,const DocumentSnapshot* source,
+    PhysicalWallSpaces detection,std::string_view selected_wall_id,double elevation,Vec2 origin,
+    const std::vector<std::string>* retained_room_ids=nullptr) {
+    if (!source && !retained_room_ids) invalid("ordinary correspondence requires an actual source snapshot");
     if (detection.spaces.size()>maximum_rooms) invalid("correspondence exceeds the fresh-component budget");
     CorrespondenceBudget budget; budget.charge(cache_charge(detection));
     PhysicalWallRoomCorrespondenceReport report;
-    report.document_id=source.document_id(); report.revision=source.revision();
-    report.source_snapshot_digest=document_snapshot_digest(source);
+    if (source) {
+        report.document_id=source->document_id(); report.revision=source->revision();
+        report.source_snapshot_digest=document_snapshot_digest(*source);
+    }
     report.selected_wall_id=selected_wall_id; report.context=detection.context;
     report.context_plane_selection=selected_wall_id.empty();
-    const auto organization=organize_project(source);
+    const auto organization=organize_project(entities);
+    std::set<std::string,std::less<>> retained_roster;
+    std::map<std::string,CorrespondenceLineage,std::less<>> retained_roster_lineage;
+    if (retained_room_ids) {
+        if (retained_room_ids->size()>maximum_rooms) invalid("phase correspondence exceeds the retained-owner budget");
+        for (const auto& id:*retained_room_ids) {
+            if (id.empty() || id.size()>128 || !retained_roster.insert(id).second)
+                invalid("phase correspondence roster contains an invalid or duplicate owner identity");
+            const auto found=entities.find(id);
+            if (found==entities.end()) invalid("phase correspondence roster owner no longer exists");
+            if (found->second.id!=id) invalid("phase correspondence roster owner identity is inconsistent");
+            if (!is_physical_wall_room(found->second)) invalid("phase correspondence roster contains a nonphysical room owner");
+            const auto context=organization.drawing_context(id);
+            if (!context || !context->complete()) invalid("phase correspondence roster owner has unresolved drawing context");
+            if (*context!=report.context) invalid("phase correspondence roster owner belongs to a different drawing context");
+            budget.charge(sizeof(std::string)+id.size());
+            budget.charge(found->second.id.size()+found->second.type.size()+found->second.properties.dump().size()+
+                found->second.extensions.dump().size()+sizeof(RetainedPhysicalWallRoomCorrespondence));
+            const auto descriptor=decode_physical_wall_room_descriptor(found->second);
+            auto lineage=correspondence_lineage(descriptor.source_lineage,descriptor.selected_wall_id,report.context,budget);
+            if (std::abs(lineage.elevation-elevation)>default_geometry_tolerance_metres)
+                invalid("phase correspondence roster owner belongs to a different effective plane");
+            // Owner identity/topology must be admitted before Boolean work
+            // can conservatively report numerical comparison uncertainty.
+            // Charge the encoded count before identified-boundary admission
+            // performs its contact checks; geometry is charged only once.
+            const auto& segments=found->second.properties.at("segments");
+            if (!segments.is_array()) invalid("phase correspondence roster owner has malformed boundary segments");
+            auto edge_count=segments.size();
+            if (edge_count>maximum_returned_edges)
+                throw CorrespondenceBudgetFailure("correspondence region exceeds the edge budget");
+            for (const auto& hole:descriptor.holes) {
+                if (hole.size()>maximum_returned_edges-edge_count)
+                    throw CorrespondenceBudgetFailure("correspondence region exceeds the edge budget");
+                edge_count+=hole.size();
+            }
+            budget.geometry_edge_count(edge_count);
+            (void)decode_identified_boundary_entity(found->second);
+            retained_roster_lineage.emplace(id,std::move(lineage));
+        }
+    }
     report.effective_elevation_m=elevation;
     std::vector<CorrespondenceLineage> fresh_lineage;
     std::vector<CorrespondenceRegion> fresh_regions;
@@ -661,8 +760,10 @@ PhysicalWallRoomCorrespondenceReport correspondence_report(const DocumentSnapsho
     std::set<std::string> current_owners;
     if (!selected_wall_id.empty()) current_owners.insert(std::string(selected_wall_id));
     for (const auto& lineage:fresh_lineage) current_owners.insert(lineage.owners.begin(),lineage.owners.end());
-    DetectionCache active_cache(source);
-    for (const auto& [id,entity]:source.entities()) {
+    std::optional<DetectionCache> active_cache;
+    if (!retained_room_ids) active_cache.emplace(*source);
+    for (const auto& [id,entity]:entities) {
+        if (retained_room_ids && !retained_roster.contains(id)) continue;
         if (!is_physical_wall_room(entity)) continue;
         const auto context=organization.drawing_context(id);
         if (context && context->complete() && *context!=report.context) continue;
@@ -672,22 +773,27 @@ PhysicalWallRoomCorrespondenceReport correspondence_report(const DocumentSnapsho
         try {
             if (!context || !context->complete()) invalid("retained room has unresolved drawing context");
             const auto descriptor=decode_physical_wall_room_descriptor(entity);
-            lineage=correspondence_lineage(descriptor.source_lineage,descriptor.selected_wall_id,report.context,budget);
+            lineage=retained_room_ids ? std::move(retained_roster_lineage.at(id)) :
+                correspondence_lineage(descriptor.source_lineage,descriptor.selected_wall_id,report.context,budget);
             const auto changed_plane=std::abs(lineage.elevation-report.effective_elevation_m)>default_geometry_tolerance_metres;
-            if (changed_plane && std::none_of(lineage.owners.begin(),lineage.owners.end(),[&](const auto& owner) {
+            if (!retained_room_ids && changed_plane && std::none_of(lineage.owners.begin(),lineage.owners.end(),[&](const auto& owner) {
                 return current_owners.contains(owner);
             })) continue;
             old.descriptor_digest=physical_wall_room_descriptor_digest(entity);
             old.boundary=boundary_geometry(decode_identified_boundary_entity(entity)); old.holes=descriptor.holes;
-            budget.geometry(old.boundary,old.holes);
-            if (!active_cache.active(id)) invalid("retained room owner is inactive in the semantic phase");
+            if (!retained_room_ids) budget.geometry(old.boundary,old.holes);
+            // An explicit phase roster describes the admitted original owner
+            // evidence, even when that owner is inactive in the destination.
+            // Ordinary correspondence retains its current active-owner fence.
+            if (!retained_room_ids && !active_cache->active(id)) invalid("retained room owner is inactive in the semantic phase");
             if (changed_plane) invalid("surviving physical source identity moved to a different effective plane; review explicitly");
             region=correspondence_region(old.boundary,old.holes,origin);
         } catch (const CorrespondenceBudgetFailure&) { throw; }
         catch (const std::bad_alloc&) { throw; }
         catch (const Standard_Failure& e) { old.diagnostic=std::string("planar comparison failed: ")+e.what(); }
         catch (const std::exception& e) { old.diagnostic=e.what(); }
-        budget.charge(entity.id.size()+entity.type.size()+entity.properties.dump().size()+entity.extensions.dump().size()+sizeof(old));
+        if (!retained_room_ids)
+            budget.charge(entity.id.size()+entity.type.size()+entity.properties.dump().size()+entity.extensions.dump().size()+sizeof(old));
         old.room=entity;
         report.retained.push_back(std::move(old)); old_lineage.push_back(std::move(lineage)); old_regions.push_back(std::move(region));
     }
@@ -753,7 +859,7 @@ PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const Doc
     if (!read_document_wall(selected,{},wall,error)) invalid(error);
     // The source point supplies only the numerical comparison origin; it has
     // no role in room identity or candidate assignment.
-    return correspondence_report(source,std::move(detection),selected_wall_id,wall.elevation,wall.baseline.start);
+    return correspondence_report(source.entities(),&source,std::move(detection),selected_wall_id,wall.elevation,wall.baseline.start);
 }
 
 PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const DocumentSnapshot& source,
@@ -764,11 +870,44 @@ PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const Doc
     // retained regions and never supplies geometry or ownership evidence.
     const auto origin=!detection.spaces.empty() && !detection.spaces.front().boundary.empty()
         ? detection.spaces.front().boundary.front().start : Vec2{};
-    return correspondence_report(source,std::move(detection),{},effective_elevation_m,origin);
+    return correspondence_report(source.entities(),&source,std::move(detection),{},effective_elevation_m,origin);
+}
+PhasePhysicalWallRoomCorrespondenceReport phase_physical_wall_room_correspondence(
+    const DocumentSnapshot& source,const DrawingContext& context,double effective_elevation_m,
+    const PhysicalWallPhaseSelection& destination_selection,const std::vector<std::string>& retained_room_ids) {
+    if (retained_room_ids.size()>maximum_rooms) invalid("phase correspondence exceeds the retained-owner budget");
+    auto detection=detect_physical_wall_spaces(source,context,effective_elevation_m,destination_selection);
+    const auto origin=!detection.spaces.empty() && !detection.spaces.front().boundary.empty()
+        ? detection.spaces.front().boundary.front().start : Vec2{};
+    auto correspondence=correspondence_report(source.entities(),&source,std::move(detection),{},effective_elevation_m,origin,&retained_room_ids);
+    correspondence.explicit_phase_evaluation=true;
+    PhasePhysicalWallRoomCorrespondenceReport report;
+    report.destination_selection=destination_selection;
+    report.retained_room_ids=retained_room_ids;
+    report.source_entities_digest=entity_map_digest(source.entities());
+    report.correspondence=std::move(correspondence);
+    return report;
+}
+PhasePhysicalWallRoomCorrespondenceReport phase_physical_wall_room_correspondence(
+    const std::map<std::string,Entity,std::less<>>& entities,const DrawingContext& context,
+    double effective_elevation_m,const PhysicalWallPhaseSelection& destination_selection,
+    const std::vector<std::string>& retained_room_ids) {
+    if (retained_room_ids.size()>maximum_rooms) invalid("phase correspondence exceeds the retained-owner budget");
+    auto detection=detect_physical_wall_spaces(entities,context,effective_elevation_m,destination_selection);
+    const auto origin=!detection.spaces.empty() && !detection.spaces.front().boundary.empty()
+        ? detection.spaces.front().boundary.front().start : Vec2{};
+    auto correspondence=correspondence_report(entities,nullptr,std::move(detection),{},effective_elevation_m,origin,&retained_room_ids);
+    correspondence.explicit_phase_evaluation=true;
+    PhasePhysicalWallRoomCorrespondenceReport report;
+    report.destination_selection=destination_selection;
+    report.retained_room_ids=retained_room_ids;
+    report.source_entities_digest=entity_map_digest(entities);
+    report.correspondence=std::move(correspondence);
+    return report;
 }
 bool physical_wall_room_correspondence_is_current(const PhysicalWallRoomCorrespondenceReport& report,
     const DocumentSnapshot& source) {
-    return report.document_id==source.document_id() && report.revision==source.revision() &&
+    return !report.explicit_phase_evaluation && report.document_id==source.document_id() && report.revision==source.revision() &&
         report.source_snapshot_digest==document_snapshot_digest(source);
 }
 } // namespace sketch

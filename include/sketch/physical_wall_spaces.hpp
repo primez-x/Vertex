@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/measurement_area_graph.hpp"
+#include "sketch/physical_wall_phase.hpp"
 #include "sketch/project_organization.hpp"
 
 #include <cstddef>
@@ -58,5 +59,18 @@ struct PhysicalWallSpaces {
 [[nodiscard]] PhysicalWallSpaces detect_physical_wall_spaces(
     const DocumentSnapshot& document, const DrawingContext& context,
     double effective_elevation_m);
+
+// Pure explicit phase discovery. Evaluates only the named registry at the
+// requested alternative (nullopt is baseline); all other registries retain
+// their saved active selection. Complete phase reference/physical ownership
+// admission precedes the same context, plane, geometry and lineage budgets.
+// Captured semantic_phases records contain the exact evaluated alternatives.
+[[nodiscard]] PhysicalWallSpaces detect_physical_wall_spaces(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const DrawingContext& context, double effective_elevation_m,
+    const PhysicalWallPhaseSelection& selection);
+[[nodiscard]] PhysicalWallSpaces detect_physical_wall_spaces(
+    const DocumentSnapshot& document, const DrawingContext& context,
+    double effective_elevation_m, const PhysicalWallPhaseSelection& selection);
 
 } // namespace sketch
