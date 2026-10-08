@@ -1,4 +1,36 @@
-# Vertex project formats v1 through v87
+# Vertex project formats v1 through v88
+
+## Proposed wall height and depth edits (v88)
+
+Native format 88 and JSON/assets extraction version 86 add version-two wall
+replacement records inside the existing source-bound envelope 34/phase intent
+two. The record adds a nonempty `wall_profiles` array; version-one records keep
+their exact keys and replay. Each strict version-one profile has `wall_id`,
+`thickness`, `height` and `layer_thicknesses`, with explicit null optional values
+and exact quantity receipts. A supplied layer roster names every retained layer
+in its original order; only its thickness can change.
+
+Profiles target explicitly seeded original walls and independently map to the
+qualified proposed wall and layer identities. Coordinates, sweep, context,
+elevation, top plane, layer materials and opaque data remain intact. Recognized
+quantity entries preserve their unknown fields; unsupported or stale entries
+refuse. Hosted opening dimensions, assemblies and affected active fused joins
+use the same physical factories as architectural authoring, with resolved walls
+and their complete cuts; derived solids are discarded. Active exterior
+measurement consequences are reconstructed with stable topology.
+Physical rooms retain their original data until the same mandatory room review
+completes the edit. Final active constraint admission remains required.
+
+Profile-only operations can skip the geometry solver only when a nonempty typed
+profile has been admitted. This grants no raw wall payload or other-property
+authority. Desktop conversion compares captured height/depth/layer changes to
+typed entity replay before the original property transaction, augmentation or
+preview. Entered quantity expressions remain exact; raw numeric capture uses a
+bounded decimal that reparses to the same stored value. Cancel and stale capture
+refuse publication before entering ordinary room wrappers.
+Multi-registry, mixed-object and broader property/lifecycle changes need their
+own completion paths. Reader floors cover retained and composed intents after
+Undo. This source has not been compiled or qualified in the installed app.
 
 ## Proposed replacements for shared baseline walls (v87)
 

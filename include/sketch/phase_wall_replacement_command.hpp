@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/phase_wall_replacement.hpp"
+#include "sketch/phase_wall_profile_edit.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
 
@@ -25,6 +26,9 @@ struct PhaseWallReplacementAuthoring {
     PhaseWallReplacementIdentityMap identities;
     nlohmann::json room_review_intent=nullptr;
     std::vector<PhaseWallRoomConstraintDecision> room_constraint_decisions;
+    // Record dialect two: exact profile intent for seeded original walls.
+    // Layer identities are mapped with the qualified owned-child inventory.
+    std::vector<WallProfileEditIntent> wall_profiles;
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

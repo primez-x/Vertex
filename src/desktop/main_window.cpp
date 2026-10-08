@@ -40066,7 +40066,8 @@ private:
             retained.extensions.dump() == proposed.extensions.dump();
     }
 
-    bool editSelectedProperties(json properties, const char* message) {
+    bool editSelectedProperties(json properties, const char* message,
+        const std::optional<WallProfileEditIntent>& authored_wall_profile = std::nullopt) {
         const auto entity = selectedEntity();
         if (!entity.has_value()) {
             setError(QStringLiteral("Select an entity before editing it."));
@@ -40076,6 +40077,22 @@ private:
             try {
                 const auto source = authoringSnapshot();
                 const auto authority = captureSourceEditAuthority(source);
+                if (entity->type == "wall") {
+                    auto proposed = *entity;
+                    proposed.properties = properties;
+                    const Command raw{ApplyEntityChanges{
+                        .expected_revision = source.revision(),
+                        .entity_changes = {EntityChange::upsert(std::move(proposed))},
+                        .message = message,
+                    }};
+                    // Prepare proposed identities before the native property
+                    // transaction can validate or augment the original wall.
+                    if (const auto applied = tryApplyAlternativeWallProfileEdit(
+                            source, raw, authority, authored_wall_profile)) {
+                        if (*applied) { clearError(); refresh(); }
+                        return *applied;
+                    }
+                }
                 std::map<std::string, std::string> encoded;
                 for (const auto& [key, value] : properties.items()) {
                     encoded.emplace(key, value.dump());
@@ -40104,7 +40121,7 @@ private:
                         affectedPhysicalWallRooms(source, preview.entities(), entity->id) != 0)
                         throw std::invalid_argument("Edit wall height, thickness, slope or layers separately from geometry, context or metadata so affected rooms can be reviewed.");
                     if (!sourceEditAuthorityUnchanged(authority)) return false;
-                    applyAuthoredCommand(command);
+                    if (!applyAuthoredCommand(command)) return false;
                 }
                 clearError();
                 refresh();
@@ -40316,6 +40333,18 @@ private:
             }
             auto properties = entity->properties;
             properties[std::string(key)] = quantity.metres;
+            std::optional<WallProfileEditIntent> authored_wall_profile;
+            if (entity->type == "wall" && (key_is_height || key_is_thickness)) {
+                authored_wall_profile.emplace();
+                authored_wall_profile->wall_id = entity->id;
+                if (key_is_height) authored_wall_profile->height = quantity;
+                else authored_wall_profile->thickness = quantity;
+                // Keep the entered expression for the proposed-wall receipt.
+                // A retained scalar alias must describe the same dimension.
+                (void)replay_wall_profile_entity(*entity, *authored_wall_profile);
+                const auto* alias = key_is_height ? "height" : "thickness";
+                if (properties.contains(alias)) properties[alias] = quantity.metres;
+            }
             if (entity->type == "opening") {
                 if (!previewOpening(*entity, properties)) {
                     return false;
@@ -40346,7 +40375,7 @@ private:
                     return false;
                 }
             }
-            return editSelectedProperties(std::move(properties), message);
+            return editSelectedProperties(std::move(properties), message, authored_wall_profile);
         } catch (const std::exception& error) {
             setError(QStringLiteral("%1: %2").arg(label, QString::fromUtf8(error.what())));
             return false;
@@ -40684,8 +40713,7 @@ private:
             constrained->phase_constraint_authoring_intent.is_null()) return command;
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
         if (!intent.wall_replacement.is_null()) {
-            proposed_ids=decode_phase_wall_replacement_authoring(intent.wall_replacement).identities;
-            return command;
+            return finishAlternativeWallEdit(authoringSnapshot(),intent,*constrained,proposed_ids);
         }
         const auto source=authoringSnapshot();
         if (intent.expected_revision!=source.revision() || intent.source_snapshot_digest!=document_snapshot_digest(source) ||
@@ -40711,9 +40739,16 @@ private:
         for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
             for (const auto& id:*ids) replacement.identities.emplace(id,new_id("proposed"));
         intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
+        return finishAlternativeWallEdit(source,intent,*constrained,proposed_ids);
+    }
+
+    std::optional<Command> finishAlternativeWallEdit(const DocumentSnapshot& source,
+        const PhaseConstraintAuthoringIntent& intent,const ApplyBoundaryConstraintChanges& original,
+        PhaseWallReplacementIdentityMap& proposed_ids) {
+        const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
         const auto preview=inspect_phase_wall_replacement_authoring(source,intent);
-        auto completed=*constrained;
-        if (preview.needs_room_review) {
+        auto completed=original;
+        if (preview.needs_room_review && replacement.room_review_intent.is_null()) {
             const auto authority=captureSourceEditAuthority(source);
             PhysicalWallPhaseRoomReviewDialog dialog(source,intent,m_metric_units,[this,authority] {
                 if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The project or drawing context changed. Reopen the proposed wall review.");
@@ -40731,6 +40766,136 @@ private:
         return Command{std::move(completed)};
     }
 
+    std::optional<Command> reviewAlternativeWallProfileEdit(const Command& requested,
+        const std::optional<WallProfileEditIntent>& authored_profile = std::nullopt) {
+        const auto* raw=std::get_if<ApplyEntityChanges>(&requested);
+        if (!raw) return requested;
+        const auto source=authoringSnapshot();
+        const auto scope=constraint_phase_scope(source.entities());
+        std::map<std::string,std::pair<std::string,std::string>,std::less<>> shared_walls;
+        for (const auto& registry:scope.registries) if (registry.alternative_id) {
+            const auto model=ModelPhases::from_json(source.entities().at(registry.registry_id).properties.at("model"));
+            for (const auto& id:model.baseline_ids())
+                if (source.entities().at(id).type=="wall" && !scope.inactive_owner_ids.contains(id))
+                    shared_walls.emplace(id,std::pair{registry.registry_id,*registry.alternative_id});
+        }
+        const auto unchanged = [&](const EntityChange& change) {
+            if (change.kind != EntityChangeKind::upsert) return false;
+            const auto original = source.entities().find(change.entity.id);
+            return original != source.entities().end() && original->second == change.entity &&
+                original->second.properties.dump() == change.entity.properties.dump() &&
+                original->second.extensions.dump() == change.entity.extensions.dump();
+        };
+        const bool touches=std::any_of(raw->entity_changes.begin(),raw->entity_changes.end(),[&](const auto& change) {
+            return !unchanged(change) && shared_walls.contains(
+                change.kind==EntityChangeKind::erase?change.entity_id:change.entity.id);
+        });
+        if (!touches) return requested;
+        if (raw->expected_revision!=source.revision() || !raw->asset_changes.empty())
+            throw std::invalid_argument("The proposed wall profile requires its unchanged original project and no asset changes.");
+        PhaseWallReplacementAuthoring replacement;
+        for (const auto& change:raw->entity_changes) {
+            if (unchanged(change)) continue;
+            if (change.kind!=EntityChangeKind::upsert || !shared_walls.contains(change.entity.id))
+                throw std::invalid_argument("Edit shared wall profiles separately from other objects. Remove shared walls through the design phase demolition list.");
+            const auto& original=source.entities().at(change.entity.id);
+            const auto& registry=shared_walls.at(change.entity.id);
+            if (!replacement.registry_id.empty() && replacement.registry_id!=registry.first)
+                throw std::invalid_argument("Edit wall profiles in one building's design registry at a time.");
+            replacement.registry_id=registry.first;replacement.alternative_id=registry.second;
+            WallProfileEditIntent profile;profile.wall_id=original.id;
+            const auto quantity=[&](const nlohmann::json& value) {
+                if (!value.is_number()) throw std::invalid_argument("Wall height and depth must be numeric measurements.");
+                const auto metres = value.get<double>();
+                if (!std::isfinite(metres) || metres <= 0)
+                    throw std::invalid_argument("Wall profile dimensions must be finite and positive.");
+                const auto magnitude = static_cast<int>(std::floor(std::log10(metres)));
+                for (int digits = 1; digits <= 17; ++digits) {
+                    auto decimal = QString::number(metres, 'f', std::max(0, digits - 1 - magnitude));
+                    if (decimal.contains(QLatin1Char('.'))) {
+                        while (decimal.endsWith(QLatin1Char('0'))) decimal.chop(1);
+                        if (decimal.endsWith(QLatin1Char('.'))) decimal.chop(1);
+                    }
+                    try {
+                        auto parsed = parse_quantity(decimal.toStdString() + " m", Unit::metre);
+                        if (parsed.metres == metres) return parsed;
+                    } catch (const std::invalid_argument&) {
+                    } catch (const std::overflow_error&) {
+                    }
+                }
+                throw std::invalid_argument("Enter this wall dimension explicitly; its stored value exceeds editable quantity precision.");
+            };
+            if (authored_profile) {
+                if (raw->entity_changes.size() != 1 || authored_profile->wall_id != original.id)
+                    throw std::invalid_argument("The entered wall dimension belongs to a different captured edit.");
+                profile = *authored_profile;
+            } else {
+                for (const auto* key:{"thickness_m","height_m"}) {
+                    const auto value=change.entity.properties.find(key);
+                    if (value==change.entity.properties.end()) continue;
+                    const auto before=original.properties.find(key);
+                    if (before!=original.properties.end() && *before==*value) continue;
+                    if (std::string_view(key)=="thickness_m") profile.thickness=quantity(*value);
+                    else profile.height=quantity(*value);
+                }
+                if (change.entity.properties.contains("layers") &&
+                    (!original.properties.contains("layers") || original.properties.at("layers")!=change.entity.properties.at("layers"))) {
+                    profile.layer_thicknesses=std::vector<WallProfileLayerThickness>{};
+                    for (const auto& layer:change.entity.properties.at("layers"))
+                        profile.layer_thicknesses->push_back({layer.at("id").get<std::string>(),quantity(layer.at("thickness_m"))});
+                }
+            }
+            if (!profile.thickness && !profile.height && !profile.layer_thicknesses)
+                throw std::invalid_argument("This shared wall change needs a proposed property or geometry edit. Its original data has been preserved.");
+            const auto expected=replay_wall_profile_entity(original,profile);
+            auto without_new_receipts=expected;
+            if (original.properties.contains("quantity_entries"))
+                without_new_receipts.properties["quantity_entries"]=original.properties.at("quantity_entries");
+            else without_new_receipts.properties.erase("quantity_entries");
+            const auto exact=[&](const Entity& candidate) {
+                return candidate==change.entity && candidate.properties.dump()==change.entity.properties.dump() &&
+                    candidate.extensions.dump()==change.entity.extensions.dump();
+            };
+            if (!exact(expected) && !exact(without_new_receipts))
+                throw std::invalid_argument("Change wall height, depth and layer thickness separately from other shared wall properties.");
+            replacement.seed_wall_ids.push_back(original.id);replacement.wall_profiles.push_back(std::move(profile));
+        }
+        std::sort(replacement.seed_wall_ids.begin(),replacement.seed_wall_ids.end());
+        const auto plan=inspect_phase_wall_replacement_plan(source.entities(),replacement.seed_wall_ids,
+            replacement.registry_id,replacement.alternative_id);
+        if (!plan.ready()) {
+            QStringList reasons;
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
+                reasons.push_back(QString::fromStdString(diagnostic.reason));
+            throw std::invalid_argument(reasons.join('\n').toStdString());
+        }
+        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
+            for (const auto& id:*ids) replacement.identities.emplace(id,new_id("proposed"));
+        ConstraintAuthoringIntent semantic;semantic.message=raw->message;
+        auto intent=make_phase_constraint_authoring_intent(source,semantic);
+        intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
+        PhaseWallReplacementIdentityMap proposed_ids;
+        return finishAlternativeWallEdit(source,intent,phase_wall_replacement_authoring_command(intent),proposed_ids);
+    }
+
+    std::optional<bool> tryApplyAlternativeWallProfileEdit(const DocumentSnapshot& source,
+        const Command& raw, const SourceEditAuthority& authority,
+        const std::optional<WallProfileEditIntent>& authored_profile = std::nullopt) {
+        if (fullSnapshotDigest(source) != authority.source_digest ||
+            !sourceEditAuthorityUnchanged(authority)) return false;
+        const auto reviewed = reviewAlternativeWallProfileEdit(raw, authored_profile);
+        if (!reviewed) {
+            clearError();
+            refreshInspector();
+            return false;
+        }
+        if (std::holds_alternative<ApplyEntityChanges>(*reviewed)) return std::nullopt;
+        // The combined room review may run a modal event loop. Recheck the
+        // actual capture and selection before publishing its completed child.
+        if (!sourceEditAuthorityUnchanged(authority)) return false;
+        return applyAuthoredCommand(*reviewed);
+    }
+
     void remapProposedWallSelection(const PhaseWallReplacementIdentityMap& proposed_ids) {
         if (const auto found=proposed_ids.find(m_selected_id.toStdString());found!=proposed_ids.end())
             m_selected_id=id_from(found->second);
@@ -40745,8 +40910,10 @@ private:
 
     bool applyAuthoredCommand(const Command& requested) {
         requireSiteCommandAdmission(requested);
+        const auto profiled=reviewAlternativeWallProfileEdit(requested);
+        if (!profiled) return false;
         PhaseWallReplacementIdentityMap proposed_ids;
-        const auto reviewed=reviewAlternativeWallEdit(requested,proposed_ids);
+        const auto reviewed=reviewAlternativeWallEdit(*profiled,proposed_ids);
         if (!reviewed) return false;
         const auto& command=*reviewed;
         requireSiteCommandAdmission(command);
@@ -40771,7 +40938,9 @@ private:
     }
 
     bool applyDocumentCommand(const Command& command) {
-        return applyAuthoredCommand(augmentAuthoredCommand(command));
+        const auto profiled=reviewAlternativeWallProfileEdit(command);
+        if (!profiled) return false;
+        return applyAuthoredCommand(augmentAuthoredCommand(*profiled));
     }
 
     DocumentSnapshot authoringSnapshot() const {
@@ -40845,10 +41014,10 @@ private:
             require_current();
             // The reviewed wrapper already contains the exact augmented child.
             // Publish it once through normal Site/workspace admission.
-            applyAuthoredCommand(*reviewed);
+            if (!applyAuthoredCommand(*reviewed)) return false;
         } else {
             require_current();
-            applyAuthoredCommand(command);
+            if (!applyAuthoredCommand(command)) return false;
         }
         return true;
     }
@@ -40861,6 +41030,19 @@ private:
             return false;
         }
         try {
+            if (entity.type == "wall") {
+                const auto source = authoringSnapshot();
+                const auto authority = captureSourceEditAuthority(source);
+                const Command raw{ApplyEntityChanges{
+                    .expected_revision = expected_revision.value_or(source.revision()),
+                    .entity_changes = {EntityChange::upsert(entity)},
+                    .message = message,
+                }};
+                if (const auto applied = tryApplyAlternativeWallProfileEdit(source, raw, authority)) {
+                    if (*applied) clearError();
+                    return *applied;
+                }
+            }
             if (entity.type == "wall" && m_selected_id == QString::fromStdString(entity.id)) {
                 const auto source = authoringSnapshot();
                 const auto original = source.entities().find(entity.id);
@@ -40881,17 +41063,17 @@ private:
                         if (affectedPhysicalWallRooms(source, candidate.entities(), wall_id) != 0)
                             throw std::invalid_argument("Edit wall height, thickness, slope or layers separately from geometry, context or metadata so affected rooms can be reviewed.");
                         if (!sourceEditAuthorityUnchanged(authority)) return false;
-                        applyAuthoredCommand(command);
+                        if (!applyAuthoredCommand(command)) return false;
                     }
                     clearError();
                     return true;
                 }
             }
-            applyDocumentCommand(ApplyEntityChanges{
+            if (!applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = expected_revision.value_or(m_document->revision()),
                 .entity_changes = {EntityChange::upsert(std::move(entity))},
                 .message = message,
-            });
+            })) return false;
             clearError();
             return true;
         } catch (const std::exception& error) {

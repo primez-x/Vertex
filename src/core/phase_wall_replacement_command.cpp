@@ -64,6 +64,13 @@ struct Stage {
     std::set<std::string,std::less<>> deferred;
     std::set<std::string,std::less<>> deferred_removals;
 };
+bool has_geometry_or_relation_intent(const ConstraintAuthoringIntent& intent) {
+    return intent.wall_resize || intent.wall_geometry_move || intent.wall_curve_construction ||
+        intent.boundary_resize || intent.boundary_vertex_move || intent.exterior_corner_move ||
+        intent.exterior_segment_resize || intent.exterior_segment_arc || intent.measured_stroke_resize ||
+        intent.measured_stroke_vertex_move || intent.measured_stroke_transform || intent.joint_translation ||
+        intent.relation_anchor || !intent.relation_mutations.empty();
+}
 Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent& intent,
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
@@ -80,7 +87,23 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         else found->second=encode_constraint_entity(mutation.constraint,&found->second);
         return true;
     });
-    stage.entities=reconstruct_active_phase_constraint_authoring(stage.replacement.entities,mapped);
+    stage.entities=stage.replacement.entities;
+    if (!edit.wall_profiles.empty()) {
+        auto profiles=edit.wall_profiles;
+        for (auto& profile:profiles) {
+            if (!std::binary_search(edit.seed_wall_ids.begin(),edit.seed_wall_ids.end(),profile.wall_id))
+                invalid("profile edit must name an explicitly seeded original wall");
+            profile.wall_id=stage.replacement.original_to_proposed.at(profile.wall_id);
+            // Complete layer rosters are typed child identity references, never
+            // caller supplied replacement wall/layer payloads.
+            if (profile.layer_thicknesses) for (auto& layer:*profile.layer_thicknesses)
+                layer.layer_id=stage.replacement.original_to_proposed.at(layer.layer_id);
+        }
+        stage.entities=replay_wall_profile_entities(stage.entities,profiles,false);
+    }
+    if (has_geometry_or_relation_intent(mapped))
+        stage.entities=reconstruct_active_phase_constraint_authoring(stage.entities,mapped);
+    else if (edit.wall_profiles.empty()) invalid("replacement has no semantic edit");
     preserve_baseline(source,stage.entities,stage.plan);
     // Incoming room evidence sees every independently reconstructed new
     // relationship. These copies were withheld from the physical solve; only
@@ -198,6 +221,11 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
     Json result={{"version",1},{"registry_id",value.registry_id},{"alternative_id",value.alternative_id},
         {"seed_wall_ids",value.seed_wall_ids},{"identities",value.identities},{"room_review_intent",value.room_review_intent},
         {"room_constraint_decisions",std::move(decisions)}};
+    if (!value.wall_profiles.empty()) {
+        result["version"]=2;result["wall_profiles"]=Json::array();
+        for (const auto& profile:value.wall_profiles)
+            result["wall_profiles"].push_back(encode_wall_profile_edit_intent(profile));
+    }
     // The decoder below is the single strict semantic admission path. Encoding
     // never supplies geometry, inferred room mappings or arbitrary clone data.
     if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
@@ -205,8 +233,12 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
 }
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
-    keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities","room_review_intent","room_constraint_decisions"});
-    if (!value.at("version").is_number_integer() || value.at("version")!=1) invalid("unsupported replacement version");
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version")!=1 && value.at("version")!=2)) invalid("unsupported replacement version");
+    const bool profiles=value.at("version")==2;
+    if (profiles) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
+        "room_review_intent","room_constraint_decisions","wall_profiles"});
+    else keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities","room_review_intent","room_constraint_decisions"});
     PhaseWallReplacementAuthoring result;
     result.registry_id=identity(value.at("registry_id"));result.alternative_id=identity(value.at("alternative_id"));
     const auto& seeds=value.at("seed_wall_ids");
@@ -214,6 +246,18 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
     for (const auto& seed:seeds) result.seed_wall_ids.push_back(identity(seed));
     if (!std::is_sorted(result.seed_wall_ids.begin(),result.seed_wall_ids.end()) ||
         std::adjacent_find(result.seed_wall_ids.begin(),result.seed_wall_ids.end())!=result.seed_wall_ids.end()) invalid("wall seeds must be unique and sorted");
+    if (profiles) {
+        const auto& edits=value.at("wall_profiles");
+        if (!edits.is_array() || edits.empty() || edits.size()>2048) invalid("invalid wall profile inventory");
+        std::set<std::string,std::less<>> targets;
+        for (const auto& edit:edits) {
+            auto profile=decode_wall_profile_edit_intent(edit);
+            if (!targets.insert(profile.wall_id).second ||
+                !std::binary_search(result.seed_wall_ids.begin(),result.seed_wall_ids.end(),profile.wall_id))
+                invalid("profile target must be a unique original wall seed");
+            result.wall_profiles.push_back(std::move(profile));
+        }
+    }
     const auto& identities=value.at("identities");
     if (!identities.is_object() || identities.empty() || identities.size()>4096) invalid("invalid replacement identity inventory");
     std::set<std::string,std::less<>> destinations;

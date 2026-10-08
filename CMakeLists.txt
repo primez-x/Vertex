@@ -814,9 +814,13 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # document/authoring dependency; the public authoring target remains stable.
   target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp
     src/core/phase_wall_replacement.cpp src/core/phase_wall_replacement_authoring.cpp
-    src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp)
+    src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp
+    src/core/phase_wall_profile_edit.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
-  target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision)
+  # Proposed profile replay must use the same hosted-assembly and fused-join
+  # admission as native architectural authoring, rather than accept solids
+  # that the architectural constructors would subsequently reject.
+  target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision sketch_architecture)
   add_library(sketch_constraint_authoring INTERFACE)
   target_link_libraries(sketch_constraint_authoring INTERFACE sketch_document sketch_constraints sketch_precision sketch_project_organization)
   if(BUILD_TESTING)

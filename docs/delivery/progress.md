@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 proposed wall profile editing
+
+The next source slice adds typed wall height/depth and complete optional layer
+thickness intents. Qualified original wall and layer IDs map to independently
+copied proposals before replay. Coordinates, source context, materials, opaque
+fields and original baseline records remain intact. Pure entity replay admits
+captured desktop changes; full-map replay uses the shared physical factories
+for hosted assemblies and affected active joins, then reconstructs exterior
+measurement consequences. Rooms remain unchanged
+until mandatory combined review, followed by final active constraint admission.
+
+Desktop routing intercepts supported raw shared wall profiles before ordinary
+augmentation can edit the original. Unsupported mixed or broader changes refuse
+without altering baseline data. Existing quantity metadata is admitted and
+updated through typed receipts. Native 88/extraction 86 distinguish the new
+profile record while earlier replacement records retain exact semantics.
+Independent source review found an early property-callback bypass, double-door
+clearance and joined-solid contact gaps. The callbacks now intercept raw edits
+before the original property transaction/augmentation/preview; native factories
+admit the same actual resolved walls and cuts. Cancel and stale-source results
+propagate without publishing a child. Entered quantities bypass numeric fallback
+and retain their expressions; raw numeric capture searches bounded plain decimals
+that reparse to the exact stored value. Unchanged profiles do not create copies.
+Source review closed the routing and physical findings; root reviewed the final
+quantity correction. No build, test, probe, script, launch, package or installation
+runs. Compilation, interaction and physical-factory cost remain unverified.
+
 ### October 8 separate proposed wall identities
 
 Source implementation adds independent proposed replacements when a semantic
