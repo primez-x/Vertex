@@ -1,4 +1,42 @@
-# Vertex project formats v1 through v88
+# Vertex project formats v1 through v89
+
+## Proposed door and window profile edits (v89)
+
+Native format 89 and JSON/assets extraction version 87 add version-three wall
+replacement records within source-bound envelope 34/phase intent two. The record
+adds a nonempty `opening_profiles` array; earlier record dialects keep their exact
+keys and behavior. Wall profiles and geometric/relationship edits remain separate
+reviewed operations. Each opening profile retains its original `opening_id` and
+`wall_id`, exact optional `offset`, `width`, `sill` and `height` quantity receipts,
+optional same-family `assembly` and `door_operation`, and an explicit
+`clear_door_operation` boolean. Null means unchanged; setting and clearing an
+operation together refuses. An absent door operation has no inferred swing and
+is distinct from an authored default hinged operation.
+
+Profiles target existing openings on explicitly seeded shared baseline hosts.
+Qualified opening and wall identities map to separate proposed copies before
+physical replay. Complete host cuts, manufactured assemblies, resolved placement
+and affected active joins use the common physical factories. Baseline owners and
+their opaque fields remain intact. Unrelated unhosted schedule/transport openings
+do not participate in affected-host admission. Rooms remain original until the
+same mandatory combined review completes their definitions and copied constraint
+decisions; final active constraint admission still applies.
+
+Desktop capture independently compares raw edits with typed replay, retaining
+entered quantities and unknown receipt fields. Stale known receipts, unexpected
+field changes, family changes, rehosting and unsupported interior extensions
+refuse. Canvas jamb resizing and station sliding discover proposals before an
+ordinary original-object command is prepared. Detached previews retain actual
+fresh physical identities, captured label presentation and original canvas
+aliases. Release consumes the exact displayed typed intent, retires gesture
+state and retains source, selection, save/recovery and viewport fences throughout
+room review. Cancel publishes nothing. Generic prepared publication cannot
+publish an unfinished physical stage.
+
+Reader floors include all retained direct and wrapped version-three intents,
+including after Undo. Broader opening creation/deletion/rehosting and compound
+multi-registry edits require their own completion paths. This source has not
+been compiled or qualified in the installed application.
 
 ## Proposed wall height and depth edits (v88)
 

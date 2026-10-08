@@ -1,12 +1,14 @@
 #pragma once
 
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_hosted_opening_edit.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 
 #include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sketch {
 
@@ -38,6 +40,20 @@ struct PhaseWallCanvasProposal {
 [[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_wall_canvas_proposal(
     const DocumentSnapshot& source,
     const ConstraintAuthoringIntent& semantic,
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
+
+// Discover the actual saved-active shared-baseline hosts before ordinary
+// opening authoring or Document preview. Every profile must retain an existing
+// active opening and its exact active host. No shared-baseline host returns
+// nullopt; mixed shared/nonshared targets, several registries and unsupported
+// replacement dependencies throw instead of mutating any shared original.
+//
+// Allocation, actual-source authority and provisional room-review/publication
+// lifetime are the same as prepare_phase_wall_canvas_proposal above. Profiles
+// replay only onto independently copied openings in the complete physical map.
+[[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_canvas_proposal(
+    const DocumentSnapshot& source,
+    const std::vector<HostedOpeningProfileEditIntent>& profiles,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
 
 } // namespace sketch

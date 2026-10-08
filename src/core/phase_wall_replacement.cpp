@@ -514,9 +514,13 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         rooms.insert(room_transit.begin(), room_transit.end());
         for (const auto& [id, entity] : source) {
             if (entity.type == "opening") {
+                const auto host = entity.properties.find("wall_id");
+                if (host == entity.properties.end() || !host->is_string() ||
+                    !walls.contains(host->get_ref<const std::string&>()) ||
+                    scope.inactive_owner_ids.contains(id)) continue;
                 std::string wall_id, error;
                 if (!read_document_wall_id(entity, wall_id, error)) reject(id + ": " + error);
-                if (walls.contains(wall_id) && !scope.inactive_owner_ids.contains(id)) owners.insert(id);
+                owners.insert(id);
             }
         }
         // Validate complete hosted geometry, including opening envelope, before

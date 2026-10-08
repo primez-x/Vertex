@@ -101,9 +101,33 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         }
         stage.entities=replay_wall_profile_entities(stage.entities,profiles,false);
     }
+    if (!edit.opening_profiles.empty()) {
+        if (!edit.wall_profiles.empty() || has_geometry_or_relation_intent(mapped))
+            invalid("opening profiles require a separate reviewed operation from wall geometry or relationships");
+        auto profiles = edit.opening_profiles;
+        for (auto& profile : profiles) {
+            if (!std::binary_search(edit.seed_wall_ids.begin(), edit.seed_wall_ids.end(), profile.wall_id))
+                invalid("opening profile must name an explicitly seeded original host");
+            const auto original = source.find(profile.opening_id);
+            if (original == source.end() || original->second.type != "opening" ||
+                original->second.properties.at("wall_id") != profile.wall_id)
+                invalid("opening profile must retain its actual original host");
+            profile.opening_id = stage.replacement.original_to_proposed.at(profile.opening_id);
+            profile.wall_id = stage.replacement.original_to_proposed.at(profile.wall_id);
+        }
+        stage.entities = replay_hosted_opening_profile_entities(stage.entities, profiles, false);
+        std::set<std::string, std::less<>> copied_walls;
+        for (const auto& [original, proposed] : stage.replacement.original_to_proposed) {
+            const auto owner = source.find(original);
+            if (owner != source.end() && owner->second.type == "wall") copied_walls.insert(proposed);
+        }
+        // Document replay derives the same complete physical admission as the
+        // desktop preview, including copied hosts outside the edited roster.
+        validate_active_wall_physical_dependencies(stage.entities, copied_walls);
+    }
     if (has_geometry_or_relation_intent(mapped))
         stage.entities=reconstruct_active_phase_constraint_authoring(stage.entities,mapped);
-    else if (edit.wall_profiles.empty()) invalid("replacement has no semantic edit");
+    else if (edit.wall_profiles.empty() && edit.opening_profiles.empty()) invalid("replacement has no semantic edit");
     preserve_baseline(source,stage.entities,stage.plan);
     // Incoming room evidence sees every independently reconstructed new
     // relationship. These copies were withheld from the physical solve; only
@@ -226,6 +250,12 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
         for (const auto& profile:value.wall_profiles)
             result["wall_profiles"].push_back(encode_wall_profile_edit_intent(profile));
     }
+    if (!value.opening_profiles.empty()) {
+        if (!value.wall_profiles.empty()) invalid("wall and opening profiles require separate reviewed operations");
+        result["version"] = 3; result["opening_profiles"] = Json::array();
+        for (const auto& profile : value.opening_profiles)
+            result["opening_profiles"].push_back(encode_hosted_opening_profile_edit_intent(profile));
+    }
     // The decoder below is the single strict semantic admission path. Encoding
     // never supplies geometry, inferred room mappings or arbitrary clone data.
     if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
@@ -234,10 +264,12 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version")!=1 && value.at("version")!=2)) invalid("unsupported replacement version");
+        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3)) invalid("unsupported replacement version");
     const bool profiles=value.at("version")==2;
     if (profiles) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
         "room_review_intent","room_constraint_decisions","wall_profiles"});
+    else if (value.at("version") == 3) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
+        "room_review_intent","room_constraint_decisions","opening_profiles"});
     else keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities","room_review_intent","room_constraint_decisions"});
     PhaseWallReplacementAuthoring result;
     result.registry_id=identity(value.at("registry_id"));result.alternative_id=identity(value.at("alternative_id"));
@@ -256,6 +288,18 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
                 !std::binary_search(result.seed_wall_ids.begin(),result.seed_wall_ids.end(),profile.wall_id))
                 invalid("profile target must be a unique original wall seed");
             result.wall_profiles.push_back(std::move(profile));
+        }
+    }
+    if (value.at("version") == 3) {
+        const auto& edits = value.at("opening_profiles");
+        if (!edits.is_array() || edits.empty() || edits.size() > 2048) invalid("invalid opening profile inventory");
+        std::set<std::string, std::less<>> targets;
+        for (const auto& edit : edits) {
+            auto profile = decode_hosted_opening_profile_edit_intent(edit);
+            if (!targets.insert(profile.opening_id).second ||
+                !std::binary_search(result.seed_wall_ids.begin(), result.seed_wall_ids.end(), profile.wall_id))
+                invalid("opening profile must name a unique original opening and a seeded host");
+            result.opening_profiles.push_back(std::move(profile));
         }
     }
     const auto& identities=value.at("identities");

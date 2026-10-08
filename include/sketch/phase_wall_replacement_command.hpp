@@ -2,6 +2,7 @@
 
 #include "sketch/phase_wall_replacement.hpp"
 #include "sketch/phase_wall_profile_edit.hpp"
+#include "sketch/phase_hosted_opening_edit.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
 
@@ -29,6 +30,9 @@ struct PhaseWallReplacementAuthoring {
     // Record dialect two: exact profile intent for seeded original walls.
     // Layer identities are mapped with the qualified owned-child inventory.
     std::vector<WallProfileEditIntent> wall_profiles;
+    // Record dialect three: existing copied openings retain their host/family.
+    // Wall-profile and geometry edits use separate reviewed operations.
+    std::vector<HostedOpeningProfileEditIntent> opening_profiles;
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

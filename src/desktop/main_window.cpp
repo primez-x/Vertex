@@ -33,6 +33,7 @@
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_wall_replacement_request.hpp"
 #include "sketch/phase_wall_canvas_proposal.hpp"
+#include "sketch/phase_hosted_opening_capture.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
@@ -1581,10 +1582,17 @@ SlabElementKind read_slab_element_kind(const json& properties) {
 std::optional<HostedOpening> read_hosted_opening(const Entity& entity,
                                                  QString* error = nullptr) {
     const auto wall_id = read_string(entity.properties, "wall_id");
-    const auto offset = read_finite_number(entity.properties, "offset_m");
-    const auto width = read_finite_number(entity.properties, "width_m");
-    const auto sill = read_finite_number(entity.properties, "sill_m");
-    const auto height = read_finite_number(entity.properties, "height_m");
+    const auto dimension = [&](const char* canonical, const char* alias) -> std::optional<double> {
+        const auto value = entity.properties.contains(canonical) ? read_finite_number(entity.properties, canonical) :
+            read_finite_number(entity.properties, alias);
+        if (entity.properties.contains(alias) && (!value || read_finite_number(entity.properties, alias) != value))
+            return std::nullopt;
+        return value;
+    };
+    const auto offset = dimension("offset_m", "offset");
+    const auto width = dimension("width_m", "width");
+    const auto sill = dimension("sill_m", "sill");
+    const auto height = dimension("height_m", "height");
     if (!wall_id.has_value() || !offset.has_value() || !width.has_value() ||
         !sill.has_value() || !height.has_value()) {
         if (error != nullptr) {
@@ -5559,6 +5567,7 @@ class MainWindow::Impl {
         Vec2 move_canvas_delta;
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
+        std::shared_ptr<const std::vector<CanvasLabel>> retained_labels;
     };
     struct VertexPreviewProjection {
         std::vector<CanvasEntity> entities;
@@ -25976,6 +25985,7 @@ public:
     void clearOpeningWidthCapture() {
         m_opening_preview_source.reset(); m_opening_preview_authority.reset();
         m_opening_preview_view_context.reset(); m_opening_preview_retained.reset();
+        m_opening_preview_retained_labels.reset();
         m_opening_preview_site_input.reset();
         m_opening_preview_site_generation=0;
         m_opening_preview_command.reset(); m_opening_preview_release_pending=false;
@@ -26019,6 +26029,8 @@ public:
         m_opening_preview_edit_source=captureCanvasEditSource();
         m_opening_preview_authority=std::move(authority);
         m_opening_preview_retained=std::move(retained);
+        m_opening_preview_retained_labels=std::make_shared<const std::vector<CanvasLabel>>(
+            site ? m_site_edit_local_labels : canvas->labels());
         m_opening_preview_document=m_document; m_opening_preview_canvas=canvas;
         m_opening_preview_id=id;
     }
@@ -27657,16 +27669,17 @@ public:
         const auto move_offset=request.move_offset;
         const auto edit_source=request.edit_source;
         const auto prepared=request.prepared;
+        const auto retained_labels=request.retained_labels;
         m_opening_preview_sequence = m_opening_preview_queue.enqueue(
-            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units,site_input,move_offset,edit_source,prepared]
+            [source, retained=std::move(retained), id, scale, keep_start, result,view_context,command,labels,metric_units,site_input,move_offset,edit_source,prepared,retained_labels]
             (const RegenerationCancellationToken& cancellation) {
                 if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(), {}};
                 if (move_offset) {
                     *result=computeHostedOpeningPreview(*source,*retained,id,
-                        hosted_opening_offset_command(*source,id.toStdString(),*move_offset),
-                        view_context.get(),command.get(),metric_units,labels.get(),edit_source,prepared.get());
+                        openingProfileGeometryCommand(*source,id.toStdString(),*move_offset,std::nullopt,true),
+                        view_context.get(),command.get(),metric_units,labels.get(),edit_source,prepared.get(),retained_labels.get());
                 } else *result = computeOpeningWidthPreview(*source, *retained, id, scale, keep_start,
-                    view_context.get(), command.get(), metric_units, labels.get(),edit_source,prepared.get());
+                    view_context.get(), command.get(), metric_units, labels.get(),edit_source,prepared.get(),retained_labels.get());
                 if (*result && site_input && !cancellation.is_cancelled()) {
                     std::erase_if(**result,[&](const auto& item){
                         return !site_input->frames.geometry.contains({item.id,item.presentation_key});
@@ -27701,6 +27714,7 @@ public:
         try {
             if (!openingPreviewCanvasCurrent(canvas) || !m_opening_preview_source ||
                 !m_opening_preview_authority || !m_opening_preview_retained ||
+                !m_opening_preview_retained_labels ||
                 !m_opening_preview_edit_source ||
                 m_opening_preview_document!=m_document ||
                 !sourceEditAuthorityCurrent(*m_opening_preview_authority)) return false;
@@ -27743,6 +27757,7 @@ public:
         request.site_generation=m_opening_preview_site_generation;
         request.edit_source=m_opening_preview_edit_source;
         request.prepared=std::make_shared<PreparedCanvasEdit>();
+        request.retained_labels=m_opening_preview_retained_labels;
         m_opening_preview_command.reset();m_opening_preview_release_pending=false;
         m_opening_preview_prepared.reset();
         m_opening_preview_latest_serial=serial;m_opening_preview_id=requested_id;
@@ -27794,6 +27809,7 @@ public:
         request.move_canvas_delta=delta;
         request.edit_source=m_opening_preview_edit_source;
         request.prepared=std::make_shared<PreparedCanvasEdit>();
+        request.retained_labels=m_opening_preview_retained_labels;
         m_opening_preview_command.reset(); m_opening_preview_move_error.clear();
         m_opening_preview_prepared.reset();
         m_opening_preview_latest_serial=serial;
@@ -27804,6 +27820,50 @@ public:
             m_pending_opening_preview=std::move(request);
         } else startOpeningPreviewJob(std::move(request));
         return std::nullopt;
+    }
+
+    bool publishOpeningCanvasEdit(PlanCanvas* canvas,
+        std::shared_ptr<const DocumentSnapshot> source,
+        std::shared_ptr<const SourceEditAuthority> authority, Command command,
+        std::shared_ptr<PreparedCanvasEdit> prepared,
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source, bool unchanged) {
+        if (!canvas || !source || !authority || !prepared || !edit_source)
+            throw std::invalid_argument("The opening drag has no captured publication authority.");
+        const QPointer<PlanCanvas> viewport = canvas;
+        const auto center = canvas->viewCenter();
+        const auto zoom = canvas->viewScale();
+        const auto size = canvas->size();
+        const auto dpr = canvas->devicePixelRatioF();
+        const auto navigation = canvas->navigationGeneration();
+        const bool site = static_cast<bool>(m_opening_preview_site_input);
+        const auto site_generation = m_opening_preview_site_generation;
+        const auto require_viewport = [this, viewport, center, zoom, size, dpr, navigation, site, site_generation] {
+            if (!viewport || !viewport->isVisible() || viewport->viewCenter().x != center.x ||
+                viewport->viewCenter().y != center.y || viewport->viewScale() != zoom ||
+                viewport->size() != size || viewport->devicePixelRatioF() != dpr ||
+                viewport->navigationGeneration() != navigation || m_boundary_session || m_linework_drawing ||
+                m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("The opening preview's drawing view or interaction changed during review.");
+            if (site) {
+                requireSiteEditCurrent();
+                if (!siteCanvas(viewport.data()) || m_site_edit_generation != site_generation)
+                    throw std::invalid_argument("The opening preview's Site presentation changed during review.");
+            } else if (siteCanvas(viewport.data())) {
+                throw std::invalid_argument("The opening preview no longer belongs to its captured plan view.");
+            }
+        };
+        require_viewport();
+        if (!sourceEditAuthorityUnchanged(*authority)) return false;
+        // Retire gesture state before a modal room/relationship review. These
+        // local copies retain the exact displayed intent and actual source.
+        clearOpeningWidthCapture();
+        if (unchanged) { clearError(); return true; }
+        if (prepared->alternative_wall) {
+            canvas->setEntities(canvas->entities());
+            if (!publishReviewedAlternativeWallCanvasEdit(*source, command,
+                    *prepared->alternative_wall, *authority, edit_source, require_viewport)) return false;
+        } else publishPreparedCanvasEdit(prepared, edit_source);
+        clearError(); refresh(); return true;
     }
 
     bool commitOpeningMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
@@ -27820,11 +27880,8 @@ public:
             m_opening_preview_id.toStdString()));
         if (!opening) throw std::invalid_argument("The opening's captured station is unavailable.");
         const bool unchanged=opening->offset==*m_opening_preview_move_offset;
-        const auto prepared=m_opening_preview_prepared;
-        const auto edit_source=m_opening_preview_edit_source;
-        clearOpeningWidthCapture();
-        if (unchanged) {clearError();return true;}
-        publishPreparedCanvasEdit(prepared,edit_source);clearError();refresh();return true;
+        return publishOpeningCanvasEdit(canvas, m_opening_preview_source, m_opening_preview_authority,
+            *m_opening_preview_command, m_opening_preview_prepared, m_opening_preview_edit_source, unchanged);
     }
 
     void pollOpeningPreview() {
@@ -27834,6 +27891,7 @@ public:
                     request.authority==m_opening_preview_authority && openingPreviewCaptureCurrent(request.canvas) &&
                     request.source==m_opening_preview_source && request.canvas==m_opening_preview_canvas &&
                     request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
+                    request.retained_labels==m_opening_preview_retained_labels &&
                     request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation &&
                     request.edit_source==m_opening_preview_edit_source && request.prepared &&
                     request.entity_id==m_opening_preview_id && m_selected_ids==QStringList{request.entity_id} &&
@@ -27864,6 +27922,7 @@ public:
             const bool same_capture=request.source==m_opening_preview_source &&
                 request.authority==m_opening_preview_authority && request.canvas==m_opening_preview_canvas &&
                 request.view_context==m_opening_preview_view_context && request.retained==m_opening_preview_retained &&
+                request.retained_labels==m_opening_preview_retained_labels &&
                 request.site_input==m_opening_preview_site_input && request.site_generation==m_opening_preview_site_generation &&
                 request.edit_source==m_opening_preview_edit_source;
             if(request.canvas) {
@@ -27890,7 +27949,8 @@ public:
             const bool request_current=current(request);
             if(!completion.succeeded() || !request_current || completion.receipt->source_revision!=request.source->revision() ||
                 !*request.result || !request.command || !*request.command || !request.labels || !request.prepared ||
-                (!request.prepared->document && (!request.prepared->workspace || !request.prepared->mirror))) {
+                (!request.prepared->alternative_wall && !request.prepared->document &&
+                 (!request.prepared->workspace || !request.prepared->mirror))) {
                 if (request_current && request.move_offset && completion.kind!=RegenerationCompletionKind::cancelled) {
                     auto message=QStringLiteral("The opening could not be moved in the current view.");
                     try {if (completion.error) std::rethrow_exception(completion.error);}
@@ -27918,9 +27978,8 @@ public:
                     // The released canvas has retired the gesture. Only its
                     // exact admitted job may complete that one pending command.
                     if(!current(request)) throw std::invalid_argument("The opening source or interaction changed before commit.");
-                    clearOpeningWidthCapture();
-                    if (request.scale==1.0) { clearError();continue; }
-                    publishPreparedCanvasEdit(request.prepared,request.edit_source);clearError();refresh();
+                    (void)publishOpeningCanvasEdit(request.canvas.data(), request.source, request.authority,
+                        **request.command, request.prepared, request.edit_source, request.scale==1.0);
                 } catch(const Standard_Failure& error) {
                     clearOpeningWidthCapture();
                     setError(QStringLiteral("Resize opening: %1").arg(QString::fromUtf8(error.GetMessageString())));
@@ -27937,16 +27996,58 @@ public:
         }
         if(!m_running_opening_preview && !m_pending_opening_preview) m_opening_preview_timer->stop();
     }
+    static Command openingProfileGeometryCommand(const DocumentSnapshot& source,
+        const std::string& opening_id, const std::optional<double>& move_offset,
+        const std::optional<double>& relative_width_scale, bool keep_start_jamb) {
+        const auto& original = source.entities().at(opening_id);
+        const auto cut = read_hosted_opening(original);
+        if (!cut) throw std::invalid_argument("The opening's captured dimensions are unavailable.");
+        if (move_offset.has_value() == relative_width_scale.has_value())
+            throw std::invalid_argument("An opening drag must change either its station or its jamb span.");
+        auto candidate = original;
+        const auto set = [&](const char* canonical, const char* alias, double value, double before) {
+            if (value == before) return;
+            candidate.properties[canonical] = value;
+            if (candidate.properties.contains(alias)) candidate.properties[alias] = value;
+        };
+        if (move_offset) {
+            if (!std::isfinite(*move_offset) || *move_offset < 0)
+                throw std::invalid_argument("Opening station must be finite and nonnegative.");
+            set("offset_m", "offset", *move_offset, cut->offset);
+        } else {
+            if (!std::isfinite(*relative_width_scale) || *relative_width_scale <= 0)
+                throw std::invalid_argument("Opening width scale must be finite and positive.");
+            const auto width = cut->width * *relative_width_scale;
+            const auto offset = keep_start_jamb ? cut->offset : cut->offset + cut->width - width;
+            if (!std::isfinite(width) || !std::isfinite(offset) || width <= 0 || offset < 0)
+                throw std::invalid_argument("The opening resize exceeds its supported dimensions.");
+            set("width_m", "width", width, cut->width);
+            set("offset_m", "offset", offset, cut->offset);
+        }
+        const auto profile = capture_hosted_opening_profile_edit(original, candidate);
+        if (profile) {
+            auto proposal = prepare_phase_hosted_opening_canvas_proposal(source, {*profile},
+                [](std::string_view) { return new_id("proposed"); });
+            if (proposal) {
+                proposal->intent.intent.message = move_offset ? "Move proposed hosted opening" : "Resize proposed hosted opening";
+                return Command{phase_wall_replacement_authoring_command(proposal->intent)};
+            }
+        }
+        return move_offset ? Command{hosted_opening_offset_command(source, opening_id, *move_offset)} :
+            Command{hosted_opening_width_resize_command(source, opening_id, *relative_width_scale, keep_start_jamb)};
+    }
+
     static std::optional<std::vector<CanvasEntity>> computeOpeningWidthPreview(
         const DocumentSnapshot& source, const std::vector<CanvasEntity>& retained_scene,
         const QString& requested_id, double scale, bool keep_start_jamb,
         const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr,
         bool metric_units=false, std::vector<CanvasLabel>* proposed_labels=nullptr,
-        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr) {
+        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr,
+        const std::vector<CanvasLabel>* retained_labels=nullptr) {
         try {
             return computeHostedOpeningPreview(source,retained_scene,requested_id,
-                hosted_opening_width_resize_command(source,requested_id.toStdString(),scale,keep_start_jamb),
-                view_context,admitted_command,metric_units,proposed_labels,edit_source,prepared);
+                openingProfileGeometryCommand(source,requested_id.toStdString(),std::nullopt,scale,keep_start_jamb),
+                view_context,admitted_command,metric_units,proposed_labels,edit_source,prepared,retained_labels);
         } catch(const Standard_Failure&) {return std::nullopt;}
           catch(const std::exception&) {return std::nullopt;}
     }
@@ -27956,9 +28057,18 @@ public:
         const QString& requested_id,Command command,
         const ArchitecturalViewContext* view_context=nullptr,std::optional<Command>* admitted_command=nullptr,
         bool metric_units=false,std::vector<CanvasLabel>* proposed_labels=nullptr,
-        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr) {
+        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source={},PreparedCanvasEdit* prepared=nullptr,
+        const std::vector<CanvasLabel>* retained_labels=nullptr) {
         try {
             if (proposed_labels) proposed_labels->clear();
+            const auto context = view_context ? std::optional<ArchitecturalViewContext>{*view_context} : std::nullopt;
+            const std::vector<CanvasLabel> no_labels;
+            if (auto projected = projectAlternativeWallCanvasCommand(source, command, retained_scene,
+                    retained_scene, retained_labels ? *retained_labels : no_labels, metric_units, context, prepared)) {
+                if (admitted_command) *admitted_command = std::move(command);
+                if (proposed_labels) *proposed_labels = std::move(projected->labels);
+                return std::move(projected->entities);
+            }
             // Width and station edits share the same complete-host projection.
             // Neither can display an affine copy of the old opening or wall cut.
             if(admitted_command) command=augmentAuthoredCommand(command,source);
@@ -28081,16 +28191,14 @@ public:
                 canvas->openingWidthPreviewSerial()!=m_opening_preview_latest_serial+1)
                 throw std::invalid_argument("The exact opening width preview changed. Start again.");
             if(m_opening_preview_command) {
-                const auto prepared=m_opening_preview_prepared;
-                const auto edit_source=m_opening_preview_edit_source;
-                clearOpeningWidthCapture();
-                if (scale==1.0) { clearError();return true; }
-                publishPreparedCanvasEdit(prepared,edit_source);clearError();refresh();return true;
+                return publishOpeningCanvasEdit(canvas, m_opening_preview_source, m_opening_preview_authority,
+                    *m_opening_preview_command, m_opening_preview_prepared, m_opening_preview_edit_source, scale==1.0);
             }
             const auto matching=[&](const auto& request) {
                 return request && request->serial==m_opening_preview_latest_serial &&
                     request->canvas==canvas && request->authority==m_opening_preview_authority &&
                     request->view_context==m_opening_preview_view_context && request->retained==m_opening_preview_retained &&
+                    request->retained_labels==m_opening_preview_retained_labels &&
                     request->site_input==m_opening_preview_site_input && request->site_generation==m_opening_preview_site_generation &&
                     request->source==m_opening_preview_source && request->entity_id==requested_id &&
                     request->edit_source==m_opening_preview_edit_source && request->prepared &&
@@ -32012,14 +32120,27 @@ public:
             validate_opening_assembly(assembly);
             auto properties = entity->properties;
             properties["opening_assembly"] = opening_assembly_json(assembly);
+            auto proposed = *entity;
+            proposed.properties = properties;
+            const auto source = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(source);
+            HostedOpeningProfileEditIntent authored;
+            authored.opening_id = entity->id;
+            authored.wall_id = entity->properties.at("wall_id").get<std::string>();
+            authored.assembly = assembly;
+            const Command raw{ApplyEntityChanges{revision, {EntityChange::upsert(proposed)}, {}, "edit opening assembly"}};
+            if (const auto applied = tryApplyAlternativeOpeningProfileEdit(source, raw, authority, authored)) {
+                if (*applied) { clearError(); refresh(); }
+                return *applied;
+            }
             if (!previewOpening(*entity, properties)) {
                 return false;
             }
             auto candidate = *entity;
             candidate.properties = std::move(properties);
-            applyDocumentCommand(ApplyEntityChanges{
+            if (!applyDocumentCommand(ApplyEntityChanges{
                 revision, {EntityChange::upsert(std::move(candidate))}, {},
-                "edit opening assembly"});
+                "edit opening assembly"})) return false;
             clearError();
             refresh();
             return true;
@@ -32045,10 +32166,12 @@ public:
             if (entity->type == "opening") {
                 auto properties = entity->properties;
                 properties["width_m"] = quantity.metres;
-                if (!previewOpening(*entity, properties)) {
-                    return false;
-                }
-                return editSelectedProperties(std::move(properties), "edit opening width");
+                if (properties.contains("width")) properties["width"] = quantity.metres;
+                HostedOpeningProfileEditIntent authored;
+                authored.opening_id = entity->id;
+                authored.wall_id = entity->properties.at("wall_id").get<std::string>();
+                authored.width = quantity;
+                return editSelectedProperties(std::move(properties), "edit opening width", std::nullopt, authored);
             }
             // Programmatic edits use the same validated intent as the dialog.
             // The interactive inspector opens a preview before committing.
@@ -40206,7 +40329,8 @@ private:
     }
 
     bool editSelectedProperties(json properties, const char* message,
-        const std::optional<WallProfileEditIntent>& authored_wall_profile = std::nullopt) {
+        const std::optional<WallProfileEditIntent>& authored_wall_profile = std::nullopt,
+        const std::optional<HostedOpeningProfileEditIntent>& authored_opening_profile = std::nullopt) {
         const auto entity = selectedEntity();
         if (!entity.has_value()) {
             setError(QStringLiteral("Select an entity before editing it."));
@@ -40228,6 +40352,20 @@ private:
                     // transaction can validate or augment the original wall.
                     if (const auto applied = tryApplyAlternativeWallProfileEdit(
                             source, raw, authority, authored_wall_profile)) {
+                        if (*applied) { clearError(); refresh(); }
+                        return *applied;
+                    }
+                }
+                if (entity->type == "opening") {
+                    auto proposed = *entity;
+                    proposed.properties = properties;
+                    const Command raw{ApplyEntityChanges{
+                        .expected_revision = source.revision(),
+                        .entity_changes = {EntityChange::upsert(std::move(proposed))},
+                        .message = message,
+                    }};
+                    if (const auto applied = tryApplyAlternativeOpeningProfileEdit(
+                            source, raw, authority, authored_opening_profile)) {
                         if (*applied) { clearError(); refresh(); }
                         return *applied;
                     }
@@ -40473,6 +40611,7 @@ private:
             auto properties = entity->properties;
             properties[std::string(key)] = quantity.metres;
             std::optional<WallProfileEditIntent> authored_wall_profile;
+            std::optional<HostedOpeningProfileEditIntent> authored_opening_profile;
             if (entity->type == "wall" && (key_is_height || key_is_thickness)) {
                 authored_wall_profile.emplace();
                 authored_wall_profile->wall_id = entity->id;
@@ -40485,9 +40624,11 @@ private:
                 if (properties.contains(alias)) properties[alias] = quantity.metres;
             }
             if (entity->type == "opening") {
-                if (!previewOpening(*entity, properties)) {
-                    return false;
-                }
+                authored_opening_profile.emplace();
+                authored_opening_profile->opening_id = entity->id;
+                authored_opening_profile->wall_id = entity->properties.at("wall_id").get<std::string>();
+                authored_opening_profile->height = quantity;
+                if (properties.contains("height")) properties["height"] = quantity.metres;
             } else if (entity->type == "slab") {
                 if (!previewSlab(*entity, properties)) {
                     return false;
@@ -40514,7 +40655,7 @@ private:
                     return false;
                 }
             }
-            return editSelectedProperties(std::move(properties), message, authored_wall_profile);
+            return editSelectedProperties(std::move(properties), message, authored_wall_profile, authored_opening_profile);
         } catch (const std::exception& error) {
             setError(QStringLiteral("%1: %2").arg(label, QString::fromUtf8(error.what())));
             return false;
@@ -41038,6 +41179,82 @@ private:
         return applyAuthoredCommand(*reviewed);
     }
 
+    std::optional<Command> reviewAlternativeOpeningProfileEdit(const Command& requested,
+        const std::optional<HostedOpeningProfileEditIntent>& authored_profile = std::nullopt) {
+        const auto* raw = std::get_if<ApplyEntityChanges>(&requested);
+        if (!raw) return requested;
+        const auto source = authoringSnapshot();
+        const auto scope = constraint_phase_scope(source.entities());
+        std::set<std::string, std::less<>> shared_hosts;
+        for (const auto& registry : scope.registries) if (registry.alternative_id) {
+            const auto model = ModelPhases::from_json(source.entities().at(registry.registry_id).properties.at("model"));
+            for (const auto& id : model.baseline_ids())
+                if (source.entities().at(id).type == "wall" && !scope.inactive_owner_ids.contains(id))
+                    shared_hosts.insert(id);
+        }
+        const auto shared = [&](const std::string& id) {
+            const auto found = source.entities().find(id);
+            if (found == source.entities().end() || found->second.type != "opening" ||
+                scope.inactive_owner_ids.contains(id)) return false;
+            const auto host = found->second.properties.find("wall_id");
+            return host != found->second.properties.end() && host->is_string() &&
+                shared_hosts.contains(host->get_ref<const std::string&>());
+        };
+        const auto unchanged = [&](const EntityChange& change) {
+            if (change.kind != EntityChangeKind::upsert) return false;
+            const auto before = source.entities().find(change.entity.id);
+            return before != source.entities().end() && before->second == change.entity &&
+                before->second.properties.dump() == change.entity.properties.dump() &&
+                before->second.extensions.dump() == change.entity.extensions.dump();
+        };
+        if (std::none_of(raw->entity_changes.begin(), raw->entity_changes.end(), [&](const auto& change) {
+                return !unchanged(change) && shared(change.kind == EntityChangeKind::erase ?
+                    change.entity_id : change.entity.id);
+            })) return requested;
+        if (raw->expected_revision != source.revision() || !raw->asset_changes.empty())
+            throw std::invalid_argument("The proposed opening edit requires its unchanged original project and no asset changes.");
+        std::vector<HostedOpeningProfileEditIntent> profiles;
+        for (const auto& change : raw->entity_changes) {
+            if (unchanged(change)) continue;
+            if (change.kind != EntityChangeKind::upsert || !shared(change.entity.id))
+                throw std::invalid_argument("Edit shared doors and windows separately from other objects. Remove them through the design phase demolition list.");
+            if (authored_profile && (raw->entity_changes.size() != 1 || authored_profile->opening_id != change.entity.id))
+                throw std::invalid_argument("The entered opening dimension belongs to a different captured edit.");
+            const auto captured = capture_hosted_opening_profile_edit(
+                source.entities().at(change.entity.id), change.entity, authored_profile);
+            if (captured) profiles.push_back(*captured);
+        }
+        if (profiles.empty()) return Command{ApplyEntityChanges{source.revision(), {}, {}, raw->message}};
+        auto proposal = prepare_phase_hosted_opening_canvas_proposal(source, profiles,
+            [](std::string_view) { return new_id("proposed"); });
+        if (!proposal) throw std::invalid_argument("The shared opening lost its captured design alternative.");
+        proposal->intent.intent.message = raw->message;
+        PhaseWallReplacementIdentityMap proposed_ids;
+        return finishAlternativeWallEdit(source, proposal->intent,
+            phase_wall_replacement_authoring_command(proposal->intent), proposed_ids);
+    }
+
+    std::optional<bool> tryApplyAlternativeOpeningProfileEdit(const DocumentSnapshot& source,
+        const Command& raw, const SourceEditAuthority& authority,
+        const std::optional<HostedOpeningProfileEditIntent>& authored_profile = std::nullopt) {
+        if (fullSnapshotDigest(source) != authority.source_digest ||
+            !sourceEditAuthorityUnchanged(authority)) return false;
+        const auto reviewed = reviewAlternativeOpeningProfileEdit(raw, authored_profile);
+        if (!reviewed) { clearError(); refreshInspector(); return false; }
+        if (convertedOpeningProfileNoOp(raw, *reviewed)) return true;
+        if (std::holds_alternative<ApplyEntityChanges>(*reviewed)) return std::nullopt;
+        if (!sourceEditAuthorityUnchanged(authority)) return false;
+        return applyAuthoredCommand(*reviewed);
+    }
+
+    static bool convertedOpeningProfileNoOp(const Command& requested, const Command& captured) {
+        const auto* before = std::get_if<ApplyEntityChanges>(&requested);
+        const auto* after = std::get_if<ApplyEntityChanges>(&captured);
+        return before && after && !before->entity_changes.empty() && before->asset_changes.empty() &&
+            before->expected_revision == after->expected_revision && after->entity_changes.empty() &&
+            after->asset_changes.empty();
+    }
+
     void remapProposedWallSelection(const PhaseWallReplacementIdentityMap& proposed_ids) {
         if (const auto found=proposed_ids.find(m_selected_id.toStdString());found!=proposed_ids.end())
             m_selected_id=id_from(found->second);
@@ -41054,8 +41271,11 @@ private:
         requireSiteCommandAdmission(requested);
         const auto profiled=reviewAlternativeWallProfileEdit(requested);
         if (!profiled) return false;
+        const auto opening_profiled=reviewAlternativeOpeningProfileEdit(*profiled);
+        if (!opening_profiled) return false;
+        if (convertedOpeningProfileNoOp(*profiled, *opening_profiled)) return true;
         PhaseWallReplacementIdentityMap proposed_ids;
-        const auto reviewed=reviewAlternativeWallEdit(*profiled,proposed_ids);
+        const auto reviewed=reviewAlternativeWallEdit(*opening_profiled,proposed_ids);
         if (!reviewed) return false;
         const auto& command=*reviewed;
         requireSiteCommandAdmission(command);
@@ -41082,7 +41302,10 @@ private:
     bool applyDocumentCommand(const Command& command) {
         const auto profiled=reviewAlternativeWallProfileEdit(command);
         if (!profiled) return false;
-        return applyAuthoredCommand(augmentAuthoredCommand(*profiled));
+        const auto opening_profiled=reviewAlternativeOpeningProfileEdit(*profiled);
+        if (!opening_profiled) return false;
+        if (convertedOpeningProfileNoOp(*profiled, *opening_profiled)) return true;
+        return applyAuthoredCommand(augmentAuthoredCommand(*opening_profiled));
     }
 
     DocumentSnapshot authoringSnapshot() const {
@@ -41181,6 +41404,19 @@ private:
                     .message = message,
                 }};
                 if (const auto applied = tryApplyAlternativeWallProfileEdit(source, raw, authority)) {
+                    if (*applied) clearError();
+                    return *applied;
+                }
+            }
+            if (entity.type == "opening") {
+                const auto source = authoringSnapshot();
+                const auto authority = captureSourceEditAuthority(source);
+                const Command raw{ApplyEntityChanges{
+                    .expected_revision = expected_revision.value_or(source.revision()),
+                    .entity_changes = {EntityChange::upsert(entity)},
+                    .message = message,
+                }};
+                if (const auto applied = tryApplyAlternativeOpeningProfileEdit(source, raw, authority)) {
                     if (*applied) clearError();
                     return *applied;
                 }
@@ -56838,8 +57074,15 @@ private:
                 candidate.properties["door_operation"] = encode_door_operation(edited);
             }
             if(candidate.properties==source->properties) return;
+            const auto snapshot = authoringSnapshot();
+            const auto authority = captureSourceEditAuthority(snapshot);
+            const Command raw{ApplyEntityChanges{context.revision, {EntityChange::upsert(candidate)}, {}, "edit door operation"}};
+            if (const auto applied = tryApplyAlternativeOpeningProfileEdit(snapshot, raw, authority)) {
+                if (*applied) { clearError(); refresh(); }
+                return;
+            }
             if (!previewOpening(candidate, candidate.properties)) return;
-            applyDocumentCommand(ApplyEntityChanges{context.revision,{EntityChange::upsert(candidate)},{},"edit door operation"});
+            if (!applyDocumentCommand(raw)) return;
             clearError(); refresh();
         } catch(const std::exception& error) { setError(QString::fromUtf8(error.what())); }
     }
@@ -57036,6 +57279,7 @@ private:
     std::shared_ptr<const DocumentSnapshot> m_opening_preview_source;
     std::shared_ptr<const ArchitecturalViewContext> m_opening_preview_view_context;
     std::shared_ptr<const std::vector<CanvasEntity>> m_opening_preview_retained;
+    std::shared_ptr<const std::vector<CanvasLabel>> m_opening_preview_retained_labels;
     std::shared_ptr<const SiteEndpointPreviewInput> m_opening_preview_site_input;
     std::uint64_t m_opening_preview_site_generation{};
     Vec2 m_opening_preview_center{};

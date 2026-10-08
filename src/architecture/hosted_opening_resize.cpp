@@ -20,6 +20,9 @@ std::vector<const Entity*> hosted_openings(const DocumentSnapshot& source,
     for (const auto& [id,entity] : source.entities()) {
         (void)id;
         if (entity.type != "opening") continue;
+        const auto reference = entity.properties.find("wall_id");
+        if (reference == entity.properties.end() || !reference->is_string() ||
+            reference->get_ref<const std::string&>() != wall_id) continue;
         std::string host,error;
         if (!read_document_wall_id(entity,host,error)) throw std::invalid_argument(error);
         if (host == wall_id) result.push_back(&entity);

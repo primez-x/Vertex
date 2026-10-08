@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 proposed hosted opening edits
+
+Source implementation adds typed existing-opening offset, width, sill, height,
+same-family assembly and door-operation edits. Operation removal is explicit;
+absence and an authored default hinged operation remain physically distinct.
+Raw desktop capture admits exact entered quantities and retained aliases/receipts,
+then independently compares the supported edit with typed replay. Baseline hosts
+and their complete affected closure gain separate proposed identities before
+the original property transaction, geometry command or Document preview.
+
+Canvas jamb resizing and station sliding use the detached proposed physical map
+and captured labels. Release retains the exact displayed intent and original
+source while retiring transient gesture state, then completes mandatory room
+and copied relationship review under source/selection/recovery/viewport fences.
+All affected cuts, assemblies and active joins use shared physical factories;
+unrelated unhosted opening records remain untouched. Native 89/extraction 87
+cover retained direct/wrapped records after Undo. Original baseline records and
+other alternatives remain intact.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+run. The installed candidate is unchanged. Compilation, interaction, persistence
+and Undo remain unverified. Independent source review approved the integrated
+slice after corrections for absent/default door operations, unrelated unhosted
+records, source-preserving legacy no-ops and complete copied-wall factory admission.
+Root reviewed the final routing, resource bounds, aliases and interfaces. Opening creation,
+deletion/rehosting, compound multi-registry edits and broader shared-wall profile
+changes remain source gaps; production acceptance remains separate.
+
 ### October 8 proposed wall canvas previews
 
 Canvas wall moves, wall endpoints and hard-connected identified/measured vertex
