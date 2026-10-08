@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 100 requires native reader 102 for retained baseline horizontal
+assembly demolition. It preserves exclusive phase envelope six and its strict
+actual registry/alternative/slab decision, without replacement identities or
+ordinary entity authority. Original owners and other alternatives remain exact;
+only the active alternative's demolition list changes. Direct and wrapped
+proofs retain the floor throughout history, including Undo. Earlier floors
+remain unchanged.
+
 Exchange version 99 requires native reader 101 for source-derived proposed
 horizontal assembly profiles. It retains the exclusive phase-envelope five,
 replacement one and exact entered profile one, including explicit owner/layer/

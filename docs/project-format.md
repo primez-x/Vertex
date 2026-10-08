@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v101
+# Vertex project formats v1 through v102
+
+## Retained baseline horizontal assembly demolition (v102)
+
+Native format 102 and JSON/assets extraction version 100 retain demolition of
+shared baseline slabs, floors, ceilings and foundations inside the actual saved
+alternative. Phase envelope six contains only `slab_demolition` beside its
+existing captured-source bindings and empty ordinary semantic inventory. Its
+strict version-one decision has exactly `version`, `registry_id`,
+`alternative_id` and sorted unique `slab_ids`.
+
+Replay independently derives actual active baseline membership. Only the saved
+active alternative's `demolished_ids` list receives an exact additive change;
+original owners, assemblies, other alternatives, presentation and opaque data
+remain retained. Supported slab-hosted assemblies remain intact and use existing
+inactive-host projection in native geometry, schedules and saved views. Native
+profiles, resolved placement, context and actual materials undergo admission.
+No fresh identities or detached entity payload grant demolition authority.
+
+Delete and Cut use the same captured source and operation. Cut publishes the
+clipboard only after admitted document publication. Ordinary/proposed-only
+deletion keeps its existing lane. Baseline removal through the general edit API
+uses the same typed demolition proof. The operation's site footprint includes
+the retained owners whose active role changes. The required-reader floor covers
+direct and wrapped proofs across retained history, including Undo.
+
+This is a source contract. Compilation, interactive behavior, clipboard/history
+behavior and storage round trips have not run for this source batch.
 
 ## Source-derived proposed horizontal assemblies (v101)
 

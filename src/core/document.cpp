@@ -48,6 +48,7 @@
 #include "sketch/phase_roof_transform.hpp"
 #include "sketch/phase_roof_resize.hpp"
 #include "sketch/phase_slab_replacement.hpp"
+#include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -2526,7 +2527,8 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
         return (intent.contains("wall_replacement") && !intent.at("wall_replacement").is_null()) ||
             (intent.contains("opening_demolition") && !intent.at("opening_demolition").is_null()) ||
             (intent.contains("roof_replacement") && !intent.at("roof_replacement").is_null()) ||
-            (intent.contains("slab_replacement") && !intent.at("slab_replacement").is_null());
+            (intent.contains("slab_replacement") && !intent.at("slab_replacement").is_null()) ||
+            (intent.contains("slab_demolition") && !intent.at("slab_demolition").is_null());
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2552,6 +2554,12 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
                 decode_phase_slab_replacement_authoring(intent.slab_replacement));
             if (entity_map_digest(replay) != entity_map_digest(candidate))
                 throw std::invalid_argument("Slab replacement cannot change retained owners or borrow other edit authority");
+        }
+        if (!intent.slab_demolition.is_null()) {
+            const auto replay = replay_phase_slab_demolition_entities(source,
+                decode_slab_demolition_intent(intent.slab_demolition));
+            if (entity_map_digest(replay) != entity_map_digest(candidate))
+                throw std::invalid_argument("Slab demolition cannot change retained owners or borrow other edit authority");
         }
     }
 #endif

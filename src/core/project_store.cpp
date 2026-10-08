@@ -387,6 +387,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 replacement_proof(replacement_proof,command.room_review_geometry_proof,0))
                 required=std::max(required,87U);
             const auto profile_intent=[](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==6) return 102U;
                 if (intent.is_object() && intent.value("version",0)==5) return 101U;
                 if (intent.is_object() && intent.value("version",0)==4) {
                     const auto replacement=intent.find("roof_replacement");
@@ -2203,6 +2204,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 102 &&
          sqlite3_column_int(user_version.get(), 0) != 101 &&
          sqlite3_column_int(user_version.get(), 0) != 100 &&
          sqlite3_column_int(user_version.get(), 0) != 99 &&
@@ -2759,6 +2761,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=102)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 102 for retained baseline horizontal assembly demolition");
         if (required_format>=101)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 101 for source-derived proposed horizontal assemblies or exact scientific quantities");
         if (required_format>=100)

@@ -754,7 +754,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     const auto publish_assembly = [&](const std::string& id, const std::string& catalog_id,
                                       const AssemblyExpansion& expansion,
                                       const std::optional<std::string>& document_entity_id) {
-        if (inactive_owner_ids.contains(id)) return true;
+        if (inactive_owner_ids.contains(id) ||
+            (expansion.source_instance.placement &&
+             inactive_owner_ids.contains(expansion.source_instance.placement->host_entity_id))) return true;
         const auto source=entities.find(id);
         const auto placement = source==entities.end()
             ? SitePresentationPlacement{} : site_placements.at(id);

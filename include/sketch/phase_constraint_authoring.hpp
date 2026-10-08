@@ -27,6 +27,9 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect five: source-derived horizontal assembly replacement. The
     // baseline and its actual entered dimensions remain retained verbatim.
     nlohmann::json slab_replacement=nullptr;
+    // Dialect six: registry-only demolition of actual shared baseline slabs.
+    // No replacement identity or ordinary geometry authority accompanies it.
+    nlohmann::json slab_demolition=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

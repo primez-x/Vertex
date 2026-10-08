@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 retained horizontal assembly demolition implementation
+
+Delete and Cut now derive demolition from actual active shared baseline slabs,
+floors, ceilings and foundations. Only the saved active alternative's demolition
+list changes; original owners, other alternatives and presentation stay exact.
+Actual native profile, resolved placement, material and context admission occurs
+before publication. Supported slab-hosted assemblies retain their actual source
+records and follow existing inactive-host presentation. Ordinary/proposed-only
+Delete/Cut retains its existing lane and limits.
+
+The general edit path routes baseline removals through the same typed source
+operation. Captured selection/context fences remain active, site operation
+footprints include retained slabs whose active role changes, and Cut writes the
+clipboard only after admitted publication. Exclusive phase envelope six and
+native 102/extraction 100 retain direct/wrapped operations throughout history,
+including Undo; no new replacement identities are declared.
+
+Independent bounded source review approved this integration after correcting
+unmasked native publication of authored-profile assemblies on inactive hosts.
+Native publication now applies the decoded placement-host activity guard before
+publishing either profiles or legacy host copies. This is source review only.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations ran;
+the installed candidate stays unchanged. Compilation, interaction, clipboard,
+Undo/Redo and save/reopen remain unverified. Layer-stack inventory/material
+controls and core editing are in parallel implementation. Proposed footprint,
+transform, clone and mixed-family workflows remain open. No production
+acceptance or completion estimate is claimed.
+
 ### October 8 source-derived horizontal profile implementation
 
 Slab, floor, ceiling and foundation thickness/elevation controls now supply

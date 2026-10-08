@@ -41,6 +41,7 @@
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
+#include "sketch/phase_slab_demolition.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/phase_roof_demolition.hpp"
 #include "sketch/roof_removal.hpp"
@@ -30543,13 +30544,15 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            if (const auto demolition = roofRemovalCommand(source, selected_ids, "Cut selected roofs")) {
+            auto demolition = slabRemovalCommand(source, selected_ids, "Cut selected horizontal assemblies");
+            if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Cut selected roofs");
+            if (demolition) {
                 const auto encoded = clipboardSelectionPayload(source);
                 const auto clipboard_text = QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size()));
                 auto* clipboard = QGuiApplication::clipboard();
                 if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
                 if (!sourceEditAuthorityUnchanged(authority))
-                    throw std::invalid_argument("The selected roofs or active design changed before Cut.");
+                    throw std::invalid_argument("The selected objects or active design changed before Cut.");
                 if (!applyAuthoredCommand(*demolition)) return false;
                 clipboard->setText(clipboard_text, QClipboard::Clipboard);
                 m_selected_id.clear();
@@ -31060,9 +31063,11 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            if (const auto demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs")) {
+            auto demolition = slabRemovalCommand(source, selected_ids, "Delete selected horizontal assemblies");
+            if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs");
+            if (demolition) {
                 if (!sourceEditAuthorityUnchanged(authority))
-                    throw std::invalid_argument("The selected roofs or active design changed before demolition.");
+                    throw std::invalid_argument("The selected objects or active design changed before demolition.");
                 if (!applyAuthoredCommand(*demolition)) return false;
                 m_selected_id.clear();
                 m_selected_ids.clear();
@@ -41630,6 +41635,38 @@ private:
         return complete_exterior_wall_measurement_command(source, authored_command);
     }
 
+    static std::optional<Command> slabRemovalCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& selected_ids, const std::string& message) {
+        if (selected_ids.empty()) return std::nullopt;
+        const auto scope = constraint_phase_scope(source.entities());
+        bool shared_baseline = false;
+        for (const auto& registry : scope.registries) if (registry.alternative_id) {
+            const auto model = ModelPhases::from_json(source.entities().at(registry.registry_id).properties.at("model"));
+            for (const auto& id : selected_ids) {
+                const auto owner = source.entities().find(id);
+                if (owner != source.entities().end() && owner->second.type == "slab" &&
+                    std::binary_search(model.baseline_ids().begin(), model.baseline_ids().end(), id))
+                    shared_baseline = true;
+            }
+        }
+        // Ordinary Delete/Cut keeps its existing admission and resource limits.
+        // The new bounded demolition lane applies only to a shared baseline slab.
+        if (!shared_baseline) return std::nullopt;
+        const auto request = phase_slab_demolition_request(source.entities(), selected_ids);
+        if (!request) throw std::invalid_argument("The selected baseline slab has no active demolition destination.");
+        ConstraintAuthoringIntent semantic;
+        semantic.message = message;
+        auto intent = make_phase_constraint_authoring_intent(source, semantic);
+        intent.slab_demolition = encode_slab_demolition_intent(*request);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision = source.revision();
+        command.message = message;
+        command.phase_constraint_authoring_completion = true;
+        command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source, Command{command});
+        return Command{std::move(command)};
+    }
+
     std::optional<Command> alternativeRoofDemolitionCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& selected_ids, const std::string& message) {
         std::vector<std::string> roof_ids;
@@ -42055,6 +42092,26 @@ private:
         if (raw->expected_revision != source.revision() || !raw->asset_changes.empty() || raw->entity_changes.size() > 2048)
             throw std::invalid_argument("Proposed horizontal assembly edits require a bounded edit of the unchanged source.");
         const auto authority = captureSourceEditAuthority(source);
+        if (std::any_of(raw->entity_changes.begin(), raw->entity_changes.end(), [](const auto& change) {
+                return change.kind == EntityChangeKind::erase;
+            })) {
+            std::vector<std::string> removed;
+            for (const auto& change : raw->entity_changes) {
+                if (change.kind == EntityChangeKind::erase) removed.push_back(change.entity_id);
+                else {
+                    const auto original = source.entities().find(change.entity.id);
+                    if (original == source.entities().end() || original->second != change.entity ||
+                        original->second.properties.dump() != change.entity.properties.dump() ||
+                        original->second.extensions.dump() != change.entity.extensions.dump())
+                        throw std::invalid_argument("Delete baseline horizontal assemblies separately from other edits.");
+                }
+            }
+            const auto demolition = slabRemovalCommand(source, removed, raw->message);
+            if (!demolition) throw std::invalid_argument("The baseline slab removal has no saved alternative destination.");
+            if (!sourceEditAuthorityUnchanged(authority))
+                throw std::invalid_argument("The selected horizontal assemblies or active design changed before demolition.");
+            return demolition;
+        }
         std::vector<SlabProfileEditIntent> edits;
         std::set<std::string, std::less<>> targets;
         for (const auto& change : raw->entity_changes) {
@@ -42177,6 +42234,7 @@ private:
         if (!constrained || !constrained->phase_constraint_authoring_completion ||
             constrained->phase_constraint_authoring_intent.is_null()) return command;
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
+        if (!intent.slab_demolition.is_null()) return command;
         if (!intent.slab_replacement.is_null()) {
             proposed_ids = decode_phase_slab_replacement_authoring(intent.slab_replacement).identities;
             return command;
@@ -49009,6 +49067,10 @@ private:
                         for (const auto& [original,fresh]:replacement.identities) {
                             (void)fresh;targets.insert(original);
                         }
+                    }
+                    if (!intent.slab_demolition.is_null()) {
+                        const auto demolition = decode_slab_demolition_intent(intent.slab_demolition);
+                        targets.insert(demolition.slab_ids.begin(), demolition.slab_ids.end());
                     }
                     for (const auto& [id,entity]:source.entities())
                         if (!after.contains(id) || entity!=after.at(id) ||
