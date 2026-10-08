@@ -14,6 +14,24 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 grouped wall Delete and Cut implementation
+
+Canonical physical-wall removal now accepts a captured wall-only multiselection
+and connects both Delete and Cut to one room review. Grouped proof 31 retains
+its exact original wall inventory and child; native 82/extraction 80 protects
+every retained history event. Original single-wall semantics remain distinct.
+Both routes apply the exact admitted command without post-preview augmentation.
+Cut publishes its clipboard payload only after successful complete publication;
+cancelling preserves source, selection and clipboard. Site admission resolves
+and validates the grouped child footprint with the same retained inventory.
+Mixed selections and phase demolition remain separate gaps.
+
+Independent source review approved the integrated ten-file batch with no proved
+P1/P2 finding or source-level compile/link inconsistency. No compilation, runtime
+interaction, cancellation, persistence or Undo claim is made. No builds, tests,
+probes, launches, packages or installations run; the installed candidate stays
+unchanged.
+
 ### October 8 wall deletion with context and room consequences
 
 Context/plane discovery and analytical room correspondence now use the actual
@@ -2496,7 +2514,8 @@ passes. No installed ACL, profile or firewall was changed.
    loss is permitted. Wall profiles/sloped tops/layers, ordinary length/endpoint editing,
    explicit connected curve construction and their atomic room reviews, including
    multi-context/plane completion, ordinary single-wall drag and the singleton
-   numerical/canvas rotation integration and context-based single-wall deletion, are
+   numerical/canvas rotation integration, context-based single-wall deletion and
+   wall-only grouped Delete/Cut, are
    recorded above; do not restart them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent

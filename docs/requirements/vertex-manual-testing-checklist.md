@@ -466,6 +466,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U067 — Cut and paste an object**
   - Steps: Ctrl-select one symbol and one label among several placed items, cut them, and paste into another project. Repeat with a selected wall and its hosted door alongside the annotations.
+  - Room-layout check: Draw and name rooms separated by two walls. Select only those two walls and Cut. Cancel the room review first; confirm both walls, their openings, room names and the previous clipboard contents remain. Repeat, explicitly assign or retire each affected room and apply. Paste the cut walls into another project. Undo once in the original project and confirm the complete former layout returns. Repeat with walls on two floors; cancelling the second review must preserve the entire original project and clipboard.
   - Expected: The original is removed and the pasted object is retained correctly.
   - Also check: Unselected symbols and labels remain. One Undo restores the complete cut selection. A rejected selection or read-only project changes neither the project nor clipboard.
   - Result: Not tested
@@ -517,6 +518,7 @@ drawing; switching modes does not change existing geometry.
   - Steps: Select one symbol and one label among other items and press Delete. Repeat with a wall and its hosted opening selected alongside those annotations.
   - Room-layout check: Define and name two rooms separated by a wall. Select only that wall and press Delete. Check the Wall deletion list for its doors, windows, dimensions and constraints. Compare the remaining space; explicitly retain one room identity or create a named room, and retire the other as appropriate. Cancel first and confirm nothing changed. Repeat and apply, then Undo once and Redo. Check room names, classifications, dimensions, active design phase and saved views; save and reopen. Repeat by deleting an exterior wall so no closed room remains and retire its room. Its former appraisal observation must show unavailable quantities until its exterior source is repaired, without losing its declared facts. If an unknown dependent reference prevents deletion, the complete original project must remain intact.
   - Expected: Only the intended object disappears; dependent objects are handled clearly.
+  - Multiple-wall check: Ctrl-select two partition walls and press Delete. Confirm both walls and their hosted objects appear in the deletion list. Cancel first, then repeat and apply the room choices. Undo once and Redo; room names, classifications and saved views must follow the same complete edit. Repeat across two floors, then delete all walls of a room and explicitly retire it when no closed space remains.
   - Also check: Unselected annotations remain; deleting the wall removes its hosted opening. One Undo restores the entire selection, and Redo removes it again.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

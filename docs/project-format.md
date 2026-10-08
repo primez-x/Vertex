@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v81
+# Vertex project formats v1 through v82
+
+## Grouped wall deletion with reviewed rooms (v82)
+
+Native format 82 and JSON/assets extraction version 80 retain grouped wall
+deletion reviews throughout history. A single-context completion uses envelope
+31; a multi-context completion keeps envelope 27 with its grouped child proof.
+The child has exactly `version`, `kind`, `expected_revision`, `message`,
+`wall_ids` and `proof`. Its version is 31 and its kind is
+`physical_wall_deletion`; `wall_ids` contains two to 128 sorted, unique original
+wall identities. `proof` retains the canonical ordinary version-one command.
+The complete room event remains bounded to 1 MiB.
+
+Decoding checks declared erasures and the exact child revision/message.
+Admission requires that the declared inventory equals every original wall
+erased by the child. It independently reconstructs hosted openings, supported
+dimensions and constraints, known memberships and opaque-reference refusal
+from those original walls. Undeclared walls, unrelated changes, replacement
+walls and asset lanes refuse. Single-wall envelope 30 retains its one-wall
+meaning and does not acquire grouped authority.
+
+The desktop route captures an entirely physical-wall selection and reviews all
+affected original room contexts/planes before a single publication. Cancelling
+discards every staged room decision. Cut publishes its clipboard payload only
+after the complete drawing change succeeds. Mixed selections, embedded
+assemblies and phase demolition retain their separate routes.
+
+This is a source contract; compilation and runtime qualification remain pending.
 
 ## Wall deletion and context-based room review (v81)
 

@@ -29313,6 +29313,87 @@ public:
         }
     }
 
+    bool hasOnlyPhysicalWallSelection(const DocumentSnapshot& source) const {
+        return !m_selected_ids.isEmpty() &&
+            std::all_of(m_selected_ids.begin(), m_selected_ids.end(), [&](const auto& id) {
+                const auto found = source.entities().find(id.toStdString());
+                return found != source.entities().end() && found->second.type == "wall";
+            });
+    }
+
+    bool removeSelectedPhysicalWalls(const DocumentSnapshot& source, bool cut) {
+        const auto authority = captureSourceEditAuthority(source);
+        if (authority.selection.isEmpty() ||
+            !authority.selection.contains(authority.context.selected_id))
+            throw std::invalid_argument("The selected wall identity changed. Select the physical walls again.");
+        std::vector<std::string> wall_ids;
+        std::set<std::string> unique_wall_ids;
+        for (const auto& id : authority.selection) {
+            const auto found = source.entities().find(id.toStdString());
+            if (found == source.entities().end() || found->second.type != "wall" ||
+                annotationActionTarget(source, id, false) ||
+                !unique_wall_ids.insert(found->first).second)
+                throw std::invalid_argument("Select unambiguous physical walls to remove together.");
+            wall_ids.push_back(found->first);
+        }
+        const bool site = siteCanvas(m_architecturalCanvas);
+        const auto site_generation = m_site_publication_generation;
+        const auto require_current = [&] {
+            if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
+                m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The wall removal, project, selection or workspace changed. Select the walls again.");
+            if (site) {
+                requireSitePublicationCurrent();
+                if (m_site_publication_generation != site_generation || !m_site_publication_source ||
+                    fullSnapshotDigest(*m_site_publication_source) != authority.source_digest)
+                    throw std::invalid_argument("The displayed Site Plan changed during wall removal. Select the walls again.");
+            }
+        };
+        require_current();
+        // Retain raw/typed collision admission and prove every requested root
+        // belongs to the captured graph before the core owns attached cleanup.
+        const auto selection_graph = clipboardSelectionGraph(source, true, &authority.selection);
+        for (const auto& id : wall_ids)
+            if (std::none_of(selection_graph.begin(), selection_graph.end(), [&](const auto& entity) {
+                    return entity.id == id && entity.type == "wall";
+                }))
+                throw std::invalid_argument("Select unambiguous physical walls to remove together.");
+        QString clipboard_text;
+        QClipboard* clipboard = nullptr;
+        if (cut) {
+            const auto encoded = clipboardSelectionPayload(source);
+            clipboard_text = QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size()));
+            clipboard = QGuiApplication::clipboard();
+            if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+        }
+        require_current();
+        auto deletion = wall_ids.size() == 1
+            ? prepare_physical_wall_deletion(source, wall_ids.front())
+            : prepare_physical_walls_deletion(source, wall_ids);
+        if (cut) deletion.message = "Cut walls and attached objects";
+        const Command command = std::move(deletion);
+        const auto candidate = preview_physical_wall_room_review_geometry(source, command);
+        const auto primary_wall_id = authority.context.selected_id.toStdString();
+        const auto groups = affectedPhysicalWallRoomGroups(source, candidate.entities(), primary_wall_id, true);
+        require_current();
+        if (!groups.empty()) {
+            const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
+                primary_wall_id, authority, owner, require_current);
+            if (!reviewed) { clearError(); refreshInspector(); return false; }
+            require_current();
+            applyAuthoredCommand(*reviewed);
+        } else {
+            require_current();
+            applyAuthoredCommand(command);
+        }
+        if (cut) clipboard->setText(clipboard_text, QClipboard::Clipboard);
+        m_selected_id.clear();
+        m_selected_ids.clear();
+        clearError();
+        refresh();
+        return true;
+    }
+
     bool cutSelection() {
         try {
             const auto source = authoringSnapshot();
@@ -29325,6 +29406,7 @@ public:
                     throw std::invalid_argument("The selection source changed before Cut. The project was not changed.");
                 return deleteSelection();
             }
+            if (hasOnlyPhysicalWallSelection(source)) return removeSelectedPhysicalWalls(source, true);
             const auto entities = clipboardSelectionGraph(source);
             if (entities.empty()) {
                 throw std::invalid_argument(
@@ -29849,54 +29931,7 @@ public:
                 const auto candidate = Document::preview_command(source, command); validate_document_assembly_instances(candidate.entities());
                 applyAuthoredCommand(command); m_selected_id.clear(); m_selected_ids.clear(); clearError(); refresh(); return true;
             }
-            if (m_selected_ids.size() == 1) {
-                const auto selected = source.entities().find(m_selected_ids.front().toStdString());
-                if (selected != source.entities().end() && selected->second.type == "wall" &&
-                    !annotationActionTarget(source, m_selected_ids.front(), false)) {
-                    if (m_selected_ids.front() != m_selected_id)
-                        throw std::invalid_argument("The selected wall identity changed. Select one physical wall again.");
-                    const auto authority = captureSourceEditAuthority(source);
-                    const bool site = siteCanvas(m_architecturalCanvas);
-                    const auto site_generation = m_site_publication_generation;
-                    const auto require_current = [&] {
-                        if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
-                            m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                            throw std::invalid_argument("The wall deletion, project, selection or workspace changed. Select the wall again.");
-                        if (site) {
-                            requireSitePublicationCurrent();
-                            if (m_site_publication_generation != site_generation)
-                                throw std::invalid_argument("The displayed Site Plan changed during wall deletion. Select the wall again.");
-                        }
-                    };
-                    require_current();
-                    // Retain the existing raw/typed selection identity checks,
-                    // including collisions with annotation children. The core
-                    // deletion builder owns the exact attached-object cleanup.
-                    const auto selection_graph = clipboardSelectionGraph(source, true);
-                    if (std::none_of(selection_graph.begin(), selection_graph.end(), [&](const auto& entity) {
-                            return entity.id == selected->first && entity.type == "wall";
-                        }))
-                        throw std::invalid_argument("Select one unambiguous physical wall to delete.");
-                    const Command command = prepare_physical_wall_deletion(source, selected->first);
-                    const auto candidate = preview_physical_wall_room_review_geometry(source, command);
-                    const auto groups = affectedPhysicalWallRoomGroups(source, candidate.entities(), selected->first, true);
-                    if (!groups.empty()) {
-                        const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
-                            selected->first, authority, owner, require_current);
-                        if (!reviewed) { clearError(); refreshInspector(); return false; }
-                        require_current();
-                        applyDocumentCommand(*reviewed);
-                    } else {
-                        require_current();
-                        applyDocumentCommand(command);
-                    }
-                    m_selected_id.clear();
-                    m_selected_ids.clear();
-                    clearError();
-                    refresh();
-                    return true;
-                }
-            }
+            if (hasOnlyPhysicalWallSelection(source)) return removeSelectedPhysicalWalls(source, false);
             const auto entities = clipboardSelectionGraph(source, true);
             if (entities.empty()) {
                 throw std::invalid_argument(
@@ -46356,11 +46391,14 @@ private:
                 }
                 for (const auto& edit:value.dimension_placement_moves) targets.insert(edit.dimension_id);
                 if (!value.room_review_geometry_proof.is_null()) {
-                    // The core admits only a canonical direct wall geometry or
-                    // profile child. Its complete footprint remains subject to
-                    // selection authority beneath the atomic room wrapper.
-                    const auto geometry_command=command_from_json(value.room_review_geometry_proof);
-                    (void)preview_physical_wall_room_review_geometry(source,geometry_command);
+                    // Retain the declared grouped wall inventory while resolving
+                    // its original child footprint beneath the atomic room event.
+                    const auto& proof=value.room_review_geometry_proof;
+                    const auto geometry_command=proof.value("kind",std::string{})=="physical_wall_deletion"
+                        ? decode_physical_wall_deletion_review_proof(proof) : command_from_json(proof);
+                    const auto candidate=preview_physical_wall_room_review_geometry(source,geometry_command);
+                    if (is_physical_wall_room_deletion_review_command(geometry_command))
+                        validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),geometry_command,proof);
                     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
                     if (geometry) {
                         for (const auto& edit:geometry->wall_edits) targets.insert(edit.wall_id);
@@ -46378,7 +46416,7 @@ private:
                 }
                 const auto room_review_targets = [&](const json& intent) {
                     const auto review=decode_physical_wall_room_review_intent(intent);
-                    targets.insert(review.selected_wall_id);
+                    if (!review.selected_wall_id.empty()) targets.insert(review.selected_wall_id);
                     std::set<std::string,std::less<>> rooms;
                     for (const auto& decision : review.retained) {
                         if (!decision.room_id.empty()) rooms.insert(decision.room_id);
@@ -53807,22 +53845,48 @@ public:
         const DocumentSnapshot& source, const DocumentSnapshot& candidate, const Command& geometry_command,
         const std::string& selected_wall_id, const SourceEditAuthority& authority, QWidget* parent,
         const std::function<void()>& additional_fence = {}) {
+        if (fullSnapshotDigest(source) != authority.source_digest)
+            throw std::invalid_argument("The wall proposal does not belong to the captured original project.");
+        // Source-dependent admission must precede granting grouped selection
+        // authority; a broad raw deletion shape alone cannot grant it.
+        const auto derived = preview_physical_wall_room_review_geometry(source, geometry_command);
+        const bool deletion = is_physical_wall_room_deletion_review_command(geometry_command);
+        bool deletion_selection = false;
+        if (deletion) {
+            std::set<std::string> selected_walls, removed_walls;
+            bool actual_wall_roots = !authority.selection.isEmpty();
+            for (const auto& id : authority.selection) {
+                const auto found = source.entities().find(id.toStdString());
+                if (found == source.entities().end() || found->second.type != "wall" ||
+                    annotationActionTarget(source, id, false) ||
+                    !selected_walls.insert(id.toStdString()).second)
+                    actual_wall_roots = false;
+            }
+            if (const auto* child = std::get_if<ApplyEntityChanges>(&geometry_command))
+                for (const auto& change : child->entity_changes) {
+                    if (change.kind != EntityChangeKind::erase) continue;
+                    const auto found = source.entities().find(change.entity_id);
+                    if (found != source.entities().end() && found->second.type == "wall")
+                        removed_walls.insert(found->first);
+                }
+            deletion_selection = actual_wall_roots && selected_walls == removed_walls &&
+                authority.selection.contains(authority.context.selected_id) &&
+                authority.context.selected_id == QString::fromStdString(selected_wall_id);
+        }
+        const bool selection_matches = deletion ? deletion_selection
+            : authority.selection.size() == 1 &&
+                authority.context.selected_id == QString::fromStdString(selected_wall_id) &&
+                authority.selection.front() == QString::fromStdString(selected_wall_id);
         const auto current_source = [&] {
-            if (!sourceEditAuthorityUnchanged(authority) || authority.selection.size() != 1 ||
-                authority.context.selected_id != QString::fromStdString(selected_wall_id) ||
-                authority.selection.front() != QString::fromStdString(selected_wall_id) ||
+            if (!sourceEditAuthorityUnchanged(authority) || !selection_matches ||
                 hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
                 throw std::invalid_argument("The wall proposal, project, selection or workspace changed. Reopen the wall editor.");
             if (additional_fence) additional_fence();
             return authoringSnapshot();
         };
-        if (fullSnapshotDigest(source) != authority.source_digest)
-            throw std::invalid_argument("The wall proposal does not belong to the captured original project.");
         (void)current_source();
         // Delegate direct-command eligibility to the same core admission used
         // by the room dialog. Never rebuild the already accepted wall intent.
-        const auto derived = preview_physical_wall_room_review_geometry(source, geometry_command);
-        const bool deletion = is_physical_wall_room_deletion_review_command(geometry_command);
         if ((deletion && fullSnapshotDigest(derived) != fullSnapshotDigest(candidate)) ||
             entity_map_digest(derived.entities()) != entity_map_digest(candidate.entities()) || derived.assets() != candidate.assets())
             throw std::invalid_argument("The room review geometry differs from the admitted wall proposal.");

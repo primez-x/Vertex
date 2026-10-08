@@ -151,6 +151,15 @@ appraisal observations remain historical and withhold quantities until their
 physical source is repaired. Envelope 29/30, or batch 27 with context-based
 intents, requires native 81/extraction 79.
 
+A wall-only selection also supports removing several walls together with Delete
+or Cut. Grouped proof 31 declares the exact original wall inventory and retains
+its independently reconstructed ordinary child; single-context envelope 31 or
+batch 27 requires native 82/extraction 80. Every affected original room context
+and plane is reviewed against cumulative detached candidates. No intermediate
+wall or room state is published. Cancel preserves the drawing and clipboard;
+successful Cut writes its prepared clipboard payload after the complete event.
+Mixed selections and semantic phase demolition keep their separate contracts.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

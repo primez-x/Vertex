@@ -91,10 +91,21 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // remain unchanged until explicit context/plane review.
 [[nodiscard]] ApplyEntityChanges prepare_physical_wall_deletion(
     const DocumentSnapshot& source,std::string_view wall_id);
+// Wall-only selections are sorted; duplicates and more than 128 roots refuse.
+// Singleton commands retain the original raw-v1 proof and message. Groups
+// require their explicit v31 qualification before acquiring room-review authority.
+[[nodiscard]] ApplyEntityChanges prepare_physical_walls_deletion(
+    const DocumentSnapshot& source,const std::vector<std::string>& wall_ids);
+[[nodiscard]] nlohmann::json encode_physical_wall_deletion_review_proof(
+    const DocumentSnapshot& source,const Command& command);
+// Accepts only the bounded canonical grouped v31 envelope and returns its raw
+// child. The original source must independently validate all declared roots.
+[[nodiscard]] Command decode_physical_wall_deletion_review_proof(const nlohmann::json& proof);
 [[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);
 void validate_physical_wall_room_deletion_review_source(
     const std::map<std::string,Entity,std::less<>>& source,
-    const std::map<std::string,Entity,std::less<>>& candidate,const Command& command);
+    const std::map<std::string,Entity,std::less<>>& candidate,const Command& command,
+    const nlohmann::json& retained_proof=nlohmann::json(nullptr));
 // Source-dependent profile admission preserves exact identity, extensions and
 // every nonprofile property, including opaque geometry and drawing context.
 // The declared profile includes height, thickness, layers and sloped top fields.
