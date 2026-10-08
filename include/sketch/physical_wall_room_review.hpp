@@ -48,6 +48,9 @@ struct PhysicalWallRoomReviewIntent {
     // Version two discovers this exact context/plane without a selected wall.
     // Its selected_wall_id must be empty; version one remains seed-based.
     bool context_plane_selection{};
+    // Version three admits ordinary retained coverage and new-room membership
+    // through actual saved phase choices. One/two retain collect-all replay.
+    bool active_phase_room_scope{};
 };
 struct ReplayedPhysicalWallRoomReview {
     std::map<std::string,Entity,std::less<>> entities;

@@ -136,6 +136,17 @@ Native reader 84/extraction 82 is required throughout retained history. All phas
 membership consumers now share the same model-role admission, including terrain,
 measured linework and wall/roof joins.
 
+Ordinary wall editing now reviews the rooms active in the displayed phase. It
+does not ask to redefine or retire preserved inactive baseline rooms or rooms
+from another alternative. New ordinary room definitions join the registry
+resolved from their actual enclosing walls, in its saved alternative or baseline;
+ambiguous cross-registry support refuses. Scope is derived from the complete
+original source rather than a caller-supplied list. Version-three ordinary room
+intent retains this new authority; older intent histories keep their original
+replay semantics. Baseline room identities and facts remain reserved even while
+inactive. Direct creation through the existing drawing controller retains its
+separate authored phase-membership path.
+
 `to_json` returns a detached canonical JSON object tagged `sketch.model_phases`,
 version 1. Registry IDs, baseline IDs, alternative IDs and member IDs are sorted;
 the active selection is persisted as a string or null. `from_json` rejects unknown

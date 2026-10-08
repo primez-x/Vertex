@@ -182,7 +182,8 @@ public:
     // Reviewed wall-profile changes require v78 in all retained history.
     // Context/plane room review requires v81; grouped wall deletion requires v82.
     // Intact joint wall commands composed with room review require v83.
-    // Baseline-preserving phase room variants require v84 in all retained history.
+    // Baseline-preserving phase variants and active-phase room review require
+    // v84 in all retained history, including terrain phase membership.
     static constexpr std::uint32_t format_version = 84;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);

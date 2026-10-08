@@ -28,6 +28,16 @@ format 84. Earlier projects keep their existing minimum reader.
 
 This source batch has not been compiled or qualified in the installed app.
 
+Ordinary physical-room intent version 3 also requires reader 84/extraction 82.
+Its explicit `active_phase_room_scope: true` and `context_plane_selection`
+boolean retain the exact saved phase choices through the original entity and
+snapshot bindings. Correspondence and replay derive the active owner roster from
+actual admitted registries; inactive baseline and other-alternative rooms keep
+their original payloads. Fresh rooms join the one registry resolved by actual
+clear-boundary wall support, or its real selected-wall fallback, in the saved
+alternative or baseline. Conflicting supporting registries refuse. Older intent
+versions 1 and 2 retain their original keys and collect-all replay semantics.
+
 ## Joint wall movement and room review (v83)
 
 Native format 83 and JSON/assets extraction version 81 retain intact joint-wall

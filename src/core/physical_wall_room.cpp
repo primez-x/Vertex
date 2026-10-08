@@ -24,6 +24,31 @@
 #include <utility>
 
 namespace sketch {
+std::vector<std::string> active_physical_wall_room_ids(
+    const std::map<std::string,Entity,std::less<>>& entities) {
+    std::set<std::string,std::less<>> inactive;
+    const auto registry=std::find_if(entities.begin(),entities.end(),[](const auto& entry) {
+        return entry.second.type=="model_phases";
+    });
+    if (registry!=entities.end()) {
+        const auto saved=ModelPhases::from_json(registry->second.properties.at("model")).active_alternative();
+        // Selecting the first registry's actual saved choice leaves every
+        // other registry at its independently admitted actual saved choice.
+        for (const auto& phase:physical_wall_phase_states(entities,{registry->first,saved}))
+            for (const auto& member:phase.registered_entity_ids) {
+                const auto state=phase.states.find(member);
+                if (state==phase.states.end() || state->second==ModelPhase::demolished) inactive.insert(member);
+            }
+    }
+    std::vector<std::string> result;
+    for (const auto& [id,entity]:entities) {
+        if (!is_physical_wall_room(entity)) continue;
+        if (id.empty() || std::all_of(id.begin(),id.end(),[](unsigned char c){return std::isspace(c)!=0;}) || entity.id!=id)
+            throw std::invalid_argument("Physical wall room: room key differs from its actual identity");
+        if (!inactive.contains(id)) result.push_back(id);
+    }
+    return result;
+}
 namespace {
 using Json=nlohmann::json;
 constexpr std::size_t maximum_rooms=2048;
@@ -672,6 +697,20 @@ bool physical_wall_room_lineage_matches_current_inventory(
 }
 
 namespace {
+struct OrdinaryRoomScope {
+    std::set<std::string,std::less<>> active;
+    bool uses_saved_phases{};
+};
+OrdinaryRoomScope ordinary_room_scope(const std::map<std::string,Entity,std::less<>>& entities) {
+    const auto ids=active_physical_wall_room_ids(entities);
+    OrdinaryRoomScope result;
+    result.active.insert(ids.begin(),ids.end());
+    for (const auto& [id,entity]:entities) {
+        (void)id;
+        if (entity.type=="model_phases") result.uses_saved_phases=true;
+    }
+    return result;
+}
 PhysicalWallRoomCorrespondenceReport correspondence_report(
     const std::map<std::string,Entity,std::less<>>& entities,const DocumentSnapshot* source,
     PhysicalWallSpaces detection,std::string_view selected_wall_id,double elevation,Vec2 origin,
@@ -687,6 +726,11 @@ PhysicalWallRoomCorrespondenceReport correspondence_report(
     report.selected_wall_id=selected_wall_id; report.context=detection.context;
     report.context_plane_selection=selected_wall_id.empty();
     const auto organization=organize_project(entities);
+    std::optional<OrdinaryRoomScope> ordinary_scope;
+    if (!retained_room_ids) {
+        ordinary_scope=ordinary_room_scope(entities);
+        report.active_phase_room_scope=ordinary_scope->uses_saved_phases;
+    }
     std::set<std::string,std::less<>> retained_roster;
     std::map<std::string,CorrespondenceLineage,std::less<>> retained_roster_lineage;
     if (retained_room_ids) {
@@ -765,6 +809,7 @@ PhysicalWallRoomCorrespondenceReport correspondence_report(
     for (const auto& [id,entity]:entities) {
         if (retained_room_ids && !retained_roster.contains(id)) continue;
         if (!is_physical_wall_room(entity)) continue;
+        if (ordinary_scope && !ordinary_scope->active.contains(id)) continue;
         const auto context=organization.drawing_context(id);
         if (context && context->complete() && *context!=report.context) continue;
         if (report.retained.size()==maximum_rooms) invalid("correspondence exceeds the retained-owner budget");
@@ -907,7 +952,10 @@ PhasePhysicalWallRoomCorrespondenceReport phase_physical_wall_room_correspondenc
 }
 bool physical_wall_room_correspondence_is_current(const PhysicalWallRoomCorrespondenceReport& report,
     const DocumentSnapshot& source) {
-    return !report.explicit_phase_evaluation && report.document_id==source.document_id() && report.revision==source.revision() &&
-        report.source_snapshot_digest==document_snapshot_digest(source);
+    if (report.explicit_phase_evaluation || report.document_id!=source.document_id() || report.revision!=source.revision() ||
+        report.source_snapshot_digest!=document_snapshot_digest(source)) return false;
+    try {
+        return report.active_phase_room_scope==ordinary_room_scope(source.entities()).uses_saved_phases;
+    } catch (const std::exception&) { return false; }
 }
 } // namespace sketch

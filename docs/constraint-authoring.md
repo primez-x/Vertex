@@ -169,6 +169,16 @@ and other command lanes cannot borrow this authority. Returning to baseline
 retrieves original records; a complete existing alternative can switch display
 without another room-assignment event.
 
+Ordinary room intent 3 separately binds current saved phase choices and reviews
+only active room owners. It can retain, redefine or retire active proposed rooms
+without consuming preserved inactive baseline owners. New rooms receive the
+actual supporting registry's saved alternative/baseline membership in that same
+event; conflicting support scopes refuse. Old intent 1/2 replay stays unchanged.
+This requires native 84/extraction 82 throughout retained history. Serialized
+envelopes 29 through 32 are admitted by the common reader before their existing
+strict per-dialect checks; the previous common whitelist omitted those supported
+context/deletion/joint-room forms.
+
 Connected wall-group movement uses its intact joint envelope 17 before room
 review. Shared translations, saved per-owner offsets and rigid operators retain
 their actual selected source identities and independently replayed constraint

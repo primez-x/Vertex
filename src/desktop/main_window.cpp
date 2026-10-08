@@ -54329,9 +54329,11 @@ public:
         }
         if (changed_owners.empty()) return {};
         const auto organization = organize_project(source);
+        const auto active_ids=active_physical_wall_room_ids(source.entities());
+        const std::set<std::string> active_rooms(active_ids.begin(),active_ids.end());
         std::vector<PhysicalWallRoomReviewGroup> groups;
         for (const auto& [id, entity] : source.entities()) {
-            if (!is_physical_wall_room(entity)) continue;
+            if (!is_physical_wall_room(entity) || !active_rooms.contains(id)) continue;
             const auto context = organization.drawing_context(id);
             if (!context || !context->complete())
                 throw std::invalid_argument("A retained room has unresolved drawing context; resolve it before changing physical walls.");

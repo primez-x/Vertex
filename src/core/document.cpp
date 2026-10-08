@@ -1989,6 +1989,16 @@ static bool has_room_review_completion(const ApplyBoundaryConstraintChanges& com
         has_room_review_geometry_completion(command) || has_room_review_batch_completion(command);
 }
 
+static bool room_review_context_selection(const nlohmann::json& intent) {
+    if (intent.is_null()) return false;
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    return decode_physical_wall_room_review_intent(intent).context_plane_selection;
+#else
+    return intent.is_object() && (intent.value("version",0)==2 ||
+        (intent.value("version",0)==3 && intent.value("context_plane_selection",false)));
+#endif
+}
+
 static void validate_phase_room_review_mode(const ApplyBoundaryConstraintChanges& command) {
     if (!has_phase_room_review_completion(command)) return;
     if (!command.phase_room_review_completion || command.phase_room_review_intent.is_null())
@@ -4117,13 +4127,21 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 for (const auto& [id,entity] : reviewed_source)
                     if (entity.type=="wall" && (!source.contains(id) || source.at(id).type!="wall"))
                         throw std::invalid_argument("Wall room review cannot create a physical source wall");
+                bool active_phase_scope=false;
                 for (const auto& encoded : room_review_intents(command)) {
                     const auto intent=decode_physical_wall_room_review_intent(encoded);
+                    active_phase_scope=active_phase_scope || intent.active_phase_room_scope;
                     for (const auto& decision : intent.retained) reviewed_rooms.insert(decision.room_id);
+                }
+                std::set<std::string> active_rooms;
+                if (active_phase_scope) {
+                    const auto ids=active_physical_wall_room_ids(source);
+                    active_rooms.insert(ids.begin(),ids.end());
                 }
                 const auto organization=organize_project(source);
                 for (const auto& [id,entity] : source) {
                     if (!is_physical_wall_room(entity)) continue;
+                    if (active_phase_scope && !active_rooms.contains(id)) continue;
                     const auto context=organization.drawing_context(id);
                     if (!context || !context->complete())
                         throw std::invalid_argument("Wall room review requires resolved retained room contexts");
@@ -5642,8 +5660,7 @@ nlohmann::json command_to_json(const Command& command) {
                     validate_room_review_mode(typed,false);
                     const bool geometry=has_room_review_geometry_completion(typed);
                     const bool batch=has_room_review_batch_completion(typed);
-                    const bool context_review=typed.room_review_intent.is_object() &&
-                        typed.room_review_intent.value("version",0)==2;
+                    const bool context_review=room_review_context_selection(typed.room_review_intent);
                     const int geometry_version=geometry ? room_review_geometry_dialect(typed,room_review_geometry_command(typed))
                         : context_review ? 29 : 18;
                     const int version=batch ? 27 : geometry_version;
@@ -5935,7 +5952,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23 && value.at("version") != 24 && value.at("version") != 25 && value.at("version") != 26 && value.at("version") != 27 && value.at("version") != 28 && value.at("version") != 33) ||
+            (value.at("version")<1 || value.at("version")>33) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -6195,8 +6212,7 @@ Command command_from_json(const nlohmann::json& value,
                 result.room_review_completion=true;
                 result.room_review_intent=value.at("room_review_intent");
                 if (!geometry) {
-                    const bool context_review=result.room_review_intent.is_object() &&
-                        result.room_review_intent.value("version",0)==2;
+                    const bool context_review=room_review_context_selection(result.room_review_intent);
                     if (context_review!=(value.at("version")==29))
                         throw std::invalid_argument("Room-only review dialect does not match its selection basis");
                 }

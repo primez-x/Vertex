@@ -12,6 +12,12 @@
 
 namespace sketch {
 struct PhysicalWallSpace;
+// Pure admission using every actual phase registry's saved choice. Registry
+// members must resolve and physical owners have unique registry ownership;
+// absent/demolished members are excluded, unregistered room owners stay active.
+// Returned actual room identities are sorted; no entity or selection changes.
+[[nodiscard]] std::vector<std::string> active_physical_wall_room_ids(
+    const std::map<std::string,Entity,std::less<>>& entities);
 struct PhysicalWallRoomCheck {
     bool current{};
     std::string diagnostic;
@@ -101,6 +107,10 @@ struct PhysicalWallRoomCorrespondenceReport {
     // Transient analytical phase reports must never borrow the ordinary
     // destructive retain/retire command's acceptance authority.
     bool explicit_phase_evaluation{false};
+    // Ordinary report uses saved phase authority whenever an actual registry
+    // exists, including active-only authoring before any room is inactive.
+    // Persisted acceptance needs the explicit version-three room scope.
+    bool active_phase_room_scope{false};
 };
 // A distinct analytical report for an explicitly selected destination phase
 // and exact old owner roster. The ordinary payload remains detached evidence;

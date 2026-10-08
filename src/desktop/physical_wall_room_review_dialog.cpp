@@ -379,6 +379,7 @@ public:
         require_current();if (!report) throw std::invalid_argument("Current room detection is unavailable.");
         PhysicalWallRoomReviewIntent result;result.selected_wall_id=report->selected_wall_id;result.source_snapshot_digest=source_digest;
         result.context_plane_selection=report->context_plane_selection;
+        result.active_phase_room_scope=report->active_phase_room_scope;
         result.source_entities_digest=entity_map_digest(source.entities());result.context=report->context;result.effective_elevation_m=report->effective_elevation_m;
         result.source_authoring_digest=document_authoring_source_digest_v2(source);result.source_saved_revision=source.saved_revision_optional();
         const auto assigned=assignments();std::set<std::string> retiring;

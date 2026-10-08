@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 ordinary room editing in the active design
+
+Ordinary room correspondence and version-three review intent now use the actual
+saved phase roster. Registry identities, member types and unique physical
+ownership are admitted independently; inactive baseline/other-alternative rooms
+are excluded before geometry decoding and retain exact payloads. Legacy intent
+1/2 keys and collect-all replay remain unchanged; explicit phase reports still
+cannot borrow ordinary destructive authority.
+
+Fresh ordinary rooms join the registry resolved from their actual clear-boundary
+wall support, in its saved alternative or baseline. Conflicting supporting
+registries refuse; unrelated registry metadata and alternatives remain intact.
+Selected-wall scoped retirement performs its existing qualified membership
+cleanup in the same event. MainWindow affected-room groups and final geometry
+coverage use this active roster; the dialog carries its captured scope. Native
+84/extraction 82 floors cover intent 3 throughout history. The common command
+reader now admits supported context/deletion/joint-room envelopes 29 through 32
+before existing exact dialect checks; its earlier whitelist had omitted them.
+
+Integrated independent source review approved this scoped batch without a
+required P1/P2 finding or obvious source compile inconsistency. No builds,
+tests, probes, launches, packages or installations run; compilation, editing,
+phase quantities, save/reopen and Undo remain unverified. The installed
+candidate is unchanged.
+Direct raw room creation still uses the drawing controller's existing authored
+membership augmentation. Explicit phase-choice changes that redefine or retire
+an existing proposed room and phase-aware constraint solving remain in progress.
+
 ### October 8 atomic room variants in remodeling alternatives
 
 Exclusive envelope 33 now prepares and replays an actual phase-registry change

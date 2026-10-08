@@ -111,6 +111,59 @@ void validate_active(const Entities& source,const std::set<std::string>& rooms,
             invalid(std::string(owner_kind)+" is inactive in the semantic phase");
     }
 }
+std::optional<std::string> room_creation_registry(const Entities& source,
+    const std::map<std::string,std::string,std::less<>>& wall_registries,
+    const PhysicalWallSpace& space,const std::string& selected_wall_id) {
+    std::set<std::string> registries;
+    const auto admit_face=[&](const Json& face) {
+        for (const auto& edge:face.at("edges")) for (const auto& use:edge.at("source_uses")) {
+            const auto owner=use.at("owner_id").get<std::string>();id(owner);
+            const auto actual=source.find(owner);
+            if (actual==source.end() || actual->second.id!=owner || actual->second.type!="wall")
+                invalid("new room support must resolve to an actual physical wall");
+            const auto registry=wall_registries.find(owner);
+            if (registry!=wall_registries.end()) registries.insert(registry->second);
+        }
+    };
+    // Physical inventory also contains unrelated components on this plane.
+    // Membership follows actual boundary support, including inline holes.
+    admit_face(space.source_lineage.at("outer"));
+    for (const auto& hole:space.source_lineage.at("holes")) admit_face(hole);
+    if (registries.size()>1) invalid("new room support belongs to conflicting phase registries");
+    if (!registries.empty()) return *registries.begin();
+    // A seeded review may explicitly supply phase authority for otherwise
+    // unregistered support. Context-only discovery has no invented seed.
+    const auto selected=wall_registries.find(selected_wall_id);
+    return selected==wall_registries.end() ? std::nullopt : std::optional<std::string>{selected->second};
+}
+void register_created_rooms(Entities& result,
+    const std::map<std::string,std::vector<std::string>,std::less<>>& created) {
+    for (const auto& [registry_id,room_ids]:created) {
+        auto& raw=result.at(registry_id).properties.at("model");
+        const auto original=ModelPhases::from_json(raw);
+        auto entities=original.entity_ids(),baseline=original.baseline_ids();
+        auto alternatives=original.alternatives();
+        entities.insert(entities.end(),room_ids.begin(),room_ids.end());
+        if (original.active_alternative()) {
+            const auto target=std::find_if(alternatives.begin(),alternatives.end(),[&](const auto& alternative) {
+                return alternative.id==*original.active_alternative();
+            });
+            if (target==alternatives.end()) invalid("new room saved alternative no longer exists");
+            target->proposed_ids.insert(target->proposed_ids.end(),room_ids.begin(),room_ids.end());
+        } else baseline.insert(baseline.end(),room_ids.begin(),room_ids.end());
+        const auto expected=ModelPhases::create(std::move(entities),std::move(baseline),
+            std::move(alternatives),original.active_alternative());
+        // Append only the reviewed identities to actual raw membership. Keep
+        // original registry payload, selection, other alternatives and order.
+        for (const auto& room_id:room_ids) raw.at("entity_ids").push_back(room_id);
+        if (original.active_alternative()) {
+            for (auto& alternative:raw.at("alternatives"))
+                if (alternative.at("id")==*original.active_alternative())
+                    for (const auto& room_id:room_ids) alternative.at("proposed_ids").push_back(room_id);
+        } else for (const auto& room_id:room_ids) raw.at("baseline_ids").push_back(room_id);
+        if (ModelPhases::from_json(raw).to_json()!=expected.to_json()) invalid("new room phase membership differs from saved authority");
+    }
+}
 Json retain_registry_metadata(const Json& original,const Json& canonical) {
     if (canonical.is_object()) {
         auto result=original.is_object()?original:Json::object();
@@ -326,12 +379,23 @@ struct RoomReviewBatchGuard {
 PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json& value) {
     try {
         if (value.dump().size()>16*1024*1024) invalid("intent exceeds evidence budget");
-        keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
-            "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2))
+        if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+            (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3))
             invalid("unsupported intent version");
+        const bool active_scope=value.at("version")==3;
+        if (active_scope)
+            keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
+                "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals","active_phase_room_scope","context_plane_selection"});
+        else
+            keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
+                "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals"});
         PhysicalWallRoomReviewIntent result;
-        result.context_plane_selection=value.at("version")==2;
+        result.active_phase_room_scope=active_scope;
+        if (active_scope) {
+            if (!value.at("active_phase_room_scope").is_boolean() || value.at("active_phase_room_scope")!=true ||
+                !value.at("context_plane_selection").is_boolean()) invalid("version three requires explicit ordinary active room scope and selection mode");
+            result.context_plane_selection=value.at("context_plane_selection").get<bool>();
+        } else result.context_plane_selection=value.at("version")==2;
         result.selected_wall_id=value.at("selected_wall_id").get<std::string>();
         if (result.context_plane_selection) {
             if (!result.selected_wall_id.empty()) invalid("context/plane intent cannot contain a selected wall");
@@ -434,12 +498,16 @@ Json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent&
         Json rows=Json::array();for (const auto& r:d.acknowledged_relations) rows.push_back(relation_json(r));
         relationships.push_back({{"entity_id",d.entity_id},{"removed_room_ids",d.removed_room_ids},{"acknowledged_relations",std::move(rows)}});
     }
-    Json result{{"version",intent.context_plane_selection ? 2 : 1},{"selected_wall_id",intent.selected_wall_id},{"source_snapshot_digest",intent.source_snapshot_digest},
+    Json result{{"version",intent.active_phase_room_scope ? 3 : (intent.context_plane_selection ? 2 : 1)},{"selected_wall_id",intent.selected_wall_id},{"source_snapshot_digest",intent.source_snapshot_digest},
         {"source_authoring_digest",intent.source_authoring_digest},
         {"source_saved_revision",intent.source_saved_revision ? Json(*intent.source_saved_revision) : Json(nullptr)},
         {"source_entities_digest",intent.source_entities_digest},{"context",context_json(intent.context)},{"effective_elevation_m",intent.effective_elevation_m},
         {"retained",std::move(retained)},{"fresh",std::move(fresh)},{"removed_reference_ids",intent.removed_reference_ids},
         {"kept_reference_ids",intent.kept_reference_ids},{"relationship_removals",std::move(relationships)}};
+    if (intent.active_phase_room_scope) {
+        result["active_phase_room_scope"]=true;
+        result["context_plane_selection"]=intent.context_plane_selection;
+    }
     (void)decode_physical_wall_room_review_intent(result);return result;
 }
 
@@ -457,6 +525,22 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
         if (elevation!=intent.effective_elevation_m) invalid("source effective plane changed");
     }
     const auto organization=organize_project(source);const auto current_owners=current_source_owners(detection,intent.selected_wall_id);
+    std::optional<std::set<std::string,std::less<>>> active_rooms;
+    std::map<std::string,std::string,std::less<>> wall_registries;
+    if (intent.active_phase_room_scope) {
+        const auto admitted=active_physical_wall_room_ids(source);
+        active_rooms.emplace(admitted.begin(),admitted.end());
+        if (std::none_of(source.begin(),source.end(),[](const auto& entry){return entry.second.type=="model_phases";}))
+            invalid("active room scope requires actual saved phase authority");
+        // The shared active roster already admitted every registry/member and
+        // unique physical ownership before this index is constructed.
+        for (const auto& [registry_id,registry]:source) {
+            if (registry.type!="model_phases") continue;
+            const auto model=ModelPhases::from_json(registry.properties.at("model"));
+            for (const auto& member:model.entity_ids()) if (source.at(member).type=="wall")
+                wall_registries.emplace(member,registry_id);
+        }
+    }
     std::set<std::string> expected_rooms,retiring,affected_tokens,occupied;
     std::size_t retained_bytes=0,retained_contacts=0;
     for (const auto& [entity_id,e]:source) {
@@ -467,6 +551,10 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
             }
         }
         if (!is_physical_wall_room(e)) continue;
+        // Older intents deliberately keep their original collect-all dialect.
+        // Version three excludes inactive originals before context, descriptor
+        // or plane evidence admission and cannot assign or retire those owners.
+        if (active_rooms && !active_rooms->contains(entity_id)) continue;
         const auto c=organization.drawing_context(entity_id);
         if (!c || !c->complete()) invalid("retained room has unresolved drawing context");
         if (*c!=intent.context) continue;
@@ -591,7 +679,7 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
         if (mentions(properties,affected_tokens) || mentions(found->second.extensions,affected_tokens)) invalid("unsupported relationship metadata reference");
         found->second.properties["model"]=RoomRelationshipSnapshot::create(std::move(references),std::move(relations)).to_json();
     }
-    if (intent.context_plane_selection) {
+    if (intent.context_plane_selection || intent.active_phase_room_scope) {
         // Explicit retirement removes known live memberships. Original
         // evidence and opaque metadata remain for the reference scan below.
         auto retired_members=retiring;retired_members.insert(removed.begin(),removed.end());
@@ -655,6 +743,7 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
     for (const auto& [room_id,d]:old)
         if (d->disposition==PhysicalWallRoomRetainedDisposition::retain) retained_owners.insert(room_id);
     std::map<std::string,PhysicalWallSpaces,std::less<>> seeded_detections;
+    std::map<std::string,std::vector<std::string>,std::less<>> created_by_registry;
     const auto source_owner=[&](const PhysicalWallSpace& space) {
         if (!intent.context_plane_selection) return intent.selected_wall_id;
         // Descriptors retain a real active source owner, never the deleted wall
@@ -696,6 +785,10 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
             result=edited_boundary_entities_for_room_review(result,edit,retained_owners);
             retained_edits.push_back(std::move(edit));
         } else {
+            if (active_rooms) {
+                const auto registry=room_creation_registry(source,wall_registries,space,intent.selected_wall_id);
+                if (registry) created_by_registry[*registry].push_back(d->room_id);
+            }
             const auto& c=d->context;
             Entity room=encode_identified_boundary_entity(replacement);
             room.properties.update({{"property_id",c.property_id},{"building_id",c.building_id},{"floor_id",c.floor_id},{"layer_id",c.layer_id},
@@ -705,6 +798,12 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
             result.emplace(room.id,std::move(room));
             created_room_ids.push_back(d->room_id);
         }
+    }
+    if (active_rooms) {
+        register_created_rooms(result,created_by_registry);
+        // Re-admit the resulting actual inventory, including fresh physical
+        // owners, without changing any evaluated or saved phase selection.
+        (void)active_physical_wall_room_ids(result);
     }
     if (const auto error=validate_boundary_integrity(result)) invalid(*error);
     for (const auto& id:kept) {
@@ -720,6 +819,14 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
             const auto decoded=decode_boundary_dimension_entity(result.at(id));
             (void)resolve_boundary_dimension(*decoded.dimension,result);
         }
+    }
+    if (active_rooms) for (const auto& [room_id,room]:source) {
+        if (!is_physical_wall_room(room) || active_rooms->contains(room_id)) continue;
+        const auto preserved=result.find(room_id);
+        if (preserved==result.end() || preserved->second!=room ||
+            preserved->second.properties.dump()!=room.properties.dump() ||
+            preserved->second.extensions.dump()!=room.extensions.dump())
+            invalid("ordinary active room review changed an inactive original owner");
     }
     return {std::move(result),std::move(retained_edits),std::move(created_room_ids),{retiring.begin(),retiring.end()}};
 }
@@ -754,7 +861,11 @@ PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(const DocumentS
     if (report.context_plane_selection!=intent.context_plane_selection || report.selected_wall_id!=intent.selected_wall_id ||
         report.context!=intent.context || report.effective_elevation_m!=intent.effective_elevation_m)
         invalid("intent does not belong to the displayed context/plane report");
-    auto encoded=encode_physical_wall_room_review_intent(intent);
+    auto captured_intent=intent;
+    // Scope comes from the current displayed ordinary report, never from a
+    // caller's unchecked marker or an explicit destination-phase report.
+    captured_intent.active_phase_room_scope=report.active_phase_room_scope;
+    auto encoded=encode_physical_wall_room_review_intent(captured_intent);
     auto replayed=replay_physical_wall_room_review(source.entities(),encoded);
     return {std::move(replayed),std::move(encoded)};
 }

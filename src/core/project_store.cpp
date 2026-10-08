@@ -307,6 +307,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (context_review(command.room_review_intent) ||
                 std::any_of(command.room_review_additional_intents.begin(),command.room_review_additional_intents.end(),context_review))
                 required=std::max(required,81U);
+            const auto active_phase_review=[](const nlohmann::json& intent) {
+                return intent.is_object() && intent.contains("version") && intent.at("version")==3;
+            };
+            if (active_phase_review(command.room_review_intent) ||
+                std::any_of(command.room_review_additional_intents.begin(),command.room_review_additional_intents.end(),active_phase_review))
+                required=std::max(required,84U);
             if (command.curve_construction_completion)
                 required = std::max(required,75U);
             if (command.room_review_batch_completion || !command.room_review_additional_intents.empty())

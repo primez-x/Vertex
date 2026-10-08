@@ -1281,6 +1281,7 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U193 — Switch between two remodeling alternatives**
   - Unchanged-room check: Define a clear room from physical walls, create an alternative with no wall changes, then switch between it and the baseline. The room's area remains available without redefining the room. Change or demolish a supporting wall: the previous area must not be presented as current until its room consequences are reviewed.
   - Expected: Only the intended alternative's changes appear.
+  - Editing check: With reviewed proposed rooms displayed, edit or move a supporting wall and complete its room review. The room list includes the active design's rooms, not preserved inactive baseline rooms or another design's rooms. New room definitions stay in the displayed design. Switch to baseline and confirm its original room facts and outlines remain intact.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
