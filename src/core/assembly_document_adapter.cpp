@@ -1,6 +1,11 @@
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/annotation_entity_codec.hpp"
+#include "sketch/architectural_document_adapter.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <iterator>
+#include <numbers>
 #include <stdexcept>
 #include <set>
 
@@ -243,5 +248,227 @@ ApplyEntityChanges independent_assembly_type_remove_command(const DocumentSnapsh
     Entity entity=found->second;
     entity.properties["model"]=catalog(entity).without_type(type_id).to_json();
     return upsert(source,std::move(entity),expected_revision,"Remove assembly type");
+}
+ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision) {
+    revision(source, expected_revision);
+    require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
+        "an embedded assembly group requires between 1 and 1000 roots");
+    const auto finite_point = [](const auto& point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    };
+    require(finite_point(transform.pivot) && finite_point(transform.offset) &&
+        std::isfinite(transform.rotation_z_radians) && std::isfinite(transform.scale) &&
+        transform.scale > 0.0, "assembly group transform must be finite with a positive scale");
+
+    using Identity = std::pair<std::string, std::string>;
+    std::set<Identity> selected, copies;
+    std::map<std::string, AssemblyModel, std::less<>> models;
+    for (const auto& target : targets) {
+        identifier(target.catalog_id);
+        identifier(target.instance_id);
+        require(selected.emplace(target.catalog_id, target.instance_id).second,
+            "duplicate embedded assembly group root");
+        const auto found = source.entities().find(target.catalog_id);
+        require(found != source.entities().end() && found->second.id == target.catalog_id,
+            "embedded assembly group catalog is missing or has inconsistent identity");
+        if (!models.contains(target.catalog_id))
+            models.emplace(target.catalog_id, catalog(found->second));
+        const auto& model = models.at(target.catalog_id);
+        require(std::any_of(model.instances().begin(), model.instances().end(),
+            [&](const auto& instance) { return instance.id == target.instance_id; }),
+            "embedded assembly group instance is missing from its catalog");
+        if (target.copy_instance_id) {
+            identifier(*target.copy_instance_id);
+            require(copies.emplace(target.catalog_id, *target.copy_instance_id).second &&
+                std::none_of(model.instances().begin(), model.instances().end(),
+                    [&](const auto& instance) { return instance.id == *target.copy_instance_id; }),
+                "embedded assembly copy identity already exists");
+        }
+    }
+    // Includes all embedded and independent roots, not just selected profiles.
+    // Identity gestures must pass the same source budgets and descriptors.
+    validate_document_assembly_instances(source.entities());
+    struct Root {
+        std::size_t raw_index;
+        AssemblyTransform pose;
+    };
+    std::vector<Root> roots;
+    roots.reserve(targets.size());
+    AssemblyExpansionBudget selected_budget;
+    for (const auto& target : targets) {
+        const auto& model = models.at(target.catalog_id);
+        const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
+            [&](const auto& value) { return value.id == target.instance_id; });
+        const auto expansion = model.expand(*instance, selected_budget);
+        require(!expansion.profiles.empty() && !expansion.nodes.empty(),
+            "embedded assembly group requires genuine geometric profile expansion");
+        const auto& raw_instances = source.entities().at(target.catalog_id).properties.at("model").at("instances");
+        const auto raw = std::find_if(raw_instances.begin(), raw_instances.end(),
+            [&](const auto& value) { return value.at("id") == target.instance_id; });
+        require(raw != raw_instances.end(), "embedded assembly source record is missing");
+        roots.push_back({static_cast<std::size_t>(std::distance(raw_instances.begin(), raw)),
+            expansion.nodes.front().transform});
+    }
+
+    const auto whole_turn = 2.0 * std::numbers::pi;
+    const bool reflected = transform.flip_horizontal != transform.flip_vertical;
+    // Two flips are a proper half-turn. Normalize before addition so even a
+    // finite, very large angle cannot overflow, and exact whole turns vanish.
+    const auto angle = std::remainder(std::remainder(transform.rotation_z_radians, whole_turn) +
+        (transform.flip_horizontal && transform.flip_vertical ? std::numbers::pi : 0.0), whole_turn);
+    const bool identity = angle == 0.0 && !reflected && transform.scale == 1.0 &&
+        transform.offset.x == 0.0 && transform.offset.y == 0.0 && transform.offset.z == 0.0;
+    const auto cosine = std::abs(angle) == std::numbers::pi ? -1.0 : std::cos(angle);
+    const auto sine = std::abs(angle) == std::numbers::pi ? 0.0 : std::sin(angle);
+    const auto hx = reflected && transform.flip_horizontal ? -1.0 : 1.0;
+    const auto hy = reflected && transform.flip_vertical ? -1.0 : 1.0;
+    const auto moved_pose = [&](AssemblyTransform root) {
+        if (angle == 0.0 && !reflected && transform.scale == 1.0) {
+            root.translation_m.x += transform.offset.x;
+            root.translation_m.y += transform.offset.y;
+            root.translation_m.z += transform.offset.z;
+        } else {
+            // Subtract the common pivot before scale/rotation. In particular,
+            // no enormous affine translation is subtracted from source pose.
+            const auto dx = root.translation_m.x - transform.pivot.x;
+            const auto dy = root.translation_m.y - transform.pivot.y;
+            const auto dz = root.translation_m.z - transform.pivot.z;
+            root.translation_m = {
+                transform.pivot.x + hx * transform.scale * (cosine * dx - sine * dy) + transform.offset.x,
+                transform.pivot.y + hy * transform.scale * (sine * dx + cosine * dy) + transform.offset.y,
+                transform.pivot.z + transform.scale * dz + transform.offset.z};
+        }
+        if (angle != 0.0 || reflected) {
+            auto heading = std::remainder(std::remainder(root.rotation_radians, whole_turn) + angle, whole_turn);
+            if (reflected) heading = transform.flip_horizontal ? std::numbers::pi - heading : -heading;
+            root.rotation_radians = std::remainder(heading, whole_turn);
+        }
+        root.scale *= transform.scale;
+        root.mirrored_y = root.mirrored_y != reflected;
+        require(finite_point(root.translation_m) && std::isfinite(root.rotation_radians) &&
+            std::isfinite(root.scale) && root.scale > 0.0,
+            "embedded assembly group pose exceeds the supported transform range");
+        return root;
+    };
+
+    std::map<std::string, Entity, std::less<>> changed;
+    for (std::size_t i = 0; i < targets.size(); ++i) {
+        const auto& target = targets[i];
+        if (identity && !target.copy_instance_id) continue;
+        const auto& before = source.entities().at(target.catalog_id);
+        auto [entry, inserted] = changed.try_emplace(target.catalog_id, before);
+        (void)inserted;
+        auto& instances = entry->second.properties.at("model").at("instances");
+        // Always clone the captured original, even if another selected record
+        // in this same catalog has already been transformed in the candidate.
+        auto raw = before.properties.at("model").at("instances").at(roots[i].raw_index);
+        if (target.copy_instance_id) raw["id"] = *target.copy_instance_id;
+        if (!identity) {
+            const auto pose = moved_pose(roots[i].pose);
+            raw.erase("placement");
+            // Patch only owned pose fields, retaining an existing explicit
+            // false parity field and all raw override/nested-override records.
+            auto& encoded = raw["root_transform"];
+            if (!encoded.is_object()) encoded = nlohmann::json::object();
+            encoded["translation_m"] = {pose.translation_m.x, pose.translation_m.y, pose.translation_m.z};
+            encoded["rotation_radians"] = pose.rotation_radians;
+            encoded["scale"] = pose.scale;
+            if (pose.mirrored_y || encoded.contains("mirrored_y")) encoded["mirrored_y"] = pose.mirrored_y;
+        }
+        if (target.copy_instance_id) instances.push_back(std::move(raw));
+        else instances.at(roots[i].raw_index) = std::move(raw);
+    }
+    ApplyEntityChanges command{expected_revision, {}, {},
+        copies.empty() ? "Transform embedded assembly group" : "Copy/transform embedded assembly group"};
+    for (auto& [id, entity] : changed) {
+        (void)id;
+        command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+    }
+    if (command.entity_changes.empty()) (void)Document::fork(source);
+    else (void)Document::preview_command(source, command);
+    return command;
+}
+ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& source,
+    std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision) {
+    revision(source, expected_revision);
+    require(!targets.empty() && targets.size() <= maximum_architectural_group_targets,
+        "an embedded assembly copy requires between 1 and 1000 roots");
+    std::set<std::string, std::less<>> fresh_ids;
+    std::vector<EmbeddedAssemblyGroupTarget> moving;
+    moving.reserve(targets.size());
+    for (const auto& target : targets) {
+        require(target.copy_instance_id.has_value(), "an embedded assembly copy requires a fresh document identity");
+        identifier(*target.copy_instance_id);
+        require(!source.entities().contains(*target.copy_instance_id) && fresh_ids.insert(*target.copy_instance_id).second,
+            "embedded assembly copy document identity already exists");
+        moving.push_back({target.catalog_id, target.instance_id, std::nullopt});
+    }
+    // Derive exact poses through the same qualified shared-pivot command. Its
+    // existing-catalog upserts are detached input only, never published here.
+    const auto movement = embedded_assembly_group_transform_command(source, moving, transform, expected_revision);
+    std::map<std::string, const Entity*, std::less<>> moved_catalogs;
+    for (const auto& change : movement.entity_changes) {
+        require(change.kind == EntityChangeKind::upsert && change.entity.type == "assembly_model" &&
+            moved_catalogs.emplace(change.entity.id, &change.entity).second,
+            "embedded assembly copy has conflicting catalog consequences");
+    }
+    for (const auto& [id, entity] : source.entities()) {
+        if (entity.type == kAnnotationEntityType) {
+            const auto state = decode_annotation_entity(entity);
+            for (const auto& child : state.labels)
+                require(!fresh_ids.contains(child.id), "embedded assembly copy identity collides with an annotation");
+            for (const auto& child : state.symbols)
+                require(!fresh_ids.contains(child.id), "embedded assembly copy identity collides with a component");
+        } else if (entity.type == "assembly_model") {
+            for (const auto& instance : entity.properties.at("model").at("instances"))
+                require(!fresh_ids.contains(id + ":instance:" + instance.at("id").get<std::string>()),
+                    "embedded assembly copy identity collides with a catalog instance");
+        }
+    }
+    ApplyEntityChanges command{expected_revision, {}, {}, "Copy embedded assemblies as independent objects"};
+    AssemblyExpansionBudget budget;
+    std::map<std::string, AssemblyModel, std::less<>> proposed_models;
+    for (const auto& target : targets) {
+        const auto& original = source.entities().at(target.catalog_id);
+        const auto found_catalog = moved_catalogs.find(target.catalog_id);
+        const auto& proposed = found_catalog == moved_catalogs.end() ? original : *found_catalog->second;
+        if (!proposed_models.contains(target.catalog_id))
+            proposed_models.emplace(target.catalog_id, catalog(proposed));
+        const auto& model = proposed_models.at(target.catalog_id);
+        const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
+            [&](const auto& value) { return value.id == target.instance_id; });
+        require(instance != model.instances().end(), "embedded assembly copy lost its qualified source instance");
+        const auto expansion = model.expand(*instance, budget);
+        require(!expansion.profiles.empty() && !expansion.nodes.empty(),
+            "embedded assembly copy requires genuine geometric profile expansion");
+        const auto& rows = proposed.properties.at("model").at("instances");
+        const auto row = std::find_if(rows.begin(), rows.end(),
+            [&](const auto& value) { return value.at("id") == target.instance_id; });
+        require(row != rows.end(), "embedded assembly copy lost its raw source record");
+        auto raw = *row;
+        raw["schema"] = "sketch.assembly-instance.v1";
+        raw["id"] = *target.copy_instance_id;
+        if (raw.contains("placement") || !raw.at("root_transform").is_object())
+            raw["root_transform"] = encode_assembly_transform(expansion.nodes.front().transform);
+        raw.erase("placement");
+        Entity copy = original;
+        copy.id = *target.copy_instance_id;
+        copy.type = "assembly_instance";
+        copy.properties.erase("model");
+        copy.properties["version"] = 1;
+        copy.properties["form"] = "independent_assembly_instance";
+        copy.properties["assembly_catalog_id"] = target.catalog_id;
+        copy.properties["instance"] = std::move(raw);
+        // Embedded profile poses are already world-authored. Materializing a
+        // root must not apply its catalog's optional Site/building frame again.
+        copy.properties["presentation_frame"] = {{"version", 1}, {"mode", "world"}};
+        (void)decode_document_assembly_instance(copy);
+        command.entity_changes.push_back(EntityChange::upsert(std::move(copy)));
+    }
+    (void)Document::preview_command(source, command);
+    return command;
 }
 } // namespace sketch

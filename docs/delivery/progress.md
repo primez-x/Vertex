@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 embedded assemblies in numerical selection edits
+
+Geometric instances embedded in a component catalog now join walls, measured
+geometry, physical objects, explicit annotations and reference images in
+numerical Transform and Copy. Qualified catalog/instance identities remain
+distinct from bodies and annotation children. Transform changes only selected
+raw instance poses; Copy materializes fresh independent document roots sharing
+the original catalog, with their own retained selection and phase/page
+registrations. Explicit world frames prevent repeated building/Site placement.
+Object appearance and model label offsets follow copied roots without copying
+unselected annotation children or changing the original records.
+
+Captured catalogs, bindings and canonical expansions are cached once per
+catalog/root under one selection budget. Full candidate profile keys still
+must match the source. Typing in the numerical editor coalesces replacement
+previews and immediately disables Apply and retires the previous candidate.
+The complete admitted command remains the only command Apply can publish.
+
+Independent source review accepted the core/canvas integration after correcting
+world frames and repeated expansion. No build, test, probe, native job, launch,
+package or installation ran. Compilation, native geometry, save/history,
+interaction and performance remain unverified; manual checks stay Not tested.
+Generated label selection, typed Site collision editing and production
+qualification remain required work.
+
 ### October 7 complete architectural Copy and reflection
 
 The numerical selection editor now copies supported persisted architectural
@@ -53,7 +78,7 @@ and architectural reflection scopes. Root reviewed the single-object
 integration. No build, test, probe, native job, launch, package or installation
 ran; the installed candidate is unchanged. Compilation, interaction,
 history/reopen, native geometry and performance remain unverified. Manual
-checks remain Not tested. Mixed embedded-catalog groups, generated labels,
+checks remain Not tested. At this checkpoint mixed embedded-catalog groups, generated labels,
 typed Site collision editing and production qualification remain required work.
 
 ### October 7 shared architectural selection transforms

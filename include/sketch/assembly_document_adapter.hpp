@@ -1,8 +1,10 @@
 #pragma once
 #include "sketch/assembly_model.hpp"
 #include "sketch/document.hpp"
+#include <span>
 
 namespace sketch {
+struct ArchitecturalGroupTransform;
 using AssemblyDocumentEntities = std::map<std::string, Entity, std::less<>>;
 struct AssemblyDocumentInstance {
     std::string assembly_catalog_id;
@@ -52,4 +54,30 @@ struct AssemblyDocumentTypeUpdateImpact {
     const std::string& catalog_id, AssemblyType replacement, Revision expected_revision);
 [[nodiscard]] ApplyEntityChanges independent_assembly_type_remove_command(const DocumentSnapshot& source,
     const std::string& catalog_id, const std::string& type_id, Revision expected_revision);
+struct EmbeddedAssemblyGroupTarget {
+    std::string catalog_id;
+    std::string instance_id;
+    // A fresh identity in this catalog's embedded instance namespace. The
+    // source record remains unchanged when this is present.
+    std::optional<std::string> copy_instance_id;
+};
+// Qualified embedded geometric roots receive one shared world-pivot operator:
+// positive uniform scale and yaw, global X/Y flips, then XYZ offset. Each
+// catalog is upserted once, retaining raw model/instance data and metadata.
+// Nonidentity poses become explicit world root transforms; identity Copy
+// retains the source pose representation. Metadata-only instances are refused.
+// Full canonical document admission precedes return; no snapshot is mutated.
+[[nodiscard]] ApplyEntityChanges embedded_assembly_group_transform_command(
+    const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision);
+// Materialize each selected embedded root as a fresh independently editable
+// document instance sharing its immutable source catalog. Here copy_instance_id
+// is required and names a fresh document entity, not an appended catalog row.
+// Source catalogs/instances stay unchanged; the new root inherits catalog
+// context and non-model metadata, with an explicit world presentation frame
+// for its already world-authored pose. Callers register phase/page membership and
+// clone selected presentation through their complete authored command.
+[[nodiscard]] ApplyEntityChanges embedded_assembly_group_copy_command(
+    const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
+    const ArchitecturalGroupTransform& transform, Revision expected_revision);
 } // namespace sketch

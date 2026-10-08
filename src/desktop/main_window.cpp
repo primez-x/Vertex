@@ -11314,6 +11314,48 @@ public:
         const bool site_group = group && siteCanvas(m_architecturalCanvas);
         QStringList geometry_selection;
         std::vector<std::string> architectural_selection;
+        std::map<std::string,AssemblyDocumentInstance,std::less<>> embedded_selection;
+        std::map<std::string,AssemblyModel,std::less<>> selection_catalogs;
+        std::map<std::string,std::optional<AssemblyDocumentInstance>,std::less<>> selection_embedded_bindings;
+        std::map<std::string,AssemblyExpansion,std::less<>> selection_assembly_expansions;
+        AssemblyExpansionBudget selection_assembly_budget;
+        const auto selection_catalog = [&](const std::string& id) -> const AssemblyModel& {
+            if (!selection_catalogs.contains(id)) {
+                const auto& entity=source.entities().at(id);
+                if (entity.type!="assembly_model")
+                    throw std::invalid_argument("The selected assembly catalog changed its semantic type.");
+                selection_catalogs.emplace(id,AssemblyModel::from_json(entity.properties.at("model")));
+            }
+            return selection_catalogs.at(id);
+        };
+        const auto selection_embedded_binding = [&](const std::string& alias) -> std::optional<AssemblyDocumentInstance> {
+            if (const auto cached=selection_embedded_bindings.find(alias);cached!=selection_embedded_bindings.end())
+                return cached->second;
+            constexpr std::string_view marker=":instance:";
+            std::optional<AssemblyDocumentInstance> binding;
+            for (auto separator=alias.find(marker);separator!=std::string::npos;
+                separator=alias.find(marker,separator+1)) {
+                const auto catalog=source.entities().find(alias.substr(0,separator));
+                if (catalog==source.entities().end() || catalog->second.type!="assembly_model") continue;
+                const auto& model=selection_catalog(catalog->first);
+                for (const auto& instance : model.instances()) {
+                    if (instance.id!=alias.substr(separator+marker.size())) continue;
+                    if (binding) throw std::invalid_argument("The assembly child identity is ambiguous.");
+                    binding=AssemblyDocumentInstance{catalog->first,instance};
+                }
+            }
+            selection_embedded_bindings.emplace(alias,binding);
+            return binding;
+        };
+        const auto selection_assembly_expansion = [&](const std::string& id,
+            const std::optional<AssemblyDocumentInstance>& embedded) -> const AssemblyExpansion& {
+            if (!selection_assembly_expansions.contains(id)) {
+                const auto binding=embedded ? *embedded : decode_document_assembly_instance(source.entities().at(id));
+                const auto& model=selection_catalog(binding.assembly_catalog_id);
+                selection_assembly_expansions.emplace(id,model.expand(binding.instance,selection_assembly_budget));
+            }
+            return selection_assembly_expansions.at(id);
+        };
         std::vector<PresentationAnnotationTarget> annotation_targets, overlay_targets;
         std::vector<std::string> reference_targets;
         std::map<QString,PresentationAnnotationTarget> render_targets;
@@ -11341,15 +11383,15 @@ public:
                     throw std::invalid_argument("A selected ID names distinct body/profile owners. Select an unambiguous semantic group.");
                 for (const auto& identity : selection_presentations) {
                     if (identity.presentation_key.isEmpty()) continue;
+                    if (!selection.contains(identity.id))
+                        throw std::invalid_argument("A selected profile is absent from the complete retained selection.");
                     const auto persisted=source.entities().find(identity.id.toStdString());
-                    // Profiles from one independent persisted assembly share
-                    // one command target. An embedded catalog instance is a
-                    // different source owner, even if its raw ID collides.
-                    if (identity.type!=QStringLiteral("assembly_instance") || persisted==source.entities().end() ||
-                        persisted->second.type!="assembly_instance" || embeddedAssemblyChild(source,identity.id.toStdString()))
-                        throw std::invalid_argument("Numeric group Transform requires persisted architectural roots. Embedded assembly profiles need their own complete group command.");
-                    AssemblyExpansionBudget budget;
-                    const auto expansion=expand_document_assembly_instance(persisted->second,source.entities(),budget);
+                    const auto embedded=selection_embedded_binding(identity.id.toStdString());
+                    if (identity.type!=QStringLiteral("assembly_instance") ||
+                        (embedded && (persisted!=source.entities().end() || annotation_child_exists(source,identity.id.toStdString()))) ||
+                        (!embedded && (persisted==source.entities().end() || persisted->second.type!="assembly_instance")))
+                        throw std::invalid_argument("A selected profile has no unambiguous assembly source owner.");
+                    const auto& expansion=selection_assembly_expansion(identity.id.toStdString(),embedded);
                     if (std::count_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& profile) {
                         return identity.presentation_key==QString::fromStdString(json{
                             {"part_path",profile.part_path},{"type_id",profile.type_id},{"profile_id",profile.profile.id}}.dump());
@@ -11367,6 +11409,32 @@ public:
                 const auto include_point = [&](Vec2 point) { geometry.push_back({point,point,0.0}); };
                 for (const auto& id : selection) {
                     const auto found = source.entities().find(id.toStdString());
+                    const auto embedded=selection_embedded_binding(id.toStdString());
+                    if (embedded) {
+                        if (found!=source.entities().end() || annotation_child_exists(source,id.toStdString()) ||
+                            (site_group && m_site_edit_annotation_targets.contains(id)))
+                            throw std::invalid_argument("A selected ID names distinct body/profile owners. Select an unambiguous assembly instance.");
+                        const auto& displayed=site_group ? m_site_edit_local_geometry : selection_canvas->entities();
+                        if (std::none_of(displayed.begin(),displayed.end(),[&](const auto& item) {
+                            return item.id==id && item.type==QStringLiteral("assembly_instance") && !item.presentation_key.isEmpty();
+                        })) throw std::invalid_argument("A selected embedded assembly has no visible qualified geometric profile.");
+                        if (std::none_of(selection_presentations.begin(),selection_presentations.end(),[&](const auto& identity) {
+                            return identity.id==id && identity.type==QStringLiteral("assembly_instance") && !identity.presentation_key.isEmpty();
+                        })) throw std::invalid_argument("Select a qualified geometric profile of the embedded assembly.");
+                        if (!embedded_selection.emplace(id.toStdString(),*embedded).second) continue;
+                        if (embedded_selection.size()+architectural_selection.size()>maximum_architectural_group_targets)
+                            throw std::invalid_argument("The architectural selection exceeds the 1000-object limit.");
+                        const auto& expansion=selection_assembly_expansion(id.toStdString(),embedded);
+                        if (expansion.profiles.empty())
+                            throw std::invalid_argument("A selected embedded assembly has no canonical geometric profiles.");
+                        for (const auto& profile : expansion.profiles) {
+                            const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
+                                profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
+                            const auto path=assembly_placement_boundary(profile.profile.outer,xy);
+                            geometry.insert(geometry.end(),path.begin(),path.end());
+                        }
+                        continue;
+                    }
                     std::optional<PresentationAnnotationTarget> target;
                     if (site_group) {
                         const auto typed=m_site_edit_annotation_targets.find(id);
@@ -11420,7 +11488,7 @@ public:
                         continue;
                     }
                     if (found == source.entities().end() || (!geometry_root(found->second) && !architectural_root(found->second)))
-                        throw std::invalid_argument("Select supported persisted plan objects, explicit symbol/text children and reference images. Generated labels/dimensions and embedded assembly groups require their semantic owner.");
+                        throw std::invalid_argument("Select supported plan objects, qualified assembly profiles, explicit symbol/text children and reference images. Generated labels/dimensions require their semantic owner.");
                     if (!visible.contains(found->first))
                         throw std::invalid_argument("A selected object is outside the current visible source. Reopen Transform with a visible selection.");
                     const auto& entity = found->second;
@@ -11428,7 +11496,7 @@ public:
                         throw std::invalid_argument("A selected ID names both a persisted body and an embedded assembly. Select an unambiguous semantic target.");
                     if (architectural_root(entity)) {
                         if (std::find(architectural_selection.begin(),architectural_selection.end(),found->first)!=architectural_selection.end()) continue;
-                        if (architectural_selection.size()>=maximum_architectural_group_targets)
+                        if (architectural_selection.size()+embedded_selection.size()>=maximum_architectural_group_targets)
                             throw std::invalid_argument("The architectural selection exceeds the 1000-object limit.");
                         const auto path=assemblyHostPlan(source,found->first,presentation_scene->wall_plans);
                         if (path.empty()) throw std::invalid_argument("A selected architectural object has no canonical plan profile.");
@@ -11595,6 +11663,14 @@ public:
                     const PlanarTransform transform{*group_pivot, angle * std::numbers::pi / 180.0,
                         horizontal, vertical,
                         {offset(offset_x->text()), offset(offset_y->text())}};
+                    const ArchitecturalGroupTransform physical_transform{{group_pivot->x,group_pivot->y,0.0},
+                        {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0,
+                        transform.flip_horizontal,transform.flip_vertical};
+                    std::vector<EmbeddedAssemblyGroupTarget> embedded_targets;
+                    for (const auto& [alias,binding] : embedded_selection) {
+                        (void)alias;
+                        embedded_targets.push_back({binding.assembly_catalog_id,binding.instance.id,std::nullopt});
+                    }
                     ApplyEntityChanges presentation{source.revision(),{}, {},"Transform presentation group"};
                     if (!annotation_targets.empty() || !reference_targets.empty()) {
                         presentation=presentation_group_transform_command(source,annotation_targets,reference_targets,transform,source.revision());
@@ -11700,8 +11776,86 @@ public:
                         for (const auto& [owner,selected_children] : children)
                             seeds.push_back(annotation_child_subset(source.entities().at(owner),selected_children,true));
                         for (const auto& id : reference_targets) seeds.push_back(source.entities().at(id));
-                        auto copied = makeIndependentSelectionCloneCommand(source,std::move(seeds),transform,
-                            presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities);
+                        auto copied = seeds.empty() ? ApplyEntityChanges{source.revision(),{}, {},"Copy transformed selection"} :
+                            makeIndependentSelectionCloneCommand(source,std::move(seeds),transform,
+                                presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities);
+                        if (!embedded_targets.empty()) {
+                            for (auto& target : embedded_targets) {
+                                const auto alias=target.catalog_id+":instance:"+target.instance_id;
+                                std::string fresh;
+                                do { fresh=new_id("assembly_instance"); }
+                                while (source.entities().contains(fresh) || annotation_child_exists(source,fresh) ||
+                                    embeddedAssemblyChild(source,fresh) || std::any_of(candidate_copy_ids.begin(),candidate_copy_ids.end(),
+                                        [&](const auto& entry) { return entry.second==fresh; }));
+                                target.copy_instance_id=fresh;
+                                if (!candidate_copy_ids.emplace(alias,fresh).second)
+                                    throw std::invalid_argument("A copied assembly alias collides with another selected owner.");
+                            }
+                            const auto embedded=embedded_assembly_group_copy_command(source,embedded_targets,physical_transform,source.revision());
+                            if (embedded.expected_revision!=source.revision() || !embedded.asset_changes.empty())
+                                throw std::invalid_argument("An embedded assembly copy must retain its captured revision and shared assets.");
+                            std::set<std::string,std::less<>> fresh_ids;
+                            for (const auto& change : copied.entity_changes) fresh_ids.insert(change.entity.id);
+                            for (const auto& change : embedded.entity_changes) {
+                                if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
+                                    !fresh_ids.insert(change.entity.id).second || change.entity.type!="assembly_instance" ||
+                                    std::none_of(embedded_targets.begin(),embedded_targets.end(),[&](const auto& target) {
+                                        return target.copy_instance_id==change.entity.id;
+                                    })) throw std::invalid_argument("An embedded assembly copy requires exact fresh independent roots.");
+                                copied.entity_changes.push_back(change);
+                            }
+                            for (const auto& target : embedded_targets)
+                                if (!fresh_ids.contains(*target.copy_instance_id))
+                                    throw std::invalid_argument("An embedded assembly copy lost a selected root.");
+                            // Copy only these roots' appearance. An explicitly
+                            // selected annotation can already own a fresh subset;
+                            // otherwise create an appearance-only container.
+                            for (const auto& [owner_id,annotation] : source.entities()) {
+                                if (annotation.type!=kAnnotationEntityType) continue;
+                                auto records=json::array();
+                                for (const auto& record : annotation.properties.at("state").at("overrides")) {
+                                    const auto alias=record.at("target_id").get<std::string>();
+                                    if (!embedded_selection.contains(alias) || record.at("target_kind")!="object") continue;
+                                    auto value=record;
+                                    value["target_id"]=candidate_copy_ids.at(alias);
+                                    if (value.contains("plan_label_offset_m")) {
+                                        const auto offset=read_point(value.at("plan_label_offset_m"));
+                                        if (!offset) throw std::invalid_argument("The copied assembly label offset is invalid.");
+                                        const auto moved=transform_point(*offset,PlanarTransform{{},transform.rotation_radians,
+                                            transform.flip_horizontal,transform.flip_vertical,{}});
+                                        value["plan_label_offset_m"]=json::array({moved.x,moved.y});
+                                    }
+                                    records.push_back(std::move(value));
+                                }
+                                if (records.empty()) continue;
+                                const auto existing_id=candidate_copy_ids.find(owner_id);
+                                auto existing=existing_id==candidate_copy_ids.end() ? copied.entity_changes.end() :
+                                    std::find_if(copied.entity_changes.begin(),copied.entity_changes.end(),[&](const auto& change) {
+                                        return change.kind==EntityChangeKind::upsert && change.entity.id==existing_id->second;
+                                    });
+                                if (existing!=copied.entity_changes.end()) {
+                                    if (existing->entity.type!=kAnnotationEntityType)
+                                        throw std::invalid_argument("The copied appearance owner changed its semantic type.");
+                                    auto& overrides=existing->entity.properties.at("state").at("overrides");
+                                    for (auto& record : records) overrides.push_back(std::move(record));
+                                    validate_annotation_entity(existing->entity);
+                                } else {
+                                    auto appearance=annotation;
+                                    appearance.id=new_id("annotation");
+                                    appearance.required=false;
+                                    appearance.properties.at("state")["labels"]=json::array();
+                                    appearance.properties.at("state")["symbols"]=json::array();
+                                    appearance.properties.at("state")["overrides"]=std::move(records);
+                                    validate_annotation_entity(appearance);
+                                    if (!candidate_copy_ids.emplace(owner_id,appearance.id).second)
+                                        throw std::invalid_argument("A copied appearance owner has no unique fresh container.");
+                                    copied.entity_changes.push_back(EntityChange::upsert(std::move(appearance)));
+                                }
+                            }
+                            if (copied.entity_changes.size()>kMaximumNumericSelectionGraphEntities)
+                                throw std::invalid_argument("The complete numeric copy dependency graph exceeds the entity limit.");
+                            copied=validateIndependentAreaCopy(source,std::move(copied));
+                        }
                         const auto target = render_targets.find(primary_render_id);
                         const auto primary = target == render_targets.end() ? candidate_copy_ids.at(primary_render_id.toStdString()) :
                             candidate_copy_children.at({target->second.owner_id,target->second.child_id});
@@ -11709,12 +11863,25 @@ public:
                     }
                     auto command=geometry_selection.isEmpty() ? Command{std::move(presentation)} :
                         makeSelectionGeometryTransformCommand(source,geometry_selection,transform,std::move(presentation.entity_changes));
-                    if (!architectural_selection.empty()) {
-                        const auto architectural=architectural_group_transform_command(source,architectural_selection,
-                            ArchitecturalGroupTransform{{group_pivot->x,group_pivot->y,0.0},
-                                {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0,
-                                transform.flip_horizontal,transform.flip_vertical},
-                            new_id("architectural-group-transform"),source.revision());
+                    if (!architectural_selection.empty() || !embedded_targets.empty()) {
+                        auto architectural=architectural_selection.empty() ?
+                            ApplyEntityChanges{source.revision(),{}, {},"Transform architectural selection"} :
+                            architectural_group_transform_command(source,architectural_selection,physical_transform,
+                                new_id("architectural-group-transform"),source.revision());
+                        if (!embedded_targets.empty()) {
+                            const auto embedded=embedded_assembly_group_transform_command(source,embedded_targets,physical_transform,source.revision());
+                            if (embedded.expected_revision!=source.revision() || !embedded.asset_changes.empty())
+                                throw std::invalid_argument("An embedded assembly transform must retain its captured revision and local assets.");
+                            for (const auto& change : embedded.entity_changes) {
+                                const auto existing=std::find_if(architectural.entity_changes.begin(),architectural.entity_changes.end(),[&](const auto& other) {
+                                    return other.entity.id==change.entity.id;
+                                });
+                                if (existing!=architectural.entity_changes.end()) {
+                                    if (existing->kind!=change.kind || existing->entity!=change.entity)
+                                        throw std::invalid_argument("Selected objects require differing transforms of the same catalog: "+change.entity.id);
+                                } else architectural.entity_changes.push_back(change);
+                            }
+                        }
                         if (architectural.expected_revision!=source.revision() || !architectural.asset_changes.empty())
                             throw std::invalid_argument("An architectural group transform must retain its captured revision and local assets.");
                         const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
@@ -11788,6 +11955,11 @@ public:
                 for (const auto& id : architectural_selection) {
                     physical_preview_ids[0].insert(id);
                     physical_preview_ids[1].insert(clone->isChecked() ? candidate_copy_ids.at(id) : id);
+                }
+                for (const auto& [alias,binding] : embedded_selection) {
+                    (void)binding;
+                    physical_preview_ids[0].insert(alias);
+                    physical_preview_ids[1].insert(clone->isChecked() ? candidate_copy_ids.at(alias) : alias);
                 }
                 if (group) {
                     PlanSceneCaches caches;
@@ -12025,6 +12197,24 @@ public:
                             if (std::none_of(admitted_physical.begin(),admitted_physical.end(),[&](const auto& key) {return key.first.toStdString()==id;}))
                                 throw std::invalid_argument("A selected architectural root is unavailable in the complete canonical preview: "+id);
                         }
+                        for (const auto& [alias,binding] : embedded_selection) {
+                            const auto id=selected && clone->isChecked() ? candidate_copy_ids.at(alias) : alias;
+                            // These commands change root poses, never catalog
+                            // definitions or local part/profile identities.
+                            // Reuse the captured canonical keys rather than
+                            // revalidating a whole catalog for every profile.
+                            const auto& expansion=selection_assembly_expansions.at(alias);
+                            std::size_t retained{};
+                            for (const auto& key : admitted_physical) if (key.first.toStdString()==id) ++retained;
+                            if (expansion.profiles.empty() || retained!=expansion.profiles.size())
+                                throw std::invalid_argument("A selected embedded assembly has an incomplete canonical preview: "+id);
+                            for (const auto& profile : expansion.profiles) {
+                                const auto key=QString::fromStdString(json{{"part_path",profile.part_path},
+                                    {"type_id",profile.type_id},{"profile_id",profile.profile.id}}.dump());
+                                if (!admitted_physical.contains({id_from(id),key}))
+                                    throw std::invalid_argument("A selected embedded profile is missing from the canonical preview: "+id);
+                            }
+                        }
                         for (const auto& id : physical_preview_ids[selected ? 1 : 0]) {
                             const auto& other=selected ? *presentation_scene : *proposed_scene;
                             const bool existed=source.entities().contains(id) || std::any_of(presentation_scene->all_geometry.begin(),presentation_scene->all_geometry.end(),
@@ -12112,12 +12302,30 @@ public:
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             }
         };
+        QTimer preview_debounce(&dialog);
+        preview_debounce.setSingleShot(true);
+        preview_debounce.setInterval(120);
+        QObject::connect(&preview_debounce, &QTimer::timeout, &dialog, update_preview);
+        const auto schedule_preview = [&] {
+            // Never apply the previous values while a replacement preview is
+            // pending. Coalesce typing before preparing the complete graph.
+            candidate_command.reset();
+            candidate_copy_ids.clear();
+            candidate_copy_children.clear();
+            freedom->clear();
+            status->clear();
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            preview->setEntities({});
+            preview->setLabels({});
+            preview->setReferences({});
+            preview_debounce.start();
+        };
         if (supported_selection) {
             for (auto* field : {rotation, offset_x, offset_y})
-                QObject::connect(field, &QLineEdit::textChanged, &dialog, update_preview);
+                QObject::connect(field, &QLineEdit::textChanged, &dialog, schedule_preview);
             for (auto* field : {flip_horizontal, flip_vertical})
-                QObject::connect(field, &QCheckBox::toggled, &dialog, update_preview);
-            if (clone) QObject::connect(clone, &QCheckBox::toggled, &dialog, update_preview);
+                QObject::connect(field, &QCheckBox::toggled, &dialog, schedule_preview);
+            if (clone) QObject::connect(clone, &QCheckBox::toggled, &dialog, schedule_preview);
             update_preview();
         }
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -12172,7 +12380,11 @@ public:
                         }
                         applyAuthoredCommand(candidate_command->first);
                         m_selected_id = id_from(candidate_command->second);
-                        if (group) m_selected_ids = clone->isChecked() ? copied_selection : selection;
+                        if (group) {
+                            m_selected_ids = clone->isChecked() ? copied_selection : selection;
+                            m_selected_ids.removeAll(m_selected_id);
+                            m_selected_ids.push_back(m_selected_id);
+                        }
                         refresh();
                         if (group && clone->isChecked() && site_group) {
                             // Site aliases are published by refresh. Resolve the
