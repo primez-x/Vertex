@@ -39,6 +39,7 @@
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
+#include "sketch/roof_clone.hpp"
 #include "sketch/phase_roof_demolition.hpp"
 #include "sketch/roof_removal.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
@@ -4716,7 +4717,9 @@ ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snap
                     return view.kind == expected;
                 });
             if (found == model.views().end()) continue;
-            return architectural_view_context(*found);
+            auto context = architectural_view_context(*found);
+            context.sheet_view_entity_id = id;
+            return context;
         } catch (const std::exception&) {
             // The typed Document boundary reports malformed sheet/view data;
             // a transient canvas still falls back to the safe default frame.
@@ -5435,6 +5438,13 @@ class MainWindow::Impl {
         // Physical preview only. A source-bound room review must finish this
         // intent before normal document/workspace preparation can publish it.
         std::optional<PhaseWallCanvasProposal> alternative_wall;
+        PhaseRoofReplacementIdentityMap roof_selection_redirect;
+    };
+    struct IndependentRoofCopyCapture {
+        std::string source_digest;
+        // Filled only by the source-derived roof copy producer after genuine
+        // Document admission, including qualified presentation additions.
+        std::optional<ApplyEntityChanges> intent;
     };
     struct PresentationTransformCapture {
         std::string owner_id;
@@ -7670,7 +7680,20 @@ public:
         const ArchitecturalGroupTransform transform{{0.0,0.0,0.0},
             {gesture.x,gesture.y,gesture.z},gesture.rotation_z_radians,gesture.scale,
             flip_horizontal,flip_vertical};
+        if (clone && original.type == "roof" && gesture.scale == 1.0) {
+            RoofCloneIdentityMap identities;
+            IndependentRoofCopyCapture capture;
+            auto command = sourceDerivedRoofCloneCommand(source, {original.id},
+                {{original.id, transform}}, "Copy transformed roof", identities, &capture);
+            auto complete = augmentAuthoredCommand(command, source);
+            requireIndependentCopyRegistrations(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture);
+            return {std::move(complete), identities.at(original.id)};
+        }
         if (!clone) {
+            if (original.type == "roof" && gesture.scale == 1.0)
+                return {sourceDerivedRoofTransformCommand(source, {{original.id, transform}},
+                    "Transform roof"), original.id};
             const std::vector<std::string> targets{original.id};
             return {augmentAuthoredCommand(architectural_group_transform_command(source,targets,transform,
                 new_id("architectural-mirror"),source.revision()),source),original.id};
@@ -8572,6 +8595,16 @@ public:
         std::span<const JointAnnotationTranslationIntent> annotation_moves = {},
         std::span<const JointReferenceTranslationIntent> reference_moves = {}) {
         model_ids=translationModelRoots(source,std::move(model_ids));
+        if (changes.empty() && annotation_moves.empty() && reference_moves.empty() &&
+            !model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
+                const auto found = source.entities().find(id.toStdString());
+                return found != source.entities().end() && found->second.type == "roof";
+            })) {
+            std::vector<RoofRigidTransformIntent> roofs;
+            for (const auto& id : model_ids)
+                roofs.push_back({id.toStdString(), {{}, {offset.x, offset.y, 0.0}, 0.0, 1.0, false, false}});
+            return sourceDerivedRoofTransformCommand(source, roofs, "Move roofs");
+        }
         if (!model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
                 const auto found = source.entities().find(id.toStdString());
                 return found != source.entities().end() && found->second.type == "wall";
@@ -9036,7 +9069,16 @@ public:
         }
     }
 
-    ApplyEntityChanges validateIndependentAreaCopy(const DocumentSnapshot& source, ApplyEntityChanges command) const {
+    ApplyEntityChanges validateIndependentAreaCopy(const DocumentSnapshot& source, ApplyEntityChanges command,
+        const IndependentRoofCopyCapture* roof_copy = nullptr) const {
+        if (roof_copy && roof_copy->intent) {
+            // Roof presentation containers retain their original rows. Admit
+            // only the exact source-derived additions and phase/page enrollment,
+            // rather than requiring those retained targets to become copies.
+            requireIndependentCopyRegistrations(source, *roof_copy->intent, command, roof_copy);
+            (void)Document::preview_command(source, command);
+            return command;
+        }
         std::set<std::string,std::less<>> copied_ids;
         std::set<std::string,std::less<>> copied_geometry_ids;
         std::set<std::string,std::less<>> copied_wall_ids;
@@ -9194,7 +9236,42 @@ public:
         std::map<std::string,std::string,std::less<>>& identities,
         std::map<std::pair<std::string,std::string>,std::string>& child_identities,
         std::size_t maximum_entities = kMaximumClipboardEntities,
-        const std::function<PlanarTransform(const std::string&)>& owner_transform = {}) {
+        const std::function<PlanarTransform(const std::string&)>& owner_transform = {},
+        IndependentRoofCopyCapture* roof_copy = nullptr) {
+        if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
+                return entity.type == "roof" || entity.type == "roof_join";
+            })) {
+            std::set<std::string, std::less<>> owners;
+            for (const auto& entity : seeds) {
+                if (source.entities().at(entity.id) != entity)
+                    throw std::invalid_argument("The roof copy no longer matches its captured source.");
+                if (entity.type == "roof") owners.insert(entity.id);
+                else for (const auto& roof : parse_roof_join(entity.properties, entity.id).roof_ids) owners.insert(roof);
+            }
+            std::vector<ArchitecturalGroupTransformTarget> operations;
+            for (const auto& id : owners) {
+                const auto operation = owner_transform ? owner_transform(id) : transform;
+                operations.push_back({id, {{operation.pivot.x, operation.pivot.y, 0.0},
+                    {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
+                    operation.flip_horizontal, operation.flip_vertical}});
+            }
+            if (!presentation.entity_changes.empty() || !presentation.asset_changes.empty() ||
+                presentation.expected_revision != source.revision())
+                throw std::invalid_argument("Copy roofs separately from independent labels and references.");
+            auto command = sourceDerivedRoofCloneCommand(source, {owners.begin(), owners.end()},
+                operations, "Copy roofs", identities, roof_copy);
+            if (command.entity_changes.size() > maximum_entities)
+                throw std::invalid_argument("The complete roof copy exceeds the selection entity limit.");
+            for (const auto& id : owners) {
+                const auto& roof = source.entities().at(id);
+                if (roof.properties.contains("roof_openings"))
+                    for (const auto& cut : roof.properties.at("roof_openings")) {
+                        const auto child = cut.at("id").template get<std::string>();
+                        child_identities.emplace(std::make_pair(id, child), identities.at(child));
+                    }
+            }
+            return command;
+        }
         const auto graph = independentAreaCopyGraph(source,std::move(seeds),true,true,maximum_entities,true);
         const auto operation_for=[&](const std::string& id) {
             return owner_transform ? owner_transform(id) : transform;
@@ -12054,6 +12131,7 @@ public:
                             offset_z->text(),scale->text(),clone->isChecked());
                         return {augmentAuthoredCommand(architecturalObjectTransformCommand(source,*original,transaction),source),target};
                     }();
+                    root = roofReplacementTargetID(command, root);
                     const auto preview = Document::preview_command(source, command);
                     const auto preview_entity = preview.entities().find(root);
                     if (preview_entity == preview.entities().end()) throw std::invalid_argument("The transform preview did not produce its target object.");
@@ -12614,6 +12692,7 @@ public:
                 if (!context_current()) throw std::invalid_argument(lastError().toStdString());
                 std::optional<PlanarTransform> shared_callout_transform;
                 std::function<PlanarTransform(const std::string&)> callout_owner_transform;
+                IndependentRoofCopyCapture roof_copy_capture;
                 auto candidate = [&]() -> std::pair<Command, std::string> {
                     if (!group) return makeSelectedTransformCommand(source,*original,rotation->text(),
                         flip_horizontal->isChecked(),flip_vertical->isChecked(),offset_x->text(),offset_y->text(),clone->isChecked());
@@ -12790,7 +12869,8 @@ public:
                         for (const auto& id : reference_targets) seeds.push_back(source.entities().at(id));
                         auto copied = seeds.empty() ? ApplyEntityChanges{source.revision(),{}, {},"Copy transformed selection"} :
                             makeIndependentSelectionCloneCommand(source,std::move(seeds),transform,
-                                presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities,callout_owner_transform);
+                                presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities,
+                                callout_owner_transform,&roof_copy_capture);
                         if (!embedded_targets.empty()) {
                             for (auto& target : embedded_targets) {
                                 const auto alias=selection_embedded_ids->at({target.catalog_id,target.instance_id});
@@ -12866,7 +12946,7 @@ public:
                             }
                             if (copied.entity_changes.size()>kMaximumNumericSelectionGraphEntities)
                                 throw std::invalid_argument("The complete numeric copy dependency graph exceeds the entity limit.");
-                            copied=validateIndependentAreaCopy(source,std::move(copied));
+                            copied=validateIndependentAreaCopy(source,std::move(copied),&roof_copy_capture);
                         }
                         const auto target = render_targets.find(primary_render_id);
                         const auto primary = target == render_targets.end() ? candidate_copy_ids.at(primary_render_id.toStdString()) :
@@ -12892,6 +12972,18 @@ public:
                             physical_targets.push_back({id,{{operation.pivot.x,operation.pivot.y,0.0},
                                 {operation.offset.x,operation.offset.y,0.0},operation.rotation_radians,1.0,
                                 operation.flip_horizontal,operation.flip_vertical}});
+                        }
+                        const auto* selected_presentations = std::get_if<ApplyEntityChanges>(&command);
+                        if (geometry_selection.isEmpty() && selected_presentations && selected_presentations->entity_changes.empty() &&
+                            embedded_targets.empty() && !physical_targets.empty() &&
+                            std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
+                                return source.entities().at(target.entity_id).type == "roof";
+                            })) {
+                            std::vector<RoofRigidTransformIntent> roofs;
+                            for (const auto& target : physical_targets)
+                                roofs.push_back({target.entity_id, target.transform});
+                            return {sourceDerivedRoofTransformCommand(source, roofs, "Transform roofs"),
+                                primary_render_id.toStdString()};
                         }
                         auto architectural=physical_targets.empty() ?
                             ApplyEntityChanges{source.revision(),{}, {},"Transform architectural selection"} :
@@ -12925,9 +13017,10 @@ public:
                 if (group && clone->isChecked()) {
                     auto* copied = std::get_if<ApplyEntityChanges>(&candidate.first);
                     if (!copied) throw std::invalid_argument("A complete selection copy requires one entity command.");
-                    requireIndependentCopyRegistrations(source,*copy_intent,*copied);
-                    candidate.first = validateIndependentAreaCopy(source,*copied);
-                    requireIndependentCopyRegistrations(source,*copy_intent,std::get<ApplyEntityChanges>(candidate.first));
+                    requireIndependentCopyRegistrations(source,*copy_intent,*copied,&roof_copy_capture);
+                    candidate.first = validateIndependentAreaCopy(source,*copied,&roof_copy_capture);
+                    requireIndependentCopyRegistrations(source,*copy_intent,
+                        std::get<ApplyEntityChanges>(candidate.first),&roof_copy_capture);
                 }
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
                 const auto proposed = changes && changes->entity_changes.empty() ? source :
@@ -12949,7 +13042,8 @@ public:
                 std::array<std::set<std::string,std::less<>>,2> physical_preview_ids;
                 for (const auto& id : architectural_selection) {
                     physical_preview_ids[0].insert(id);
-                    physical_preview_ids[1].insert(clone->isChecked() ? candidate_copy_ids.at(id) : id);
+                    physical_preview_ids[1].insert(clone->isChecked() ? candidate_copy_ids.at(id) :
+                        roofReplacementTargetID(candidate.first, id));
                 }
                 for (const auto& [alias,binding] : embedded_selection) {
                     (void)binding;
@@ -13225,7 +13319,8 @@ public:
                             geometry.push_back(std::move(entity));
                         }
                         for (const auto& original_id : architectural_selection) {
-                            const auto id=selected && clone->isChecked() ? candidate_copy_ids.at(original_id) : original_id;
+                            const auto id=selected ? (clone->isChecked() ? candidate_copy_ids.at(original_id) :
+                                roofReplacementTargetID(candidate.first, original_id)) : original_id;
                             if (std::none_of(admitted_physical.begin(),admitted_physical.end(),[&](const auto& key) {return key.first.toStdString()==id;}))
                                 throw std::invalid_argument("A selected architectural root is unavailable in the complete canonical preview: "+id);
                         }
@@ -13475,10 +13570,12 @@ public:
                             copied_selection.removeAll(primary);
                             copied_selection.push_back(primary);
                         }
-                        applyAuthoredCommand(candidate_command->first);
-                        m_selected_id = id_from(candidate_command->second);
+                        if (!applyAuthoredCommand(candidate_command->first)) return;
+                        m_selected_id = id_from(roofReplacementTargetID(candidate_command->first, candidate_command->second));
                         if (group) {
                             m_selected_ids = clone->isChecked() ? copied_selection : selection;
+                            if (!clone->isChecked()) for (auto& selected : m_selected_ids)
+                                selected = id_from(roofReplacementTargetID(candidate_command->first, selected.toStdString()));
                             m_selected_ids.removeAll(m_selected_id);
                             m_selected_ids.push_back(m_selected_id);
                         }
@@ -23672,6 +23769,26 @@ public:
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
         const Entity& original, const ArchitecturalTransaction& transaction) {
         const auto& operations=transaction.operations();
+        if (original.type == "roof" && operations.size() == 2 &&
+            operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
+            operations[1].action == ArchitecturalAction::transform &&
+            operations[1].object_id == operations[0].duplicate_id && operations[1].transform &&
+            operations[1].transform->scale == 1.0) {
+            const auto& movement = *operations[1].transform;
+            RoofCloneIdentityMap identities{{original.id, operations[0].duplicate_id}};
+            return sourceDerivedRoofCloneCommand(source, {original.id}, {{original.id,
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, 1.0, false, false}}},
+                transaction.undo_label(), identities);
+        }
+        if (original.type == "roof" && operations.size() == 1 &&
+            operations.front().action == ArchitecturalAction::transform &&
+            operations.front().object_id == original.id && operations.front().transform &&
+            operations.front().transform->scale == 1.0) {
+            const auto& movement = *operations.front().transform;
+            return sourceDerivedRoofTransformCommand(source, {{original.id,
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, 1.0, false, false}}},
+                transaction.undo_label());
+        }
         if (original.type=="wall" && operations.size()==1 && operations.front().transform) {
             const auto& transform=*operations.front().transform;
             if (transform.scale==1.0 && transform.z==0.0) {
@@ -23721,6 +23838,10 @@ public:
         (void)physicalPlanRotationAngle(entity);
         if (transform.rotation_radians==0.0)
             return ApplyEntityChanges{source.revision(),{}, {},"Rotate physical object in plan"};
+        if (entity.type == "roof")
+            return sourceDerivedRoofTransformCommand(source, {{entity.id,
+                {{transform.pivot.x, transform.pivot.y, 0.0}, {}, transform.rotation_radians, 1.0, false, false}}},
+                "Rotate roof in plan");
         const auto c=std::cos(transform.rotation_radians),s=std::sin(transform.rotation_radians);
         const auto& pivot=transform.pivot;
         ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};
@@ -24685,7 +24806,7 @@ public:
                     } else proposed.segments = std::move(canonical);
                 } else if (entity.type == "roof_join") {
                     const auto join = parse_roof_join(entity.properties, entity.id);
-                    if (entity == source.entities().at(entity.id) &&
+                    if (source.entities().contains(entity.id) && entity == source.entities().at(entity.id) &&
                         std::none_of(join.roof_ids.begin(), join.roof_ids.end(), [&](const auto& id) {
                             return effective_building_geometry_entity(candidate_snapshot, candidate.at(id)) !=
                                 effective_building_geometry_entity(source, source.entities().at(id));
@@ -24889,7 +25010,7 @@ public:
                 if (edited_footprint)
                     retain_footprint_vertex_handles(proposed, entity, source.revision(),
                         source.is_editable(), view_context ? &*view_context : nullptr);
-                if (entity.type=="roof" && entity!=source.entities().at(entity.id) && !proposed.segments.empty() &&
+                if (entity.type=="roof" && (!source.entities().contains(entity.id) || entity!=source.entities().at(entity.id)) && !proposed.segments.empty() &&
                     (!view_context || horizontal_plan_frame(view_context->frame))) {
                     proposed.resize_frame=physicalPlanResizeFrame(entity,view_context ? &view_context->frame : nullptr);
                     retain_roof_plan_corner_handles(proposed,source.revision(),source.is_editable());
@@ -25285,6 +25406,94 @@ public:
           catch (const std::exception&) { return std::nullopt; }
     }
 
+    static std::optional<VertexPreviewProjection> computeAlternativeRoofGeometryProjection(
+        const DocumentSnapshot& source, const DocumentSnapshot& candidate, const Command& command,
+        const std::vector<CanvasEntity>& retained, const std::vector<CanvasEntity>& eligible,
+        const std::vector<CanvasLabel>& labels, bool metric_units,
+        const std::set<std::string, std::less<>>& appraisal_area_ids,
+        const std::map<QString, QRectF>& label_footprints, const std::vector<Bounds2>& component_bounds,
+        const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font,
+        const SiteEndpointPreviewInput* site_input = nullptr) {
+        const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!phase || !phase->phase_constraint_authoring_completion ||
+            phase->phase_constraint_authoring_intent.is_null()) return std::nullopt;
+        const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
+        if (intent.roof_replacement.is_null()) return std::nullopt;
+        const auto replacement = decode_phase_roof_replacement_authoring(intent.roof_replacement);
+        if (replacement.demolition) return std::nullopt;
+        std::map<QString, QString> aliases;
+        for (const auto& [old_id, new_id] : replacement.identities) {
+            const auto original = source.entities().find(old_id);
+            if (original != source.entities().end() &&
+                (original->second.type == "roof" || original->second.type == "roof_join"))
+                aliases.emplace(id_from(new_id), id_from(old_id));
+        }
+        const auto adapt = [&](const std::vector<CanvasEntity>& captured) {
+            std::vector<CanvasEntity> result;
+            for (auto item : captured) {
+                const auto mapping = replacement.identities.find(item.id.toStdString());
+                if (mapping == replacement.identities.end() || !aliases.contains(id_from(mapping->second))) continue;
+                // Only render aliases change. Both physical snapshots remain
+                // the actual source and admitted complete proposed document.
+                item.id = id_from(mapping->second);
+                result.push_back(std::move(item));
+            }
+            return result;
+        };
+        auto proposed_retained = adapt(retained), proposed_eligible = adapt(eligible);
+        auto context = view_context;
+        if (context && !context->view_id.empty()) {
+            const auto owner = candidate.entities().find(context->sheet_view_entity_id);
+            if (owner == candidate.entities().end() || owner->second.type != kSheetViewEntityType)
+                throw std::invalid_argument("The proposed roof preview lost its captured saved-view owner.");
+            const auto model = decode_sheet_view_entity(owner->second);
+            const auto view = std::find_if(model.views().begin(), model.views().end(),
+                [&](const auto& item) { return item.id == context->view_id; });
+            if (view == model.views().end())
+                throw std::invalid_argument("The proposed roof preview lost its captured saved view.");
+            context = architectural_view_context(*view);
+            context->sheet_view_entity_id = owner->first;
+        }
+        std::optional<SiteEndpointPreviewInput> site;
+        if (site_input) {
+            site = *site_input;
+            for (const auto& [identity, frame] : site_input->frames.geometry) {
+                const auto mapping = replacement.identities.find(identity.first.toStdString());
+                if (mapping != replacement.identities.end() && aliases.contains(id_from(mapping->second)))
+                    site->frames.geometry.emplace(std::make_pair(id_from(mapping->second), identity.second), frame);
+            }
+            for (const auto& [id, frame] : site_input->move_frames) {
+                const auto mapping = replacement.identities.find(id.toStdString());
+                if (mapping != replacement.identities.end() && aliases.contains(id_from(mapping->second)))
+                    site->move_frames.emplace(id_from(mapping->second), frame);
+            }
+        }
+        auto projection = computeConstraintGeometryProjection(source, candidate, proposed_retained,
+            proposed_eligible, labels, metric_units, appraisal_area_ids, label_footprints, component_bounds,
+            context, label_font, site ? &*site : nullptr);
+        if (!projection) throw std::invalid_argument("The proposed roof geometry could not be projected in the captured view.");
+        for (auto& item : projection->entities)
+            if (const auto alias = aliases.find(item.id); alias != aliases.end()) item.id = alias->second;
+        // Bound view overlays have separately declared identities. Match their
+        // preview to the captured overlay, retaining actual candidate values.
+        if (context) {
+            std::map<QString, QString> overlay_aliases;
+            std::set<QString> old_overlays;
+            for (const auto& [old_id, new_id] : replacement.identities) {
+                const auto original = id_from(context->view_id + "/overlay/" + old_id);
+                overlay_aliases.emplace(id_from(context->view_id + "/overlay/" + new_id), original);
+                old_overlays.insert(original);
+            }
+            std::erase_if(projection->entities, [&](const auto& item) { return old_overlays.contains(item.id); });
+            std::erase_if(projection->labels, [&](const auto& item) { return old_overlays.contains(item.id); });
+            for (auto& item : projection->entities)
+                if (const auto alias = overlay_aliases.find(item.id); alias != overlay_aliases.end()) item.id = alias->second;
+            for (auto& label : projection->labels)
+                if (const auto alias = overlay_aliases.find(label.id); alias != overlay_aliases.end()) label.id = alias->second;
+        }
+        return projection;
+    }
+
     static CanvasSelectionFrame physicalPlanResizeFrame(const Entity& entity,
         const BuildingViewFrame* projection=nullptr) {
         const auto angle=physicalPlanRotationFamily(entity.type)
@@ -25354,11 +25563,13 @@ public:
             else mirror.clear_saved_revision();
             prepared.workspace.emplace(std::move(edit));
             prepared.mirror.emplace(std::move(mirror));
+            prepared.roof_selection_redirect = admittedRoofSelectionRedirect(source, preview, command);
             return preview;
         }
         auto edit=Document::prepare_edit(source,command);
         auto preview=edit.preview();
         prepared.document.emplace(std::move(edit));
+        prepared.roof_selection_redirect = admittedRoofSelectionRedirect(source, preview, command);
         return preview;
     }
 
@@ -25649,7 +25860,10 @@ public:
                                 if (!cancellation.is_cancelled()) *plan_move_command = command;
                             } else {
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
-                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,
+                            *result=computeAlternativeRoofGeometryProjection(*source,candidate,command,*retained,
+                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
+                                view_context,label_font);
+                            if (!*result) *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
                                 view_context,label_font,nullptr,component_sources.get());
                             if (*result && !cancellation.is_cancelled()) {
@@ -25710,9 +25924,14 @@ public:
                                 VertexPreviewProjection unchanged;
                                 unchanged.entities=*retained;unchanged.labels=*labels;
                                 *result=std::move(unchanged);
-                            } else *result=computeConstraintGeometryProjection(*source,candidate,*retained,
-                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
-                                view_context,label_font,site_input.get());
+                            } else {
+                                *result=computeAlternativeRoofGeometryProjection(*source,candidate,command,*retained,
+                                    *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
+                                    view_context,label_font,site_input.get());
+                                if (!*result) *result=computeConstraintGeometryProjection(*source,candidate,*retained,
+                                    *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
+                                    view_context,label_font,site_input.get());
+                            }
                             if (*result && !cancellation.is_cancelled()) {
                                 retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,site_wall_move->ids);
                                 for (const auto& reference:site_input->move_references) {
@@ -25788,10 +26007,14 @@ public:
                         }
                     } else if (rotation_command && rigid_transform) {
                         auto command=physicalPlanRotationCommand(*source,id,*rigid_transform);
+                        const auto target_id = id_from(roofReplacementTargetID(command, id.toStdString()));
                         if (!cancellation.is_cancelled()) {
                             if (!prepared_move) throw std::invalid_argument("The physical rotation has no prepared publication.");
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
-                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,
+                            *result=computeAlternativeRoofGeometryProjection(*source,candidate,command,*retained,
+                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
+                                view_context,label_font,site_input.get());
+                            if (!*result) *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
                                 view_context,label_font,site_input.get());
                             if (*result && !cancellation.is_cancelled()) {
@@ -25806,9 +26029,9 @@ public:
                                     })) entities.push_back(original);
                                 }
                                 for (auto& proposed:entities) {
-                                    if (proposed.id!=id || proposed.segments.empty()) continue;
+                                    if (proposed.id!=target_id || proposed.segments.empty()) continue;
                                     const auto original=std::find_if(retained->begin(),retained->end(),[&](const auto& item) {
-                                        return item.id==proposed.id && item.presentation_key==proposed.presentation_key;
+                                        return item.id==id && (item.presentation_key==proposed.presentation_key || target_id!=id);
                                     });
                                     if (original==retained->end() || !original->resize_frame) continue;
                                     auto frame=*original->resize_frame;
@@ -25826,7 +26049,7 @@ public:
                                     }
                                     frame.center=center;
                                     frame.rotation_radians=std::atan2(along.y-center.y,along.x-center.x);
-                                    frame.source_rotation_radians=physicalPlanRotationAngle(candidate.entities().at(id.toStdString()));
+                                    frame.source_rotation_radians=physicalPlanRotationAngle(candidate.entities().at(target_id.toStdString()));
                                     if (site_input) frame.source_rotation_direction=1.0;
                                     proposed.resize_frame=frame;
                                 }
@@ -25971,6 +26194,7 @@ public:
                 for (const auto& view : model.views()) {
                     if (view.id != m_active_named_view.toStdString()) continue;
                     context = architectural_view_context(view);
+                    context.sheet_view_entity_id = entity.id;
                     kind = architectural_view_kind(view.kind);
                     found = true;
                 }
@@ -27025,19 +27249,25 @@ public:
             if (capture->workspace || capture->mirror || !prepared->document || prepared->workspace || prepared->mirror)
                 throw std::invalid_argument("The canvas edit's document authority changed.");
             measureDocumentEdit([&] { (void)m_document->commit_prepared(*prepared->document); });
-            return;
+        } else {
+            requireWorkspaceDocument();
+            if (!capture->workspace || !capture->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
+                throw std::invalid_argument("The canvas edit's recovery authority changed.");
+            const auto live_mirror=m_document->snapshot();
+            if (!live_mirror.shares_full_snapshot_with(*capture->mirror) &&
+                fullSnapshotDigest(live_mirror)!=fullSnapshotDigest(*capture->mirror))
+                throw std::invalid_argument("The project's save or recovery state changed during the edit.");
+            measureDocumentEdit([&] {
+                (void)m_project_workspace->commit(*prepared->workspace);
+                *m_document=std::move(*prepared->mirror);
+            });
         }
-        requireWorkspaceDocument();
-        if (!capture->workspace || !capture->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
-            throw std::invalid_argument("The canvas edit's recovery authority changed.");
-        const auto live_mirror=m_document->snapshot();
-        if (!live_mirror.shares_full_snapshot_with(*capture->mirror) &&
-            fullSnapshotDigest(live_mirror)!=fullSnapshotDigest(*capture->mirror))
-            throw std::invalid_argument("The project's save or recovery state changed during the edit.");
-        measureDocumentEdit([&] {
-            (void)m_project_workspace->commit(*prepared->workspace);
-            *m_document=std::move(*prepared->mirror);
-        });
+        if (!prepared->roof_selection_redirect.empty()) {
+            remapProposedWallSelection(prepared->roof_selection_redirect);
+            m_pending_proposed_selection = prepared->roof_selection_redirect;
+            m_pending_proposed_selection_document = m_document;
+            m_pending_proposed_selection_revision = authoringSnapshot().revision();
+        }
     }
 
     void publishEntityTransformPreparedEdit(bool no_op) {
@@ -41140,7 +41370,18 @@ private:
     }
 
     static void requireIndependentCopyRegistrations(const DocumentSnapshot& source,
-        const ApplyEntityChanges& intent, const ApplyEntityChanges& candidate) {
+        const ApplyEntityChanges& intent, const ApplyEntityChanges& candidate,
+        const IndependentRoofCopyCapture* roof_copy = nullptr) {
+        if (roof_copy && roof_copy->intent) {
+            if (roof_copy->source_digest != document_snapshot_digest(source) ||
+                command_to_json(Command{intent}).dump() != command_to_json(Command{*roof_copy->intent}).dump())
+                throw std::invalid_argument("The roof copy no longer matches its admitted source-derived intent.");
+            auto expected = intent;
+            registerNewObjectMemberships(source, expected);
+            if (command_to_json(Command{candidate}).dump() != command_to_json(Command{expected}).dump())
+                throw std::invalid_argument("A roof copy may add only its admitted geometry, qualified presentation and scope enrollment.");
+            return;
+        }
         // Originals can gain only the exact phase/page registrations derived
         // from fresh copied objects. Geometry completion cannot alter an
         // original body, dependency or unrelated registry as a side effect.
@@ -41360,6 +41601,201 @@ private:
         // unregistered joins into an unrelated active design.
         (void)Document::preview_command(source, Command{command});
         return Command{std::move(command)};
+    }
+
+    static ApplyEntityChanges sourceDerivedRoofCloneCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& owners,
+        const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
+        RoofCloneIdentityMap& identities, IndependentRoofCopyCapture* capture = nullptr) {
+        const auto plan = inspect_roof_clone_plan(source.entities(), owners);
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons += '\n';
+                reasons += diagnostic.entity_id + ": " + diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons);
+        }
+        std::set<std::string, std::less<>> occupied;
+        std::size_t reserved_nodes{}, reserved_bytes{};
+        // Copy destinations cannot reuse a historical entity, child or opaque
+        // reserved spelling after Undo. Reading these strings grants no
+        // authority to rewrite any source payload.
+        const auto reserve_text = [&](const std::string& value) {
+            if (value.size() > 64 * 1024 * 1024 - reserved_bytes)
+                throw std::invalid_argument("The roof copy's retained identity reservation exceeds its string budget.");
+            reserved_bytes += value.size(); occupied.insert(value);
+        };
+        const auto reserve = [&](const auto& self, const json& value, std::size_t depth) -> void {
+            if (depth > 64 || ++reserved_nodes > 4 * 1024 * 1024)
+                throw std::invalid_argument("The roof copy's retained identity reservation exceeds its JSON budget.");
+            if (value.is_string()) reserve_text(value.get_ref<const std::string&>());
+            else if (value.is_object()) for (const auto& [key, child] : value.items()) {
+                reserve_text(key); self(self, child, depth + 1);
+            } else if (value.is_array()) for (const auto& child : value) self(self, child, depth + 1);
+        };
+        for (const auto& revision : source.history()) for (const auto& [id, entity] : revision.entities) {
+            reserve_text(id); reserve_text(entity.type);
+            reserve(reserve, entity.properties, 0); reserve(reserve, entity.extensions, 0);
+        }
+        for (const auto& [id, asset] : source.assets()) { (void)asset; reserve_text(id); }
+        for (const auto& [id, proposed] : identities) {
+            (void)id;
+            if (!occupied.insert(proposed).second)
+                throw std::invalid_argument("A roof copy destination is already reserved in the source or history.");
+        }
+        for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& id : *slots) {
+                if (identities.contains(id)) continue;
+                auto fresh = new_id("roof-copy");
+                while (!occupied.insert(fresh).second) fresh = new_id("roof-copy");
+                identities.emplace(id, std::move(fresh));
+            }
+        const auto copied = replay_roof_clone(source.entities(), plan, identities);
+        ApplyEntityChanges creation{source.revision(), {}, {}, message};
+        for (const auto& [id, entity] : copied.entities) {
+            const auto before = source.entities().find(id);
+            if (before == source.entities().end() || before->second != entity ||
+                before->second.properties.dump() != entity.properties.dump() ||
+                before->second.extensions.dump() != entity.extensions.dump())
+                creation.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        // This is a genuine source-derived identity copy, admitted by Document,
+        // rather than a fabricated revision or altered baseline snapshot.
+        const auto detached = Document::preview_command(source, creation);
+        std::vector<ArchitecturalGroupTransformTarget> targets;
+        std::set<std::string, std::less<>> moved;
+        for (const auto& operation : operations) {
+            if (!std::binary_search(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end(), operation.entity_id) ||
+                !moved.insert(operation.entity_id).second || operation.transform.scale != 1.0)
+                throw std::invalid_argument("A roof copy requires one rigid operation for each selected roof.");
+            targets.push_back({identities.at(operation.entity_id), operation.transform});
+        }
+        if (moved.size() != plan.selected_roof_ids.size())
+            throw std::invalid_argument("The roof copy is missing a selected roof's transform.");
+        const auto movement = architectural_group_transform_command(detached, targets,
+            new_id("roof-copy-transform"), detached.revision());
+        const auto candidate = movement.entity_changes.empty() ? detached : Document::preview_command(detached, movement);
+        creation.entity_changes.clear();
+        for (const auto& [id, entity] : candidate.entities()) {
+            const auto before = source.entities().find(id);
+            if (before == source.entities().end() || before->second != entity ||
+                before->second.properties.dump() != entity.properties.dump() ||
+                before->second.extensions.dump() != entity.extensions.dump())
+                creation.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        for (const auto& id : plan.required_entity_ids) {
+            const auto& retained = candidate.entities().at(id);
+            const auto& original = source.entities().at(id);
+            if (retained != original || retained.properties.dump() != original.properties.dump() ||
+                retained.extensions.dump() != original.extensions.dump())
+                throw std::invalid_argument("Copying a roof would modify an original owner or dependency.");
+        }
+        if (candidate.assets() != source.assets())
+            throw std::invalid_argument("A roof copy must retain its actual shared assets.");
+        (void)Document::preview_command(source, creation);
+        if (capture) {
+            capture->source_digest = document_snapshot_digest(source);
+            capture->intent = creation;
+        }
+        return creation;
+    }
+
+    static Command sourceDerivedRoofTransformCommand(const DocumentSnapshot& source,
+        const std::vector<RoofRigidTransformIntent>& operations, const std::string& message) {
+        // Explicit mathematical intent is captured before any generic preview
+        // can attempt to mutate a shared baseline. Never infer an operation
+        // from a detached, arbitrarily changed roof descriptor.
+        const auto physical = replay_roof_rigid_transform_entities(source.entities(), operations);
+        std::vector<RoofEditIntent> edits;
+        for (const auto& operation : operations) {
+            const auto& before = source.entities().at(operation.roof_id);
+            const auto& after = physical.at(operation.roof_id);
+            if (const auto captured = capture_roof_rigid_transform(before, after, operation.transform)) {
+                RoofEditIntent edit;
+                edit.roof_id = operation.roof_id;
+                edit.transform = *captured;
+                edits.push_back(std::move(edit));
+            }
+        }
+        if (edits.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
+        const auto request = phase_roof_edit_replacement_request(source.entities(), edits);
+        if (!request) {
+            ApplyEntityChanges command{source.revision(), {}, {}, message};
+            for (const auto& edit : edits)
+                command.entity_changes.push_back(EntityChange::upsert(physical.at(edit.roof_id)));
+            (void)Document::preview_command(source, Command{command});
+            return command;
+        }
+        const auto plan = inspect_phase_roof_replacement_plan(source.entities(), request->seed_roof_ids,
+            request->registry_id, request->alternative_id);
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons += '\n';
+                reasons += diagnostic.entity_id + ": " + diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons);
+        }
+        PhaseRoofReplacementAuthoring replacement;
+        replacement.registry_id = request->registry_id;
+        replacement.alternative_id = request->alternative_id;
+        replacement.seed_roof_ids = request->seed_roof_ids;
+        replacement.roof_edits = std::move(edits);
+        std::set<std::string, std::less<>> occupied;
+        for (const auto& record : source.history())
+            for (const auto& [id, entity] : record.entities) { (void)entity; occupied.insert(id); }
+        for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+        for (const auto* ids : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& id : *ids) {
+                auto proposed = new_id("proposed");
+                while (!occupied.insert(proposed).second) proposed = new_id("proposed");
+                replacement.identities.emplace(id, std::move(proposed));
+            }
+        ConstraintAuthoringIntent semantic;
+        semantic.message = message;
+        auto intent = make_phase_constraint_authoring_intent(source, semantic);
+        intent.roof_replacement = encode_phase_roof_replacement_authoring(replacement);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision = source.revision();
+        command.message = message;
+        command.phase_constraint_authoring_completion = true;
+        command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source, Command{command});
+        return command;
+    }
+
+    static std::string roofReplacementTargetID(const Command& command, const std::string& original) {
+        const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!phase || !phase->phase_constraint_authoring_completion ||
+            phase->phase_constraint_authoring_intent.is_null()) return original;
+        const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
+        if (intent.roof_replacement.is_null()) return original;
+        const auto replacement = decode_phase_roof_replacement_authoring(intent.roof_replacement);
+        const auto found = replacement.identities.find(original);
+        return !replacement.demolition && found != replacement.identities.end() ? found->second : original;
+    }
+
+    static PhaseRoofReplacementIdentityMap admittedRoofSelectionRedirect(
+        const DocumentSnapshot& source, const DocumentSnapshot& candidate, const Command& command) {
+        PhaseRoofReplacementIdentityMap result;
+        const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!phase || !phase->phase_constraint_authoring_completion ||
+            phase->phase_constraint_authoring_intent.is_null()) return result;
+        const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
+        if (intent.roof_replacement.is_null()) return result;
+        const auto replacement = decode_phase_roof_replacement_authoring(intent.roof_replacement);
+        if (replacement.demolition) return result;
+        for (const auto& [original_id, proposed_id] : replacement.identities) {
+            const auto original = source.entities().find(original_id);
+            if (original == source.entities().end() ||
+                (original->second.type != "roof" && original->second.type != "roof_join")) continue;
+            const auto proposed = candidate.entities().find(proposed_id);
+            if (proposed == candidate.entities().end() || proposed->second.type != original->second.type)
+                throw std::invalid_argument("The admitted roof edit lost its proposed selection owner.");
+            result.emplace(original_id, proposed_id);
+        }
+        return result;
     }
 
     std::optional<Command> reviewAlternativeRoofEdit(const Command& requested, bool* handled = nullptr) {
@@ -48616,6 +49052,15 @@ private:
         // Host movement owns opening cuts. A selected opening cannot acquire
         // a second free-space edit merely by joining this group.
         geometry_ids=translationModelRoots(source,std::move(geometry_ids));
+        if (geometry_ids.isEmpty() && dimension_ids.isEmpty() && annotation_targets.empty() &&
+            reference_targets.empty() && embedded_targets.empty() && !physical_targets.empty() &&
+            std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
+                return source.entities().at(target.entity_id).type == "roof";
+            })) {
+            std::vector<RoofRigidTransformIntent> roofs;
+            for (const auto& target : physical_targets) roofs.push_back({target.entity_id, target.transform});
+            return sourceDerivedRoofTransformCommand(source, roofs, "Move roofs on Site");
+        }
         const auto geometry_operation=geometry_ids.isEmpty() ? PlanarTransform{} : selected_operation(geometry_ids.front());
         bool per_owner_geometry=!geometry_ids.isEmpty() && std::any_of(geometry_ids.begin(),geometry_ids.end(),[&](const auto& id) {
             return !equivalentPlanOperators(geometry_operation,selected_operation(id));

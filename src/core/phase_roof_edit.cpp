@@ -130,10 +130,18 @@ void admit_cohorts(const Entities& entities, const Ids& targets) {
 } // namespace
 
 nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent) {
-    if (!identity(intent.roof_id) || (!intent.profile && !intent.openings && !intent.pose && !intent.form))
+    if (!identity(intent.roof_id) || (!intent.profile && !intent.openings && !intent.pose && !intent.form && !intent.transform))
         invalid("Roof edit requires a valid owner and a typed component");
     if (intent.form && intent.profile) invalid("Roof conversion cannot also author a profile component");
+    if (intent.transform && (intent.profile || intent.openings || intent.pose || intent.form))
+        invalid("Roof rigid transform cannot borrow another component's edit authority");
     Json result{{"version", 1}, {"roof_id", intent.roof_id}, {"profile", nullptr}, {"openings", nullptr}, {"pose", nullptr}};
+    if (intent.transform) {
+        if (intent.transform->roof_id != intent.roof_id) invalid("Roof rigid transform component owner differs");
+        result["version"] = 3;
+        result["form"] = nullptr;
+        result["transform"] = encode_roof_rigid_transform_intent(*intent.transform);
+    }
     if (intent.form) {
         if (intent.form->roof_id != intent.roof_id) invalid("Roof form component owner differs");
         result["version"] = 2;
@@ -160,7 +168,13 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
         !value.contains("roof_id") || !value.contains("profile") || !value.contains("openings") || !value.contains("pose") ||
         value.dump().size() > proof_limit) invalid("Roof edit fields or proof budget are invalid");
     const bool conversion = value.at("version") == 2;
-    if (conversion) {
+    const bool rigid_transform = value.at("version") == 3;
+    if (rigid_transform) {
+        if (value.size() != 7 || !value.contains("form") || !value.at("form").is_null() ||
+            !value.contains("transform") || value.at("transform").is_null() ||
+            !value.at("profile").is_null() || !value.at("openings").is_null() || !value.at("pose").is_null())
+            invalid("Roof rigid transform requires exactly seven version-three fields and no other component");
+    } else if (conversion) {
         if (value.size() != 6 || !value.contains("form") || value.at("form").is_null() || !value.at("profile").is_null())
             invalid("Roof conversion requires exactly six version-two fields with form and no profile");
     } else if (value.at("version") != 1 || value.size() != 5 || value.contains("form")) {
@@ -168,6 +182,7 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
     }
     RoofEditIntent result;
     result.roof_id = value.at("roof_id").get<std::string>();
+    if (rigid_transform) result.transform = decode_roof_rigid_transform_intent(value.at("transform"));
     if (conversion) result.form = decode_roof_form_edit_intent(value.at("form"));
     if (!value.at("profile").is_null()) result.profile = decode_roof_profile_edit_intent(value.at("profile"));
     if (!value.at("openings").is_null()) result.openings = decode_roof_opening_edit_intent(value.at("openings"));
@@ -178,6 +193,7 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
 Entity replay_roof_edit_entity(const Entity& source, const RoofEditIntent& intent) {
     (void)encode_roof_edit_intent(intent);
     if (source.id != intent.roof_id) invalid("Roof edit target differs from its actual source identity");
+    if (intent.transform) return replay_roof_rigid_transform_entity(source, *intent.transform);
     validate_roof_profile_source_entity(source);
     auto result = source;
     if (intent.form) merge_component(result, source, stage_roof_form_entity(source, *intent.form), Component::form);

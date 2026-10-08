@@ -4,6 +4,7 @@
 #include "sketch/phase_roof_opening_edit.hpp"
 #include "sketch/phase_roof_pose_edit.hpp"
 #include "sketch/phase_roof_profile_edit.hpp"
+#include "sketch/phase_roof_transform.hpp"
 
 namespace sketch {
 
@@ -16,12 +17,15 @@ struct RoofEditIntent {
     std::optional<RoofOpeningEditIntent> openings;
     std::optional<RoofPoseEditIntent> pose;
     std::optional<RoofFormEditIntent> form;
+    std::optional<RoofRigidTransformIntent> transform;
 };
 
 // Strict version one: version, roof_id, profile, openings, pose. At least one
 // nonnull typed component is required; all component owner IDs must agree.
 // Conversion uses strict version two: those five fields plus nonnull form,
 // with profile null. Historical same-form edits retain the exact v1 wire.
+// Rigid movement uses strict version three with form and transform fields;
+// transform is exclusive and reads the actual mathematical operation.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 

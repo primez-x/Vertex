@@ -45,6 +45,7 @@
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
+#include "sketch/phase_roof_transform.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -477,6 +478,22 @@ void validate_entity(const Entity& entity) {
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid wall join entity: ") + error.what());
+        }
+    }
+    if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations")) {
+        try {
+            const auto& archive = entity.extensions.at("roof_rigid_transform_derivations");
+            if (!archive.is_object() || !archive.contains("version") ||
+                !archive.at("version").is_number_integer() ||
+                (archive.at("version").is_number_unsigned() ? archive.at("version").get<std::uint64_t>() == 0 :
+                    archive.at("version").get<std::int64_t>() <= 0))
+                throw std::invalid_argument("Roof movement derivation requires a positive version");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (archive.at("version") == 1) validate_roof_rigid_transform_derivations(entity);
+#endif
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                std::string("invalid roof movement derivation: ") + error.what());
         }
     }
     if (entity.type == "roof_join") {
@@ -1412,6 +1429,13 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         if(entity.type=="wall" && entity.extensions.contains("wall_merge_archive") &&
             entity.extensions.at("wall_merge_archive").at("version")!=1)
             unsupported_boundary="Unsupported wall merge archive: "+id;
+    for (const auto& [id, entity] : entities)
+        if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations")) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (entity.extensions.at("roof_rigid_transform_derivations").at("version") != 1)
+#endif
+                unsupported_boundary = "Unsupported roof movement derivation: " + id;
+        }
     for (const auto& [id, entity] : entities) {
         if (entity.type != "measurement_boundary" || !entity.extensions.contains("survey_source")) continue;
         const auto admission = inspect_survey_source(entity.extensions.at("survey_source"));

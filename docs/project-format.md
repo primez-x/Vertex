@@ -1,4 +1,52 @@
-# Vertex project formats v1 through v98
+# Vertex project formats v1 through v99
+
+## Source-derived roof movement and independent copies (v99)
+
+Native format 99 and JSON/assets extraction version 97 retain mathematical
+roof movement, rotation and reflection. The operation contains exactly
+`version`, `roof_id` and `transform`; the transform contains exactly `pivot_m`,
+`offset_m`, `rotation_z_radians`, `scale`, `flip_horizontal` and `flip_vertical`.
+Scale is one. This is an explicit mathematical operation on the actual source,
+not a fabricated measurement receipt for a computed coordinate.
+
+The source-derived result changes only roof placement, orientation and the
+reflected opening Y coordinates. Original profile dimensions, opening IDs,
+schema, context, material and opaque metadata remain retained. Affected
+understood coordinate receipts are moved verbatim into the owned extension
+`roof_rigid_transform_derivations`. Its strict version-one envelope contains
+exactly `version` and `operations`; each operation record contains exactly
+`operation`, `source`, `result` and `receipts`. The receipt record contains
+exactly `quantity_entries` and `roof_opening_input`. Every closed historical
+source/result frame is independently derived from its mathematical operation,
+and every archived input is checked against its actual original scalar.
+Unsupported affected bindings refuse. Opaque receipt siblings remain retained.
+Historical owner and child IDs are provenance and are never remapped by a copy.
+Future positive archive versions remain intact in a read-only document.
+
+Baseline movement uses roof replacement record three with combined roof edit
+version three: exactly `version`, `roof_id`, `profile`, `openings`, `pose`,
+`form` and `transform`. Only `transform` is nonnull. Earlier combined dialects
+and their floors remain unchanged. The floor follows retained archives and
+direct, nested or composed replacement proofs, including after Undo. Native
+source and final resolved roofs and affected joins are admitted as a complete
+map. Original baseline owners and other alternatives remain retained.
+
+Independent roof copies derive their exact entity and child mappings from
+explicit active owners. Whole selected joins are copied; partial selections
+retain the effective source join material as independent roofs. Owned opening
+and bound overlay IDs are fresh. Qualified view and annotation presentation is
+appended while original rows remain exact. Every new owner receives actual
+current phase and page enrollment. Controller validation accepts only this
+captured copy and its exact source-derived enrollment. Copy destinations cannot
+reuse a reserved name in retained history or opaque source data. Existing local
+assets stay shared. Archived movement inputs remain byte-equivalent.
+
+Saved-view previews retain both their sheet-view owner and local view ID.
+Admitted prepared publication redirects selection to the actual proposed roof
+after commit. No screen alias replaces a physical document identity.
+This source contract has not been compiled or exercised. Non-unit scaling,
+mixed baseline/non-roof edits and unsupported live reference families remain
+separate implementation work.
 
 ## Typed proposed roof form conversion (v98)
 

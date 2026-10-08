@@ -18,6 +18,9 @@ struct ArchitecturalViewContext {
     std::vector<SectionOverlay> overlays;
     std::optional<BuildingViewCrop> crop;
     bool restrict_to_objects{false};
+    // View IDs are local to a sheet-view model. Retain the captured owner
+    // instead of resolving the same spelling across unrelated models.
+    std::string sheet_view_entity_id;
 };
 
 struct PhaseWallCanvasProjection {

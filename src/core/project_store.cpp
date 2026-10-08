@@ -361,6 +361,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                         const auto edits = replacement->find("roof_edits");
                         if (edits != replacement->end() && edits->is_array() &&
                             std::any_of(edits->begin(), edits->end(), [](const auto& edit) {
+                                return edit.is_object() && edit.value("version", 0) == 3;
+                            })) return 99U;
+                        if (edits != replacement->end() && edits->is_array() &&
+                            std::any_of(edits->begin(), edits->end(), [](const auto& edit) {
                                 return edit.is_object() && edit.value("version", 0) == 2;
                             })) return 98U;
                         return 96U;
@@ -514,6 +518,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
+            if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations"))
+                required = std::max(required, 99U);
             // This semantic marker changes which measured source graph is
             // authoritative. Older readers must not ignore it, even if the
             // marked owner is retained only in an earlier revision.
@@ -2156,6 +2162,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 99 &&
          sqlite3_column_int(user_version.get(), 0) != 98 &&
          sqlite3_column_int(user_version.get(), 0) != 97 &&
          sqlite3_column_int(user_version.get(), 0) != 96 &&
@@ -2709,6 +2716,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=99)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 99 for source-derived roof movement and rotation");
         if (required_format>=98)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 98 for typed proposed roof form conversion");
         if (required_format>=97)

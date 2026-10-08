@@ -6,6 +6,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/phase_roof_transform.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/wall_semantics.hpp"
@@ -677,6 +678,14 @@ std::optional<Entity> try_transform_shared_solid(EntityState& entities,
 Entity transform_building_entity(const Entity& source,
                                  const ArchitecturalTransform& transform,
                                  bool flip_horizontal = false, bool flip_vertical = false) {
+    if (source.type == "roof" && transform.scale == 1.0) {
+        // Actual movement math retires affected entered coordinates into a
+        // retained derivation. Generic receipt invalidation must not discard
+        // the original expressions or their opaque metadata.
+        return replay_roof_rigid_transform_entity(source, {source.id,
+            {{}, {transform.x, transform.y, transform.z}, transform.rotation_z_radians,
+                1.0, flip_horizontal, flip_vertical}});
+    }
     if (source.type == "stair" && source.properties.contains("level_connection") &&
         !source.properties.at("level_connection").is_null() &&
         transform.scale != 1.0) {

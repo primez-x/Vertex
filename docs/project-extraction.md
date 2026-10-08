@@ -1,5 +1,18 @@
 # Portable project extraction
 
+Exchange version 97 requires native reader 99 for mathematical roof movement,
+rotation and reflection. It retains exact operation inputs, independently
+derived historical frames and verbatim retired coordinate/opening receipts.
+Baseline replacement carries combined roof edit three inside replacement
+record three. Historical owner/child IDs remain provenance through independent
+or proposed copies. Floors cover archives and nested/composed phase proofs in
+every retained revision, including Undo. Earlier contracts keep their floors.
+
+Exchange version 96 requires native reader 98 for typed panel/gable/hip form
+conversion. Exchange version 95 requires native reader 97 for baseline roof
+demolition and surviving join components. Their complete source-derived
+identities, physical intent and preserved original revisions remain retained.
+
 Exchange version 94 retains atomic proposed roof profile, opening and placement
 edits and requires native reader 96. Roof replacement record three preserves its
 complete combined intent, exact coordinate/profile/opening quantities, finite

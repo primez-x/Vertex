@@ -91,6 +91,13 @@ Entity opaque_remainder(Entity entity) {
         const bool known_form = p.contains("form") && (p.at("form") == "sloped_roof_panel" ||
             p.at("form") == "gable_roof" || p.at("form") == "hip_roof");
         if (!known_schema || !known_form) return entity;
+        if (entity.extensions.contains(roof_rigid_transform_derivations_key)) {
+            // Closed historical frames identify their original source; their
+            // owner/cut IDs are provenance, not current replacement bindings.
+            // Unknown receipt siblings retain their opaque reference checks.
+            entity.extensions[std::string(roof_rigid_transform_derivations_key)] =
+                roof_rigid_transform_opaque_remainder(entity);
+        }
         if (p.contains("roof_openings")) for (auto& opening : p.at("roof_openings")) opening.erase("id");
         if (entity.extensions.contains("roof_opening_input")) {
             auto& receipt = entity.extensions.at("roof_opening_input");

@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 mathematical roof movement and independent copy implementation
+
+Roof plan movement, rotation, reflection and numerical rigid transforms now
+derive from explicit mathematical operations against the actual captured
+source. Profile dimensions and opaque metadata remain exact. Understood
+affected coordinate/opening receipts are archived verbatim with independently
+replayable source/result frames; computed coordinates never become entered
+measurements. Native source/final admission includes actual levels and affected
+joins. Shared baseline roofs use distinct proposed cohorts, preserving the
+original design and other alternatives. Non-unit scaling remains open.
+
+Independent copies now derive fresh roof, join, opening and bound overlay IDs
+from explicit active owners. Whole selected joins are copied; partial joined
+selections retain their effective material. Qualified view and annotation rows
+are appended without rewriting originals, historical derivation IDs remain
+provenance, and actual phase/page enrollment accompanies new owners. The
+controller's copy validation accepts only the admitted source-bound copy plus
+its exact scope registration. Source/history identity reservation is bounded.
+
+Alternative previews now project the actual proposed owners through the
+captured saved-view owner/local ID. Prepared Document and Workspace publication
+redirect selection only after successful commit. Numerical object preview also
+resolves its actual proposed target. Native 99/extraction 97 retain mathematical
+roof intent and archives throughout history, including Undo. Future positive
+archive versions remain retained read-only.
+
+Independent bounded source reviews approved the rigid math/archive, preview
+and selection corrections, and independent copy integration after correcting
+missing mirror enrollment, over-strict presentation validation and static
+digest calls. These are source reviews only. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran; the installed candidate
+stays unchanged. Compilation, interaction, Undo/Redo and save/reopen remain
+unverified. Roof axis-resize geometry and typed mathematical replay are the
+next active implementation, alongside remaining family lifecycle and reference
+work. No overall completion or production acceptance is claimed.
+
 ### October 8 typed roof form conversion implementation
 
 The properties dialog now supplies a typed change between sloped panel, gable
