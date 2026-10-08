@@ -391,6 +391,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (intent.is_object() && intent.value("version",0)==5) {
                     const auto replacement = intent.find("slab_replacement");
                     if (replacement != intent.end() && replacement->is_object()) {
+                        for (const auto* name : {"slab_geometry", "ordinary_geometry"}) {
+                            const auto geometry = replacement->find(name);
+                            if (geometry != replacement->end() && geometry->is_array() &&
+                                std::any_of(geometry->begin(), geometry->end(), [](const auto& edit) {
+                                    return edit.is_object() && edit.value("version", 0) == 2;
+                                })) return 109U;
+                        }
                         const auto profiles = replacement->find("slab_profiles");
                         if (replacement->value("version", 0) == 1 && profiles != replacement->end() && profiles->is_array() &&
                             std::any_of(profiles->begin(), profiles->end(), [](const auto& profile) {
@@ -578,8 +585,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (required<101 && (scientific_receipt(entity.properties) || scientific_receipt(entity.extensions))) required=101;
             if (entity.type == "slab" && entity.extensions.contains("slab_layer_stack_retirement"))
                 required = std::max(required, 103U);
-            if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations"))
-                required = std::max(required, 104U);
+            if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations")) {
+                const auto& archive = entity.extensions.at("slab_geometry_derivations");
+                required = std::max(required, archive.is_object() && archive.value("version", 0) == 2 ? 109U : 104U);
+            }
             if (entity.type == "wall" && entity.extensions.contains("wall_layer_stack_retirement"))
                 required = std::max(required, 107U);
             if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations"))
@@ -2228,6 +2237,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 109 &&
          sqlite3_column_int(user_version.get(), 0) != 108 &&
          sqlite3_column_int(user_version.get(), 0) != 107 &&
          sqlite3_column_int(user_version.get(), 0) != 106 &&
@@ -2791,6 +2801,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=109)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 109 for source-derived horizontal assembly model transforms");
         if (required_format>=108)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 108 for exact retained horizontal-layer thickness editing");
         if (required_format>=107)

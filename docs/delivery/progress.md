@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 horizontal 3D model transformation source integration
+
+The controller now routes slab/floor/ceiling/foundation XYZ movement and
+uniform model scaling through actual-source replay, including transformed
+independent copies. Analytical footprints and holes, physical total/layer
+thicknesses and world elevation follow the same transform. Bound floor/level
+placement remains exact; replay derives the corresponding native elevation.
+Plan canvas scaling keeps its existing physical-profile semantics.
+
+Geometry intent two and derivation archive two retain the model operation,
+actual profile and resolved elevation shift. Known changed entered dimensions
+retire verbatim rather than gaining fabricated quantities. Exact no-ops and
+opaque unaffected data remain exact. Native 109/extraction 107 retains these
+semantics throughout direct/wrapped and historical commands, including Undo.
+Independent source review approved this slice after closing affected scalar
+alias receipt guards. Hosted horizontal assembly copying is being integrated
+next in the existing clone producer.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. The installed candidate is unchanged; compilation,
+interaction and storage round trips remain unverified. No production
+acceptance, completion percentage or ETA is claimed.
+
 ### October 8 wall layer authoring and horizontal copying source integration
 
 Wall layers now have Add/Remove/Up/Down, editable thickness, actual catalog

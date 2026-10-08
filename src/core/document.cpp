@@ -510,7 +510,7 @@ void validate_entity(const Entity& entity) {
                     archive.at("version").get<std::int64_t>() <= 0))
                 throw std::invalid_argument("Horizontal geometry derivation requires a positive version");
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-            if (archive.at("version") == 1) validate_slab_geometry_derivation(entity);
+            if (archive.at("version") == 1 || archive.at("version") == 2) validate_slab_geometry_derivation(entity);
 #endif
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,

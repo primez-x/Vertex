@@ -7745,7 +7745,7 @@ public:
         const ArchitecturalGroupTransform transform{{0.0,0.0,0.0},
             {gesture.x,gesture.y,gesture.z},gesture.rotation_z_radians,gesture.scale,
             flip_horizontal,flip_vertical};
-        if (clone && original.type == "slab" && gesture.scale == 1.0 && gesture.z == 0.0) {
+        if (clone && original.type == "slab") {
             SlabCloneIdentityMap identities;
             IndependentModelCopyCapture capture;
             auto command = sourceDerivedSlabCloneCommand(source, {original.id},
@@ -7769,13 +7769,9 @@ public:
             if (original.type == "roof" && gesture.scale == 1.0)
                 return {sourceDerivedRoofTransformCommand(source, {{original.id, transform}},
                     "Transform roof"), original.id};
-            if (original.type == "slab" && gesture.scale == 1.0 && gesture.z == 0.0) {
-                SlabGeometryEditIntent intent;
-                intent.slab_id = original.id;
-                intent.kind = SlabGeometryEditKind::transform_plan;
-                intent.transform = PlanarTransform{{}, gesture.rotation_z_radians,
-                    flip_horizontal, flip_vertical, {gesture.x, gesture.y}};
-                return {sourceDerivedSlabGeometryEditCommand(source, {intent}, "Transform horizontal assembly in plan"),
+            if (original.type == "slab") {
+                const auto intent = slabTransformGeometryIntent(original.id, transform);
+                return {sourceDerivedSlabGeometryEditCommand(source, {intent}, "Transform horizontal assembly"),
                     original.id};
             }
             const std::vector<std::string> targets{original.id};
@@ -23983,13 +23979,12 @@ public:
         if (original.type == "slab" && operations.size() == 2 &&
             operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
             operations[1].action == ArchitecturalAction::transform &&
-            operations[1].object_id == operations[0].duplicate_id && operations[1].transform &&
-            operations[1].transform->scale == 1.0 && operations[1].transform->z == 0.0) {
+            operations[1].object_id == operations[0].duplicate_id && operations[1].transform) {
             const auto& movement = *operations[1].transform;
             SlabCloneIdentityMap identities{{original.id, operations[0].duplicate_id}};
             IndependentModelCopyCapture capture;
             auto command = sourceDerivedSlabCloneCommand(source, {original.id}, {{original.id,
-                {{}, {movement.x, movement.y, 0.0}, movement.rotation_z_radians, 1.0, false, false}}},
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
                 transaction.undo_label(), identities, &capture);
             auto complete = augmentAuthoredCommand(command, source);
             requireIndependentCopyRegistrations(source, command,
@@ -24018,14 +24013,10 @@ public:
         }
         if (original.type == "slab" && operations.size() == 1 &&
             operations.front().action == ArchitecturalAction::transform &&
-            operations.front().object_id == original.id && operations.front().transform &&
-            operations.front().transform->scale == 1.0 && operations.front().transform->z == 0.0) {
+            operations.front().object_id == original.id && operations.front().transform) {
             const auto& movement = *operations.front().transform;
-            SlabGeometryEditIntent intent;
-            intent.slab_id = original.id;
-            intent.kind = SlabGeometryEditKind::transform_plan;
-            intent.transform = PlanarTransform{{}, movement.rotation_z_radians, false, false,
-                {movement.x, movement.y}};
+            const auto intent = slabTransformGeometryIntent(original.id,
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false});
             return sourceDerivedSlabGeometryEditCommand(source, {intent}, transaction.undo_label());
         }
         if (original.type=="wall" && operations.size()==1 && operations.front().transform) {
@@ -42199,6 +42190,28 @@ private:
         return occupied;
     }
 
+    static SlabGeometryEditIntent slabTransformGeometryIntent(const std::string& id,
+        const ArchitecturalGroupTransform& transform) {
+        const auto finite_point = [](Vec3 value) {
+            return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+        };
+        if (!finite_point(transform.pivot) || !finite_point(transform.offset) ||
+            !std::isfinite(transform.rotation_z_radians) || !std::isfinite(transform.scale) || transform.scale <= 0.0)
+            throw std::invalid_argument("Horizontal assembly transforms require finite coordinates and a positive scale.");
+        SlabGeometryEditIntent intent;
+        intent.slab_id = id;
+        if (transform.scale == 1.0 && transform.offset.z == 0.0) {
+            intent.kind = SlabGeometryEditKind::transform_plan;
+            intent.transform = PlanarTransform{{transform.pivot.x, transform.pivot.y}, transform.rotation_z_radians,
+                transform.flip_horizontal, transform.flip_vertical, {transform.offset.x, transform.offset.y}};
+        } else {
+            intent.kind = SlabGeometryEditKind::transform_model;
+            intent.model_transform = SlabModelTransform{transform.pivot, transform.offset,
+                transform.rotation_z_radians, transform.scale, transform.flip_horizontal, transform.flip_vertical};
+        }
+        return intent;
+    }
+
     static ApplyEntityChanges sourceDerivedSlabCloneCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& owners,
         const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
@@ -42229,17 +42242,10 @@ private:
         std::vector<SlabGeometryEditIntent> movement;
         std::set<std::string, std::less<>> moved;
         for (const auto& operation : operations) {
-            const auto& transform = operation.transform;
             if (!std::binary_search(plan.selected_slab_ids.begin(), plan.selected_slab_ids.end(), operation.entity_id) ||
-                !moved.insert(operation.entity_id).second || transform.scale != 1.0 || transform.offset.z != 0.0 ||
-                !std::isfinite(transform.pivot.z))
-                throw std::invalid_argument("A horizontal copy requires one rigid plan operation for each selected assembly.");
-            SlabGeometryEditIntent edit;
-            edit.slab_id = identities.at(operation.entity_id);
-            edit.kind = SlabGeometryEditKind::transform_plan;
-            edit.transform = PlanarTransform{{transform.pivot.x, transform.pivot.y}, transform.rotation_z_radians,
-                transform.flip_horizontal, transform.flip_vertical, {transform.offset.x, transform.offset.y}};
-            movement.push_back(std::move(edit));
+                !moved.insert(operation.entity_id).second)
+                throw std::invalid_argument("A horizontal copy requires one operation for each selected assembly.");
+            movement.push_back(slabTransformGeometryIntent(identities.at(operation.entity_id), operation.transform));
         }
         if (moved.size() != plan.selected_slab_ids.size())
             throw std::invalid_argument("The horizontal copy is missing a selected assembly's transform.");

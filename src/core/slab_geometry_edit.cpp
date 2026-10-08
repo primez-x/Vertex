@@ -40,6 +40,9 @@ void keys(const Json& value, std::initializer_list<const char*> names) {
 bool version_one(const Json& value) {
     return (value.is_number_integer() || value.is_number_unsigned()) && value == 1;
 }
+bool version_two(const Json& value) {
+    return (value.is_number_integer() || value.is_number_unsigned()) && value == 2;
+}
 std::string identity(const Json& value) {
     if (!value.is_string()) invalid("identity must be a string");
     const auto& id = value.get_ref<const std::string&>();
@@ -62,6 +65,11 @@ Vec2 point(const Json& value) {
     return {scalar(value.at(0)), scalar(value.at(1))};
 }
 Json point(Vec2 value) { return Json::array({scalar(value.x), scalar(value.y)}); }
+Vec3 point3(const Json& value) {
+    if (!value.is_array() || value.size() != 3) invalid("model point must contain three scalars");
+    return {scalar(value.at(0)), scalar(value.at(1)), scalar(value.at(2))};
+}
+Json point3(Vec3 value) { return Json::array({scalar(value.x), scalar(value.y), scalar(value.z)}); }
 std::size_t index(const Json& value) {
     if ((!value.is_number_integer() && !value.is_number_unsigned()) ||
         (value.is_number_integer() && !value.is_number_unsigned() && value.get<std::int64_t>() < 0) ||
@@ -224,6 +232,99 @@ Json derive(const Json& before, const SlabGeometryEditIntent& intent) {
     admit_frame(after);
     return after;
 }
+PlanarTransform plan_projection(const SlabModelTransform& t) {
+    return {{t.pivot_m.x, t.pivot_m.y}, t.rotation_radians,
+        t.flip_horizontal, t.flip_vertical, {t.offset_m.x, t.offset_m.y}};
+}
+double profile_scalar(const Json& profile, const char* canonical, const char* alias, bool positive) {
+    const auto& a = profile.at(canonical); const auto& b = profile.at(alias);
+    if (a.is_null() && b.is_null()) invalid("model profile scalar is missing");
+    const auto value = scalar(a.is_null() ? b : a);
+    if (!b.is_null() && scalar(b) != value) invalid("model profile aliases disagree");
+    if (positive && value <= default_geometry_tolerance_metres) invalid("model profile thickness must be positive");
+    return value;
+}
+void admit_model_frame(const Json& value) {
+    (void)proof_budget(value);
+    keys(value, {"boundary", "holes", "profile", "elevation_shift_m"});
+    const Json geometry{{"boundary", value.at("boundary")}, {"holes", value.at("holes")}};
+    admit_frame(geometry);
+    const auto& profile = value.at("profile");
+    keys(profile, {"thickness_m", "thickness", "elevation_m", "elevation", "layers"});
+    const auto thickness = profile_scalar(profile, "thickness_m", "thickness", true);
+    const auto elevation = profile_scalar(profile, "elevation_m", "elevation", false);
+    const auto shift = scalar(value.at("elevation_shift_m"));
+    const auto& layers = profile.at("layers");
+    if (!layers.is_null()) {
+        if (!layers.is_array() || layers.size() > 1024) invalid("model frame layer budget exceeded");
+        double total = 0;
+        for (const auto& layer : layers) {
+            const auto amount = scalar(layer);
+            if (amount <= default_geometry_tolerance_metres) invalid("model frame layer thickness must be positive");
+            total = scalar(total + amount);
+        }
+        if (!layers.empty() && std::abs(total - thickness) >
+            std::max(default_geometry_tolerance_metres, std::abs(thickness) * 1e-9))
+            invalid("model frame layers must sum to total thickness");
+    }
+    std::size_t count = 0;
+    Slab slab; slab.boundary = ring(value.at("boundary"), count);
+    for (const auto& hole : value.at("holes")) slab.holes.push_back(ring(hole, count));
+    slab.thickness = thickness; slab.elevation = scalar(elevation + shift);
+    // Historical mathematical frames have no identity/material authority.
+    // Positive ordered layers are checked above; native admission checks the
+    // complete analytical footprint extruded by its actual profile total.
+    (void)make_slab(slab);
+}
+Json model_frame(const Entity& source, double actual_shift) {
+    auto result = frame(source);
+    Json profile = Json::object();
+    for (const auto* name : {"thickness_m", "thickness", "elevation_m", "elevation"}) {
+        const auto value = field(source.properties, name);
+        profile[name] = value ? *value : Json(nullptr);
+    }
+    profile["layers"] = nullptr;
+    if (const auto layers = field(source.properties, "layers")) {
+        if (!layers->is_array() || layers->size() > 1024) invalid("model frame layer budget exceeded");
+        profile["layers"] = Json::array();
+        for (const auto& layer : *layers) profile.at("layers").push_back(layer.at("thickness_m"));
+    }
+    result["profile"] = std::move(profile);
+    result["elevation_shift_m"] = scalar(actual_shift);
+    admit_model_frame(result);
+    return result;
+}
+Json derive_model(const Json& before, const SlabGeometryEditIntent& intent) {
+    admit_model_frame(before);
+    const auto& t = *intent.model_transform;
+    const auto planar = plan_projection(t);
+    if (t.uniform_scale == 1 && t.offset_m.z == 0 && rigid_identity(planar)) return before;
+    // Reuse the exact v1 analytical plan operation without changing its wire
+    // or semantics. Only the model lane also scales the physical profile.
+    SlabGeometryEditIntent plan;
+    plan.slab_id = intent.slab_id; plan.kind = SlabGeometryEditKind::transform_plan;
+    plan.transform = planar; plan.uniform_scale = t.uniform_scale;
+    const auto projected = derive({{"boundary", before.at("boundary")}, {"holes", before.at("holes")}}, plan);
+    auto after = before;
+    after.at("boundary") = projected.at("boundary"); after.at("holes") = projected.at("holes");
+    auto& profile = after.at("profile");
+    for (const auto* name : {"thickness_m", "thickness"})
+        if (!profile.at(name).is_null() && t.uniform_scale != 1)
+            assign(profile.at(name), scalar(profile.at(name)) * t.uniform_scale);
+    if (!profile.at("layers").is_null() && t.uniform_scale != 1)
+        for (auto& amount : profile.at("layers")) assign(amount, scalar(amount) * t.uniform_scale);
+    const auto raw_elevation = profile_scalar(before.at("profile"), "elevation_m", "elevation", false);
+    const auto shift = scalar(before.at("elevation_shift_m"));
+    // Avoid cancellation for pure XYZ moves, including exact identity. For
+    // scale, the source world coordinate comes solely from actual placement.
+    const auto new_elevation = t.uniform_scale == 1 ? scalar(raw_elevation + t.offset_m.z) :
+        scalar(t.pivot_m.z + (scalar(raw_elevation + shift) - t.pivot_m.z) *
+            t.uniform_scale + t.offset_m.z - shift);
+    for (const auto* name : {"elevation_m", "elevation"})
+        if (!profile.at(name).is_null()) assign(profile.at(name), new_elevation);
+    admit_model_frame(after);
+    return after;
+}
 void apply_frame(Entity& target, const Json& value) {
     const auto update = [](Json& raw, const Json& derived) {
         for (std::size_t i = 0; i < raw.size(); ++i)
@@ -233,6 +334,15 @@ void apply_frame(Entity& target, const Json& value) {
     update(target.properties.at("boundary"), value.at("boundary"));
     for (std::size_t i = 0; i < value.at("holes").size(); ++i)
         update(target.properties.at("holes").at(i), value.at("holes").at(i));
+}
+void apply_model_frame(Entity& target, const Json& value) {
+    apply_frame(target, value);
+    const auto& profile = value.at("profile");
+    for (const auto* name : {"thickness_m", "thickness", "elevation_m", "elevation"})
+        if (!profile.at(name).is_null()) target.properties.at(name) = profile.at(name);
+    if (!profile.at("layers").is_null())
+        for (std::size_t i = 0; i < profile.at("layers").size(); ++i)
+            target.properties.at("layers").at(i).at("thickness_m") = profile.at("layers").at(i);
 }
 
 using Scalars = std::map<std::string, double, std::less<>>;
@@ -250,6 +360,13 @@ Scalars geometry_scalars(const Json& value) {
     add(value.at("boundary"), "/boundary");
     for (std::size_t i = 0; i < value.at("holes").size(); ++i)
         add(value.at("holes").at(i), "/holes/" + std::to_string(i));
+    if (const auto profile = field(value, "profile")) {
+        for (const auto* name : {"thickness_m", "thickness", "elevation_m", "elevation"})
+            if (!profile->at(name).is_null()) result.emplace("/" + std::string(name), scalar(profile->at(name)));
+        if (!profile->at("layers").is_null())
+            for (std::size_t i = 0; i < profile->at("layers").size(); ++i)
+                result.emplace("/layers/" + std::to_string(i) + "/thickness_m", scalar(profile->at("layers").at(i)));
+    }
     return result;
 }
 bool descendant(std::string_view path, std::string_view parent) {
@@ -258,6 +375,9 @@ bool descendant(std::string_view path, std::string_view parent) {
 Ids changed_segments(const Scalars& before, const Scalars& after) {
     Ids result;
     for (const auto& [path, value] : before) if (after.at(path) != value) {
+        if (!path.starts_with("/boundary/") && !path.starts_with("/holes/")) {
+            result.insert(path); continue;
+        }
         auto end = path.rfind('/');
         if (!path.ends_with("/sweep_radians")) end = path.rfind('/', end - 1);
         result.insert(path.substr(0, end));
@@ -278,7 +398,19 @@ Json retire_receipts(const Entity& source, Entity& result, const Json& before, c
     if (!entries) return {{"quantity_entries", std::move(archived)}};
     if (!entries->is_object() || entries->size() > collection_limit) invalid("quantity entry budget exceeded");
     const auto old_values = geometry_scalars(before), new_values = geometry_scalars(after);
-    const auto affected = changed_segments(old_values, new_values);
+    auto affected = changed_segments(old_values, new_values);
+    // An absent alias can still carry an opaque future binding. Treat known
+    // scalar aliases as one affected dimension without materializing fields
+    // or adding mathematical archive scalars that did not exist in source.
+    if (affected.contains("/thickness_m") || affected.contains("/thickness")) {
+        affected.insert("/thickness_m"); affected.insert("/thickness");
+    }
+    if (affected.contains("/elevation_m") || affected.contains("/elevation")) {
+        affected.insert("/elevation_m"); affected.insert("/elevation");
+    }
+    for (const auto& [path, value] : old_values)
+        if (path.starts_with("/layers/") && path.ends_with("/thickness_m") && new_values.at(path) != value)
+            affected.insert(path.substr(0, path.size() - std::string_view("thickness_m").size()) + "thickness");
     for (const auto& [path, raw] : entries->items()) {
         const auto old = old_values.find(path);
         if (old != old_values.end()) {
@@ -298,7 +430,8 @@ void admit_record(const Json& record) {
     keys(record, {"operation", "source", "result", "receipts"});
     const auto intent = decode_slab_geometry_edit_intent(record.at("operation"));
     const auto& before = record.at("source"), after = record.at("result");
-    if (!exact(derive(before, intent), after) || exact(before, after)) invalid("archive result differs from its mathematical operation");
+    const auto derived = intent.kind == SlabGeometryEditKind::transform_model ? derive_model(before, intent) : derive(before, intent);
+    if (!exact(derived, after) || exact(before, after)) invalid("archive result differs from its mathematical operation");
     const auto& receipts = record.at("receipts");
     keys(receipts, {"quantity_entries"});
     const auto& values = receipts.at("quantity_entries");
@@ -375,7 +508,7 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
         {"vertex", nullptr}, {"transform", nullptr}, {"resize", nullptr}};
     switch (intent.kind) {
     case SlabGeometryEditKind::move_vertex: {
-        if (!intent.vertex || intent.transform || intent.resize || intent.uniform_scale != 1)
+        if (!intent.vertex || intent.transform || intent.resize || intent.uniform_scale != 1 || intent.model_transform)
             invalid("vertex intent must be exclusive");
         const auto& v = *intent.vertex;
         if (v.vertex_index >= collection_limit || (v.hole_index && *v.hole_index >= collection_limit)) invalid("vertex index budget exceeded");
@@ -385,7 +518,7 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
         break;
     }
     case SlabGeometryEditKind::transform_plan: {
-        if (intent.vertex || !intent.transform || intent.resize) invalid("transform intent must be exclusive");
+        if (intent.vertex || !intent.transform || intent.resize || intent.model_transform) invalid("transform intent must be exclusive");
         if (scalar(intent.uniform_scale) <= 0) invalid("uniform plan scale must be positive");
         const auto& t = *intent.transform;
         result.at("kind") = "transform_plan";
@@ -395,13 +528,24 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
         break;
     }
     case SlabGeometryEditKind::resize_plan: {
-        if (intent.vertex || intent.transform || !intent.resize || intent.uniform_scale != 1)
+        if (intent.vertex || intent.transform || !intent.resize || intent.uniform_scale != 1 || intent.model_transform)
             invalid("resize intent must be exclusive");
         const auto& r = *intent.resize;
         if (scalar(r.scale_x) <= 0 || scalar(r.scale_y) <= 0) invalid("plan scales must be positive");
         result.at("kind") = "resize_plan";
         result.at("resize") = {{"scale_x", r.scale_x}, {"scale_y", r.scale_y}, {"anchor_m", point(r.anchor_m)},
             {"frame_rotation_radians", scalar(r.frame_rotation_radians)}};
+        break;
+    }
+    case SlabGeometryEditKind::transform_model: {
+        if (intent.vertex || intent.transform || intent.resize || intent.uniform_scale != 1 || !intent.model_transform)
+            invalid("model transform intent must be exclusive");
+        const auto& t = *intent.model_transform;
+        if (scalar(t.uniform_scale) <= 0) invalid("uniform model scale must be positive");
+        result.at("version") = 2; result.at("kind") = "transform_model";
+        result.at("transform") = {{"pivot_m", point3(t.pivot_m)}, {"offset_m", point3(t.offset_m)},
+            {"rotation_radians", scalar(t.rotation_radians)}, {"uniform_scale", t.uniform_scale},
+            {"flip_horizontal", t.flip_horizontal}, {"flip_vertical", t.flip_vertical}};
         break;
     }
     default: invalid("unsupported geometry edit kind");
@@ -412,9 +556,12 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
 SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& value) {
     (void)proof_budget(value);
     keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize"});
-    if (!version_one(value.at("version")) || !value.at("kind").is_string()) invalid("unsupported intent version or kind");
+    if ((!version_one(value.at("version")) && !version_two(value.at("version"))) ||
+        !value.at("kind").is_string()) invalid("unsupported intent version or kind");
     SlabGeometryEditIntent result; result.slab_id = identity(value.at("slab_id"));
     const auto& kind = value.at("kind");
+    if (version_two(value.at("version")) != (kind == "transform_model"))
+        invalid("intent version does not match its operation kind");
     if (kind == "move_vertex") {
         if (!value.at("transform").is_null() || !value.at("resize").is_null()) invalid("vertex wire must be exclusive");
         const auto& v = value.at("vertex"); keys(v, {"vertex_index", "proposed_position_m", "hole_index"});
@@ -436,6 +583,16 @@ SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& va
         result.kind = SlabGeometryEditKind::resize_plan;
         result.resize = SlabPlanAxisResize{scalar(r.at("scale_x")), scalar(r.at("scale_y")), point(r.at("anchor_m")),
             scalar(r.at("frame_rotation_radians"))};
+    } else if (kind == "transform_model") {
+        if (!value.at("vertex").is_null() || !value.at("resize").is_null()) invalid("model wire must be exclusive");
+        const auto& t = value.at("transform");
+        keys(t, {"pivot_m", "offset_m", "rotation_radians", "uniform_scale", "flip_horizontal", "flip_vertical"});
+        if (!t.at("flip_horizontal").is_boolean() || !t.at("flip_vertical").is_boolean())
+            invalid("reflection flags must be booleans");
+        result.kind = SlabGeometryEditKind::transform_model;
+        result.model_transform = SlabModelTransform{point3(t.at("pivot_m")), point3(t.at("offset_m")),
+            scalar(t.at("rotation_radians")), scalar(t.at("uniform_scale")),
+            t.at("flip_horizontal").get<bool>(), t.at("flip_vertical").get<bool>()};
     } else invalid("unsupported intent kind");
     (void)encode_slab_geometry_edit_intent(result);
     return result;
@@ -446,29 +603,65 @@ void validate_slab_geometry_derivation(const Entity& source) {
     if (!archive) return;
     (void)proof_budget(*archive);
     keys(*archive, {"version", "operations"});
-    if (!version_one(archive->at("version"))) invalid("unsupported derivation archive namespace");
+    const bool model_archive = version_two(archive->at("version"));
+    if (!version_one(archive->at("version")) && !model_archive) invalid("unsupported derivation archive namespace");
     const auto& operations = archive->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit) invalid("archive operation budget exceeded");
-    for (const auto& record : operations) admit_record(record);
+    bool contains_model = false;
+    for (const auto& record : operations) {
+        const auto intent = decode_slab_geometry_edit_intent(record.at("operation"));
+        const bool model = intent.kind == SlabGeometryEditKind::transform_model;
+        if (model && !model_archive) invalid("version one archive cannot contain a model operation");
+        contains_model = contains_model || model;
+        admit_record(record);
+    }
+    if (model_archive && !contains_model) invalid("version two archive requires a model operation");
 }
-Entity replay_slab_geometry_entity(const Entity& source, const SlabGeometryEditIntent& intent) {
+namespace {
+Entity replay_with_actual_shift(const Entity& source, const SlabGeometryEditIntent& intent,
+    std::optional<double> actual_shift) {
     const auto operation = encode_slab_geometry_edit_intent(intent);
     if (source.id != intent.slab_id) invalid("target differs from actual live source identity");
     (void)actual_slab(source);
-    const auto before = frame(source), after = derive(before, intent);
+    const bool model = intent.kind == SlabGeometryEditKind::transform_model;
+    if (model && !actual_shift) invalid("model replay requires actual resolved vertical placement");
+    const auto before = model ? model_frame(source, *actual_shift) : frame(source);
+    const auto after = model ? derive_model(before, intent) : derive(before, intent);
     if (exact(before, after)) return source;
     auto result = intent.kind == SlabGeometryEditKind::move_vertex
         ? stage_architectural_footprint_vertex_entity(source, *intent.vertex) : source;
-    if (intent.kind != SlabGeometryEditKind::move_vertex) apply_frame(result, after);
-    if (!exact(frame(result), after)) invalid("actual footprint staging differs from mathematical replay");
+    if (model) apply_model_frame(result, after);
+    else if (intent.kind != SlabGeometryEditKind::move_vertex) apply_frame(result, after);
+    if (!exact(model ? model_frame(result, *actual_shift) : frame(result), after))
+        invalid("actual footprint/profile staging differs from mathematical replay");
     const auto receipts = retire_receipts(source, result, before, after);
     const auto key = std::string(slab_geometry_derivations_key);
-    if (!result.extensions.contains(key)) result.extensions[key] = {{"version", 1}, {"operations", Json::array()}};
+    if (!result.extensions.contains(key)) result.extensions[key] = {{"version", model ? 2 : 1}, {"operations", Json::array()}};
+    else if (model) result.extensions.at(key).at("version") = 2;
     auto& operations = result.extensions.at(key).at("operations");
     if (operations.size() >= operation_limit) invalid("archive operation budget exceeded");
     operations.push_back({{"operation", operation}, {"source", before}, {"result", after}, {"receipts", receipts}});
     (void)actual_slab(result);
     return result;
+}
+} // namespace
+Entity replay_slab_geometry_entity(const Entity& source, const SlabGeometryEditIntent& intent) {
+    // Detached replay has no authority to infer a bound floor/level shift.
+    // An explicit absolute placement has no level shift. Admit that closed
+    // envelope directly; level mode must use the complete actual map below.
+    std::optional<double> shift;
+    if (intent.kind == SlabGeometryEditKind::transform_model) {
+        if (const auto placement = field(source.properties, "vertical_placement")) {
+            keys(*placement, {"version", "mode", "offset_m"});
+            if (!version_one(placement->at("version")) || !placement->at("mode").is_string() ||
+                placement->at("mode") != "absolute")
+                invalid("detached model replay cannot resolve level placement");
+            if (std::abs(scalar(placement->at("offset_m"))) > 1e9)
+                invalid("absolute placement offset range exceeded");
+        }
+        shift = 0;
+    }
+    return replay_with_actual_shift(source, intent, shift);
 }
 std::map<std::string, Entity, std::less<>> replay_slab_geometry_entities(
     const std::map<std::string, Entity, std::less<>>& source, const std::vector<SlabGeometryEditIntent>& intents) {
@@ -495,7 +688,14 @@ std::map<std::string, Entity, std::less<>> replay_slab_geometry_entities(
     auto result = source;
     std::size_t archive_bytes = 0;
     for (const auto& intent : intents) {
-        auto slab = replay_slab_geometry_entity(source.at(intent.slab_id), intent);
+        std::optional<double> shift;
+        if (intent.kind == SlabGeometryEditKind::transform_model) {
+            const auto& raw = source.at(intent.slab_id);
+            const auto original = actual_slab(raw);
+            const auto resolved = actual_slab(resolve_vertical_placement(source, raw), false);
+            shift = scalar(resolved.elevation - original.elevation);
+        }
+        auto slab = replay_with_actual_shift(source.at(intent.slab_id), intent, shift);
         if (const auto archive = field(slab.extensions, std::string(slab_geometry_derivations_key))) {
             const auto size = proof_budget(*archive);
             if (size > proof_limit - archive_bytes) invalid("batch archive byte budget exceeded");

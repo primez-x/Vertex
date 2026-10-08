@@ -1,4 +1,41 @@
-# Vertex project formats v1 through v108
+# Vertex project formats v1 through v109
+
+## Horizontal assembly model transforms (v109)
+
+Native format 109 and JSON/assets extraction version 107 retain analytical slab
+model transformations. Geometry intent version two has the same six keys as
+version one: `version`, `slab_id`, `kind`, `vertex`, `transform` and `resize`.
+Its exclusive `transform_model` kind carries `pivot_m` and `offset_m` as XYZ
+coordinates, `rotation_radians`, positive `uniform_scale`, `flip_horizontal`
+and `flip_vertical` in `transform`; the other operation fields are null.
+Version-one plan operations retain their existing wire and profile semantics.
+
+Model operations move and uniformly scale the actual footprint, holes, total
+thickness, ordered layer thicknesses and elevation. Resolved floor/level
+placement supplies the world elevation used for scaling. The saved placement
+and source context remain exact; the resulting native elevation offsets that
+actual shift. Pure translations avoid subtraction of the placement shift.
+Detached replay admits only absent or explicit absolute placement; level mode
+requires the complete actual entity map.
+
+`extensions.slab_geometry_derivations` version two retains unchanged version-one
+records and new model records, with at least one model operation required.
+Model source/result frames contain `boundary`, `holes`, `profile` and
+`elevation_shift_m`. The exact profile fields are `thickness_m`, `thickness`,
+`elevation_m`, `elevation` and `layers`; absent source aliases or inventories
+are null, and an existing layer array records ordered thicknesses without live
+layer identities. Actual numeric representations survive unchanged fields.
+Every result is independently derived from its recorded operation, with finite
+coordinates, positive thickness, consistent aliases/layer totals and native
+analytical solid admission. Changed known entered-measurement receipts retire
+verbatim into the record; unsupported affected bindings refuse the edit.
+
+The desktop uses this source replay for 3D movement, uniform scaling and
+transformed independent copies, including floor-relative sources. Plan canvas
+scaling continues to preserve physical thickness. Direct/wrapped shared-baseline
+geometry intents and retained derivation archives raise the reader floor,
+including historical revisions after Undo. This section documents source
+implementation; compilation and storage round trips are not yet qualified.
 
 ## Retained horizontal-layer thickness input (v108)
 
