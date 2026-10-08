@@ -112,8 +112,9 @@ double read_number(QLineEdit* input, bool metric, bool length=false, bool angle=
 }
 struct TransformFields {
     std::array<QLineEdit*,5> fields{};
+    bool mirrored_y{false};
     static TransformFields form(QWidget* parent, QFormLayout* layout, const QString& prefix, const AssemblyTransform& transform) {
-        TransformFields result;
+        TransformFields result; result.mirrored_y=transform.mirrored_y;
         const std::array<double,5> values{transform.translation_m.x,transform.translation_m.y,transform.translation_m.z,transform.rotation_radians,transform.scale};
         const std::array<QString,5> suffixes{"X","Y","Z","Yaw","Scale"};
         const std::array<QString,5> labels{"X","Y","Base Z","Yaw (degrees)","Uniform scale"};
@@ -122,9 +123,10 @@ struct TransformFields {
     }
     AssemblyTransform read(bool metric) const {
         return {{read_number(fields[0],metric,true),read_number(fields[1],metric,true),read_number(fields[2],metric,true)},
-                read_number(fields[3],metric,false,true),read_number(fields[4],metric)};
+                read_number(fields[3],metric,false,true),read_number(fields[4],metric),mirrored_y};
     }
-    void set(const AssemblyTransform& value) const {
+    void set(const AssemblyTransform& value) {
+        mirrored_y=value.mirrored_y;
         const std::array<double,5> values{value.translation_m.x,value.translation_m.y,value.translation_m.z,value.rotation_radians,value.scale};
         for (int i=0;i<5;++i) {
             const auto text=exact(i==3 ? values[i]*180/std::numbers::pi : values[i])+(i<3 ? " m" : "");
@@ -513,7 +515,7 @@ public:
             const auto row=parts->verticalHeader()->logicalIndex(visual); auto* choice=qobject_cast<QComboBox*>(parts->cellWidget(row,0));
             require(choice && choice->currentIndex()>=0,"Choose an available child type"); auto id=choice->property("stableId").toString().toStdString();
             auto part=part_drafts.at(id);part.id=id;part.type_id=choice->currentData().toString().toStdString();
-            TransformFields transform; for(int i=0;i<5;++i)transform.fields[i]=qobject_cast<QLineEdit*>(parts->cellWidget(row,i+1)); part.transform=transform.read(metric); result.parts.push_back(std::move(part));
+            TransformFields transform; transform.mirrored_y=part.transform.mirrored_y; for(int i=0;i<5;++i)transform.fields[i]=qobject_cast<QLineEdit*>(parts->cellWidget(row,i+1)); part.transform=transform.read(metric); result.parts.push_back(std::move(part));
         }
         require(!result.profiles.empty() || !result.parts.empty(),"Add a solid profile or a nested part"); return result;
     }

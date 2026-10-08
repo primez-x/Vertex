@@ -522,7 +522,7 @@ inline void validate(const ProjectImportCandidate& result) {
                 !p.at("version").is_number_integer() || !p.contains("form") || !p.at("form").is_string()) reject();
             const bool supported = entity.type == "stair"
                 ? (p.at("version") == 1 && p.at("form") == "straight_stair_flight") ||
-                    ((p.at("version") == 2 || p.at("version") == 3) && p.at("form") == "multi_flight_stair")
+                    ((p.at("version") == 2 || p.at("version") == 3 || p.at("version") == 4) && p.at("form") == "multi_flight_stair")
                 : (p.at("version") == 1 && p.at("form") == "straight_railing") ||
                     (p.at("version") == 2 && p.at("form") == "stair_flight_railing") ||
                     (p.at("version") == 3 && p.at("form") == "stair_landing_railing");

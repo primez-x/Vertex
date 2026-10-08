@@ -14,6 +14,48 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 complete architectural Copy and reflection
+
+The numerical selection editor now copies supported persisted architectural
+groups together with measured geometry, explicit annotations and references.
+Copied stairs receive fresh qualified flight/landing IDs and their own hosted
+railings; complete joined-roof groups retain a fresh join. Saved dimensions,
+appearance and shared assets follow the copied graph. Derived roof joins stay
+in the command and preview while their physical hosts remain selected and
+editable. Originals stay unchanged except exact new-object phase/page
+registrations. Apply retains the complete preview command and selection.
+
+The shared architectural core now mirrors slabs, rooms, columns, beams,
+stairs, independent/hosted railings, roofs and independent assemblies about
+one model pivot. Analytical curves retain reflected sweep handedness; roof
+openings retain the correct corner/center origin. Stair properties version 4
+adds exact far-edge alignment for straight connections between unequal-width
+flights. Reflection swaps turns, alignment, railing sides and landing edge
+fractions without changing IDs or widths. Editing and resizing retain this
+version, and the landing table exposes physical Left/Right alignment.
+
+Assembly transforms persist explicit local-Y mirror parity throughout root,
+part, nested override and legacy placements. Native preparation, plan helpers,
+authoring editors, cache identity and IFC profile sweeps retain it. Native
+format 68 and extraction version 66 protect these contracts throughout
+retained history. IFC original-proof comparison also recognizes v4 stair
+child identities instead of replacing untouched source provenance.
+
+The single-object editor now exposes horizontal/vertical mirroring alongside
+XYZ offsets, positive uniform scale and Copy. Unambiguous embedded assembly
+profiles route to that editor. Mirrored physical copies use the complete fresh
+closure before transforming, including dimensions and appearance. Failed or
+stale previews cannot remain applicable. Slab/room preview admission no longer
+incorrectly calls the other building-family decoder.
+
+Independent source reviews accepted the corrected group Copy, assembly parity
+and architectural reflection scopes. Root reviewed the single-object
+integration. No build, test, probe, native job, launch, package or installation
+ran; the installed candidate is unchanged. Compilation, interaction,
+history/reopen, native geometry and performance remain unverified. Manual
+checks remain Not tested. Mixed embedded-catalog groups, generated labels,
+typed Site collision editing and production qualification remain required work.
+
 ### October 7 shared architectural selection transforms
 
 Persisted nonwall architectural groups now enter the numerical Transform

@@ -45,9 +45,9 @@ Form form(const Entity& e) {
         invalid("Landing railing requires version 3");
     }
     if (name=="multi_flight_stair") {
-        if (version>3) return Form::opaque;
-        if (version==2 || version==3) return Form::stair_multi;
-        invalid("Multi-flight stair requires version 2 or 3");
+        if (version>4) return Form::opaque;
+        if (version==2 || version==3 || version==4) return Form::stair_multi;
+        invalid("Multi-flight stair requires version 2, 3 or 4");
     }
     if (version>2) return Form::opaque;
     if (version==1 && name=="straight_stair_flight") return Form::stair_v1;

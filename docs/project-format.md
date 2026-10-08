@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v67
+# Vertex project formats v1 through v68
+
+## Architectural reflections (v68)
+
+Native format 68 and JSON/assets extraction version 66 retain assembly mirror
+parity and straight stair alignment. The reader floor scans every retained
+revision, including deleted, undone and abandoned records. Lowering either
+native format marker refuses the file instead of dropping these semantics.
+
+Assembly root transforms, local part transforms, nested path overrides and
+legacy host placements may contain the optional boolean `mirrored_y`. Missing
+means false; canonical encoding omits false. The exact operator is
+`translation + scale * R(yaw) * D_y(mirrored_y) * point`, with positive uniform
+scale and local Y reflection before yaw. Reflection leaves local Z unchanged.
+Composition reverses a child's yaw under a mirrored parent and XORs parity.
+The floor follows marker presence, including explicit false, only at these
+schema-owned transform paths; similarly named opaque user properties do not
+raise it. Existing assembly envelope names remain unchanged.
+
+Multi-flight stairs add properties version 4. It inherits version 3's optional
+per-flight going and width. A straight connecting landing may carry
+`straight_alignment: "right"`; no other value or turn is accepted. Older stair
+versions reject this field. Missing means the historical near-width-edge
+alignment; `"right"` aligns the far edge of the positive local-width interval.
+For incoming width `wi` and outgoing width `wo`, that landing covers local Y
+`[min(0, wi - wo), wi]` and the outgoing origin has Y `wi - wo`. This preserves
+unequal widths under reflection. In the editor the far edge is physical Left
+when looking up the stair, matching the hosted-railing side convention.
+
+Reflection retains stable flight/landing IDs, swaps physical flight-railing
+sides and remaps landing edge indices and fractions through the original edge
+endpoints. Authoring, subsequent transforms and plan resizing retain a source
+version-4 envelope even after its last alignment marker is cleared. IFC
+original-proof comparison also recognizes version-4 child identities.
 
 ## Independent measured copies (v67)
 

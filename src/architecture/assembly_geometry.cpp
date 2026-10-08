@@ -7,6 +7,7 @@
 #include <Standard_Failure.hxx>
 #include <TopoDS_Compound.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
@@ -36,13 +37,15 @@ AssemblyGeometry make_assembly_geometry(const AssemblyExpansion& expansion) {
             const auto& profile = source.profile;
             const auto local = make_slab(Slab{profile.id, profile.outer, profile.holes,
                 profile.height_m, profile.elevation_m});
-            gp_Trsf scale, rotation, translation;
+            gp_Trsf mirror, scale, rotation, translation;
+            if (placement.mirrored_y)
+                mirror.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)));
             scale.SetScale(gp_Pnt(0, 0, 0), placement.scale);
             rotation.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
                 placement.rotation_radians);
             translation.SetTranslation(gp_Vec(offset.x, offset.y, offset.z));
             // OCCT multiplication applies the rightmost transform first.
-            const gp_Trsf transform = translation * rotation * scale;
+            const gp_Trsf transform = translation * rotation * scale * mirror;
             BRepBuilderAPI_Transform transformed(local, transform, true);
             if (!transformed.IsDone() || transformed.Shape().IsNull() ||
                 !BRepCheck_Analyzer(transformed.Shape()).IsValid()) {

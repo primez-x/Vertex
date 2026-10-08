@@ -301,11 +301,12 @@ Entity resize_building(const Entity& original, const Resize& resize) {
                 }
             continue;
         }
-        if (key=="version" && original.type=="stair" && value==2 &&
-            original.properties.at("version")==3) continue;
+        if (key=="version" && original.type=="stair" &&
+            ((value==2 && original.properties.at("version")==3) ||
+             ((value==2 || value==3) && original.properties.at("version")==4))) continue;
         if (key=="landings") {
-            // Update only dimensions: child IDs, turns, thicknesses, order and
-            // opaque per-landing authoring data retain their original values.
+            // Update only dimensions: child IDs, turns, straight alignment,
+            // thicknesses, order and opaque authoring data stay authored.
             auto& landings = result.properties.at(key);
             for (std::size_t i=0; i<value.size(); ++i) {
                 landings[i]["depth_m"] = value[i].at("depth_m");

@@ -363,6 +363,10 @@ public:
                 auto merged = *original_entity;
                 merged.type = canonical.type;
                 merged.properties.update(canonical.properties);
+                if (merged.type == "stair" &&
+                    canonical.properties.value("form", std::string{}) == "multi_flight_stair" &&
+                    original_entity->properties.value("version", 0) == 4)
+                    merged.properties["version"] = 4;
                 preserve_stair_child_metadata(merged.properties, canonical.properties);
                 for (const auto* key : {"top_landing", "level_connection", "host"}) {
                     if (canonical.properties.contains(key) && canonical.properties.at(key).is_object() &&
@@ -826,6 +830,8 @@ private:
                             for (const auto* dimension : {"going_m", "width_m"})
                                 if (!child.contains(dimension)) retained.erase(dimension);
                         }
+                        if (std::string_view(key) == "landings" && !child.contains("straight_alignment"))
+                            retained.erase("straight_alignment");
                         retained.update(child);
                         child = std::move(retained);
                         break;
@@ -896,7 +902,27 @@ private:
         turns->addItem(QStringLiteral("Right 180°"), static_cast<int>(StairTurn::right_half));
         turns->setCurrentIndex(turns->findData(static_cast<int>(landing.turn)));
         stair_landings->setCellWidget(row, 2, turns);
-        QObject::connect(turns, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { refresh_stair_summary(); });
+        auto* alignment = new QComboBox(stair_landings);
+        // Flight width grows toward physical left when looking up the stair,
+        // matching the hosted-railing side convention. The persisted alignment
+        // flag refers to the far edge of that positive local-width interval.
+        alignment->addItem(QStringLiteral("Right"), false);
+        alignment->addItem(QStringLiteral("Left"), true);
+        alignment->setCurrentIndex(alignment->findData(landing.align_right));
+        alignment->setEnabled(landing.turn == StairTurn::straight);
+        alignment->setToolTip(QStringLiteral("Align consecutive straight flights by their left or right edges, looking up the stair."));
+        stair_landings->setCellWidget(row, 4, alignment);
+        QObject::connect(turns, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this, turns, alignment] {
+            const bool straight = static_cast<StairTurn>(turns->currentData().toInt()) == StairTurn::straight;
+            alignment->setEnabled(straight);
+            if (!straight) alignment->setCurrentIndex(0);
+            invalidate_candidate();
+            refresh_stair_summary();
+        });
+        QObject::connect(alignment, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] {
+            invalidate_candidate();
+            refresh_stair_summary();
+        });
     }
 
     void setup_stair_topology(QFormLayout* layout) {
@@ -949,9 +975,9 @@ private:
         button(QStringLiteral("Up"), "buildingObjectMoveStairFlightUp", [move] { move(-1); });
         button(QStringLiteral("Down"), "buildingObjectMoveStairFlightDown", [move] { move(1); });
         layout->addRow(QString(), actions);
-        stair_landings = new QTableWidget(0, 4, form_page);
+        stair_landings = new QTableWidget(0, 5, form_page);
         stair_landings->setObjectName(QStringLiteral("buildingObjectStairLandings"));
-        stair_landings->setHorizontalHeaderLabels({QStringLiteral("Depth"), QStringLiteral("Thickness"), QStringLiteral("Turn"), QStringLiteral("Return gap")});
+        stair_landings->setHorizontalHeaderLabels({QStringLiteral("Depth"), QStringLiteral("Thickness"), QStringLiteral("Turn"), QStringLiteral("Return gap"), QStringLiteral("Alignment")});
         stair_landings->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
         stair_landings->setMinimumHeight(110);
         layout->addRow(QStringLiteral("Connecting landings"), stair_landings);
@@ -1038,8 +1064,18 @@ private:
                 return parsed.metres;
             };
             const auto* turns = qobject_cast<QComboBox*>(stair_landings->cellWidget(row, 2));
-            stair.landings.push_back({row_id(stair_landings, row), length(0, "depth_m"), length(1, "thickness_m"),
-                static_cast<StairTurn>(turns->currentData().toInt()), length(3, "return_gap_m")});
+            const auto id = row_id(stair_landings, row);
+            const auto turn = static_cast<StairTurn>(turns->currentData().toInt());
+            bool align_right = false;
+            if (turn == StairTurn::straight) {
+                if (const auto* original = original_as<StairFlight>())
+                    for (const auto& landing : original->landings)
+                        if (landing.id == id) { align_right = landing.align_right; break; }
+                if (const auto* alignment = qobject_cast<QComboBox*>(stair_landings->cellWidget(row, 4)))
+                    align_right = alignment->currentData().toBool();
+            }
+            stair.landings.push_back({id, length(0, "depth_m"), length(1, "thickness_m"),
+                turn, length(3, "return_gap_m"), align_right});
         }
         if (validate) validate_stair(stair);
         return true;
@@ -1090,7 +1126,7 @@ private:
         const auto id = host_combo->currentData().toString().toStdString();
         const auto& entity = source_snapshot->entities().at(id);
         const auto version = entity.properties.value("version", 0);
-        if ((version != 2 && version != 3) ||
+        if ((version != 2 && version != 3 && version != 4) ||
             entity.properties.value("form", std::string{}) != "multi_flight_stair")
             throw std::invalid_argument("Landing railings require a canonical multi-flight stair.");
         return decode_stair_properties(id, entity.properties);
@@ -1107,7 +1143,7 @@ private:
                 try {
                     const auto stair = decode_stair_properties(id, entity.properties);
                     const auto version = entity.properties.value("version", 0);
-                    if ((version != 2 && version != 3) || stair.flights.empty() ||
+                    if ((version != 2 && version != 3 && version != 4) || stair.flights.empty() ||
                         (stair.landings.empty() && !stair.top_landing)) continue;
                     auto name = QStringLiteral("Stair %1").arg(++number);
                     if (entity.extensions.contains("name") && entity.extensions.at("name").is_string())

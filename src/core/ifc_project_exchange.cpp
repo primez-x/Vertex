@@ -1183,7 +1183,7 @@ std::map<std::string, std::string, std::less<>> stair_comparison_child_remap(
     const Json& captured, const Json& current) {
     std::map<std::string, std::string, std::less<>> result;
     if (!captured.is_object() || !current.is_object() ||
-        (captured.value("version", 0) != 2 && captured.value("version", 0) != 3) ||
+        (captured.value("version", 0) != 2 && captured.value("version", 0) != 3 && captured.value("version", 0) != 4) ||
         captured.value("version", 0) != current.value("version", 0) ||
         captured.value("form", std::string{}) != "multi_flight_stair" ||
         current.value("form", std::string{}) != "multi_flight_stair") return result;
@@ -1557,6 +1557,7 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
                     const auto a=transform_assembly_point({s.start.x,s.start.y,0},transform);
                     const auto b=transform_assembly_point({s.end.x,s.end.y,0},transform);
                     s.start={a.x,a.y}; s.end={b.x,b.y};
+                    if (transform.mirrored_y) s.sweep_radians=-s.sweep_radians;
                 }
                 return result;
             };

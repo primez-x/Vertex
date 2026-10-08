@@ -1,5 +1,6 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_solid.hpp"
@@ -34,12 +35,14 @@ bool canonical_form(const Entity& entity, std::string_view type, int version, st
 bool canonical_stair(const Entity& entity) {
     return canonical_form(entity,"stair",1,"straight_stair_flight") ||
         canonical_form(entity,"stair",2,"multi_flight_stair") ||
-        canonical_form(entity,"stair",3,"multi_flight_stair");
+        canonical_form(entity,"stair",3,"multi_flight_stair") ||
+        canonical_form(entity,"stair",4,"multi_flight_stair");
 }
 
 bool canonical_multi_flight_stair(const Entity& entity) {
     return canonical_form(entity,"stair",2,"multi_flight_stair") ||
-        canonical_form(entity,"stair",3,"multi_flight_stair");
+        canonical_form(entity,"stair",3,"multi_flight_stair") ||
+        canonical_form(entity,"stair",4,"multi_flight_stair");
 }
 
 bool canonical_hosted_railing(const Entity& entity) {
@@ -203,52 +206,92 @@ nlohmann::json transform_json(const ArchitecturalTransform& transform) {
              {"uniform_scale", transform.scale} };
 }
 
-Vec3 transform_point(const Vec3& point, const ArchitecturalTransform& transform) {
-    const auto cosine = std::cos(transform.rotation_z_radians);
-    const auto sine = std::sin(transform.rotation_z_radians);
+std::array<double, 2> planar_rotation(double angle) {
+    // A pair of global flips is an exact half-turn. Avoid sin(pi) roundoff
+    // multiplied by distant source coordinates or a shared model pivot.
+    if (std::abs(angle) == std::numbers::pi) return {-1.0, 0.0};
+    return {std::cos(angle), std::sin(angle)};
+}
+
+Vec3 transform_point(const Vec3& point, const ArchitecturalTransform& transform,
+                     bool flip_horizontal = false, bool flip_vertical = false) {
+    const auto [cosine, sine] = planar_rotation(transform.rotation_z_radians);
     const auto scaled_x = point.x * transform.scale;
     const auto scaled_y = point.y * transform.scale;
-    return {cosine * scaled_x - sine * scaled_y + transform.x,
-            sine * scaled_x + cosine * scaled_y + transform.y,
+    return {(flip_horizontal ? -1.0 : 1.0) * (cosine * scaled_x - sine * scaled_y) + transform.x,
+            (flip_vertical ? -1.0 : 1.0) * (sine * scaled_x + cosine * scaled_y) + transform.y,
             point.z * transform.scale + transform.z};
 }
 
-Vec3 transform_direction(const Vec3& direction, const ArchitecturalTransform& transform) {
-    const auto cosine = std::cos(transform.rotation_z_radians);
-    const auto sine = std::sin(transform.rotation_z_radians);
-    return {cosine * direction.x - sine * direction.y,
-            sine * direction.x + cosine * direction.y,
+Vec3 transform_direction(const Vec3& direction, const ArchitecturalTransform& transform,
+                         bool flip_horizontal = false, bool flip_vertical = false) {
+    const auto [cosine, sine] = planar_rotation(transform.rotation_z_radians);
+    return {(flip_horizontal ? -1.0 : 1.0) * (cosine * direction.x - sine * direction.y),
+            (flip_vertical ? -1.0 : 1.0) * (sine * direction.x + cosine * direction.y),
             direction.z};
 }
 
 BuildingObject transform_building_object(BuildingObject object,
-                                         const ArchitecturalTransform& transform) {
+                                         const ArchitecturalTransform& transform,
+                                         bool flip_horizontal = false, bool flip_vertical = false) {
     return std::visit(
-        [&transform](auto value) -> BuildingObject {
+        [&transform, flip_horizontal, flip_vertical](auto value) -> BuildingObject {
             using Object = std::decay_t<decltype(value)>;
+            const bool reflected = flip_horizontal != flip_vertical;
+            const auto point = [&](Vec3 p) { return transform_point(p, transform, flip_horizontal, flip_vertical); };
+            const auto heading = [&](double yaw) {
+                const auto u = transform_direction({std::cos(yaw), std::sin(yaw), 0},
+                    transform, flip_horizontal, flip_vertical);
+                return std::atan2(u.y, u.x);
+            };
             if constexpr (std::is_same_v<Object, RectangularColumn>) {
-                value.base_center = transform_point(value.base_center, transform);
+                value.base_center = point(value.base_center);
                 value.width *= transform.scale;
                 value.depth *= transform.scale;
                 value.height *= transform.scale;
-                value.rotation_radians += transform.rotation_z_radians;
+                value.rotation_radians = reflected ? heading(value.rotation_radians)
+                    : value.rotation_radians + transform.rotation_z_radians;
             } else if constexpr (std::is_same_v<Object, CircularColumn>) {
-                value.base_center = transform_point(value.base_center, transform);
+                value.base_center = point(value.base_center);
                 value.radius *= transform.scale;
                 value.height *= transform.scale;
-                if (transform.rotation_z_radians != 0.0)
+                if (reflected) value.rotation_radians = heading(value.rotation_radians);
+                else if (transform.rotation_z_radians != 0.0)
                     value.rotation_radians = std::remainder(
                         value.rotation_radians + transform.rotation_z_radians,
                         2.0 * std::numbers::pi);
             } else if constexpr (std::is_same_v<Object, Beam>) {
-                value.start = transform_point(value.start, transform);
-                value.end = transform_point(value.end, transform);
-                value.up = transform_direction(value.up, transform);
+                value.start = point(value.start);
+                value.end = point(value.end);
+                value.up = transform_direction(value.up, transform, flip_horizontal, flip_vertical);
                 value.width *= transform.scale;
                 value.depth *= transform.scale;
             } else if constexpr (std::is_same_v<Object, StairFlight>) {
-                value.base_position = transform_point(value.base_position, transform);
-                value.orientation_radians += transform.rotation_z_radians;
+                if (reflected) {
+                    // Flights extend to +local Y. Reflection changes that side;
+                    // the new origin is the image of the first flight's far side.
+                    const auto width = value.flights.empty() ? value.width
+                        : value.flights.front().width.value_or(value.width);
+                    for (std::size_t i = 0; i < value.landings.size(); ++i) {
+                        auto& landing = value.landings[i];
+                        switch (landing.turn) {
+                        case StairTurn::left_quarter: landing.turn = StairTurn::right_quarter; break;
+                        case StairTurn::right_quarter: landing.turn = StairTurn::left_quarter; break;
+                        case StairTurn::left_half: landing.turn = StairTurn::right_half; break;
+                        case StairTurn::right_half: landing.turn = StairTurn::left_half; break;
+                        case StairTurn::straight: landing.align_right = !landing.align_right; break;
+                        }
+                    }
+                    const auto v = transform_direction({-std::sin(value.orientation_radians),
+                        std::cos(value.orientation_radians), 0}, transform, flip_horizontal, flip_vertical);
+                    value.base_position = point(value.base_position);
+                    value.base_position.x += transform.scale * width * v.x;
+                    value.base_position.y += transform.scale * width * v.y;
+                    value.orientation_radians = heading(value.orientation_radians);
+                } else {
+                    value.base_position = point(value.base_position);
+                    value.orientation_radians += transform.rotation_z_radians;
+                }
                 value.total_rise *= transform.scale;
                 value.going *= transform.scale;
                 value.width *= transform.scale;
@@ -268,15 +311,24 @@ BuildingObject transform_building_object(BuildingObject object,
             } else if constexpr (std::is_same_v<Object, Railing>) {
                 if (value.host || value.landing_host) throw std::invalid_argument(
                     "Hosted railing placement follows its stair; transform the host stair instead");
-                value.base_position = transform_point(value.base_position, transform);
-                value.orientation_radians += transform.rotation_z_radians;
+                value.base_position = point(value.base_position);
+                value.orientation_radians = reflected ? heading(value.orientation_radians)
+                    : value.orientation_radians + transform.rotation_z_radians;
                 value.length *= transform.scale;
                 value.height *= transform.scale;
                 value.thickness *= transform.scale;
                 value.post_spacing *= transform.scale;
             } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
-                value.base_position = transform_point(value.base_position, transform);
-                value.orientation_radians += transform.rotation_z_radians;
+                value.base_position = point(value.base_position);
+                value.orientation_radians = reflected ? heading(value.orientation_radians)
+                    : value.orientation_radians + transform.rotation_z_radians;
+                if (reflected) {
+                    // Corner origin; u'=F*u, v'=J*u'=-F*v.
+                    value.base_position.x += transform.scale * value.span * std::sin(value.orientation_radians);
+                    value.base_position.y -= transform.scale * value.span * std::cos(value.orientation_radians);
+                    for (auto& opening : value.openings)
+                        opening.y = value.span - opening.y - opening.depth;
+                }
                 value.run *= transform.scale;
                 value.span *= transform.scale;
                 value.rise *= transform.scale;
@@ -290,8 +342,12 @@ BuildingObject transform_building_object(BuildingObject object,
                 }
             } else if constexpr (std::is_same_v<Object, GableRoof> ||
                                  std::is_same_v<Object, HipRoof>) {
-                value.base_position = transform_point(value.base_position, transform);
-                value.orientation_radians += transform.rotation_z_radians;
+                value.base_position = point(value.base_position);
+                value.orientation_radians = reflected ? heading(value.orientation_radians)
+                    : value.orientation_radians + transform.rotation_z_radians;
+                // Gable/hip builders use a centered footprint, unlike panels.
+                if (reflected) for (auto& opening : value.openings)
+                    opening.y = -opening.y - opening.depth;
                 value.length *= transform.scale;
                 value.span *= transform.scale;
                 value.rise *= transform.scale;
@@ -309,34 +365,37 @@ BuildingObject transform_building_object(BuildingObject object,
         std::move(object));
 }
 
-Vec2 transform_plan_point(const Vec2& point, const ArchitecturalTransform& transform) {
-    const auto cosine = std::cos(transform.rotation_z_radians);
-    const auto sine = std::sin(transform.rotation_z_radians);
+Vec2 transform_plan_point(const Vec2& point, const ArchitecturalTransform& transform,
+                          bool flip_horizontal = false, bool flip_vertical = false) {
+    const auto [cosine, sine] = planar_rotation(transform.rotation_z_radians);
     const auto scaled_x = point.x * transform.scale;
     const auto scaled_y = point.y * transform.scale;
-    const Vec2 result{cosine * scaled_x - sine * scaled_y + transform.x,
-                      sine * scaled_x + cosine * scaled_y + transform.y};
+    const Vec2 result{(flip_horizontal ? -1.0 : 1.0) * (cosine * scaled_x - sine * scaled_y) + transform.x,
+                      (flip_vertical ? -1.0 : 1.0) * (sine * scaled_x + cosine * scaled_y) + transform.y};
     if (!std::isfinite(result.x) || !std::isfinite(result.y)) {
         throw std::invalid_argument("Architectural plan transform exceeds the supported range");
     }
     return result;
 }
 
-Segment transform_plan_segment(Segment segment, const ArchitecturalTransform& transform) {
-    segment.start = transform_plan_point(segment.start, transform);
-    segment.end = transform_plan_point(segment.end, transform);
-    // A positive uniform scale and a proper Z rotation preserve the signed
-    // sweep of a circular arc.  Keeping the defining sweep avoids replacing
-    // analytical curves with sampled screen geometry.
+Segment transform_plan_segment(Segment segment, const ArchitecturalTransform& transform,
+                               bool flip_horizontal = false, bool flip_vertical = false) {
+    segment.start = transform_plan_point(segment.start, transform, flip_horizontal, flip_vertical);
+    segment.end = transform_plan_point(segment.end, transform, flip_horizontal, flip_vertical);
+    // Keep analytical endpoints and source order; orientation changes only
+    // the signed sweep. Native slab wires normalize their winding internally.
+    if (flip_horizontal != flip_vertical && segment.sweep_radians != 0.0)
+        segment.sweep_radians = -segment.sweep_radians;
     return segment;
 }
 
 Boundary transform_plan_boundary(const Boundary& boundary,
-                                 const ArchitecturalTransform& transform) {
+                                 const ArchitecturalTransform& transform,
+                                 bool flip_horizontal = false, bool flip_vertical = false) {
     Boundary result;
     result.reserve(boundary.size());
     for (const auto& segment : boundary) {
-        result.push_back(transform_plan_segment(segment, transform));
+        result.push_back(transform_plan_segment(segment, transform, flip_horizontal, flip_vertical));
     }
     return result;
 }
@@ -489,12 +548,13 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
     return result;
 }
 
-Entity transform_slab_entity(const Entity& source, const ArchitecturalTransform& transform) {
+Entity transform_slab_entity(const Entity& source, const ArchitecturalTransform& transform,
+                             bool flip_horizontal = false, bool flip_vertical = false) {
     Slab slab;
     std::string error;
     if (!read_document_slab(source, slab, error)) throw std::invalid_argument(error);
-    slab.boundary = transform_plan_boundary(slab.boundary, transform);
-    for (auto& hole : slab.holes) hole = transform_plan_boundary(hole, transform);
+    slab.boundary = transform_plan_boundary(slab.boundary, transform, flip_horizontal, flip_vertical);
+    for (auto& hole : slab.holes) hole = transform_plan_boundary(hole, transform, flip_horizontal, flip_vertical);
     slab.thickness *= transform.scale;
     slab.elevation = slab.elevation * transform.scale + transform.z;
     for (auto& layer : slab.layers) layer.thickness *= transform.scale;
@@ -523,7 +583,8 @@ Entity transform_slab_entity(const Entity& source, const ArchitecturalTransform&
     return result;
 }
 
-Entity transform_room_entity(const Entity& source, const ArchitecturalTransform& transform) {
+Entity transform_room_entity(const Entity& source, const ArchitecturalTransform& transform,
+                             bool flip_horizontal = false, bool flip_vertical = false) {
     DocumentRoomFootprint room;
     std::string error;
     const bool complete = has_document_room_volume_fields(source);
@@ -537,8 +598,8 @@ Entity transform_room_entity(const Entity& source, const ArchitecturalTransform&
     if (transform.z != 0 && !source.properties.contains("elevation_m") &&
         !source.properties.contains("elevation"))
         throw std::invalid_argument("Room Z movement requires an authored elevation");
-    room.boundary = transform_plan_boundary(room.boundary, transform);
-    for (auto& hole : room.holes) hole = transform_plan_boundary(hole, transform);
+    room.boundary = transform_plan_boundary(room.boundary, transform, flip_horizontal, flip_vertical);
+    for (auto& hole : room.holes) hole = transform_plan_boundary(hole, transform, flip_horizontal, flip_vertical);
     Entity result = source;
     if (result.properties.contains("boundary")) {
         result.properties["boundary"] = updated_boundary_geometry(
@@ -613,7 +674,8 @@ std::optional<Entity> try_transform_shared_solid(EntityState& entities,
 }
 
 Entity transform_building_entity(const Entity& source,
-                                 const ArchitecturalTransform& transform) {
+                                 const ArchitecturalTransform& transform,
+                                 bool flip_horizontal = false, bool flip_vertical = false) {
     if (source.type == "stair" && source.properties.contains("level_connection") &&
         !source.properties.at("level_connection").is_null() &&
         transform.scale != 1.0) {
@@ -623,11 +685,16 @@ Entity transform_building_entity(const Entity& source,
         throw std::invalid_argument(
             "Cannot uniformly scale a stair with a level connection; edit the connected levels first");
     }
-    const auto transformed = transform_building_object(decode_building_entity(source), transform);
+    const auto transformed = transform_building_object(decode_building_entity(source), transform,
+        flip_horizontal, flip_vertical);
     const auto canonical = encode_building_entity(transformed, source.extensions);
     Entity result = source;
     for (const auto& [key,value] : canonical.properties.items())
         if (key != "version") result.properties[key] = value;
+    // Right alignment is new authoring authority. Promote only when needed,
+    // and retain version 4 after reflecting back to default left alignment.
+    if (source.type == "stair" && canonical.properties.at("version") == 4)
+        result.properties["version"] = 4;
     // Placement changes do not migrate a schema. In particular, an authored
     // version-3 stair without explicit per-flight overrides and a version-2
     // roof with an empty opening array must retain their original version.
@@ -638,8 +705,11 @@ Entity transform_building_entity(const Entity& source,
         if (!canonical.properties.contains(key)) continue;
         auto records = source.properties.at(key);
         const auto& encoded = canonical.properties.at(key);
-        for (std::size_t i=0; i<encoded.size(); ++i)
+        for (std::size_t i=0; i<encoded.size(); ++i) {
+            if (source.type == "stair" && std::string_view(key) == "landings")
+                records.at(i).erase("straight_alignment");
             for (const auto& [field,value] : encoded.at(i).items()) records.at(i)[field]=value;
+        }
         result.properties[key]=std::move(records);
     }
     if (source.type=="stair" && source.properties.contains("top_landing") && source.properties.at("top_landing").is_object() &&
@@ -668,6 +738,64 @@ std::vector<std::string> hosted_railing_ids(const EntityState& entities, const s
         if ((railing.host?railing.host->stair_id:railing.landing_host->stair_id)==stair_id) result.push_back(id);
     }
     return result;
+}
+
+void reflect_stair_railings(EntityState& entities, const EntityState& original,
+                            const Entity& before, const Entity& after,
+                            const ArchitecturalTransform& transform,
+                            bool flip_horizontal, bool flip_vertical) {
+    const auto old_stair = decode_stair_properties(before.id, before.properties);
+    const auto new_stair = decode_stair_properties(after.id, after.properties);
+    const auto new_layout = derive_stair_layout(new_stair);
+    const auto same_point = [](Vec3 a, Vec3 b) {
+        const auto tolerance = default_geometry_tolerance_metres +
+            64.0 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(a.x), std::abs(a.y), std::abs(a.z),
+                std::abs(b.x), std::abs(b.y), std::abs(b.z)});
+        return std::abs(a.x - b.x) <= tolerance && std::abs(a.y - b.y) <= tolerance &&
+            std::abs(a.z - b.z) <= tolerance;
+    };
+    for (const auto& rail_id : hosted_railing_ids(original, before.id)) {
+        auto& entity = entities.at(rail_id);
+        const auto railing = decode_railing_properties(rail_id, original.at(rail_id).properties);
+        auto& host = entity.properties.at("host");
+        if (railing.host) {
+            host["side"] = railing.host->side == StairRailingSide::left ? "right" : "left";
+        } else {
+            const auto& old_host = *railing.landing_host;
+            const auto old_edge = derive_stair_landing_edge(old_stair, old_host);
+            const auto a = transform_point(old_edge.edge_start, transform, flip_horizontal, flip_vertical);
+            const auto b = transform_point(old_edge.edge_end, transform, flip_horizontal, flip_vertical);
+            std::size_t landing_index = old_stair.landings.size();
+            if (old_host.role == StairLandingRole::connecting) {
+                const auto landing = std::find_if(old_stair.landings.begin(), old_stair.landings.end(),
+                    [&](const auto& value) { return value.id == old_host.landing_id; });
+                if (landing == old_stair.landings.end())
+                    throw std::invalid_argument("Reflected landing railing has no canonical source landing");
+                landing_index = static_cast<std::size_t>(landing - old_stair.landings.begin());
+            }
+            const auto& polygon = new_layout.landings.at(landing_index).footprint;
+            std::optional<std::size_t> edge_index;
+            bool reversed = false;
+            for (std::size_t edge = 0; edge < polygon.size(); ++edge) {
+                const bool forward = same_point(a, polygon[edge]) && same_point(b, polygon[(edge + 1) % 4]);
+                const bool backward = same_point(b, polygon[edge]) && same_point(a, polygon[(edge + 1) % 4]);
+                if (!forward && !backward) continue;
+                if (edge_index) throw std::invalid_argument("Reflected landing railing edge is ambiguous");
+                edge_index = edge;
+                reversed = backward;
+            }
+            if (!edge_index)
+                throw std::invalid_argument("Reflected stair topology cannot represent the original landing railing edge");
+            host["edge_index"] = *edge_index;
+            if (reversed) {
+                host["start_fraction"] = 1.0 - old_host.end_fraction;
+                host["end_fraction"] = 1.0 - old_host.start_fraction;
+            }
+        }
+        for (const auto* field : {"height_m", "thickness_m", "post_spacing_m"})
+            scale_property(entity.properties, field, nullptr, transform.scale);
+    }
 }
 
 void invalidate_changed_receipts(const Entity& before, Entity& after) {
@@ -892,12 +1020,12 @@ EntityState apply_operations(const DocumentSnapshot& source,
     return entities;
 }
 
-ApplyEntityChanges make_command(const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
-                                Revision expected_revision) {
-    const auto candidate = apply_operations(source, transaction);
+ApplyEntityChanges make_candidate_command(const DocumentSnapshot& source, const EntityState& candidate,
+                                          Revision expected_revision, const std::string& undo_label,
+                                          std::span<const std::string> native_targets = {}) {
     ApplyEntityChanges command;
     command.expected_revision = expected_revision;
-    command.message = transaction.undo_label();
+    command.message = undo_label;
     std::set<std::string, std::less<>> ids;
     for (const auto& [id, entity] : source.entities()) ids.insert(id);
     for (const auto& [id, entity] : candidate) ids.insert(id);
@@ -956,8 +1084,29 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
             const auto effective=resolve_vertical_placement(preview,entity);
             (void)make_building_shape(decode_building_entity(effective),preview.entities());
         }
+        bool requires_assembly = false;
+        for (const auto& id : native_targets) {
+            const auto& entity = preview.entities().at(id);
+            if (entity.type == "assembly_instance") requires_assembly = true;
+            else if (canonical_independent_building(entity))
+                (void)make_building_shape(decode_building_entity(resolve_vertical_placement(preview, entity)),
+                    preview.entities());
+        }
+        if (requires_assembly) {
+            AssemblyExpansionBudget budget;
+            const auto expanded = expand_document_assembly_instances(preview.entities(), budget);
+            for (const auto& id : native_targets)
+                if (preview.entities().at(id).type == "assembly_instance")
+                    (void)make_assembly_geometry(expanded.at(id));
+        }
     }
     return command;
+}
+
+ApplyEntityChanges make_command(const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
+                                Revision expected_revision) {
+    return make_candidate_command(source, apply_operations(source, transaction),
+        expected_revision, transaction.undo_label());
 }
 
 }  // namespace
@@ -1568,17 +1717,23 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     }
     // Whole turns use the exact identity operator even when combined with
     // movement/scale, avoiding a tiny sine term multiplied by distant pivots.
-    const auto angle=std::remainder(transform.rotation_z_radians,2.0*std::numbers::pi);
+    const bool reflected = transform.flip_horizontal != transform.flip_vertical;
+    // Two global flips are a proper half-turn and use the existing yaw lane.
+    const auto angle=std::remainder(std::remainder(transform.rotation_z_radians,
+        2.0*std::numbers::pi) + (transform.flip_horizontal && transform.flip_vertical
+            ? std::numbers::pi : 0.0), 2.0*std::numbers::pi);
     const bool identity=transform.scale==1.0 && transform.offset.x==0.0 && transform.offset.y==0.0 &&
-        transform.offset.z==0.0 && angle==0.0;
-    const auto c=std::cos(angle),s=std::sin(angle);
+        transform.offset.z==0.0 && angle==0.0 && !reflected;
+    const auto [c,s]=planar_rotation(angle);
+    const auto hx=reflected && transform.flip_horizontal ? -1.0 : 1.0;
+    const auto hy=reflected && transform.flip_vertical ? -1.0 : 1.0;
     ArchitecturalTransform affine;
     // Difference form avoids cancelling pivot+offset against the same pivot
     // during a pure translation (which could otherwise swallow the offset).
-    affine.x=transform.offset.x+(1.0-transform.scale)*transform.pivot.x+
-        transform.scale*((1.0-c)*transform.pivot.x+s*transform.pivot.y);
-    affine.y=transform.offset.y+(1.0-transform.scale)*transform.pivot.y+
-        transform.scale*((1.0-c)*transform.pivot.y-s*transform.pivot.x);
+    affine.x=transform.offset.x+(1.0-transform.scale*hx)*transform.pivot.x+
+        transform.scale*hx*((1.0-c)*transform.pivot.x+s*transform.pivot.y);
+    affine.y=transform.offset.y+(1.0-transform.scale*hy)*transform.pivot.y+
+        transform.scale*hy*((1.0-c)*transform.pivot.y-s*transform.pivot.x);
     affine.z=transform.offset.z+(1.0-transform.scale)*transform.pivot.z;
     affine.rotation_z_radians=angle;
     affine.scale=transform.scale;
@@ -1604,7 +1759,45 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     // Creating the validated transaction also checks transaction/target lexical
     // identities on the no-op path without re-encoding any source metadata.
     if (identity) return {expected_revision,{}, {},"Transform architectural group"};
-    return architectural_transaction_command(source,transaction,expected_revision);
+    if (!reflected) {
+        // Keep the established proper-transform and hosted-child consequence
+        // path, but admit every selected native family in the final candidate.
+        return make_candidate_command(source, apply_operations(source, transaction),
+            expected_revision, transaction.undo_label(), targets);
+    }
+    // Construct final descriptors directly from the captured source. An
+    // intermediate proper move could fail world/level admission even though
+    // its reflected final position is valid; it must never be published.
+    auto candidate = copy_entities(source);
+    for (const auto& operation : transaction.operations()) {
+        const auto& id = operation.object_id;
+        const auto& before = source.entities().at(id);
+        const auto& movement = *operation.transform;
+        auto& after = candidate.at(id);
+        if (before.type == "slab")
+            after = transform_slab_entity(before, movement, transform.flip_horizontal, transform.flip_vertical);
+        else if (before.type == "room")
+            after = transform_room_entity(before, movement, transform.flip_horizontal, transform.flip_vertical);
+        else if (before.type == "assembly_instance") {
+            auto value = decode_document_assembly_instance(before);
+            auto& root = *value.instance.root_transform;
+            const auto position = transform_point({root.translation_m.x, root.translation_m.y,
+                root.translation_m.z}, movement, transform.flip_horizontal, transform.flip_vertical);
+            const auto u = transform_direction({std::cos(root.rotation_radians),
+                std::sin(root.rotation_radians), 0}, movement, transform.flip_horizontal, transform.flip_vertical);
+            root.translation_m = {position.x, position.y, position.z};
+            root.rotation_radians = std::atan2(u.y, u.x);
+            root.scale *= movement.scale;
+            root.mirrored_y = !root.mirrored_y;
+            after.properties.at("instance")["root_transform"] = encode_assembly_transform(root);
+        } else {
+            after = transform_building_entity(before, movement, transform.flip_horizontal, transform.flip_vertical);
+            if (canonical_stair(before))
+                reflect_stair_railings(candidate, source.entities(), before, after, movement,
+                    transform.flip_horizontal, transform.flip_vertical);
+        }
+    }
+    return make_candidate_command(source, candidate, expected_revision, transaction.undo_label(), targets);
 }
 
 DocumentSnapshot preview_architectural_transaction(const DocumentSnapshot& source,

@@ -290,12 +290,24 @@
   record. New copies join the active design phase and imported page where
   applicable. Local image assets are retained without changing calibration.</p>
   <p>Persisted slabs, rooms, columns, beams, stairs, railings, roofs and
-  independent assemblies can join a selected group for a shared rotation and
-  X/Y movement. A hosted railing follows its selected stair once. The preview
-  includes affected physical profiles and joined-roof consequences. Existing
-  single-object controls retain their height, scale and Copy options. Group
-  Copy and a single-axis reflection with architectural members are not yet
-  available; selecting both reflection axes gives the equivalent half-turn.</p>
+  independent assemblies can join a selected group for shared rotation,
+  horizontal or vertical reflection and X/Y movement. Enable Copy to retain
+  the originals and select the new physical objects. Hosted railings follow
+  their stair once; copied railings belong to the copied stair. Joined roofs
+  retain their join when every host is copied together. The preview includes
+  physical profiles, hosted parts and joined-roof consequences. Existing
+  single-object controls retain their height and uniform scale options.</p>
+  <p>For one physical object or catalog-based assembly, the Transform editor
+  also offers <strong>Mirror horizontally</strong> and
+  <strong>Mirror vertically</strong>. Rotation and positive uniform scaling
+  precede the world-axis mirrors, then the entered X/Y/Z offsets move the
+  result. Create a transformed copy retains the original. Connected walls
+  use their plan Transform controls.</p>
+  <p>For straight connections between stair flights of different widths, use
+  <strong>Alignment</strong> in the stair's landing table. Left and Right are
+  viewed looking up the stair. Reflection swaps that edge alignment and the
+  railings' sides while retaining the entered widths. Turning landings use
+  their turn direction instead.</p>
   <p>Area, measured-line and geometric assembly controls also work in Site Plan.
   The building's Site placement stays fixed while the selected source geometry
   changes; related callouts and calibrated reference images retain their own

@@ -118,6 +118,8 @@ void basic_stair(const StairFlight& s) {
         rise+=static_cast<double>(s.flights[i].riser_count)*h;
         if(l.thickness>rise)invalid("Connecting landing extends below stair base");
         (void)turn_name(l.turn);
+        if(l.align_right && l.turn!=StairTurn::straight)
+            invalid("Right alignment requires a straight connecting landing");
         // At a quarter turn the outgoing width lies along the incoming run.
         // Incoming width occupies the perpendicular landing span instead.
         if((l.turn==StairTurn::left_quarter||l.turn==StairTurn::right_quarter)&&
@@ -159,7 +161,12 @@ StairLayout derive_stair_layout(const StairFlight& s) {
             const auto outgoing_width=flights[i+1].width.value_or(s.width);
             double ymin=0,ymax=incoming_width,nx=l.depth,ny=0,turn=0;
             switch(l.turn){
-            case StairTurn::straight:ymax=std::max(incoming_width,outgoing_width);break;
+            case StairTurn::straight:
+                if(l.align_right) {
+                    ny=incoming_width-outgoing_width;
+                    ymin=std::min(0.0,ny);ymax=incoming_width;
+                } else ymax=std::max(incoming_width,outgoing_width);
+                break;
             case StairTurn::left_quarter:ny=incoming_width;turn=std::numbers::pi/2;break;
             case StairTurn::right_quarter:nx=l.depth-outgoing_width;turn=-std::numbers::pi/2;break;
             case StairTurn::left_half:ymax=incoming_width+outgoing_width+l.return_gap;nx=0;ny=ymax;turn=std::numbers::pi;break;
@@ -397,7 +404,9 @@ HostedRailingLayout derive_hosted_railing_layout(const Railing& r,const StairFli
 Json encode_stair_properties(const StairFlight& s){validate_stair(s);
     const bool per_flight_dimensions=std::any_of(s.flights.begin(),s.flights.end(),
         [](const auto& f){return f.going.has_value()||f.width.has_value();});
-    Json p={{"version",s.flights.empty()?1:(per_flight_dimensions?3:2)},{"form",s.flights.empty()?"straight_stair_flight":"multi_flight_stair"},{"base_position_m",json_point(s.base_position)},{"orientation_rad",s.orientation_radians},{"riser_count",s.riser_count},{"total_rise_m",s.total_rise},{"going_m",s.going},{"width_m",s.width},{"top_landing",nullptr}};
+    const bool right_alignment=std::any_of(s.landings.begin(),s.landings.end(),
+        [](const auto& l){return l.align_right;});
+    Json p={{"version",s.flights.empty()?1:(right_alignment?4:(per_flight_dimensions?3:2))},{"form",s.flights.empty()?"straight_stair_flight":"multi_flight_stair"},{"base_position_m",json_point(s.base_position)},{"orientation_rad",s.orientation_radians},{"riser_count",s.riser_count},{"total_rise_m",s.total_rise},{"going_m",s.going},{"width_m",s.width},{"top_landing",nullptr}};
     if(s.top_landing)p["top_landing"]={{"depth_m",s.top_landing->depth},{"thickness_m",s.top_landing->thickness}};
     if(s.level_connection){const auto& c=*s.level_connection;p["level_connection"]={{"version",1},{"graph_id",c.graph_entity_id},{"link_id",c.link_id},{"lower_level_id",c.lower_level_id},{"upper_level_id",c.upper_level_id}};}
     if(!s.flights.empty()){
@@ -408,24 +417,40 @@ Json encode_stair_properties(const StairFlight& s){validate_stair(s);
             if(f.width)record["width_m"]=*f.width;
             p["flights"].push_back(std::move(record));
         }
-        p["landings"]=Json::array();for(const auto& l:s.landings)p["landings"].push_back({{"id",l.id},{"depth_m",l.depth},{"thickness_m",l.thickness},{"turn",turn_name(l.turn)},{"return_gap_m",l.return_gap}});
+        p["landings"]=Json::array();
+        for(const auto& l:s.landings) {
+            Json record={{"id",l.id},{"depth_m",l.depth},{"thickness_m",l.thickness},
+                {"turn",turn_name(l.turn)},{"return_gap_m",l.return_gap}};
+            if(l.align_right)record["straight_alignment"]="right";
+            p["landings"].push_back(std::move(record));
+        }
     }return p;
 }
-StairFlight decode_stair_properties(std::string_view id,const Json& p){identity(id);const auto& version=field(p,"version");const bool v2=version.is_number_integer()&&version==2,v3=version.is_number_integer()&&version==3;const bool multi=v2||v3;version_form(p,v3?3:(v2?2:1),multi?"multi_flight_stair":"straight_stair_flight");if(!multi&&(p.contains("flights")||p.contains("landings")))invalid("Stair topology requires version 2 or 3");StairFlight s{std::string(id),point(p,"base_position_m"),number(p,"orientation_rad"),count(p,"riser_count"),number(p,"total_rise_m"),number(p,"going_m"),number(p,"width_m")};
+StairFlight decode_stair_properties(std::string_view id,const Json& p){identity(id);const auto& version=field(p,"version");const bool v2=version.is_number_integer()&&version==2,v3=version.is_number_integer()&&version==3,v4=version.is_number_integer()&&version==4;const bool multi=v2||v3||v4;version_form(p,v4?4:(v3?3:(v2?2:1)),multi?"multi_flight_stair":"straight_stair_flight");if(!multi&&(p.contains("flights")||p.contains("landings")))invalid("Stair topology requires version 2, 3 or 4");StairFlight s{std::string(id),point(p,"base_position_m"),number(p,"orientation_rad"),count(p,"riser_count"),number(p,"total_rise_m"),number(p,"going_m"),number(p,"width_m")};
     const auto& top=field(p,"top_landing");if(!top.is_null())s.top_landing=StairLanding{number(top,"depth_m"),number(top,"thickness_m")};
     if(p.contains("level_connection")){const auto& c=p.at("level_connection");const auto& v=field(c,"version");if(!v.is_number_integer()||v!=1)invalid("Invalid stair level connection version");s.level_connection=StairLevelConnection{text(c,"graph_id"),text(c,"link_id"),text(c,"lower_level_id"),text(c,"upper_level_id")};}
     if(multi){
         const auto& fs=field(p,"flights");const auto& ls=field(p,"landings");
         if(!fs.is_array()||fs.empty()||fs.size()>max_flights||!ls.is_array()||ls.size()!=fs.size()-1)invalid("Invalid stair topology arrays");
         for(const auto& f:fs){
-            if(!v3&&(f.contains("going_m")||f.contains("width_m")))
-                invalid("Per-flight stair dimensions require version 3");
+            if(!v3&&!v4&&(f.contains("going_m")||f.contains("width_m")))
+                invalid("Per-flight stair dimensions require version 3 or 4");
             StairFlightRecord record{text(f,"id"),count(f,"riser_count")};
             if(f.contains("going_m"))record.going=number(f,"going_m");
             if(f.contains("width_m"))record.width=number(f,"width_m");
             s.flights.push_back(std::move(record));
         }
-        for(const auto& l:ls)s.landings.push_back({text(l,"id"),number(l,"depth_m"),number(l,"thickness_m"),turn_value(text(l,"turn")),number(l,"return_gap_m")});
+        for(const auto& l:ls) {
+            StairConnectingLanding landing{text(l,"id"),number(l,"depth_m"),number(l,"thickness_m"),
+                turn_value(text(l,"turn")),number(l,"return_gap_m")};
+            if(l.contains("straight_alignment")) {
+                if(!v4)invalid("Straight landing alignment requires version 4");
+                if(text(l,"straight_alignment")!="right" || landing.turn!=StairTurn::straight)
+                    invalid("Straight landing alignment must be right on a straight connecting landing");
+                landing.align_right=true;
+            }
+            s.landings.push_back(std::move(landing));
+        }
     }validate_stair(s);return s;
 }
 Json encode_railing_properties(const Railing& r) {

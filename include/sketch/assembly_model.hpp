@@ -28,11 +28,13 @@ struct AssemblyPoint3 {
     double x{}, y{}, z{};
     bool operator==(const AssemblyPoint3&) const = default;
 };
-// Uniform scale, then yaw about local Z, then translation in parent metres.
+// Optional local Y reflection, positive uniform scale, yaw about local Z,
+// then translation in parent metres: t + s R(yaw) D_y^mirrored_y p.
 struct AssemblyTransform {
     AssemblyPoint3 translation_m{};
     double rotation_radians{};
     double scale{1.0};
+    bool mirrored_y{false};
     bool operator==(const AssemblyTransform&) const = default;
 };
 [[nodiscard]] AssemblyPoint3 transform_assembly_point(AssemblyPoint3 point, const AssemblyTransform& transform);
@@ -84,12 +86,13 @@ struct AssemblyPlacement {
     Vec2 translation_m{};
     double rotation_radians{};
     double scale{1.0};
+    bool mirrored_y{false};
     bool operator==(const AssemblyPlacement& other) const noexcept {
         return host_entity_id == other.host_entity_id &&
                translation_m.x == other.translation_m.x &&
                translation_m.y == other.translation_m.y &&
                rotation_radians == other.rotation_radians &&
-               scale == other.scale;
+               scale == other.scale && mirrored_y == other.mirrored_y;
     }
 };
 struct AssemblyInstance {

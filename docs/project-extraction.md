@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 66 retains assembly transform reflection parity and stair
+properties version 4, requiring native reader 68. Mirror parity is an optional
+strict boolean on root, part, nested override and legacy placement transforms.
+Straight stair landings retain their explicit far-edge alignment. The floor
+covers all retained history, including unmirrored, undone and deleted owners;
+opaque user fields do not acquire transform authority. Earlier projects retain
+their previous extraction floor.
+
 Exchange version 65 retains the explicit measured-copy source-isolation marker
 and requires native reader 67. The floor persists through all retained history,
 including undone and deleted owners. Each area's owner cohort is derived from

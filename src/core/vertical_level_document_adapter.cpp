@@ -47,7 +47,8 @@ double finite_number(const nlohmann::json& properties, const char* field, bool p
 void validate_straight_stair(const Entity& stair, double new_rise) {
     const auto& p = stair.properties;
     if (canonical_form(stair,"stair",2,"multi_flight_stair") ||
-        canonical_form(stair,"stair",3,"multi_flight_stair")) {
+        canonical_form(stair,"stair",3,"multi_flight_stair") ||
+        canonical_form(stair,"stair",4,"multi_flight_stair")) {
         auto decoded=decode_stair_properties(stair.id,p);
         decoded.total_rise=new_rise;
         (void)derive_stair_layout(decoded);
@@ -123,7 +124,8 @@ VerticalLevelEditCandidate prepare_vertical_level_edit(const DocumentSnapshot& s
         for (const auto& [id,entity] : snapshot.entities()) {
             (void)id;
             if (canonical_form(entity,"stair",2,"multi_flight_stair") ||
-                canonical_form(entity,"stair",3,"multi_flight_stair")) {
+                canonical_form(entity,"stair",3,"multi_flight_stair") ||
+                canonical_form(entity,"stair",4,"multi_flight_stair")) {
                 const auto effective=resolve_vertical_placement(snapshot,entity);
                 (void)make_building_shape(decode_building_entity(effective),snapshot.entities());
             } else if (canonical_form(entity,"railing",2,"stair_flight_railing") ||

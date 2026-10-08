@@ -11,8 +11,10 @@
 #include "sketch/opening_assembly.hpp"
 #include "sketch/terrain_surface.hpp"
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
@@ -829,9 +831,19 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             !std::isfinite(placement.translation_m.y)) {
             throw std::invalid_argument("assembly placement transform is invalid");
         }
+        auto local = source;
+        if (placement.mirrored_y) {
+            gp_Trsf mirror;
+            mirror.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0)));
+            BRepBuilderAPI_Transform mirrored(source, mirror, true);
+            if (!mirrored.IsDone() || mirrored.Shape().IsNull()) {
+                throw std::invalid_argument("assembly mirror transform failed");
+            }
+            local = mirrored.Shape();
+        }
         gp_Trsf scale;
         scale.SetScale(gp_Pnt(0.0, 0.0, 0.0), placement.scale);
-        BRepBuilderAPI_Transform scaled(source, scale, true);
+        BRepBuilderAPI_Transform scaled(local, scale, true);
         if (!scaled.IsDone() || scaled.Shape().IsNull()) {
             throw std::invalid_argument("assembly scale transform failed");
         }
@@ -848,6 +860,13 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         BRepBuilderAPI_Transform translated(rotated.Shape(), translate, true);
         if (!translated.IsDone() || translated.Shape().IsNull()) {
             throw std::invalid_argument("assembly translation transform failed");
+        }
+        if (!BRepCheck_Analyzer(translated.Shape()).IsValid()) {
+            throw std::invalid_argument("assembly host transform produced an invalid solid");
+        }
+        const auto volume = solid_volume(translated.Shape());
+        if (!std::isfinite(volume) || volume <= 0.0) {
+            throw std::invalid_argument("assembly host solid volume must be finite and positive");
         }
         return translated.Shape();
     };
@@ -885,10 +904,12 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 content.append(child_id);
                 content.push_back('\0');
                 const auto& placement = *instance.placement;
-                content.append(nlohmann::json{
+                auto placement_content = nlohmann::json{
                     {"host", placement.host_entity_id},
                     {"translation", {placement.translation_m.x, placement.translation_m.y}},
-                    {"rotation", placement.rotation_radians}, {"scale", placement.scale}}.dump());
+                    {"rotation", placement.rotation_radians}, {"scale", placement.scale}};
+                if (placement.mirrored_y) placement_content["mirrored_y"] = true;
+                content.append(placement_content.dump());
                 content.push_back('\0');
                 append_entity_content(content, geometry_entity);
                 append_building_dependencies(content, snapshot, geometry_entity);

@@ -207,6 +207,7 @@
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Trsf.hxx>
 
@@ -442,7 +443,7 @@ void remap_clipboard_json(json& value,
 bool multi_flight_stair(const Entity& entity) {
     const auto& p = entity.properties;
     return entity.type == "stair" && p.is_object() && p.contains("version") &&
-        p.at("version").is_number_integer() && (p.at("version") == 2 || p.at("version") == 3) &&
+        p.at("version").is_number_integer() && (p.at("version") == 2 || p.at("version") == 3 || p.at("version") == 4) &&
         p.contains("form") && p.at("form") == "multi_flight_stair";
 }
 
@@ -645,7 +646,9 @@ void remap_entity_references(Entity& entity,
         auto instance = decode_assembly_instance(properties.at("instance"));
         instance.id = entity.id;
         reference(properties, "assembly_catalog_id");
-        properties["instance"] = encode_assembly_instance(instance);
+        // Only this persisted root identity changes. Catalog-local parts,
+        // overrides, artwork/provenance and opaque wire fields stay intact.
+        properties.at("instance")["id"] = instance.id;
         (void)decode_document_assembly_instance(entity);
     }
     if (entity.type == "measurement_linework") {
@@ -996,7 +999,7 @@ AssemblyTransform embedded_assembly_transform(const AssemblyInstance& instance) 
     if (instance.root_transform) return *instance.root_transform;
     if (instance.placement) {
         const auto& p = *instance.placement;
-        return {{p.translation_m.x, p.translation_m.y, 0}, p.rotation_radians, p.scale};
+        return {{p.translation_m.x, p.translation_m.y, 0}, p.rotation_radians, p.scale, p.mirrored_y};
     }
     return {};
 }
@@ -2229,7 +2232,7 @@ DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& di
 
 Vec2 assembly_placement_point(Vec2 point, const AssemblyPlacement& placement) {
     const auto scaled_x = point.x * placement.scale;
-    const auto scaled_y = point.y * placement.scale;
+    const auto scaled_y = (placement.mirrored_y ? -point.y : point.y) * placement.scale;
     const auto cosine = std::cos(placement.rotation_radians);
     const auto sine = std::sin(placement.rotation_radians);
     return {cosine * scaled_x - sine * scaled_y + placement.translation_m.x,
@@ -2243,7 +2246,7 @@ Boundary assembly_placement_boundary(const Boundary& source,
     for (const auto& segment : source) {
         result.push_back({assembly_placement_point(segment.start, placement),
                           assembly_placement_point(segment.end, placement),
-                          segment.sweep_radians});
+                          placement.mirrored_y ? -segment.sweep_radians : segment.sweep_radians});
     }
     return result;
 }
@@ -7091,21 +7094,47 @@ public:
     }
 
     static std::pair<Command, std::string> embeddedAssemblyTransformCommand(const DocumentSnapshot& source,
-        const std::string& child_id, const ArchitecturalTransform& gesture, bool clone) {
+        const std::string& child_id, const ArchitecturalTransform& gesture, bool clone,
+        bool flip_horizontal = false, bool flip_vertical = false) {
         validate_document_assembly_instances(source.entities());
-        const auto binding = geometric_assembly_for_child(source, child_id);
-        if (!binding) throw std::invalid_argument("The embedded geometric assembly is unavailable.");
+        const auto binding = embeddedAssemblyChild(source, child_id);
+        if (!binding || !geometric_assembly_for_child(source, child_id))
+            throw std::invalid_argument("The embedded geometric assembly is unavailable.");
+        if (source.entities().contains(child_id) || annotation_child_exists(source,child_id))
+            throw std::invalid_argument("The selected ID names distinct body/profile owners.");
         const auto& original = source.entities().at(binding->assembly_catalog_id);
         const auto model = AssemblyModel::from_json(original.properties.at("model"));
         auto instance = binding->instance;
-        const AssemblyTransform delta{{gesture.x, gesture.y, gesture.z}, gesture.rotation_z_radians, gesture.scale};
-        const auto transform = compose_assembly_transform(delta, embedded_assembly_transform(instance));
+        // The gesture rotates first, then reflects in world X/Y. Assembly
+        // transforms encode reflection in local Y before yaw, so convert the
+        // complete O(2) operator rather than discarding its mirror parity.
+        const auto angle = flip_horizontal && flip_vertical ? gesture.rotation_z_radians + std::numbers::pi :
+            flip_horizontal ? std::numbers::pi - gesture.rotation_z_radians :
+            flip_vertical ? -gesture.rotation_z_radians : gesture.rotation_z_radians;
+        const AssemblyTransform delta{{gesture.x, gesture.y, gesture.z}, angle, gesture.scale,
+            flip_horizontal != flip_vertical};
+        const auto old_transform = embedded_assembly_transform(instance);
+        auto transform = compose_assembly_transform(delta, old_transform);
+        if (flip_horizontal || flip_vertical) {
+            // Preserve exact axis signs for pure mirrors: sin(pi) must not
+            // introduce a spurious translation at distant model coordinates.
+            const auto yaw = std::remainder(gesture.rotation_z_radians, 2.0 * std::numbers::pi);
+            const auto c = yaw == 0.0 ? 1.0 : std::cos(yaw);
+            const auto s = yaw == 0.0 ? 0.0 : std::sin(yaw);
+            const auto& p = old_transform.translation_m;
+            transform.translation_m = {
+                gesture.x + (flip_horizontal ? -1.0 : 1.0) * gesture.scale * (c*p.x - s*p.y),
+                gesture.y + (flip_vertical ? -1.0 : 1.0) * gesture.scale * (s*p.x + c*p.y),
+                gesture.z + gesture.scale*p.z};
+        }
         if (!clone && gesture.x == 0 && gesture.y == 0 && gesture.z == 0 &&
-            gesture.rotation_z_radians == 0 && gesture.scale == 1)
+            gesture.rotation_z_radians == 0 && gesture.scale == 1 && !flip_horizontal && !flip_vertical)
             return {ApplyEntityChanges{source.revision(), {}, {}, "Transform embedded assembly"}, child_id};
         if (clone) {
             do { instance.id = new_id("assembly"); } while (std::any_of(model.instances().begin(), model.instances().end(),
-                [&](const auto& value) { return value.id == instance.id; }));
+                [&](const auto& value) { return value.id == instance.id; }) ||
+                source.entities().contains(original.id + ":instance:" + instance.id) ||
+                annotation_child_exists(source,original.id + ":instance:" + instance.id));
         }
         instance.placement.reset();
         instance.root_transform = transform;
@@ -7131,6 +7160,124 @@ public:
         }
         return {ApplyEntityChanges{source.revision(), std::move(changes), {},
             clone ? "Clone embedded assembly" : "Transform embedded assembly"}, target};
+    }
+
+    std::pair<Command, std::string> architecturalObjectMirrorCommand(
+        const DocumentSnapshot& source, const Entity& original, const ArchitecturalTransform& gesture,
+        bool clone, bool flip_horizontal, bool flip_vertical) {
+        const ArchitecturalGroupTransform transform{{0.0,0.0,0.0},
+            {gesture.x,gesture.y,gesture.z},gesture.rotation_z_radians,gesture.scale,
+            flip_horizontal,flip_vertical};
+        if (!clone) {
+            const std::vector<std::string> targets{original.id};
+            return {augmentAuthoredCommand(architectural_group_transform_command(source,targets,transform,
+                new_id("architectural-mirror"),source.revision()),source),original.id};
+        }
+
+        // Close the identity copy before applying XYZ/scale/mirror intent.
+        // This retains saved dimensions and appearance alongside fresh,
+        // owner-qualified stair children and their hosted railings. Catalogs
+        // and local asset bytes remain shared captured resources.
+        std::map<std::string,std::string,std::less<>> identities;
+        std::map<std::pair<std::string,std::string>,std::string> child_identities;
+        auto creation = makeIndependentSelectionCloneCommand(source,{original},PlanarTransform{},
+            ApplyEntityChanges{source.revision(),{}, {},"Copy architectural object"},
+            identities,child_identities,kMaximumNumericSelectionGraphEntities);
+        const auto root = identities.at(original.id);
+        if (creation.expected_revision != source.revision() || !creation.asset_changes.empty())
+            throw std::invalid_argument("An architectural copy must retain its source revision and shared assets.");
+        std::set<std::string,std::less<>> copied_ids;
+        for (const auto& change : creation.entity_changes)
+            if (change.kind != EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
+                !copied_ids.insert(change.entity.id).second)
+                throw std::invalid_argument("An architectural copy requires a complete fresh dependency graph.");
+        if (!copied_ids.contains(root))
+            throw std::invalid_argument("The architectural copy did not produce its fresh root.");
+        const auto detached = Document::preview_command(source,creation);
+        std::vector<std::string> targets;
+        for (const auto& change : creation.entity_changes) {
+            const auto& entity = change.entity;
+            if (entity.type!="wall" && can_transform_architectural_entity_type(entity.type) &&
+                !hosted_stair_railing(entity)) targets.push_back(entity.id);
+        }
+        const auto movement = architectural_group_transform_command(detached,targets,transform,
+            new_id("architectural-copy-mirror"),detached.revision());
+        if (movement.expected_revision != detached.revision() || !movement.asset_changes.empty())
+            throw std::invalid_argument("The copied transform lost its detached revision or shared assets.");
+        std::set<std::string,std::less<>> moved_ids;
+        for (const auto& change : movement.entity_changes)
+            if (change.kind != EntityChangeKind::upsert || !copied_ids.contains(change.entity.id) ||
+                !moved_ids.insert(change.entity.id).second)
+                throw std::invalid_argument("The copied transform would modify an original dependency.");
+        const auto proposed = Document::preview_command(detached,movement);
+        if (proposed.entities().size() != source.entities().size() + copied_ids.size() ||
+            proposed.assets()!=source.assets())
+            throw std::invalid_argument("The copied transform changed its complete dependency graph.");
+        for (const auto& [id,entity] : source.entities()) {
+            const auto retained = proposed.entities().find(id);
+            if (retained == proposed.entities().end() || retained->second != entity)
+                throw std::invalid_argument("The copied transform would modify an original object.");
+        }
+        const PlanarTransform planar{{},gesture.rotation_z_radians,flip_horizontal,flip_vertical,
+            {gesture.x,gesture.y}};
+        const PlanarTransform linear{{},gesture.rotation_z_radians,flip_horizontal,flip_vertical,{}};
+        for (auto& change : creation.entity_changes) {
+            const auto& copied_original = detached.entities().at(change.entity.id);
+            const auto copied = proposed.entities().find(change.entity.id);
+            if (copied == proposed.entities().end())
+                throw std::invalid_argument("The copied transform lost a fresh dependency.");
+            change.entity = copied->second;
+            if (can_recognize_boundary_dimension_entity_type(copied_original.type)) {
+                const auto initial = decode_boundary_dimension_entity(copied_original);
+                const auto final = decode_boundary_dimension_entity(change.entity);
+                if (!initial.supported() || !final.supported())
+                    throw std::invalid_argument("A copied saved dimension has an unsupported placement contract.");
+                auto dimension = *final.dimension;
+                const auto point = initial.dimension->text_position;
+                dimension.text_position = point;
+                if (dimension != *initial.dimension)
+                    throw std::invalid_argument("The copied transform changed a saved dimension's binding or presentation contract.");
+                // A native consequence may already have moved this callout.
+                // Use its identity-copy position exactly once, preserving the
+                // fresh binding, placement provenance and presentation data.
+                dimension.text_position = transform_point({gesture.scale*point.x,gesture.scale*point.y},planar);
+                change.entity = encode_boundary_dimension_entity(dimension,&change.entity);
+            } else if (copied_original.type==kAnnotationEntityType) {
+                const auto& initial = copied_original.properties.at("state").at("overrides");
+                auto& final = change.entity.properties.at("state").at("overrides");
+                if (initial.size()!=final.size())
+                    throw std::invalid_argument("The copied transform changed its appearance dependency graph.");
+                for (std::size_t index=0;index<initial.size();++index) {
+                    const auto& before=initial.at(index);
+                    auto& after=final.at(index);
+                    if (before.at("target_id")!=after.at("target_id") ||
+                        before.at("target_kind")!=after.at("target_kind"))
+                        throw std::invalid_argument("The copied transform changed an appearance binding.");
+                    if (before.contains("plan_label_offset_m")) {
+                        const auto offset=read_point(before.at("plan_label_offset_m"));
+                        if (!offset) throw std::invalid_argument("The copied label offset is invalid.");
+                        // Offsets are vectors relative to the moved physical
+                        // anchor; adding XYZ translation here would move twice.
+                        const auto moved=transform_point({gesture.scale*offset->x,gesture.scale*offset->y},linear);
+                        after["plan_label_offset_m"]=json::array({moved.x,moved.y});
+                    }
+                    if (area_callout_role(before.at("target_kind").get<std::string>()) &&
+                        before.contains("plan_label_rotation_radians")) {
+                        const auto angle=before.at("plan_label_rotation_radians").get<double>();
+                        const auto direction=transform_point({std::cos(angle),std::sin(angle)},linear);
+                        after["plan_label_rotation_radians"]=std::atan2(direction.y,direction.x);
+                    }
+                }
+                validate_annotation_entity(change.entity);
+            }
+        }
+        creation.message = "Clone mirrored architectural object";
+        creation = validateIndependentAreaCopy(source,std::move(creation));
+        auto command = augmentAuthoredCommand(creation,source);
+        const auto* complete = std::get_if<ApplyEntityChanges>(&command);
+        if (!complete) throw std::invalid_argument("An architectural copy requires one complete entity command.");
+        requireIndependentCopyRegistrations(source,creation,*complete);
+        return {std::move(command),root};
     }
 
     std::pair<ArchitecturalTransaction, std::string>
@@ -8017,7 +8164,7 @@ public:
     }
 
     static void revokeCopiedAppraisalObservation(const Entity& original, Entity& copy) {
-        if (!is_closed_boundary_entity(copy.type)) return;
+        if (!is_closed_boundary_entity(copy.type) && copy.type!="room") return;
         auto facts = copy.properties.find("appraisal_facts");
         if (facts == copy.properties.end() || !facts->is_object()) return;
         auto ansi = facts->find("ansi");
@@ -8056,10 +8203,11 @@ public:
             if (change.kind == EntityChangeKind::upsert && !source.entities().contains(change.entity.id)) {
                 copied_ids.insert(change.entity.id);
                 if (is_closed_boundary_entity(change.entity.type) || change.entity.type == "measurement_linework" ||
-                    change.entity.type == "wall")
+                    can_transform_architectural_entity_type(change.entity.type) || change.entity.type=="roof_join")
                     contains_independent_copy = true;
                 if (is_closed_boundary_entity(change.entity.type) || change.entity.type == "measurement_linework" ||
                     can_transform_architectural_entity_type(change.entity.type) ||
+                    change.entity.type=="roof_join" ||
                     change.entity.type == "opening" || can_recognize_boundary_dimension_entity_type(change.entity.type))
                     copied_geometry_ids.insert(change.entity.id);
                 if (change.entity.type == "wall") copied_wall_ids.insert(change.entity.id);
@@ -8204,8 +8352,16 @@ public:
         std::map<std::string,std::string,std::less<>>& identities,
         std::map<std::pair<std::string,std::string>,std::string>& child_identities,
         std::size_t maximum_entities = kMaximumClipboardEntities) {
-        const auto graph = independentAreaCopyGraph(source,std::move(seeds),true,true,maximum_entities);
+        const auto graph = independentAreaCopyGraph(source,std::move(seeds),true,true,maximum_entities,true);
         for (const auto& entity : graph) identities.emplace(entity.id,new_id(entity.type));
+        // Flights and landings are qualified by their persisted stair owner.
+        // They can share a spelling with a body or another stair's children.
+        for (const auto& entity : graph) if (multi_flight_stair(entity)) {
+            const auto stair = decode_stair_properties(entity.id,entity.properties);
+            for (const auto& child : stair_child_ids(stair))
+                if (!child_identities.emplace(std::make_pair(entity.id,child),new_id("stair-child")).second)
+                    throw std::invalid_argument("A copied stair contains duplicate child identities.");
+        }
         for (const auto& entity : graph) if (entity.type == kAnnotationEntityType) {
             const auto state = decode_annotation_entity(entity);
             for (const auto& child : state.labels) child_identities.emplace(std::make_pair(entity.id,child.id),new_id("label"));
@@ -8221,6 +8377,52 @@ public:
             }
         }
         std::map<std::string,Entity,std::less<>> copied;
+        std::vector<std::string> physical_roots;
+        std::set<std::string,std::less<>> graph_ids;
+        for (const auto& entity : graph) {
+            graph_ids.insert(entity.id);
+            // Hosted rail placement belongs to the stair operation alone.
+            if (entity.type!="wall" && can_transform_architectural_entity_type(entity.type) && !hosted_stair_railing(entity))
+                physical_roots.push_back(entity.id);
+        }
+        std::map<std::string,Entity,std::less<>> physical_values;
+        if (!physical_roots.empty()) {
+            const auto physical = architectural_group_transform_command(source,physical_roots,
+                ArchitecturalGroupTransform{{transform.pivot.x,transform.pivot.y,0.0},
+                    {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0,
+                    transform.flip_horizontal,transform.flip_vertical},
+                new_id("architectural-group-copy"),source.revision());
+            if (physical.expected_revision!=source.revision() || !physical.asset_changes.empty())
+                throw std::invalid_argument("An architectural copy must retain its captured revision and shared assets.");
+            for (const auto& change : physical.entity_changes) {
+                if (change.kind!=EntityChangeKind::upsert || !graph_ids.contains(change.entity.id) ||
+                    !physical_values.emplace(change.entity.id,change.entity).second)
+                    throw std::invalid_argument("An architectural copy has an incomplete or conflicting dependency graph.");
+            }
+        }
+        for (const auto& entity : graph) {
+            if (entity.type=="wall" || (!can_transform_architectural_entity_type(entity.type) && entity.type!="roof_join")) continue;
+            auto clone = physical_values.contains(entity.id) ? physical_values.at(entity.id) : entity;
+            clone.id = identities.at(entity.id);
+            const auto child_owner = multi_flight_stair(entity) ? entity.id : hosted_stair_railing(entity)
+                ? stair_railing_host_id(decode_railing_properties(entity.id,entity.properties)) : std::string{};
+            // Touch only typed flight/landing references; a body reference
+            // with the same spelling keeps its body namespace.
+            if (multi_flight_stair(clone)) {
+                for (const auto* collection : {"flights","landings"})
+                    for (auto& child : clone.properties.at(collection))
+                        child["id"] = child_identities.at({entity.id,child.at("id").get<std::string>()});
+            } else if (hosted_stair_railing(clone)) {
+                auto& host=clone.properties.at("host");
+                for (const auto* key : {"flight_id","landing_id","incoming_flight_id","outgoing_flight_id"})
+                    if (host.contains(key) && !host.at(key).get<std::string>().empty())
+                        host[key]=child_identities.at({child_owner,host.at(key).get<std::string>()});
+            }
+            // Child IDs have already been remapped in their own namespace.
+            // Do not offer those mappings to the body-reference codec.
+            remap_entity_references(clone,identities);
+            copied.insert_or_assign(clone.id,std::move(clone));
+        }
         for (const auto& entity : graph) if (entity.type == "measurement_linework") {
             auto clone = entity;
             clone.id = identities.at(entity.id);
@@ -8268,13 +8470,17 @@ public:
             } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                 // Include measured-line and physical-wall dimensions as well
                 // as boundary dimensions. Every placement moves exactly once.
-                auto metadata = entity;
+                auto metadata = physical_values.contains(entity.id) ? physical_values.at(entity.id) : entity;
                 metadata.id = identities.at(entity.id);
                 remap_entity_references(metadata,identities);
                 const auto decoded = decode_boundary_dimension_entity(metadata);
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                 auto dimension = *decoded.dimension;
-                dimension.text_position = transform_point(dimension.text_position,transform);
+                // Always derive placement from the captured original. A core
+                // consequence may already have moved its saved text position.
+                const auto original_dimension = decode_boundary_dimension_entity(entity);
+                if (!original_dimension.supported()) throw std::invalid_argument(original_dimension.unsupported_reason);
+                dimension.text_position = transform_point(original_dimension.dimension->text_position,transform);
                 copied.insert_or_assign(metadata.id,encode_boundary_dimension_entity(dimension,&metadata));
             } else if (entity.type == kAnnotationEntityType) {
                 auto annotation = entity;
@@ -8350,7 +8556,17 @@ public:
                 revokeCopiedAppraisalObservation(entity,found->second);
             } else throw std::invalid_argument("A required selection copy dependency is unsupported: " + entity.type);
         for (auto& [id,entity] : copied) command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
-        return validateIndependentAreaCopy(source,std::move(command));
+        command = validateIndependentAreaCopy(source,std::move(command));
+        const auto candidate = Document::preview_command(source,command);
+        validate_architectural_geometry_changes(source,candidate);
+        for (const auto& entity : graph) {
+            if (entity.type=="wall" || (!can_transform_architectural_entity_type(entity.type) && entity.type!="roof_join")) continue;
+            const auto& clone=candidate.entities().at(identities.at(entity.id));
+            if (clone.type=="room" && !has_document_room_volume_fields(clone))
+                (void)architectural_footprint(clone);
+            else (void)makeAssemblyHostShape(candidate,clone.id);
+        }
+        return command;
     }
 
     std::pair<Command,std::string> makeIndependentAreaCloneCommand(
@@ -10860,8 +11076,22 @@ public:
     void showArchitecturalObjectTransformEditor() {
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
+        const auto authority = captureSourceEditAuthority(source);
         const auto original = selectedEntity();
-        const auto embedded = geometric_assembly_for_child(source, m_selected_id.toStdString());
+        std::optional<AssemblyDocumentInstance> embedded;
+        try {
+            embedded = embeddedAssemblyChild(source, context.selected_id.toStdString());
+            if (embedded && !geometric_assembly_for_child(source, context.selected_id.toStdString()))
+                throw std::invalid_argument("The embedded geometric assembly is unavailable.");
+            if (embedded && (source.entities().contains(context.selected_id.toStdString()) ||
+                annotation_child_exists(source,context.selected_id.toStdString())))
+                throw std::invalid_argument("The selected ID names distinct body/profile owners.");
+            if (embedded && (m_selected_ids.size()!=1 || m_selected_ids.front()!=context.selected_id))
+                throw std::invalid_argument("Select one unambiguous embedded assembly instance first.");
+        } catch (const std::exception& error) {
+            setError(QString::fromUtf8(error.what()));
+            return;
+        }
         if (!embedded && (!original || !can_transform_architectural_entity_type(original->type))) {
             setError(QStringLiteral("Select an editable architectural object first."));
             return;
@@ -10872,10 +11102,10 @@ public:
         dialog.setObjectName(QStringLiteral("architecturalTransformDialog"));
         dialog.setWindowTitle(QStringLiteral("Transform architectural object"));
         dialog.setModal(true);
-        dialog.resize(480, 390);
+        dialog.resize(480, 450);
         auto* layout = new QVBoxLayout(&dialog);
         auto* help = new QLabel(
-            QStringLiteral("Translation uses the current input units. Rotation is around the world Z axis; scale is uniform and positive. Apply commits one undoable semantic operation."),
+            QStringLiteral("Translation uses the current input units. Uniform positive scale and rotation around world Z precede horizontal/vertical mirrors about the world origin, then XYZ offset. Apply commits one undoable semantic operation."),
             &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
@@ -10900,6 +11130,20 @@ public:
         auto* scale = add_field(QStringLiteral("architecturalTransformScale"),
                                 QStringLiteral("Uniform scale"), QStringLiteral("1"));
         layout->addLayout(form);
+        auto* flip_horizontal = new QCheckBox(QStringLiteral("Mirror horizontally (world X)"), &dialog);
+        flip_horizontal->setObjectName(QStringLiteral("architecturalTransformFlipHorizontal"));
+        flip_horizontal->setAccessibleName(QStringLiteral("Mirror horizontally"));
+        layout->addWidget(flip_horizontal);
+        auto* flip_vertical = new QCheckBox(QStringLiteral("Mirror vertically (world Y)"), &dialog);
+        flip_vertical->setObjectName(QStringLiteral("architecturalTransformFlipVertical"));
+        flip_vertical->setAccessibleName(QStringLiteral("Mirror vertically"));
+        layout->addWidget(flip_vertical);
+        if (!embedded && original->type=="wall") {
+            for (auto* field : {flip_horizontal,flip_vertical}) {
+                field->setEnabled(false);
+                field->setToolTip(QStringLiteral("Mirror walls with the connected-wall plan Transform controls."));
+            }
+        }
         auto* clone = new QCheckBox(QStringLiteral("Create a transformed copy"), &dialog);
         clone->setObjectName(QStringLiteral("architecturalTransformClone"));
         layout->addWidget(clone);
@@ -10919,21 +11163,29 @@ public:
             try {
                 if (!m_document->is_editable())
                     throw std::invalid_argument("This document is read-only.");
-                if (!modalContextUnchanged(context) || document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot()))
+                if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
                     throw std::invalid_argument("The project or selection changed. Reopen the transform editor.");
                 if (embedded) {
-                    candidate_command = embeddedAssemblyTransformCommand(source, m_selected_id.toStdString(),
-                        parseArchitecturalTransform(rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()), clone->isChecked());
+                    candidate_command = embeddedAssemblyTransformCommand(source, context.selected_id.toStdString(),
+                        parseArchitecturalTransform(rotation->text(), offset_x->text(), offset_y->text(), offset_z->text(), scale->text()),
+                        clone->isChecked(),flip_horizontal->isChecked(),flip_vertical->isChecked());
                     (void)Document::preview_command(source, candidate_command->first);
                 } else {
-                    const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
-                        source, *original, rotation->text(), offset_x->text(), offset_y->text(),
-                        offset_z->text(), scale->text(), clone->isChecked());
-                    auto command = augmentAuthoredCommand(architecturalObjectTransformCommand(source,*original,transaction), source);
+                    auto [command, root] = [&]() -> std::pair<Command,std::string> {
+                        if (flip_horizontal->isChecked() || flip_vertical->isChecked())
+                            return architecturalObjectMirrorCommand(source,*original,
+                                parseArchitecturalTransform(rotation->text(),offset_x->text(),offset_y->text(),offset_z->text(),scale->text()),
+                                clone->isChecked(),flip_horizontal->isChecked(),flip_vertical->isChecked());
+                        const auto [transaction, target] = makeArchitecturalObjectTransformTransaction(
+                            source,*original,rotation->text(),offset_x->text(),offset_y->text(),
+                            offset_z->text(),scale->text(),clone->isChecked());
+                        return {augmentAuthoredCommand(architecturalObjectTransformCommand(source,*original,transaction),source),target};
+                    }();
                     const auto preview = Document::preview_command(source, command);
                     const auto preview_entity = preview.entities().find(root);
                     if (preview_entity == preview.entities().end()) throw std::invalid_argument("The transform preview did not produce its target object.");
-                    if (preview_entity->second.type != "assembly_instance") (void)decode_building_entity(preview_entity->second);
+                    if (can_recognize_building_entity_type(preview_entity->second.type))
+                        (void)decode_building_entity(preview_entity->second);
                     candidate_command = std::pair{std::move(command), root};
                 }
                 status->setText(QStringLiteral("Preview ready at model revision %1. Apply to commit %2.")
@@ -10942,6 +11194,7 @@ public:
                                                              : QStringLiteral("the object transform")));
                 apply->setEnabled(true);
             } catch (const std::exception& error) {
+                candidate_command.reset();
                 status->setText(QStringLiteral("Preview: %1").arg(QString::fromUtf8(error.what())));
                 apply->setEnabled(false);
             }
@@ -10952,8 +11205,11 @@ public:
         }
         QObject::connect(clone, &QCheckBox::toggled, &dialog,
                          [&update_preview](bool) { update_preview(); });
+        for (auto* field : {flip_horizontal,flip_vertical})
+            QObject::connect(field, &QCheckBox::toggled, &dialog,
+                             [&update_preview](bool) { update_preview(); });
         QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
-            if (!modalContextUnchanged(context) || document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot())) {
+            if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority)) {
                 update_preview();
                 return;
             }
@@ -10963,6 +11219,9 @@ public:
                 if (!changes || !changes->entity_changes.empty()) {
                     applyAuthoredCommand(candidate_command->first);
                     m_selected_id = id_from(candidate_command->second);
+                    // Every profile alias of this fresh semantic root is
+                    // selected by refresh; never retain the original's IDs.
+                    m_selected_ids = {m_selected_id};
                     refresh();
                 }
                 clearError();
@@ -11004,7 +11263,29 @@ public:
             (!siteCanvas(selection_canvas) && annotation_child_exists(source,primary_render_id.toStdString()));
         bool primary_assembly_alias{};
         try {
-            if (original) primary_assembly_alias=embeddedAssemblyChild(source,original->id).has_value();
+            const auto embedded = embeddedAssemblyChild(source,primary_render_id.toStdString());
+            primary_assembly_alias=embedded.has_value();
+            if (embedded && selection.size()==1 && selection.front()==primary_render_id) {
+                if (presentation_collision || source.entities().contains(primary_render_id.toStdString()) ||
+                    annotation_child_exists(source,primary_render_id.toStdString()))
+                    throw std::invalid_argument("A selected ID names distinct body/profile owners. Select an unambiguous assembly instance.");
+                const auto model=AssemblyModel::from_json(source.entities().at(embedded->assembly_catalog_id).properties.at("model"));
+                AssemblyExpansionBudget budget;
+                const auto expansion=model.expand(embedded->instance,budget);
+                if (expansion.profiles.empty() || selection_presentations.empty())
+                    throw std::invalid_argument("The selected embedded assembly has no available geometric profile.");
+                for (const auto& identity : selection_presentations) {
+                    if (identity.id!=primary_render_id || identity.type!=QStringLiteral("assembly_instance") ||
+                        identity.presentation_key.isEmpty() ||
+                        std::count_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& profile) {
+                            return identity.presentation_key==QString::fromStdString(json{
+                                {"part_path",profile.part_path},{"type_id",profile.type_id},{"profile_id",profile.profile.id}}.dump());
+                        })!=1)
+                        throw std::invalid_argument("A selected embedded profile has no unique canonical source identity.");
+                }
+                showArchitecturalObjectTransformEditor();
+                return;
+            }
         } catch (const std::exception& error) {
             setError(QString::fromUtf8(error.what()));
             return;
@@ -11314,10 +11595,6 @@ public:
                     const PlanarTransform transform{*group_pivot, angle * std::numbers::pi / 180.0,
                         horizontal, vertical,
                         {offset(offset_x->text()), offset(offset_y->text())}};
-                    if (!architectural_selection.empty() && clone->isChecked())
-                        throw std::invalid_argument("Copying a group containing architectural objects requires a complete independent architectural group copy command.");
-                    if (!architectural_selection.empty() && (horizontal || vertical))
-                        throw std::invalid_argument("A single-axis reflection of an architectural group is unavailable. Rotate and offset the complete group, or clear the reflection.");
                     ApplyEntityChanges presentation{source.revision(),{}, {},"Transform presentation group"};
                     if (!annotation_targets.empty() || !reference_targets.empty()) {
                         presentation=presentation_group_transform_command(source,annotation_targets,reference_targets,transform,source.revision());
@@ -11409,6 +11686,15 @@ public:
                                     throw std::invalid_argument("The complete numeric copy dependency graph exceeds the entity limit.");
                             }
                         }
+                        for (const auto& id : architectural_selection) {
+                            const auto graph=clipboard_entities_for_selection(source,id,kMaximumNumericSelectionGraphEntities);
+                            if (graph.empty()) throw std::invalid_argument("A selected architectural copy dependency graph exceeds the numeric selection limit.");
+                            for (const auto& entity : graph) {
+                                if (seed_ids.insert(entity.id).second) seeds.push_back(entity);
+                                if (seeds.size()>kMaximumNumericSelectionGraphEntities)
+                                    throw std::invalid_argument("The complete numeric copy dependency graph exceeds the entity limit.");
+                            }
+                        }
                         std::map<std::string,std::set<std::string,std::less<>>,std::less<>> children;
                         for (const auto& target : annotation_targets) children[target.owner_id].insert(target.child_id);
                         for (const auto& [owner,selected_children] : children)
@@ -11426,7 +11712,8 @@ public:
                     if (!architectural_selection.empty()) {
                         const auto architectural=architectural_group_transform_command(source,architectural_selection,
                             ArchitecturalGroupTransform{{group_pivot->x,group_pivot->y,0.0},
-                                {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0},
+                                {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0,
+                                transform.flip_horizontal,transform.flip_vertical},
                             new_id("architectural-group-transform"),source.revision());
                         if (architectural.expected_revision!=source.revision() || !architectural.asset_changes.empty())
                             throw std::invalid_argument("An architectural group transform must retain its captured revision and local assets.");
@@ -11497,7 +11784,11 @@ public:
                 std::vector<CanvasReference> references;
                 std::array<std::set<std::string, std::less<>>, 2> preview_ids;
                 std::optional<SnapshotPlanScene> proposed_scene;
-                std::set<std::string,std::less<>> physical_preview_ids(architectural_selection.begin(),architectural_selection.end());
+                std::array<std::set<std::string,std::less<>>,2> physical_preview_ids;
+                for (const auto& id : architectural_selection) {
+                    physical_preview_ids[0].insert(id);
+                    physical_preview_ids[1].insert(clone->isChecked() ? candidate_copy_ids.at(id) : id);
+                }
                 if (group) {
                     PlanSceneCaches caches;
                     proposed_scene=projectSnapshotPlanScene(proposed,presentation_options,caches);
@@ -11528,7 +11819,18 @@ public:
                     };
                     const auto before_physical=physical_index(*presentation_scene);
                     const auto after_physical=physical_index(*proposed_scene);
-                    const auto retain_physical_consequences=[&](const SnapshotPlanScene& scene,const auto& other) {
+                    if (clone->isChecked()) {
+                        // Retain every copied physical dependency on both sides,
+                        // including hidden hosted rails and fused roof joins.
+                        for (const auto& [id,copied_id] : candidate_copy_ids) {
+                            const auto original=source.entities().find(id);
+                            if (original==source.entities().end() ||
+                                (!architectural_root(original->second) && original->second.type!="roof_join")) continue;
+                            physical_preview_ids[0].insert(id);
+                            physical_preview_ids[1].insert(copied_id);
+                        }
+                    }
+                    const auto retain_physical_consequences=[&](const SnapshotPlanScene& scene,const auto& other,bool selected) {
                         std::map<PhysicalIdentity,std::size_t> occurrences;
                         for (const auto& item : scene.all_geometry) {
                             if (!physical(item)) continue;
@@ -11547,12 +11849,13 @@ public:
                             const auto before=source.entities().find(item.id.toStdString());
                             const auto after=proposed.entities().find(item.id.toStdString());
                             if (changed || (before!=source.entities().end() && after!=proposed.entities().end() && before->second!=after->second))
-                                physical_preview_ids.insert(item.id.toStdString());
+                                physical_preview_ids[selected ? 1 : 0].insert(item.id.toStdString());
                         }
                     };
-                    retain_physical_consequences(*presentation_scene,after_physical);
-                    retain_physical_consequences(*proposed_scene,before_physical);
-                    for (auto& ids : preview_ids) ids.insert(physical_preview_ids.begin(),physical_preview_ids.end());
+                    retain_physical_consequences(*presentation_scene,after_physical,false);
+                    retain_physical_consequences(*proposed_scene,before_physical,true);
+                    for (std::size_t side=0;side<preview_ids.size();++side)
+                        preview_ids[side].insert(physical_preview_ids[side].begin(),physical_preview_ids[side].end());
                 }
                 const auto add_owner = [&](const DocumentSnapshot& snapshot, const std::string& root, bool selected) {
                     auto& ids = preview_ids[selected ? 1 : 0];
@@ -11629,7 +11932,7 @@ public:
                                 before->second == after->second) {
                                 if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                                     const auto decoded=decode_boundary_dimension_entity(entity);
-                                    if (decoded.supported() && physical_preview_ids.contains(decoded.dimension->boundary_id)) add_seed(entity);
+                                    if (decoded.supported() && physical_preview_ids[selected ? 1 : 0].contains(decoded.dimension->boundary_id)) add_seed(entity);
                                 }
                                 continue;
                             }
@@ -11700,7 +12003,7 @@ public:
                         std::set<QString> admitted_artwork,admitted_references;
                         std::set<std::pair<QString,QString>> admitted_physical;
                         for (auto entity : scene.all_geometry) {
-                            if (!physical_preview_ids.contains(entity.id.toStdString())) continue;
+                            if (!physical_preview_ids[selected ? 1 : 0].contains(entity.id.toStdString())) continue;
                             if (!admitted_physical.emplace(entity.id,entity.presentation_key).second)
                                 throw std::invalid_argument("A physical consequence has an ambiguous canonical preview profile.");
                             entity.selected=selected;
@@ -11717,10 +12020,12 @@ public:
                             }
                             geometry.push_back(std::move(entity));
                         }
-                        for (const auto& id : architectural_selection)
+                        for (const auto& original_id : architectural_selection) {
+                            const auto id=selected && clone->isChecked() ? candidate_copy_ids.at(original_id) : original_id;
                             if (std::none_of(admitted_physical.begin(),admitted_physical.end(),[&](const auto& key) {return key.first.toStdString()==id;}))
                                 throw std::invalid_argument("A selected architectural root is unavailable in the complete canonical preview: "+id);
-                        for (const auto& id : physical_preview_ids) {
+                        }
+                        for (const auto& id : physical_preview_ids[selected ? 1 : 0]) {
                             const auto& other=selected ? *presentation_scene : *proposed_scene;
                             const bool existed=source.entities().contains(id) || std::any_of(presentation_scene->all_geometry.begin(),presentation_scene->all_geometry.end(),
                                 [&](const auto& item) {return item.id.toStdString()==id;});
@@ -11749,7 +12054,7 @@ public:
                             if (label.selected==selected) existing_labels.insert(plan_label_instance_key(label));
                         for (auto label : scene.all_labels) {
                             const auto render=render_id(label.id);
-                            const bool physical_label=std::any_of(physical_preview_ids.begin(),physical_preview_ids.end(),[&](const auto& id) {
+                            const bool physical_label=std::any_of(physical_preview_ids[selected ? 1 : 0].begin(),physical_preview_ids[selected ? 1 : 0].end(),[&](const auto& id) {
                                 return label.id==id_from(id) || label.id.startsWith(id_from(id)+QStringLiteral(":"));
                             });
                             if (!render && !physical_label && !preview_ids[selected ? 1 : 0].contains(label.id.toStdString())) continue;
@@ -11790,6 +12095,15 @@ public:
                 candidate_command = std::move(candidate);
                 status->clear();
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+            } catch (const Standard_Failure& error) {
+                candidate_command.reset();
+                preview->setEntities({});
+                preview->setLabels({});
+                preview->setReferences({});
+                const auto* message=error.GetMessageString();
+                status->setText(QString::fromUtf8(message && *message ? message :
+                    "The complete copied physical geometry could not be admitted."));
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             } catch (const std::exception& error) {
                 preview->setEntities({});
                 preview->setLabels({});
@@ -11831,7 +12145,10 @@ public:
                             if (!changes) throw std::invalid_argument("A selection copy requires its complete previewed command.");
                             for (const auto& change : changes->entity_changes) {
                                 if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id)) continue;
-                                if (geometry_root(change.entity) || change.entity.type=="reference_asset")
+                                // Joined-roof relations belong to the copied
+                                // graph, but the selectable roots are their
+                                // physical hosts.
+                                if (geometry_root(change.entity) || architectural_root(change.entity) || change.entity.type=="reference_asset")
                                     copied_selection.push_back(id_from(change.entity.id));
                                 if (change.entity.type==kAnnotationEntityType) {
                                     const auto state=decode_annotation_entity(change.entity);
@@ -16126,7 +16443,8 @@ public:
                     auto replacement = *std::find_if(current->model.instances().begin(),
                                                      current->model.instances().end(),
                         [&](const auto& candidate) { return candidate.id == id; });
-                    replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale};
+                    const auto mirrored_y = replacement.placement && replacement.placement->mirrored_y;
+                    replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale, mirrored_y};
                     const auto updated = current->model.with_instance(std::move(replacement));
                     if (apply_model(updated, QStringLiteral("Save assembly placement"))) {
                         populate();
@@ -22006,9 +22324,18 @@ public:
             throw std::invalid_argument("assembly placement transform is invalid");
         // This is the catalog's existing legacy copy transform. Physical
         // owner gestures remain rigid and never resize the owner's height.
+        auto placed_source = source;
+        if (placement.mirrored_y) {
+            gp_Trsf mirror;
+            mirror.SetMirror(gp_Ax2(gp_Pnt(0.0,0.0,0.0),gp_Dir(0.0,1.0,0.0)));
+            BRepBuilderAPI_Transform mirrored(placed_source,mirror,true);
+            if (!mirrored.IsDone() || mirrored.Shape().IsNull())
+                throw std::invalid_argument("assembly mirror transform failed");
+            placed_source = mirrored.Shape();
+        }
         gp_Trsf scale;
         scale.SetScale(gp_Pnt(0.0,0.0,0.0),placement.scale);
-        BRepBuilderAPI_Transform scaled(source,scale,true);
+        BRepBuilderAPI_Transform scaled(placed_source,scale,true);
         if (!scaled.IsDone() || scaled.Shape().IsNull()) throw std::invalid_argument("assembly scale transform failed");
         gp_Trsf rotate;
         rotate.SetRotation(gp_Ax1(gp_Pnt(0.0,0.0,0.0),gp_Dir(0.0,0.0,1.0)),placement.rotation_radians);
@@ -22104,7 +22431,7 @@ public:
         // another native solid generation after the scene was already built.
         for (const auto& profile:expansion.profiles) {
             const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
-                profile.transform.rotation_radians,profile.transform.scale};
+                profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
             auto outer=assembly_placement_boundary(profile.profile.outer,xy);
             segments.insert(segments.end(),outer.begin(),outer.end());
         }
@@ -22366,7 +22693,7 @@ public:
                             } else {
                                 const AssemblyPlacement xy{{},
                                     {profile->transform.translation_m.x,profile->transform.translation_m.y},
-                                    profile->transform.rotation_radians,profile->transform.scale};
+                                    profile->transform.rotation_radians,profile->transform.scale,profile->transform.mirrored_y};
                                 proposed.segments=assembly_placement_boundary(profile->profile.outer,xy);
                                 proposed.hit_segments=canonical;
                                 for (const auto& hole:profile->profile.holes)
@@ -26010,12 +26337,14 @@ public:
                                                 std::vector<Entity> graph,
                                                 bool include_constraints=true,
                                                 bool include_wall_roots=false,
-                                                std::size_t maximum_entities=kMaximumClipboardEntities) {
+                                                std::size_t maximum_entities=kMaximumClipboardEntities,
+                                                bool include_architectural_roots=false) {
         if (graph.size()>maximum_entities)
             throw std::invalid_argument("The complete selection dependency graph exceeds the entity limit.");
         if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity) {
                 return is_closed_boundary_entity(entity.type) || entity.type == "measurement_linework" ||
-                    (include_wall_roots && entity.type == "wall");
+                    (include_wall_roots && entity.type == "wall") ||
+                    (include_architectural_roots && can_transform_architectural_entity_type(entity.type));
             }))
             return graph;
         std::set<std::string, std::less<>> ids;
@@ -26064,6 +26393,38 @@ public:
             const auto entity = graph[cursor];
             if (is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework" || entity.type=="wall")
                 add_geometry(entity.id);
+            if (!include_architectural_roots) continue;
+            if (entity.type!="wall" && can_transform_architectural_entity_type(entity.type)) add_geometry(entity.id);
+            if (hosted_stair_railing(entity)) {
+                const auto host=stair_railing_host_id(decode_railing_properties(entity.id,entity.properties));
+                const auto found=snapshot.entities().find(host);
+                if (found==snapshot.entities().end() || !multi_flight_stair(found->second))
+                    throw std::invalid_argument("A copied hosted railing requires its complete persisted stair.");
+                add_geometry(host);
+            }
+        }
+        if (include_architectural_roots) {
+            // A join's geometry is supplied by all its roofs. Never publish a
+            // copied relation still attached to one of the original hosts.
+            for (const auto& [id,entity] : snapshot.entities()) {
+                if (entity.type!="roof_join") continue;
+                const auto join=parse_roof_join(entity.properties,id);
+                const bool touches=std::any_of(join.roof_ids.begin(),join.roof_ids.end(),[&](const auto& host) {return ids.contains(host);});
+                if (!touches) continue;
+                if (!std::all_of(join.roof_ids.begin(),join.roof_ids.end(),[&](const auto& host) {return ids.contains(host);}))
+                    throw std::invalid_argument("Copy a joined roof's complete host group together before cloning it.");
+                add(entity);
+            }
+            for (const auto& [id,entity] : snapshot.entities()) {
+                if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+                const auto target=entity.properties.find("target");
+                const auto owner=target!=entity.properties.end() && target->is_object()
+                    ? target->value("entity_id",std::string{}) : std::string{};
+                if (!ids.contains(owner)) continue;
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                add(entity);
+            }
         }
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != "constraint") continue;
@@ -43279,7 +43640,7 @@ private:
                             // outer/void loops for physical fill and picking.
                             const AssemblyPlacement xy{ {},
                                 {source.transform.translation_m.x, source.transform.translation_m.y},
-                                source.transform.rotation_radians, source.transform.scale };
+                                source.transform.rotation_radians, source.transform.scale, source.transform.mirrored_y };
                             preview.hit_segments = preview.segments;
                             preview.segments = assembly_placement_boundary(source.profile.outer, xy);
                             for (const auto& hole : source.profile.holes)

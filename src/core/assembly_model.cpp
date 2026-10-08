@@ -233,7 +233,7 @@ bool AssemblyProfile::operator==(const AssemblyProfile& other) const {
 AssemblyPoint3 transform_assembly_point(AssemblyPoint3 point,const AssemblyTransform& value) {
     transform(value);
     require(std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z),"assembly point must be finite");
-    const auto x=point.x*value.scale,y=point.y*value.scale,z=point.z*value.scale;
+    const auto x=point.x*value.scale,y=(value.mirrored_y ? -point.y : point.y)*value.scale,z=point.z*value.scale;
     require(std::isfinite(x) && std::isfinite(y) && std::isfinite(z),"assembly point scale overflow");
     const auto c=std::cos(value.rotation_radians),s=std::sin(value.rotation_radians);
     const AssemblyPoint3 result{c*x-s*y+value.translation_m.x,s*x+c*y+value.translation_m.y,z+value.translation_m.z};
@@ -243,22 +243,29 @@ AssemblyPoint3 transform_assembly_point(AssemblyPoint3 point,const AssemblyTrans
 AssemblyTransform compose_assembly_transform(const AssemblyTransform& parent,const AssemblyTransform& local) {
     transform(parent);transform(local);
     AssemblyTransform result{transform_assembly_point(local.translation_m,parent),
-        parent.rotation_radians+local.rotation_radians,parent.scale*local.scale};
+        parent.rotation_radians+(parent.mirrored_y ? -local.rotation_radians : local.rotation_radians),
+        parent.scale*local.scale,parent.mirrored_y!=local.mirrored_y};
     transform(result);return result;
 }
 nlohmann::json encode_assembly_transform(const AssemblyTransform& value) {
     transform(value);
-    return {{"translation_m",{value.translation_m.x,value.translation_m.y,value.translation_m.z}},
+    nlohmann::json result{{"translation_m",{value.translation_m.x,value.translation_m.y,value.translation_m.z}},
         {"rotation_radians",value.rotation_radians},{"scale",value.scale}};
+    if(value.mirrored_y)result["mirrored_y"]=true;
+    return result;
 }
 AssemblyTransform decode_assembly_transform(const nlohmann::json& value) {
     try {
-        fields(value,{"translation_m","rotation_radians","scale"});
+        if(value.is_object() && value.contains("mirrored_y")) {
+            fields(value,{"translation_m","rotation_radians","scale","mirrored_y"});
+            require(value.at("mirrored_y").is_boolean(),"assembly mirror parity must be boolean");
+        } else fields(value,{"translation_m","rotation_radians","scale"});
         const auto& p=value.at("translation_m");
         require(p.is_array() && p.size()==3 && p[0].is_number() && p[1].is_number() && p[2].is_number() &&
             value.at("rotation_radians").is_number() && value.at("scale").is_number(),"invalid assembly XYZ transform");
         AssemblyTransform result{{p[0].get<double>(),p[1].get<double>(),p[2].get<double>()},
-            value.at("rotation_radians").get<double>(),value.at("scale").get<double>()};
+            value.at("rotation_radians").get<double>(),value.at("scale").get<double>(),
+            value.contains("mirrored_y") && value.at("mirrored_y").get<bool>()};
         transform(result);return result;
     } catch(const nlohmann::json::exception& error) {throw std::invalid_argument(std::string("invalid assembly transform JSON: ")+error.what());}
 }
@@ -414,7 +421,7 @@ AssemblyExpansion AssemblyModel::expand(const AssemblyInstance& instance,Assembl
     for(const auto& change:instance.nested_overrides)changes.emplace(change.part_path,&change);
     AssemblyTransform root=instance.root_transform.value_or(AssemblyTransform{});
     if(instance.placement)root={{instance.placement->translation_m.x,instance.placement->translation_m.y,0},
-        instance.placement->rotation_radians,instance.placement->scale};
+        instance.placement->rotation_radians,instance.placement->scale,instance.placement->mirrored_y};
     std::function<void(const AssemblyType&,std::vector<std::string>,AssemblyTransform,const AssemblyPart*)> visit;
     visit=[&](const AssemblyType& type,std::vector<std::string> path,AssemblyTransform world,const AssemblyPart* part) {
         require(path.size()<32,"assembly graph depth budget exceeded");
@@ -554,6 +561,7 @@ nlohmann::json AssemblyModel::to_json() const {
                                       instance.placement->translation_m.y}},
                 {"rotation_radians", instance.placement->rotation_radians},
                 {"scale", instance.placement->scale}};
+            if(instance.placement->mirrored_y)value["placement"]["mirrored_y"]=true;
         }
         if(nested) {
             value["root_transform"]=instance.root_transform ? encode_assembly_transform(*instance.root_transform):nlohmann::json(nullptr);
@@ -625,7 +633,10 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
             std::optional<AssemblyPlacement> decoded_placement;
             if (has_placement) {
                 const auto& encoded = item.at("placement");
-                fields(encoded, {"host_entity_id", "translation_m", "rotation_radians", "scale"});
+                if(encoded.is_object() && encoded.contains("mirrored_y")) {
+                    fields(encoded, {"host_entity_id", "translation_m", "rotation_radians", "scale", "mirrored_y"});
+                    require(encoded.at("mirrored_y").is_boolean(),"assembly placement mirror parity must be boolean");
+                } else fields(encoded, {"host_entity_id", "translation_m", "rotation_radians", "scale"});
                 require(encoded.at("host_entity_id").is_string() &&
                         encoded.at("translation_m").is_array() &&
                         encoded.at("translation_m").size() == 2 &&
@@ -638,7 +649,8 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
                     {encoded.at("translation_m")[0].get<double>(),
                      encoded.at("translation_m")[1].get<double>()},
                     encoded.at("rotation_radians").get<double>(),
-                    encoded.at("scale").get<double>()};
+                    encoded.at("scale").get<double>(),
+                    encoded.contains("mirrored_y") && encoded.at("mirrored_y").get<bool>()};
             }
             AssemblyInstance instance{item.at("id").get<std::string>(), item.at("type_id").get<std::string>(),
                 item.at("property_overrides").get<Strings>(), item.at("material_overrides").get<Strings>(),

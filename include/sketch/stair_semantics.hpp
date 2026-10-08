@@ -30,6 +30,10 @@ struct StairConnectingLanding {
     double thickness{};
     StairTurn turn{StairTurn::straight};
     double return_gap{};
+    // Straight connecting flights align their far (+local Y) edges instead
+    // of their near edges. Version 4 persists true as straight_alignment=right;
+    // missing alignment is the unchanged left alignment of versions 2/3.
+    bool align_right{false};
 };
 struct StairFlight {
     std::string id;

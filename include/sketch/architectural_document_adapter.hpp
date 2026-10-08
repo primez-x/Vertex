@@ -107,6 +107,8 @@ struct ArchitecturalGroupTransform {
     Vec3 offset{};
     double rotation_z_radians{};
     double scale{1.0};
+    bool flip_horizontal{false};
+    bool flip_vertical{false};
 };
 inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 
@@ -115,8 +117,9 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 // lane instead; callers may merge non-wall changes into that complete command.
 // Render aliases/embedded profiles are not persisted targets. Caller retains
 // the complete source, view/selection and compatible Site-frame authority.
-// Proper Z yaw, XYZ offset and positive uniform scale are supported; reflection
-// and incomplete/future physical descriptors require a qualified family lane.
+// Positive uniform scale and Z yaw precede global horizontal/vertical flips
+// about the shared pivot, then XYZ offset. Mirrors leave world Z unchanged.
+// Incomplete/future physical descriptors require a qualified family lane.
 // Level-relative placements retain their bindings and share the world pivot.
 // A selected hosted railing requires its selected stair; selected/hidden
 // dependents follow the host once. Connected stair dimensions cannot scale.
