@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 wall-group movement and room consequences
+
+Room composition now retains an intact joint wall command, covering its original
+shared/per-owner translation and rigid semantics. Envelope 32/native 83/extraction
+81 protects that authority across every history event. Horizontal grouped canvas
+movement and numerical wall-group transforms retain the exact command and full
+prepared candidate/history before nested room review, preserve original source
+and selection/context fences, and publish one accepted event. Existing direct
+rigid children keep their previous authority. Uncaptured canvas movement that
+would affect rooms refuses instead of inventing a release proposal.
+
+Ordinary groups without a measured perimeter now create genuine per-owner joint
+authority before worker projection, including exact selected-wall offsets and
+qualified saved callout offsets. Singleton and complete-perimeter paths retain
+their previous semantics. Canvas/authority selections compare unique membership
+while retaining the authority's original order and primary; reverse Ctrl-click
+order cannot skip room consequences. Mismatched or duplicate membership refuses.
+
+Independent source review found and then approved corrections for the ordinary
+group producer and selection-order bypass. No further required P1/P2 source issue
+was proved. No builds, tests, probes, launches, packages or installations run.
+Compilation, interaction, cancellation, Undo and persistence remain unverified.
+The installed candidate stays unchanged. Canvas group rotation handles, mirrors,
+copies, mixed selections, Site room consequences and phase demolition remain
+separate implementation work.
+
 ### October 8 grouped wall Delete and Cut implementation
 
 Canonical physical-wall removal now accepts a captured wall-only multiselection
@@ -2515,7 +2541,8 @@ passes. No installed ACL, profile or firewall was changed.
    explicit connected curve construction and their atomic room reviews, including
    multi-context/plane completion, ordinary single-wall drag and the singleton
    numerical/canvas rotation integration, context-based single-wall deletion and
-   wall-only grouped Delete/Cut, are
+   wall-only grouped Delete/Cut and retained horizontal wall-group drag/numerical
+   transform room composition, are
    recorded above; do not restart them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent

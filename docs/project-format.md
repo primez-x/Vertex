@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v82
+# Vertex project formats v1 through v83
+
+## Joint wall movement and room review (v83)
+
+Native format 83 and JSON/assets extraction version 81 retain intact joint-wall
+envelope 17 beneath a physical-room review. A single room-context completion
+uses envelope 32; multi-context completion retains envelope 27. The floor applies
+throughout history, including after Undo or later edits. Existing direct rigid
+envelope 28 and grouped deletion envelope 31 keep their separate meanings.
+
+The child retains the original `JointTranslationIntent`, all selected source
+identities and every saved translation or rigid operator. Its ordinary admission
+independently reconstructs connected geometry, constraints, source-derived
+measurements, saved callouts and qualified presentation placements before room
+decisions are replayed. The room wrapper does not unwrap the joint proof, replace
+per-owner operators with a common transform or supply additional raw geometry.
+Every affected original room across contexts and effective planes remains
+explicitly covered in one final event.
+
+Eligibility requires physical-wall edit proofs, explicit joint intent/completion,
+selected partial walls, canonical version 17 and the existing 1 MiB event budget.
+Competing room/group/selection/specialized wrappers and actual asset mutation or
+asset-reference completion refuse. Genuine lower dimension, measured/exterior
+and position-only presentation receipts keep their original child meanings.
+
+This is a source contract. Compilation, interaction and persistence qualification
+remain pending.
 
 ## Grouped wall deletion with reviewed rooms (v82)
 

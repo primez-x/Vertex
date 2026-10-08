@@ -789,6 +789,7 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
         return encode_physical_wall_deletion_review_proof(source,geometry_command);
     if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_rigid_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_joint_review_command(geometry_command)) return command_to_json(geometry_command);
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if (!geometry || geometry->wall_edits.empty()) invalid("review requires a direct command with explicit wall edits");
     // Inspect typed lanes as well as the serialized discriminator: retained or
@@ -896,6 +897,36 @@ bool is_physical_wall_room_rigid_review_command(const Command& command) {
         // The existing wall-edit codec validates curved/straight rigid proof
         // meanings, and v21 validates one shared wall/stroke operator. Direct
         // v10/v11 decoding never consults room-review admission.
+        return command_to_json(command_from_json(proof)).dump()==proof.dump();
+    } catch (const std::exception&) { return false; }
+}
+
+bool is_physical_wall_room_joint_review_command(const Command& command) {
+    try {
+        const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!geometry || geometry->wall_edits.empty() || !geometry->joint_translation_completion ||
+            !geometry->joint_translation || geometry->joint_translation->partial_wall_ids.empty()) return false;
+        // Inspect typed markers before invoking the codec: a competing wrapper
+        // must not recursively borrow room authority or disappear from proof.
+        if (geometry->wall_split || geometry->wall_merge || geometry->exterior_corner_move ||
+            geometry->exterior_segment_resize || geometry->exterior_segment_arc ||
+            geometry->rigid_group_completion || geometry->rigid_group_transform ||
+            geometry->room_review_completion || !geometry->room_review_intent.is_null() ||
+            geometry->room_review_geometry_completion || !geometry->room_review_geometry_proof.is_null() ||
+            geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
+            geometry->selection_completion || !geometry->selection_entity_changes.empty() ||
+            geometry->wall_dimension_completion || geometry->disto_measurement_completion || geometry->disto_measurement ||
+            geometry->curve_construction_completion || geometry->supplemental_asset_reference_completion ||
+            !geometry->supplemental_asset_changes.empty()) return false;
+        if (std::any_of(geometry->wall_edits.begin(),geometry->wall_edits.end(),[](const auto& edit) {
+            return edit.version<1 || edit.version>5 || edit.curve_construction || edit.wall_classification;
+        })) return false;
+        // Do not strip the joint intent or reconstruct a common operator here.
+        // Existing v17 admission owns every lower geometry/dimension receipt
+        // and the separately source-qualified presentation consequences.
+        const auto proof=command_to_json(command);
+        if (proof.dump().size()>1024*1024 || proof.at("kind")!="apply_boundary_constraint_changes" ||
+            proof.at("version")!=17) return false;
         return command_to_json(command_from_json(proof)).dump()==proof.dump();
     } catch (const std::exception&) { return false; }
 }

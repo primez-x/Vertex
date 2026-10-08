@@ -70,8 +70,9 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 [[nodiscard]] PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomCorrespondenceReport& report,
     const PhysicalWallRoomReviewIntent& intent);
-// A direct ordinary/rigid wall-edit, profile change or curve command is admitted on a
-// detached copy. Retained rooms remain available for correspondence review.
+// A direct ordinary/rigid wall-edit, intact joint wall command, profile change
+// or curve command is admitted on a detached copy. Retained rooms remain
+// available for correspondence review.
 // Ordinary wall-bearing proofs require unwrapped v2/v3/v4/v5/v6/v7/v11;
 // curve proofs require direct v23. Profile changes require one existing-wall raw v1
 // upsert or a completed v6/v7 physical upsert with exterior redraws. Ordinary
@@ -85,6 +86,12 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // This source-independent predicate checks the bounded canonical child shape;
 // Document preview still independently admits all geometry and consequences.
 [[nodiscard]] bool is_physical_wall_room_rigid_review_command(const Command& command);
+// An intact bounded v17 requires actual wall edits and selected physical wall
+// IDs. Shared translation and per-owner v3/v4 operators retain the original
+// joint codec and source replay. Lower physical/exterior/measured/dimension
+// receipts and position-only presentation proofs keep that child authority;
+// competing intents and asset mutation/reference lanes do not qualify.
+[[nodiscard]] bool is_physical_wall_room_joint_review_command(const Command& command);
 // One existing wall and its supported hosted openings, saved dimensions and
 // attached constraints are removed together. Known phase/view/presentation
 // memberships are reconstructed from the exact original source; room owners

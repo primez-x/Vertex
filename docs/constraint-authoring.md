@@ -160,6 +160,19 @@ wall or room state is published. Cancel preserves the drawing and clipboard;
 successful Cut writes its prepared clipboard payload after the complete event.
 Mixed selections and semantic phase demolition keep their separate contracts.
 
+Connected wall-group movement uses its intact joint envelope 17 before room
+review. Shared translations, saved per-owner offsets and rigid operators retain
+their actual selected source identities and independently replayed constraint
+consequences. Room completion uses envelope 32, or batch 27, with native
+83/extraction 81. It adds explicit room assignments after ordinary admission;
+it cannot supply unrelated raw geometry or rewrite the saved operators.
+Ordinary wall-only groups use the per-owner translation lane with explicit wall
+offsets before worker projection; they do not borrow a rigid measured owner or
+gain joint authority at release. Independently selected saved callouts carry
+their own qualified placement offsets. Selected membership is compared without
+requiring Ctrl-click order to match canvas presentation order; duplicate or
+different membership refuses while the original primary stays authoritative.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

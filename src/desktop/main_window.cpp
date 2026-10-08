@@ -5308,6 +5308,10 @@ class MainWindow::Impl {
         double dpr{};
         std::uint64_t navigation_generation{};
         bool had_focus{};
+        QFont font;
+        int dpi_x{},dpi_y{};
+        std::vector<CanvasEntityPresentationIdentity> selected_presentations;
+        std::vector<CanvasLabelPresentationIdentity> selected_labels;
     };
     struct SelectionMoveIntent {
         QStringList ids;
@@ -5399,6 +5403,7 @@ class MainWindow::Impl {
         SelectionMoveIntent intent;
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
+        Command command;
     };
     struct HostedLibraryDragInput {
         std::shared_ptr<const DocumentSnapshot> source;
@@ -5557,6 +5562,7 @@ class MainWindow::Impl {
         std::shared_ptr<const OrdinaryGeometryTransformCapture> ordinary_transform_capture;
         std::optional<OrdinaryGeometryTransformIntent> ordinary_transform_intent;
         std::shared_ptr<std::optional<Command>> ordinary_transform_command;
+        std::shared_ptr<std::optional<Command>> plan_move_command;
     };
 
 public:
@@ -8678,6 +8684,46 @@ public:
             std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="wall";}) &&
             std::any_of(changes.begin(),changes.end(),[](const auto& change){return change.kind==EntityChangeKind::upsert &&
                 can_recognize_boundary_dimension_entity_type(change.entity.type);});
+        const bool plain_wall_group=model_ids.size()>1 &&
+            std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+                return source.entities().at(id.toStdString()).type=="wall";
+            }) && (partial_wall_callouts || std::none_of(graph.begin(),graph.end(),[](const auto& item) {
+                return is_closed_boundary_entity(item.type) || item.type=="measurement_linework";
+            })) && std::all_of(changes.begin(),changes.end(),[](const auto& change) {
+                return change.kind==EntityChangeKind::upsert && can_recognize_boundary_dimension_entity_type(change.entity.type);
+            });
+        if (plain_wall_group) {
+            // Capture genuine per-owner joint authority before projection. A
+            // wall-only group has no rigid measured owner to satisfy the legacy
+            // joint lane, and release must never substitute a different proof.
+            JointTranslationIntent joint;
+            joint.offset=offset;
+            joint.per_owner_translation_completion=true;
+            joint.per_target_presentation_completion=true;
+            for (const auto& id:model_ids) {
+                joint.partial_wall_ids.push_back(id.toStdString());
+                joint.owner_translations.push_back({id.toStdString(),offset});
+            }
+            for (const auto& change:changes) {
+                const auto& original=source.entities().at(change.entity.id);
+                const auto decoded=decode_boundary_dimension_entity(original);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto expected=*decoded.dimension;
+                expected.text_position={expected.text_position.x+offset.x,expected.text_position.y+offset.y};
+                expected.placement=BoundaryDimensionPlacement::manual;
+                expected.automatic_placement_version.reset();
+                if (encode_boundary_dimension_entity(expected,&original)!=change.entity)
+                    throw std::invalid_argument("A callout move cannot change its target, styling or metadata.");
+                joint.dimension_ids.push_back(change.entity.id);
+                joint.dimension_translations.push_back({change.entity.id,offset});
+            }
+            ConstraintAuthoringIntent intent;
+            intent.joint_translation=std::move(joint);
+            intent.message="Move walls and connected corners";
+            const auto preview=preview_constraint_authoring(source,intent);
+            if (!preview.accepted()) throw std::invalid_argument(movement_error(preview));
+            return append_presentations(constraint_authoring_verified_command(source,preview,nullptr));
+        }
         if(partial_wall_callouts) {
             // Complete perimeter promotion owns source translation above. The
             // remaining partial wall selection keeps its existing connected
@@ -13210,15 +13256,22 @@ public:
             if (supported_selection) {
                 if (!candidate_command || !candidate_snapshot) return;
                 try {
-                    if (!group && original->type == "wall" && authority.selection.size() == 1 &&
+                    const auto review_primary=authority.context.selected_id.toStdString();
+                    const bool wall_selection=physicalWallRoomReviewSelection(source,authority.selection,review_primary);
+                    if (wall_selection &&
                         !clone->isChecked() && !flip_horizontal->isChecked() && !flip_vertical->isChecked() &&
                         !siteCanvas(selection_canvas) &&
-                        affectedPhysicalWallRooms(source, candidate_snapshot->entities(), original->id) != 0) {
+                        affectedPhysicalWallRooms(source, candidate_snapshot->entities(), review_primary) != 0) {
                         const auto retained = *candidate_command;
                         const auto admitted = *candidate_snapshot;
+                        if (retained.second!=review_primary ||
+                            fullSnapshotDigest(Document::preview_command(source,retained.first))!=fullSnapshotDigest(admitted))
+                            throw std::invalid_argument("The wall transform's admitted command or history changed.");
                         const auto generation = input_generation;
                         const auto values = input_values();
                         const auto input_fence = [&] {
+                            if (!context_current())
+                                throw std::invalid_argument(lastError().toStdString());
                             if (generation != input_generation || values != input_values() || clone->isChecked() ||
                                 flip_horizontal->isChecked() || flip_vertical->isChecked() || preview_debounce.isActive())
                                 throw std::invalid_argument("The entered transform changed during room review. Preview it again.");
@@ -13227,12 +13280,17 @@ public:
                         buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                         room_review_active = true;
                         const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, admitted, retained.first,
-                            original->id, authority, &dialog, input_fence);
+                            review_primary, authority, &dialog, input_fence);
                         room_review_active = false;
                         if (!reviewed) { clearError(); update_preview(); return; }
                         input_fence();
-                        applyDocumentCommand(*reviewed);
+                        applyAuthoredCommand(*reviewed);
                         m_selected_id = id_from(retained.second);
+                        if (group) {
+                            m_selected_ids=selection;
+                            m_selected_ids.removeAll(m_selected_id);
+                            m_selected_ids.push_back(m_selected_id);
+                        }
                         clearError(); refresh(); dialog.accept(); return;
                     }
                     const auto* changes = std::get_if<ApplyEntityChanges>(&candidate_command->first);
@@ -23006,19 +23064,26 @@ public:
                 const auto preview = preview_constraint_authoring(source, intent);
                 requireAcceptedConstraintPreview(preview);
                 if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The move source changed.");
-                if (ids.size() == 1 && model_ids.size() == 1 && (!canvas || !siteCanvas(canvas))) {
+                const auto primary=authority.context.selected_id.toStdString();
+                if ((!canvas || !siteCanvas(canvas)) &&
+                    physicalWallRoomReviewSelection(source,authority.selection,primary)) {
+                    if (!sameSelectionMembership(ids,authority.selection))
+                        throw std::invalid_argument("The wall move selection differs from its captured original objects.");
                     std::optional<DocumentSnapshot> candidate;
-                    const auto command = constraint_authoring_verified_command(source, preview, &candidate);
+                    const auto command = model_ids.size()>1
+                        ? makeSelectionGeometryTranslationCommand(source,model_ids,model_delta)
+                        : constraint_authoring_verified_command(source,preview,&candidate);
+                    if (!candidate) candidate=Document::preview_command(source,command);
                     if (!candidate) throw std::invalid_argument("The wall move has no admitted geometry candidate.");
-                    if (affectedPhysicalWallRooms(source, candidate->entities(), model_ids.front().toStdString()) != 0) {
+                    if (affectedPhysicalWallRooms(source, candidate->entities(), primary) != 0) {
                         if (canvas)
                             throw std::invalid_argument("This wall drag has no retained horizontal-plan proposal for room review. Start the move again in a horizontal plan.");
                         const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, *candidate, command,
-                            model_ids.front().toStdString(), authority, owner);
+                            primary, authority, owner);
                         if (!reviewed) { clearError(); refreshInspector(); return false; }
                         // The review retains the exact admitted child and all
                         // room decisions; publish one complete command.
-                        applyDocumentCommand(*reviewed);
+                        applyAuthoredCommand(*reviewed);
                         clearError(); refresh(); return true;
                     }
                 }
@@ -24936,6 +25001,7 @@ public:
         const auto rotation_command=request.physical_rotation_command;
         const auto move_selection_ids=request.move_selection_ids;
         const auto plan_move=request.plan_move;
+        const auto plan_move_command=request.plan_move_command;
         const auto plan_move_model_plan_labels=request.plan_move_model_plan_labels;
         const auto move_references=request.move_references;
         const auto component_sources=request.component_sources;
@@ -24947,7 +25013,7 @@ public:
         const auto ordinary_intent=request.ordinary_transform_intent;
         const auto ordinary_command=request.ordinary_transform_command;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,plan_move_model_plan_labels,move_references,component_sources,edit_source,prepared_move,presentation_capture,presentation_intent,ordinary_capture,ordinary_intent,ordinary_command]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate,rigid_transform,endpoint_command,site_input,axis_scales,axis_angle,axis_command,site_wall_move,rotation_command,move_selection_ids,plan_move,plan_move_command,plan_move_model_plan_labels,move_references,component_sources,edit_source,prepared_move,presentation_capture,presentation_intent,ordinary_capture,ordinary_intent,ordinary_command]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (ordinary_capture && ordinary_intent && prepared_move) {
@@ -25056,6 +25122,8 @@ public:
                             if (cancellation.is_cancelled()) result->reset();
                         }
                     } else if (plan_move && prepared_move) {
+                        if (!plan_move_command)
+                            throw std::invalid_argument("The selection move has no retained command output.");
                         // Native preparation and complete source consequences
                         // stay in this worker. A zero request bypasses codecs
                         // which otherwise reject an unchanged constraint solve.
@@ -25076,6 +25144,7 @@ public:
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
                                 view_context,label_font,nullptr,component_sources.get());
                             if (*result && !cancellation.is_cancelled()) {
+                                *plan_move_command=command;
                                 retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,plan_move->ids);
                                 if (move_references) for (const auto& reference:*move_references) {
                                     if (!plan_move->ids.contains(reference.id)) continue;
@@ -26359,7 +26428,11 @@ public:
             return center.x==capture->center.x && center.y==capture->center.y &&
                 capture->canvas->viewScale()==capture->zoom && capture->canvas->size()==capture->size &&
                 capture->canvas->devicePixelRatioF()==capture->dpr &&
-                capture->canvas->navigationGeneration()==capture->navigation_generation;
+                capture->canvas->navigationGeneration()==capture->navigation_generation &&
+                capture->canvas->font()==capture->font && capture->canvas->logicalDpiX()==capture->dpi_x &&
+                capture->canvas->logicalDpiY()==capture->dpi_y &&
+                capture->canvas->selectedEntityPresentations()==capture->selected_presentations &&
+                capture->canvas->selectedLabelPresentations()==capture->selected_labels;
         } catch (...) { return false; }
     }
 
@@ -26407,8 +26480,7 @@ public:
 
     bool commitPlanMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
         const auto capture=m_plan_move_capture;
-        // Consume the stored ticket even when the release fails a fence.
-        // A rejected release cannot leave an admitted candidate reusable.
+        // A release consumes its stored proposal even if a later fence refuses.
         const auto preview=std::move(m_plan_move_preview);
         m_plan_move_preview.reset();
         if (!planMoveCaptureCurrent(capture) || canvas!=capture->canvas || ids!=m_wall_move_ids ||
@@ -26424,34 +26496,38 @@ public:
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
         const auto source=m_wall_move_source;
         const auto authority=m_wall_move_authority;
-        const auto selected=ids.size()==1 ? source->entities().find(ids.front().toStdString()) : source->entities().end();
-        if (selected!=source->entities().end() && selected->second.type=="wall") {
-            const auto candidate=[&] {
-                if (edit_source->workspace) {
-                    if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
-                        throw std::invalid_argument("The wall move's recovery authority changed.");
-                    return prepared->workspace->preview();
-                }
-                if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
-                    throw std::invalid_argument("The wall move's document authority changed.");
-                return prepared->document->preview();
-            }();
-            if (affectedPhysicalWallRooms(*source, candidate.entities(), selected->first) != 0) {
-                if (candidate.revision()==source->revision() || candidate.history().empty() ||
-                    !candidate.history().back().boundary_constraint_changes)
-                    throw std::invalid_argument("The wall move has no retained ordinary geometry command for room review.");
-                const auto& retained=*candidate.history().back().boundary_constraint_changes;
-                if (retained.wall_edits.empty() || retained.rigid_wall_transform_completion ||
-                    retained.rigid_group_completion || retained.rigid_group_transform ||
-                    retained.joint_translation_completion || retained.joint_translation ||
-                    std::any_of(retained.wall_edits.begin(),retained.wall_edits.end(),[](const auto& edit) {
-                        return (edit.version!=1 && edit.version!=2 && edit.version!=3) ||
-                            edit.rigid_transform || edit.curve_construction || edit.wall_classification;
-                    }))
-                    throw std::invalid_argument("The retained wall move is not an ordinary translation eligible for this room review.");
-                const Command command=retained;
+        const auto candidate=[&] {
+            if (edit_source->workspace) {
+                if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
+                    throw std::invalid_argument("The wall move's recovery authority changed.");
+                return prepared->workspace->preview();
+            }
+            if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
+                throw std::invalid_argument("The wall move's document authority changed.");
+            return prepared->document->preview();
+        }();
+        const auto command=preview->command;
+        if (fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(candidate))
+            throw std::invalid_argument("The wall move's admitted command or history changed.");
+        const auto primary=authority->context.selected_id.toStdString();
+        if (physicalWallRoomReviewSelection(*source,authority->selection,primary)) {
+            if (!sameSelectionMembership(ids,authority->selection))
+                throw std::invalid_argument("The wall move selection differs from its captured original objects.");
+            if (affectedPhysicalWallRooms(*source, candidate.entities(), primary) != 0) {
                 const auto source_publication=m_plan_publication_source;
-                const auto move_fence=[&, capture, authority, edit_source, source_publication] {
+                const auto site_publication=m_site_publication_source;
+                const auto site_generation=m_site_edit_generation;
+                const auto site_publication_generation=m_site_publication_generation;
+                const auto native_publication=m_nativeModelView ? m_nativeModelView->preparationSourceSnapshot() : nullptr;
+                const auto original_job=[&](const PendingVertexPreview& request) {
+                    return request.plan_move_capture==capture && request.canvas==canvas && request.source==source &&
+                        request.authority==authority && request.serial==preview->serial && request.plan_move &&
+                        request.plan_move->ids==ids && request.model_edit_source==edit_source &&
+                        request.model_edit_prepared==prepared && request.plan_move_command &&
+                        *request.plan_move_command &&
+                        command_to_json(**request.plan_move_command)==command_to_json(command);
+                };
+                const auto move_fence=[&] {
                     // The release ticket is consumed before the modal. Focus
                     // and gesture serial may change; original source, recovery
                     // authority and the displayed view remain binding.
@@ -26461,11 +26537,24 @@ public:
                         capture->canvas->viewScale()!=capture->zoom || capture->canvas->size()!=capture->size ||
                         capture->canvas->devicePixelRatioF()!=capture->dpr ||
                         capture->canvas->navigationGeneration()!=capture->navigation_generation ||
+                        capture->canvas->font()!=capture->font || capture->canvas->logicalDpiX()!=capture->dpi_x ||
+                        capture->canvas->logicalDpiY()!=capture->dpi_y ||
+                        capture->canvas->selectedEntityPresentations()!=capture->selected_presentations ||
+                        capture->canvas->selectedLabelPresentations()!=capture->selected_labels ||
                         capture->canvas->entitiesMovePreviewPending() || !capture->canvas->entitiesMovePreview().empty() ||
                         m_plan_move_capture || m_plan_move_preview || m_plan_endpoint_capture || m_model_move_edit_source ||
                         m_wall_move_source || m_wall_move_authority || m_vertex_preview_source || m_vertex_preview_authority ||
+                        m_ordinary_transform_capture || m_ordinary_transform_preview || m_ordinary_transform_intent ||
+                        m_presentation_transform_capture || m_presentation_transform_preview || m_presentation_transform_intent ||
+                        m_entity_transform_source || m_entity_transform_context || m_entity_transform_prepared ||
+                        m_entity_transform_edit_source || m_entity_transform_command || m_entity_transform_viewport ||
+                        m_entity_transform_site_capture || m_wall_move_site_capture || m_site_wall_move_preview ||
                         m_pending_vertex_preview ||
-                        (m_running_vertex_preview && m_running_vertex_preview->plan_move_capture!=capture) ||
+                        (m_running_vertex_preview && !original_job(*m_running_vertex_preview)) ||
+                        m_pending_opening_preview || m_running_opening_preview || m_opening_preview_source ||
+                        site_publication!=m_site_publication_source || site_generation!=m_site_edit_generation ||
+                        site_publication_generation!=m_site_publication_generation ||
+                        (m_nativeModelView && native_publication!=m_nativeModelView->preparationSourceSnapshot()) ||
                         source_publication!=m_plan_publication_source || !sourceEditAuthorityCurrent(*authority))
                         throw std::invalid_argument("The captured wall move view or proposal changed during room review.");
                     if (edit_source->mirror &&
@@ -26473,12 +26562,12 @@ public:
                         throw std::invalid_argument("The project's save or recovery state changed during room review.");
                 };
                 if (m_pending_vertex_preview) {
-                    if (m_pending_vertex_preview->plan_move_capture!=capture)
+                    if (!original_job(*m_pending_vertex_preview))
                         throw std::invalid_argument("Another geometry proposal is pending; start the wall move again.");
                     m_pending_vertex_preview.reset();
                 }
                 if (m_running_vertex_preview) {
-                    if (m_running_vertex_preview->plan_move_capture!=capture)
+                    if (!original_job(*m_running_vertex_preview))
                         throw std::invalid_argument("Another geometry preview is running; start the wall move again.");
                     (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
                 }
@@ -26488,13 +26577,19 @@ public:
                 m_wall_move_source.reset(); m_wall_move_authority.reset();
                 m_wall_move_frame.reset(); m_wall_move_ids.clear();
                 m_vertex_preview_source.reset(); m_vertex_preview_authority.reset();
+                m_vertex_preview_scene.reset(); m_vertex_preview_eligible.reset(); m_vertex_preview_labels.reset();
+                m_vertex_preview_appraisal_area_ids.reset(); m_vertex_preview_label_footprints.reset();
+                m_vertex_preview_component_bounds.reset(); m_vertex_preview_components.reset();
+                m_vertex_preview_references.reset(); m_vertex_preview_view_context.reset();
+                m_vertex_preview_canvas.clear(); m_vertex_preview_document.reset();
+                canvas->setEntities(canvas->entities());
                 const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,candidate,command,
-                    selected->first,*authority,owner,move_fence);
+                    primary,*authority,owner,move_fence);
                 if (!reviewed) { clearError(); refreshInspector(); return false; }
                 move_fence();
                 // The old prepared ticket is never published beside the
                 // accepted composite, which retains its complete authored child.
-                applyDocumentCommand(*reviewed);
+                applyAuthoredCommand(*reviewed);
                 clearError(); refresh(); return true;
             }
         }
@@ -26556,8 +26651,9 @@ public:
                 m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,{}, {}, {},
                 m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
             request.authority=m_wall_move_authority;
-            request.label_font=canvas->font();
+            request.label_font=capture->font;
             request.plan_move=SelectionMoveIntent{ids,local,delta};
+            request.plan_move_command=std::make_shared<std::optional<Command>>();
             request.plan_move_model_plan_labels=m_wall_move_frame.has_value() && canvas==m_architecturalCanvas;
             request.move_references=m_vertex_preview_references;
             request.plan_move_capture=capture;
@@ -26952,9 +27048,10 @@ public:
                  (!request.model_edit_prepared->workspace || !request.model_edit_prepared->mirror))))
                 { reject(request);continue; }
             if (request.plan_move) {
-                if (!request.plan_move_capture) { reject(request);continue; }
+                if (!request.plan_move_capture || !request.plan_move_command || !*request.plan_move_command)
+                    { reject(request);continue; }
                 m_plan_move_preview=PlanMovePreviewCommand{request.plan_move_capture,request.serial,
-                    *request.plan_move,request.model_edit_source,request.model_edit_prepared};
+                    *request.plan_move,request.model_edit_source,request.model_edit_prepared,**request.plan_move_command};
             }
             if (request.site_wall_move) {
                 if (!request.site_wall_move_capture) { reject(request); continue; }
@@ -43674,7 +43771,8 @@ private:
                     m_model_move_edit_source=captureCanvasEditSource();
                     m_plan_move_capture=std::make_shared<TransformViewportCapture>(TransformViewportCapture{
                         canvas,canvas->viewCenter(),canvas->viewScale(),canvas->size(),canvas->devicePixelRatioF(),
-                        canvas->navigationGeneration(),canvas->hasFocus()});
+                        canvas->navigationGeneration(),canvas->hasFocus(),canvas->font(),canvas->logicalDpiX(),
+                        canvas->logicalDpiY(),canvas->selectedEntityPresentations(),canvas->selectedLabelPresentations()});
                 }
                 if (siteCanvas(canvas) && !m_wall_move_ids.isEmpty()) {
                     auto input=captureSitePlanPreviewInput(canvas,m_wall_move_ids,true);
@@ -53747,6 +53845,31 @@ public:
         std::string selected_wall_id;
     };
 
+    static bool sameSelectionMembership(const QStringList& first, const QStringList& second) {
+        if (first.size()!=second.size()) return false;
+        const std::set<QString> first_ids(first.begin(),first.end());
+        const std::set<QString> second_ids(second.begin(),second.end());
+        return first_ids.size()==static_cast<std::size_t>(first.size()) &&
+            second_ids.size()==static_cast<std::size_t>(second.size()) && first_ids==second_ids;
+    }
+
+    bool physicalWallRoomReviewSelection(const DocumentSnapshot& source, const QStringList& selection,
+        const std::string& primary) const {
+        if (selection.isEmpty() || !selection.contains(QString::fromStdString(primary))) return false;
+        std::set<std::string> walls;
+        for (const auto& id : selection) {
+            const auto found=source.entities().find(id.toStdString());
+            if (found==source.entities().end() || found->second.type!="wall" ||
+                annotation_child_exists(source,id.toStdString()) || embeddedAssemblyChild(source,id.toStdString()) ||
+                !walls.insert(found->first).second) return false;
+            Wall wall;
+            std::string diagnostic;
+            if (!read_document_wall(resolve_vertical_placement(source.entities(),found->second),{},wall,diagnostic))
+                return false;
+        }
+        return true;
+    }
+
     static std::vector<PhysicalWallRoomReviewGroup> affectedPhysicalWallRoomGroups(const DocumentSnapshot& source,
         const std::map<std::string, Entity, std::less<>>& candidate, const std::string& selected_wall_id,
         bool allow_removal = false) {
@@ -53873,10 +53996,15 @@ public:
                 authority.selection.contains(authority.context.selected_id) &&
                 authority.context.selected_id == QString::fromStdString(selected_wall_id);
         }
+        const bool grouped_geometry = !deletion && authority.selection.size()>1;
         const bool selection_matches = deletion ? deletion_selection
-            : authority.selection.size() == 1 &&
-                authority.context.selected_id == QString::fromStdString(selected_wall_id) &&
-                authority.selection.front() == QString::fromStdString(selected_wall_id);
+            : authority.context.selected_id == QString::fromStdString(selected_wall_id) &&
+                (grouped_geometry
+                    ? physicalWallRoomReviewSelection(source,authority.selection,selected_wall_id) &&
+                        (is_physical_wall_room_rigid_review_command(geometry_command) ||
+                         is_physical_wall_room_joint_review_command(geometry_command))
+                    : authority.selection.size() == 1 &&
+                        authority.selection.front() == QString::fromStdString(selected_wall_id));
         const auto current_source = [&] {
             if (!sourceEditAuthorityUnchanged(authority) || !selection_matches ||
                 hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
@@ -53887,7 +54015,7 @@ public:
         (void)current_source();
         // Delegate direct-command eligibility to the same core admission used
         // by the room dialog. Never rebuild the already accepted wall intent.
-        if ((deletion && fullSnapshotDigest(derived) != fullSnapshotDigest(candidate)) ||
+        if (((deletion || grouped_geometry) && fullSnapshotDigest(derived) != fullSnapshotDigest(candidate)) ||
             entity_map_digest(derived.entities()) != entity_map_digest(candidate.entities()) || derived.assets() != candidate.assets())
             throw std::invalid_argument("The room review geometry differs from the admitted wall proposal.");
         const auto groups = affectedPhysicalWallRoomGroups(source, derived.entities(), selected_wall_id, deletion);
