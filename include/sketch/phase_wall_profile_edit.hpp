@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/quantity.hpp"
+#include <set>
 
 namespace sketch {
 
@@ -33,6 +34,13 @@ struct WallProfileEditIntent {
 // preserve the exact original entity.
 [[nodiscard]] Entity replay_wall_profile_entity(
     const Entity& source, const WallProfileEditIntent& intent);
+
+// Admit actual saved-active wall solids, every hosted cut/assembly and affected
+// fused joins from a complete entity map. Derived solids are discarded. Used
+// by profile/opening replay and detached geometry preview preparation.
+void validate_active_wall_physical_dependencies(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::set<std::string, std::less<>>& affected_wall_ids);
 
 // Requires the actual complete copied source, after qualified phase identity
 // mapping. Resolves saved-active scope; rejects inactive/duplicate targets.

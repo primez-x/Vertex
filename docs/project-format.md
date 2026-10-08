@@ -32,6 +32,14 @@ Multi-registry, mixed-object and broader property/lifecycle changes need their
 own completion paths. Reader floors cover retained and composed intents after
 Undo. This source has not been compiled or qualified in the installed app.
 
+Canvas preview preparation also uses the source-bound replacement intent before
+the original geometry solve. Its detached physical map is an ephemeral value,
+not a DocumentSnapshot or history entry. Presentation aliases use captured
+original IDs while the real copied entity/child IDs remain fresh. Generic edit
+publication refuses unfinished room stages; release must complete the same typed
+intent and full source/recovery/view fences before ordinary final admission.
+Preview values never certify unreviewed room or appraisal calculations.
+
 ## Proposed replacements for shared baseline walls (v87)
 
 Native format 87 and JSON/assets extraction version 85 retain envelope 34 with

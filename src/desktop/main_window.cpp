@@ -32,6 +32,8 @@
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_wall_replacement_request.hpp"
+#include "sketch/phase_wall_canvas_proposal.hpp"
+#include "sketch/phase_wall_canvas_projection.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
@@ -4021,17 +4023,6 @@ BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
     throw std::invalid_argument("unknown architectural view kind");
 }
 
-struct ArchitecturalViewContext {
-    BuildingViewFrame frame;
-    BuildingViewDepth depth;
-    ViewPresentation presentation;
-    std::vector<std::string> object_ids;
-    std::string view_id;
-    std::vector<SectionOverlay> overlays;
-    std::optional<BuildingViewCrop> crop;
-    bool restrict_to_objects{false};
-};
-
 ArchitecturalViewContext architectural_view_context(const CoordinatedView& view);
 
 bool horizontal_plan_frame(const BuildingViewFrame& frame) {
@@ -4311,13 +4302,7 @@ bool clip_plan_entity(CanvasEntity& entity, const Bounds2& crop) {
 }
 
 bool analytical_plan_context(BuildingViewKind kind, const ArchitecturalViewContext& context) {
-    const auto& frame = context.frame;
-    return kind == BuildingViewKind::plan &&
-        frame.origin.x == 0.0 && frame.origin.y == 0.0 && frame.origin.z == 0.0 &&
-        frame.direction.x == 0.0 && frame.direction.y == 0.0 && frame.direction.z == -1.0 &&
-        frame.up.x == 0.0 && frame.up.y == 1.0 && frame.up.z == 0.0 &&
-        (context.depth.far_depth_m == ViewPresentation{}.far_depth_m ||
-         std::isinf(context.depth.far_depth_m));
+    return analytical_canvas_plan_context(kind, context);
 }
 
 std::set<std::string, std::less<>> architectural_view_references(
@@ -5391,6 +5376,9 @@ class MainWindow::Impl {
         std::optional<PreparedDocumentEdit> document;
         std::optional<PreparedWorkspaceEdit> workspace;
         std::optional<Document> mirror;
+        // Physical preview only. A source-bound room review must finish this
+        // intent before normal document/workspace preparation can publish it.
+        std::optional<PhaseWallCanvasProposal> alternative_wall;
     };
     struct PresentationTransformCapture {
         std::string owner_id;
@@ -8527,6 +8515,19 @@ public:
         std::span<const JointAnnotationTranslationIntent> annotation_moves = {},
         std::span<const JointReferenceTranslationIntent> reference_moves = {}) {
         model_ids=translationModelRoots(source,std::move(model_ids));
+        if (!model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
+                const auto found = source.entities().find(id.toStdString());
+                return found != source.entities().end() && found->second.type == "wall";
+            }) && (offset.x != 0 || offset.y != 0)) {
+            ConstraintAuthoringIntent semantic;
+            semantic.wall_geometry_move = wallTranslationIntent(source, model_ids, offset);
+            semantic.message = "Move walls and connected corners";
+            if (const auto replacement = prepareAlternativeWallGeometryCommand(source, semantic)) {
+                if (!changes.empty() || !annotation_moves.empty() || !reference_moves.empty())
+                    throw std::invalid_argument("Move shared baseline walls separately from independent labels or references in this alternative.");
+                return *replacement;
+            }
+        }
         const auto movement_error = [](const ConstraintAuthoringPreview& preview) {
             std::string message;
             for (const auto& diagnostic : preview.diagnostics()) {
@@ -23381,6 +23382,20 @@ public:
                 ConstraintAuthoringIntent intent;
                 intent.wall_geometry_move = wallTranslationIntent(source, model_ids, model_delta);
                 intent.message = model_ids.size() == 1 ? "Move wall and connected corners" : "Move walls and connected corners";
+                if (const auto replacement = prepareAlternativeWallGeometryCommand(source, intent)) {
+                    const auto& provisional = std::get<ApplyBoundaryConstraintChanges>(*replacement);
+                    const auto phase_intent = decode_phase_constraint_authoring_intent(provisional.phase_constraint_authoring_intent);
+                    PhaseWallReplacementIdentityMap proposed_ids;
+                    const auto require_current = [&] {
+                        if (!sourceEditAuthorityCurrent(authority))
+                            throw std::invalid_argument("The wall move source or selection changed during proposed room review.");
+                    };
+                    const auto reviewed = finishAlternativeWallEdit(source, phase_intent, provisional, proposed_ids, require_current);
+                    if (!reviewed) { clearError(); refreshInspector(); return false; }
+                    require_current();
+                    if (!applyAuthoredCommand(*reviewed)) return false;
+                    clearError(); refresh(); return true;
+                }
                 const auto preview = preview_constraint_authoring(source, intent);
                 requireAcceptedConstraintPreview(preview);
                 if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The move source changed.");
@@ -23434,6 +23449,16 @@ public:
         throw std::invalid_argument(diagnostics.join(QStringLiteral("\n")).toStdString());
     }
 
+    static std::optional<Command> prepareAlternativeWallGeometryCommand(
+        const DocumentSnapshot& source, const ConstraintAuthoringIntent& semantic) {
+        auto proposal = prepare_phase_wall_canvas_proposal(source, semantic,
+            [](std::string_view) { return new_id("proposed"); });
+        if (!proposal) return std::nullopt;
+        // An incomplete room stage is retained only as typed semantic intent.
+        // Canvas projection and release handle it without preparing history.
+        return Command{phase_wall_replacement_authoring_command(proposal->intent)};
+    }
+
     static Command wallGeometryCommand(const DocumentSnapshot& source,
         std::vector<WallGeometryMoveTarget> targets, const std::string& message) {
         const bool unchanged=std::all_of(targets.begin(),targets.end(),[&](const auto& target) {
@@ -23457,6 +23482,7 @@ public:
         ConstraintAuthoringIntent intent;
         intent.wall_geometry_move=WallGeometryMoveIntent{std::move(targets),true};
         intent.message=message;
+        if (const auto replacement = prepareAlternativeWallGeometryCommand(source, intent)) return *replacement;
         const auto preview=preview_constraint_authoring(source,intent);
         requireAcceptedConstraintPreview(preview);
         auto document=Document::fork(source);
@@ -23546,6 +23572,7 @@ public:
         intent.wall_resize = WallResizeIntent{wall.id, quantity,
             moving_start ? WallResizeAnchor::end : WallResizeAnchor::start, true, position};
         intent.message = "Move wall endpoint and connected geometry";
+        if (const auto replacement = prepareAlternativeWallGeometryCommand(source, intent)) return *replacement;
         const auto preview = preview_constraint_authoring(source, intent);
         requireAcceptedConstraintPreview(preview);
         return constraint_authoring_verified_command(source, preview, nullptr);
@@ -23727,6 +23754,30 @@ public:
         }
     };
 
+    static std::optional<VertexPreviewProjection> projectAlternativeWallCanvasCommand(
+        const DocumentSnapshot& source, const Command& command,
+        const std::vector<CanvasEntity>& retained, const std::vector<CanvasEntity>& eligible,
+        const std::vector<CanvasLabel>& labels, bool metric_units,
+        const std::optional<ArchitecturalViewContext>& view_context, PreparedCanvasEdit* prepared) {
+        const auto* child = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!child || !child->phase_constraint_authoring_completion ||
+            child->phase_constraint_authoring_intent.is_null()) return std::nullopt;
+        auto intent = decode_phase_constraint_authoring_intent(child->phase_constraint_authoring_intent);
+        if (intent.wall_replacement.is_null()) return std::nullopt;
+        auto physical = inspect_phase_wall_replacement_authoring(source, intent);
+        auto projected = project_phase_wall_canvas(source, physical, retained, eligible, labels,
+            metric_units, view_context);
+        VertexPreviewProjection result;
+        result.entities = std::move(projected.entities);
+        result.labels = std::move(projected.labels);
+        if (prepared) {
+            if (prepared->document || prepared->workspace || prepared->mirror)
+                throw std::invalid_argument("A proposed wall preview cannot reuse a prepared original-wall edit.");
+            prepared->alternative_wall = PhaseWallCanvasProposal{std::move(intent), std::move(physical)};
+        }
+        return result;
+    }
+
     static std::optional<VertexPreviewProjection> computeBoundaryVertexPreview(
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained,
         const std::vector<CanvasEntity>& eligible,
@@ -23747,12 +23798,19 @@ public:
             const bool endpoint_object = planEndpointObjectType(owner.type);
             const bool measured=source.entities().at(edit.boundary_id).type=="measurement_linework";
             std::optional<Command> vertex_command;
-            const auto candidate_snapshot = [&] {
+            std::optional<VertexPreviewProjection> detached_projection;
+            const auto candidate_snapshot = [&]() -> std::optional<DocumentSnapshot> {
                 if (endpoint_object) {
                     auto command=planEndpointCommand(source,entity_id,vertex_id,position);
                     const auto* changes=std::get_if<ApplyEntityChanges>(&command);
                     vertex_command=owner.type=="roof" && changes && changes->entity_changes.empty() && changes->asset_changes.empty()
                         ? std::move(command) : augmentAuthoredCommand(command,source);
+                    if (auto proposed = projectAlternativeWallCanvasCommand(source, *vertex_command,
+                            retained, eligible, labels, metric_units, view_context, prepared)) {
+                        if (admitted_command) *admitted_command = *vertex_command;
+                        detached_projection = std::move(proposed);
+                        return std::nullopt;
+                    }
                     const auto candidate = prepared ? prepareCanvasEdit(source, *vertex_command, edit_source, *prepared)
                         : Document::preview_command(source, *vertex_command);
                     if (owner.type == "room" || owner.type == "roof")
@@ -23761,6 +23819,23 @@ public:
                     return candidate;
                 }
                 if (measured) {
+                    const auto model = decode_measurement_linework_model(owner.properties.at("model"));
+                    if (!model.supported()) throw std::invalid_argument(model.diagnostic);
+                    const auto edited = edited_measurement_linework(*model.model, edit, std::nullopt);
+                    if (encode_measurement_linework_model(edited) != owner.properties.at("model")) {
+                        ConstraintAuthoringIntent semantic;
+                        semantic.measured_stroke_vertex_move = MeasuredStrokeVertexMoveIntent{edit, true};
+                        semantic.message = "Move measured vertex and connected geometry";
+                        if (const auto replacement = prepareAlternativeWallGeometryCommand(source, semantic)) {
+                            vertex_command = *replacement;
+                            detached_projection = projectAlternativeWallCanvasCommand(source, *vertex_command,
+                                retained, eligible, labels, metric_units, view_context, prepared);
+                            if (!detached_projection)
+                                throw std::invalid_argument("The proposed measured vertex has no detached physical projection.");
+                            if (admitted_command) *admitted_command = *vertex_command;
+                            return std::nullopt;
+                        }
+                    }
                     std::optional<DocumentSnapshot> candidate;
                     vertex_command=measuredStrokeGeometryCommand(source,edit,std::nullopt,&candidate);
                     if (prepared) {
@@ -23772,6 +23847,15 @@ public:
                 ConstraintAuthoringIntent intent;
                 intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
                 intent.message="move boundary vertex and related objects";
+                if (const auto replacement = prepareAlternativeWallGeometryCommand(source, intent)) {
+                    vertex_command = *replacement;
+                    detached_projection = projectAlternativeWallCanvasCommand(source, *vertex_command,
+                        retained, eligible, labels, metric_units, view_context, prepared);
+                    if (!detached_projection)
+                        throw std::invalid_argument("The proposed boundary edit has no detached physical projection.");
+                    if (admitted_command) *admitted_command = *vertex_command;
+                    return std::nullopt;
+                }
                 const auto preview=preview_constraint_authoring(source,intent);
                 requireAcceptedConstraintPreview(preview);
                 std::optional<DocumentSnapshot> candidate;
@@ -23782,15 +23866,17 @@ public:
                 }
                 return *candidate;
             }();
-            const auto& candidate=candidate_snapshot.entities();
-            auto result = computeConstraintGeometryProjection(source, candidate_snapshot, retained, eligible,
+            if (detached_projection) return detached_projection;
+            if (!candidate_snapshot) throw std::invalid_argument("The boundary edit has no admitted preview.");
+            const auto& candidate=candidate_snapshot->entities();
+            auto result = computeConstraintGeometryProjection(source, *candidate_snapshot, retained, eligible,
                 labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context, label_font, site_input);
             if (result && owner.type=="roof" && vertex_command)
                 if (const auto* changes=std::get_if<ApplyEntityChanges>(&*vertex_command);
                     changes && changes->entity_changes.empty() && changes->asset_changes.empty())
-                    retainNoOpMovePresentations(*result,source,candidate_snapshot,retained,labels,{entity_id});
+                    retainNoOpMovePresentations(*result,source,*candidate_snapshot,retained,labels,{entity_id});
             if (result && !endpoint_object)
-                retainNoOpMovePresentations(*result,source,candidate_snapshot,retained,labels,{entity_id});
+                retainNoOpMovePresentations(*result,source,*candidate_snapshot,retained,labels,{entity_id});
             if (result && !measured && !endpoint_object) {
                 const auto geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
                 result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
@@ -25466,6 +25552,11 @@ public:
                             command=augmentAuthoredCommand(std::move(command),*source);
                         }
                         if (!cancellation.is_cancelled()) {
+                            if (auto proposed = projectAlternativeWallCanvasCommand(*source, command, *retained,
+                                    *eligible, *labels, metric_units, view_context, prepared_move.get())) {
+                                *result = std::move(proposed);
+                                if (!cancellation.is_cancelled()) *plan_move_command = command;
+                            } else {
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
                             *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
@@ -25512,6 +25603,7 @@ public:
                                     }
                                 }
                             } else result->reset();
+                            }
                         }
                     } else if (site_wall_move && prepared_move) {
                         if (!site_input || site_input->move_frames.empty())
@@ -25708,11 +25800,16 @@ public:
                         // the same source-bound command as a committed move.
                         const auto command=wallGeometryCommand(*source,wall_move->targets,"Preview wall movement");
                         if (!cancellation.is_cancelled()) {
+                            if (auto proposed = projectAlternativeWallCanvasCommand(*source, command, *retained,
+                                    *eligible, *labels, metric_units, view_context, prepared_move.get())) {
+                                *result = std::move(proposed);
+                            } else {
                             const auto candidate=Document::preview_command(*source,command);
                             *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,label_font,site_input.get());
                             if (*result && !move_selection_ids.isEmpty())
                                 retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,move_selection_ids);
+                            }
                         }
                     } else *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
                         *label_footprints,*component_bounds,id,vertex,position,view_context,label_font,
@@ -25972,13 +26069,15 @@ public:
                 changes && changes->entity_changes.empty() && changes->asset_changes.empty()) {
                 clearError();return true;
             }
-        if (capture->source->entities().at(id.toStdString()).type == "wall") {
-            const auto candidate = [&] {
+        if (capture->source->entities().at(id.toStdString()).type == "wall" || preview->prepared->alternative_wall) {
+            const auto candidate = [&]() -> std::optional<DocumentSnapshot> {
+                if (preview->prepared->alternative_wall) return std::nullopt;
                 if (preview->prepared->document) return preview->prepared->document->preview();
                 if (preview->prepared->workspace) return preview->prepared->workspace->preview();
                 throw std::invalid_argument("The wall endpoint has no admitted geometry candidate.");
             }();
-            if (affectedPhysicalWallRooms(*capture->source, candidate.entities(), id.toStdString()) != 0) {
+            if (preview->prepared->alternative_wall ||
+                (candidate && affectedPhysicalWallRooms(*capture->source, candidate->entities(), id.toStdString()) != 0)) {
                 if (!planEndpointCaptureCurrent(capture))
                     throw std::invalid_argument("The wall endpoint context changed before room review.");
                 const auto site_publication_generation = m_site_publication_generation;
@@ -26025,11 +26124,17 @@ public:
                 // serial again on focus loss/window blocking. The consumed
                 // release serial was checked above; retained source publication
                 // and viewport fences now guard this separate modal transaction.
-                const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(*capture->source, candidate,
+                if (preview->prepared->alternative_wall) {
+                    if (!publishReviewedAlternativeWallCanvasEdit(*capture->source, preview->command,
+                            *preview->prepared->alternative_wall, *capture->authority,
+                            capture->edit_source, endpoint_fence)) return false;
+                    clearError(); refresh(); return true;
+                }
+                const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(*capture->source, *candidate,
                     preview->command, id.toStdString(), *capture->authority, owner, endpoint_fence);
                 if (!reviewed) { clearError(); refreshInspector(); return false; }
                 endpoint_fence();
-                applyDocumentCommand(*reviewed);
+                if (!applyDocumentCommand(*reviewed)) return false;
                 clearError(); refresh(); return true;
             }
         }
@@ -26819,6 +26924,8 @@ public:
     void publishPreparedCanvasEdit(const std::shared_ptr<PreparedCanvasEdit>& prepared,
         const std::shared_ptr<const CanvasEditSourceCapture>& capture) {
         if (!prepared || !capture) throw std::invalid_argument("The canvas edit has no admitted publication.");
+        if (prepared->alternative_wall)
+            throw std::invalid_argument("Complete the proposed wall and room review before publishing this physical preview.");
         requireSiteSelectionAdmission();
         if (m_recovery_ledger.empty()) {
             if (capture->workspace || capture->mirror || !prepared->document || prepared->workspace || prepared->mirror)
@@ -26848,6 +26955,32 @@ public:
         if (!no_op) publishPreparedCanvasEdit(prepared,edit_source);
     }
 
+    bool publishReviewedAlternativeWallCanvasEdit(const DocumentSnapshot& source, const Command& provisional,
+        const PhaseWallCanvasProposal& proposal, const SourceEditAuthority& authority,
+        const std::shared_ptr<const CanvasEditSourceCapture>& edit_source,
+        const std::function<void()>& viewport_fence) {
+        const auto require_current = [&] {
+            if (!edit_source || fullSnapshotDigest(source) != authority.source_digest ||
+                !sourceEditAuthorityUnchanged(authority))
+                throw std::invalid_argument("The proposed wall preview no longer belongs to the current project or selection.");
+            if (edit_source->workspace.has_value() != !m_recovery_ledger.empty() ||
+                static_cast<bool>(edit_source->mirror) != edit_source->workspace.has_value() ||
+                (edit_source->mirror && fullSnapshotDigest(*edit_source->mirror) != fullSnapshotDigest(m_document->snapshot())))
+                throw std::invalid_argument("The proposed wall preview's save or recovery authority changed.");
+            if (viewport_fence) viewport_fence();
+        };
+        require_current();
+        const auto* child = std::get_if<ApplyBoundaryConstraintChanges>(&provisional);
+        if (!child || !child->phase_constraint_authoring_completion ||
+            child->phase_constraint_authoring_intent.dump() != encode_phase_constraint_authoring_intent(proposal.intent).dump())
+            throw std::invalid_argument("The released wall intent differs from its displayed physical proposal.");
+        PhaseWallReplacementIdentityMap proposed_ids;
+        const auto reviewed = finishAlternativeWallEdit(source, proposal.intent, *child, proposed_ids, require_current);
+        if (!reviewed) { clearError(); refreshInspector(); return false; }
+        require_current();
+        return applyAuthoredCommand(*reviewed);
+    }
+
     bool commitPlanMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
         const auto capture=m_plan_move_capture;
         // A release consumes its stored proposal even if a later fence refuses.
@@ -26866,7 +26999,8 @@ public:
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
         const auto source=m_wall_move_source;
         const auto authority=m_wall_move_authority;
-        const auto candidate=[&] {
+        const auto candidate=[&]() -> std::optional<DocumentSnapshot> {
+            if (prepared->alternative_wall) return std::nullopt;
             if (edit_source->workspace) {
                 if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
                     throw std::invalid_argument("The wall move's recovery authority changed.");
@@ -26877,13 +27011,13 @@ public:
             return prepared->document->preview();
         }();
         const auto command=preview->command;
-        if (fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(candidate))
+        if (candidate && fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(*candidate))
             throw std::invalid_argument("The wall move's admitted command or history changed.");
         const auto primary=authority->context.selected_id.toStdString();
-        if (physicalWallRoomReviewSelection(*source,authority->selection,primary)) {
+        if (prepared->alternative_wall || physicalWallRoomReviewSelection(*source,authority->selection,primary)) {
             if (!sameSelectionMembership(ids,authority->selection))
                 throw std::invalid_argument("The wall move selection differs from its captured original objects.");
-            if (affectedPhysicalWallRooms(*source, candidate.entities(), primary) != 0) {
+            if (prepared->alternative_wall || (candidate && affectedPhysicalWallRooms(*source, candidate->entities(), primary) != 0)) {
                 const auto source_publication=m_plan_publication_source;
                 const auto site_publication=m_site_publication_source;
                 const auto site_generation=m_site_edit_generation;
@@ -26953,13 +27087,18 @@ public:
                 m_vertex_preview_references.reset(); m_vertex_preview_view_context.reset();
                 m_vertex_preview_canvas.clear(); m_vertex_preview_document.reset();
                 canvas->setEntities(canvas->entities());
-                const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,candidate,command,
+                if (prepared->alternative_wall) {
+                    if (!publishReviewedAlternativeWallCanvasEdit(*source, command,
+                            *prepared->alternative_wall, *authority, edit_source, move_fence)) return false;
+                    clearError(); refresh(); return true;
+                }
+                const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,*candidate,command,
                     primary,*authority,owner,move_fence);
                 if (!reviewed) { clearError(); refreshInspector(); return false; }
                 move_fence();
                 // The old prepared ticket is never published beside the
                 // accepted composite, which retains its complete authored child.
-                applyAuthoredCommand(*reviewed);
+                if (!applyAuthoredCommand(*reviewed)) return false;
                 clearError(); refresh(); return true;
             }
         }
@@ -27410,7 +27549,7 @@ public:
                  request.physical_rotation_command || request.axis_resize_scales ||
                  (request.plan_endpoint_capture && request.plan_endpoint_capture->edit_source)) &&
                 (!request.model_edit_source || !request.model_edit_prepared ||
-                 (!request.model_edit_prepared->document &&
+                 (!request.model_edit_prepared->alternative_wall && !request.model_edit_prepared->document &&
                   (!request.model_edit_prepared->workspace || !request.model_edit_prepared->mirror))))
                 { reject(request);continue; }
             if ((request.presentation_capture || request.ordinary_transform_capture) && (!request.model_edit_source || !request.model_edit_prepared ||
@@ -40744,14 +40883,16 @@ private:
 
     std::optional<Command> finishAlternativeWallEdit(const DocumentSnapshot& source,
         const PhaseConstraintAuthoringIntent& intent,const ApplyBoundaryConstraintChanges& original,
-        PhaseWallReplacementIdentityMap& proposed_ids) {
+        PhaseWallReplacementIdentityMap& proposed_ids, const std::function<void()>& additional_fence = {}) {
+        if (additional_fence) additional_fence();
         const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
         const auto preview=inspect_phase_wall_replacement_authoring(source,intent);
         auto completed=original;
         if (preview.needs_room_review && replacement.room_review_intent.is_null()) {
             const auto authority=captureSourceEditAuthority(source);
-            PhysicalWallPhaseRoomReviewDialog dialog(source,intent,m_metric_units,[this,authority] {
+            PhysicalWallPhaseRoomReviewDialog dialog(source,intent,m_metric_units,[this,authority,additional_fence] {
                 if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The project or drawing context changed. Reopen the proposed wall review.");
+                if (additional_fence) additional_fence();
                 return authoringSnapshot();
             },owner);
             styleDialog(dialog);
@@ -40763,6 +40904,7 @@ private:
         // Keep the original selection/device wrapper; the new semantic child
         // receives normal complete command admission against this capture.
         (void)Document::preview_command(source,Command{completed});
+        if (additional_fence) additional_fence();
         return Command{std::move(completed)};
     }
 

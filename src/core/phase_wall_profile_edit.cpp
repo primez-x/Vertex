@@ -255,6 +255,33 @@ Entity replay_wall_profile_entity(const Entity& source, const WallProfileEditInt
     return result;
 }
 
+void validate_active_wall_physical_dependencies(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::set<std::string, std::less<>>& targets) {
+    if (targets.empty()) return;
+    if (targets.size() > collection_limit) invalid("Wall physical dependency target budget exceeded");
+    const auto scope = constraint_phase_scope(entities);
+    std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
+    for (const auto& [id, entity] : entities) {
+        (void)id;
+        if (entity.type != "opening" || !entity.properties.is_object()) continue;
+        const auto host = entity.properties.find("wall_id");
+        if (host != entity.properties.end() && host->is_string())
+            openings[host->get_ref<const std::string&>()].push_back(&entity);
+    }
+    for (const auto& target : targets) {
+        const auto found = entities.find(target);
+        if (found == entities.end() || found->second.id != target || found->second.type != "wall" ||
+            scope.inactive_owner_ids.contains(target))
+            invalid("Wall physical dependency target must be an actual saved-active wall");
+        const auto checked = hosted_wall(entities, found->second, openings[target]);
+        (void)make_wall(checked);
+        for (std::size_t i = 0; i < checked.openings.size(); ++i)
+            assembly_fit(*openings[target][i], checked, checked.openings[i]);
+    }
+    admit_affected_joins(entities, targets, scope, openings);
+}
+
 std::map<std::string, Entity, std::less<>> replay_wall_profile_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const std::vector<WallProfileEditIntent>& intents, bool validate_final_constraints) {
@@ -279,20 +306,7 @@ std::map<std::string, Entity, std::less<>> replay_wall_profile_entities(
         result.at(intent.wall_id) = std::move(edited);
     }
     if (result == source) return source;
-    std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
-    for (const auto& [id, entity] : result) {
-        if (entity.type != "opening" || !entity.properties.is_object()) continue;
-        const auto host = entity.properties.find("wall_id");
-        if (host != entity.properties.end() && host->is_string()) {
-            openings[host->get_ref<const std::string&>()].push_back(&entity);
-        }
-    }
-    for (const auto& target : targets) {
-        const auto checked = hosted_wall(result, result.at(target), openings[target]);
-        for (std::size_t i = 0; i < checked.openings.size(); ++i)
-            assembly_fit(*openings[target][i], checked, checked.openings[i]);
-    }
-    admit_affected_joins(result, targets, scope, openings);
+    validate_active_wall_physical_dependencies(result, targets);
     if (depth_changed) {
         const auto edits = exterior_wall_measurement_source_updates_active_phase(source, result, false);
         result = edited_boundary_entities_batch(result, edits);

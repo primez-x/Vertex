@@ -815,7 +815,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp
     src/core/phase_wall_replacement.cpp src/core/phase_wall_replacement_authoring.cpp
     src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp
-    src/core/phase_wall_profile_edit.cpp)
+    src/core/phase_wall_profile_edit.cpp src/core/phase_wall_canvas_proposal.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
   # Proposed profile replay must use the same hosted-assembly and fused-join
   # admission as native architectural authoring, rather than accept solids
@@ -1043,6 +1043,7 @@ if(SKETCH_BUILD_DESKTOP)
     target_compile_options(sketch_sheet_layout PRIVATE /W4 /permissive- /utf-8)
   endif()
   add_library(sketch_desktop src/desktop/main_window.cpp src/desktop/sketch_pdf_output.cpp
+    src/desktop/phase_wall_canvas_projection.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/physical_wall_room_review_dialog.cpp
     src/desktop/physical_wall_phase_room_review_dialog.cpp

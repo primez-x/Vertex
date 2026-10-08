@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 proposed wall canvas previews
+
+Canvas wall moves, wall endpoints and hard-connected identified/measured vertex
+drags now discover proposed replacements before solving shared originals. A
+typed value preview binds the actual captured source and keeps a detached
+physical entity map; it never creates a partial DocumentSnapshot or history
+entry. Shared native factories admit every copied wall, cut, assembly and
+affected active join, including objects outside the visible canvas.
+
+The detached renderer uses source presentation aliases with actual fresh physical
+identities, saved view/depth/crop and active-stage junction geometry. It preserves
+captured snap eligibility and uses the settled canvas's default analytical-plan
+predicate. Unqualified appraisal quantity callouts are withheld; physical room
+data remains original until review. Release consumes its exact displayed intent,
+retires transient drag authority, fences source/selection/workspace/viewport
+through combined room review, and publishes one completed event. Generic prepared
+publication explicitly refuses these provisional stages.
+
+Independent source review found default-depth projection, snap eligibility and a
+measured-vertex original-solve bypass. All three corrections passed independent
+source review; root reviewed the integrated callbacks and interfaces. No builds, tests, probes, scripts, launches,
+packages or installations run. Compilation, interaction and performance remain
+unverified. Mixed independent presentation moves, non-canvas transform editors,
+multi-registry replacements and physical-room split/merge remain source gaps.
+
 ### October 8 proposed wall profile editing
 
 The next source slice adds typed wall height/depth and complete optional layer
