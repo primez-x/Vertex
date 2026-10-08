@@ -260,7 +260,7 @@ if(SKETCH_BUILD_ARCHITECTURE)
 endif()
 
 add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp src/core/constraint_entity.cpp
-  src/core/constraint_integrity.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
+  src/core/constraint_integrity.cpp src/core/constraint_phase_scope.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
   src/core/boundary_geometry_edit.cpp src/core/constraint_wall_edit.cpp src/core/wall_split.cpp src/core/wall_merge.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
   src/core/annotation_entity_codec.cpp src/core/presentation_transform.cpp src/core/georeferencing_entity_codec.cpp
@@ -812,7 +812,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # Document replay and interactive preparation share the same deterministic
   # connected solve. Keep it in the authoritative library without a cyclic
   # document/authoring dependency; the public authoring target remains stable.
-  target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp)
+  target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
   target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision)
   add_library(sketch_constraint_authoring INTERFACE)

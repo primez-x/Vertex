@@ -17,6 +17,7 @@
 #include "sketch/presentation_transform.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
@@ -40,6 +41,9 @@
 #include "sketch/physical_wall_phase_review.hpp"
 #endif
 #include "sketch/joint_translation_replay.hpp"
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+#include "sketch/phase_constraint_authoring.hpp"
+#endif
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -807,7 +811,8 @@ std::optional<std::string> validate_measurement_linework_integrity(
 }
 
 std::optional<std::string> validate_state(const std::map<std::string, Entity, std::less<>>& entities,
-                    const std::map<std::string, Asset, std::less<>>& assets) {
+                    const std::map<std::string, Asset, std::less<>>& assets,
+                    bool active_phase_constraints = false) {
     try {
         validate_stair_attachment_state(entities);
     } catch (const std::exception& error) {
@@ -1413,7 +1418,8 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
     try {
-        const auto unsupported_constraint = validate_constraint_integrity(entities);
+        const auto unsupported_constraint = active_phase_constraints ?
+            validate_active_phase_constraint_integrity(entities) : validate_constraint_integrity(entities);
         return unsupported_boundary ? unsupported_boundary : unsupported_constraint;
     }
     catch (const std::exception& error) {
@@ -1627,7 +1633,8 @@ void validate_physical_room_source_transition(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const BoundaryGeometryEdit* reviewed_edit=nullptr,
-    const ApplyBoundaryConstraintChanges* reviewed_batch=nullptr) {
+    const ApplyBoundaryConstraintChanges* reviewed_batch=nullptr,
+    bool active_phase_constraints=false) {
     // Explicit phase review is a separate authority. Admit a source-bound
     // proposal change only when its exclusive, canonical proof independently
     // reconstructs this complete destination; ordinary payloads cannot borrow it.
@@ -1636,7 +1643,7 @@ void validate_physical_room_source_transition(
         try {
             (void)command_to_json(Command{*reviewed_batch});
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
-            const auto replay=replay_physical_wall_phase_room_review(before,reviewed_batch->phase_room_review_intent);
+            const auto replay=replay_physical_wall_phase_room_review(before,reviewed_batch->phase_room_review_intent,active_phase_constraints);
             if (entity_map_digest(replay.entities)!=entity_map_digest(after))
                 document_error(DocumentErrorCode::invalid_entity,
                     "Phase room changes differ from their independently verified destination");
@@ -1988,6 +1995,10 @@ static bool has_phase_room_review_completion(const ApplyBoundaryConstraintChange
     return command.phase_room_review_completion || !command.phase_room_review_intent.is_null();
 }
 
+static bool has_phase_constraint_authoring(const ApplyBoundaryConstraintChanges& command) {
+    return command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null();
+}
+
 static bool has_room_review_geometry_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.room_review_geometry_completion || !command.room_review_geometry_proof.is_null();
 }
@@ -2034,8 +2045,28 @@ static void validate_phase_room_review_mode(const ApplyBoundaryConstraintChanges
         command.rigid_group_completion || command.rigid_group_transform || command.wall_split || command.wall_merge ||
         command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
         has_joint_translation_completion(command) || has_room_review_completion(command) ||
-        command.wall_dimension_completion || command.curve_construction_completion || has_disto_measurement_completion(command))
+        command.wall_dimension_completion || command.curve_construction_completion || has_disto_measurement_completion(command) ||
+        has_phase_constraint_authoring(command))
         throw std::invalid_argument("Phase room review cannot borrow another edit or asset authority");
+}
+
+static void validate_phase_constraint_authoring_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.phase_constraint_authoring_completion || command.phase_constraint_authoring_intent.is_null())
+        throw std::invalid_argument("Active design authoring requires its retained mode and semantic intent");
+    if (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
+        !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
+        !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
+        !command.measured_stroke_edits.empty() || !command.dimension_placement_moves.empty() ||
+        !command.selection_entity_changes.empty() || command.selection_completion ||
+        command.exterior_source_completion || command.supplemental_source_completion ||
+        command.supplemental_asset_reference_completion || command.rigid_wall_transform_completion ||
+        command.measured_source_completion || command.dimension_placement_completion ||
+        command.rigid_group_completion || command.rigid_group_transform || command.wall_split || command.wall_merge ||
+        command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
+        has_joint_translation_completion(command) || has_room_review_completion(command) ||
+        has_phase_room_review_completion(command) || command.wall_dimension_completion ||
+        command.curve_construction_completion || has_disto_measurement_completion(command))
+        throw std::invalid_argument("Active design authoring cannot borrow raw geometry, assets or another edit authority");
 }
 
 static void validate_room_aware_wall_split_mode(const ApplyBoundaryConstraintChanges& command) {
@@ -2256,7 +2287,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const auto version=proof.at("version").get<int>();
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
     if ((grouped_deletion && version!=31) || (!grouped_deletion &&
-        version!=1 && version!=10 && version!=17 && version!=21 && version!=23 && !ordinary_room_wall_proof_version(version)))
+        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
@@ -2296,10 +2327,19 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
             throw std::invalid_argument("Room review joint physical-wall proof must retain its intact canonical intent");
         return decoded;
     }
+    if (is_physical_wall_room_active_constraint_review_command(decoded)) {
+        if (command_to_json(decoded)!=proof)
+            throw std::invalid_argument("Room review must retain its intact active design proof");
+        return decoded;
+    }
 #endif
     if (!geometry || proof.at("kind")!="apply_boundary_constraint_changes")
         throw std::invalid_argument("Room review ordinary payload must be one supported wall profile edit");
-    if (version==23) {
+    if (version==34) {
+        validate_phase_constraint_authoring_mode(*geometry);
+        if (command_to_json(decoded)!=proof)
+            throw std::invalid_argument("Room review must retain the canonical active design intent");
+    } else if (version==23) {
         if (!geometry->curve_construction_completion)
             throw std::invalid_argument("Curve room review requires explicit curve authority");
         validate_curve_construction_completion(*geometry);
@@ -2331,9 +2371,165 @@ static int room_review_geometry_dialect(const ApplyBoundaryConstraintChanges& co
     if (is_physical_wall_room_joint_review_command(geometry)) return 32;
 #endif
     const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&geometry);
+    if (constrained && has_phase_constraint_authoring(*constrained)) return 32;
     if (!constrained || constrained->wall_edits.empty()) return 26;
     return constrained->curve_construction_completion ? 24 : 25;
 }
+
+static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const ApplyBoundaryConstraintChanges& command) {
+    // Only strict, canonical command envelopes supply policy or source authority.
+    // Opaque metadata with similarly named fields never participates.
+    const auto encoded=command_to_json(Command{command});
+    std::vector<nlohmann::json> result;
+    const auto visit=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->void {
+        if (depth>2) throw std::invalid_argument("Active design proof wrapper depth is invalid");
+        if (proof.at("kind")!="apply_boundary_constraint_changes") return;
+        const auto version=proof.at("version").get<int>();
+        if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
+        else if (version==22 || version==19) self(self,proof.at("proof"),depth+1);
+        else if (proof.contains("room_review_geometry_proof"))
+            self(self,proof.at("room_review_geometry_proof"),depth+1);
+    };
+    visit(visit,encoded,0);
+    return result;
+}
+
+static void validate_active_design_preserved_dependents(const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,bool freeze_registries=true) {
+    const auto scope=constraint_phase_scope(source);
+    std::set<std::string,std::less<>> inactive_targets=scope.inactive_owner_ids;
+    for (const auto& id : scope.inactive_owner_ids) {
+        const auto& entity=source.at(id);
+        if (can_recognize_boundary_entity_type(entity.type) &&
+            inspect_boundary_entity_version(entity).format==BoundaryEntityFormat::identified_v1)
+            for (const auto& edge : decode_identified_boundary_entity(entity).segments) {
+                inactive_targets.insert(edge.segment_id);
+                inactive_targets.insert(edge.start_vertex_id);
+                inactive_targets.insert(edge.end_vertex_id);
+            }
+    }
+    const auto require_exact=[&](const std::string& id,const Entity& original) {
+        const auto after=candidate.find(id);
+        if (after==candidate.end() || !exact_entity_payload(original,after->second))
+            throw std::invalid_argument("Active design edit changed a preserved dependent: "+id);
+    };
+    if (freeze_registries)
+        for (const auto& registry : scope.registries) require_exact(registry.registry_id,source.at(registry.registry_id));
+    for (const auto& [id,original] : source) {
+        if (scope.inactive_owner_ids.contains(id)) { require_exact(id,original);continue; }
+        if (original.type=="constraint") {
+            const auto decoded=decode_constraint_entity(original);
+            if (decoded.supported() && !constraint_participates(*decoded.constraint,scope)) require_exact(id,original);
+        } else if (can_recognize_boundary_dimension_entity_type(original.type)) {
+            const auto decoded=decode_boundary_dimension_entity(original);
+            if (decoded.supported() && inactive_targets.contains(decoded.dimension->boundary_id)) require_exact(id,original);
+        } else if (original.type=="opening") {
+            std::string host,diagnostic;
+            if (!read_document_wall_id(original,host,diagnostic)) throw std::invalid_argument(diagnostic);
+            if (scope.inactive_owner_ids.contains(host)) require_exact(id,original);
+        } else if (original.type==kAnnotationEntityType) {
+            validate_annotation_entity(original);
+            const auto& rows=original.properties.at("state").at("overrides");
+            for (std::size_t index=0;index<rows.size();++index) {
+                const auto& row=rows.at(index);
+                if (!inactive_targets.contains(row.at("target_id").get<std::string>())) continue;
+                const auto after=candidate.find(id);
+                if (after==candidate.end() || after->second.type!=original.type)
+                    throw std::invalid_argument("Active design edit removed preserved annotations");
+                validate_annotation_entity(after->second);
+                const auto& retained=after->second.properties.at("state").at("overrides");
+                if (index>=retained.size() || row.dump()!=retained.at(index).dump())
+                    throw std::invalid_argument("Active design edit changed an inactive annotation placement");
+            }
+        }
+    }
+}
+
+static std::vector<bool> active_constraint_history_policies(const std::vector<RevisionRecord>& history) {
+    std::vector<bool> result(history.size(),false);
+    for (std::size_t index=0;index<history.size();++index) {
+        const auto& record=history[index];
+        if (record.revision!=index)
+            document_error(DocumentErrorCode::invalid_history,"Constraint policy history is not contiguous");
+        if (index==0) {
+            if (record.source_revision || record.boundary_constraint_changes)
+                document_error(DocumentErrorCode::invalid_history,"Create record cannot supply constraint policy");
+            continue;
+        }
+        if (record.source_revision) {
+            if (*record.source_revision>=index || record.boundary_constraint_changes ||
+                (record.action!="undo" && record.action!="redo"))
+                document_error(DocumentErrorCode::invalid_history,"Constraint policy navigation is invalid");
+            result[index]=result[static_cast<std::size_t>(*record.source_revision)];
+        } else {
+            result[index]=result[index-1];
+            if (record.boundary_constraint_changes) {
+                try {
+                    result[index]=result[index] || !phase_constraint_authoring_proofs(*record.boundary_constraint_changes).empty();
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_history,error.what());
+                }
+            }
+        }
+    }
+    return result;
+}
+
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+static void validate_phase_constraint_authoring_source(const DocumentSnapshot& source,
+    const ApplyBoundaryConstraintChanges& command) {
+    for (const auto& encoded : phase_constraint_authoring_proofs(command)) {
+        const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        if (intent.expected_revision!=source.revision() ||
+            intent.source_snapshot_digest!=document_snapshot_digest(source) ||
+            intent.source_authoring_digest!=document_authoring_source_digest_v2(source) ||
+            intent.source_saved_revision!=source.saved_revision_optional() ||
+            intent.source_entities_digest!=entity_map_digest(source.entities()) ||
+            intent.phase_selections!=phase_constraint_authoring_selections(source.entities()))
+            document_error(DocumentErrorCode::stale_revision,"Active design authoring source snapshot changed");
+    }
+}
+
+static void validate_retained_phase_constraint_authoring_source(const DocumentSnapshot& snapshot,
+    const RevisionRecord& source, const ApplyBoundaryConstraintChanges& command) {
+    for (const auto& encoded : phase_constraint_authoring_proofs(command)) {
+        const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        if (intent.expected_revision!=source.revision ||
+            intent.source_snapshot_digest!=document_snapshot_digest_at_revision(snapshot,source.revision,intent.source_saved_revision) ||
+            intent.source_authoring_digest!=document_authoring_source_digest_v2_at_revision(snapshot,source.revision) ||
+            intent.source_entities_digest!=entity_map_digest(source.entities) ||
+            intent.phase_selections!=phase_constraint_authoring_selections(source.entities))
+            throw std::invalid_argument("Active design authoring retained source authority changed");
+    }
+}
+
+static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
+    std::set<std::string,std::less<>> fresh;
+    for (const auto& [id,entity] : candidate) {
+        (void)entity;
+        if (!source.contains(id)) fresh.insert(id);
+    }
+    if (fresh.empty()) return;
+    if (fresh.size()>4096) throw std::invalid_argument("Active design fresh identity budget exceeded");
+    for (std::size_t index=0;index<preceding_records;++index)
+        for (const auto& [id,entity] : history.at(index).entities) {
+            if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
+            if (entity.type=="measurement_linework") {
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                if (decoded.supported()) for (const auto& edge : decoded.model->edges)
+                    if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
+                        throw std::invalid_argument("Active design identity collides with retained linework: "+id);
+            }
+            if (!can_recognize_boundary_entity_type(entity.type) ||
+                inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1) continue;
+            for (const auto& edge : decode_identified_boundary_entity(entity).segments)
+                if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
+                    throw std::invalid_argument("Active design identity collides with retained boundary children: "+id);
+        }
+}
+#endif
 
 static void complete_dimension_placements(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const ApplyBoundaryConstraintChanges& command) {
@@ -2552,6 +2748,20 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_phase_constraint_authoring(command) && !has_selection_completion(command) && !has_disto_measurement_completion(command)) {
+        try {
+            validate_phase_constraint_authoring_mode(command);
+            (void)command_to_json(Command{command});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (replay_phase_constraint_authoring(before,command.phase_constraint_authoring_intent)!=after)
+                throw std::invalid_argument("Active design changes differ from semantic source reconstruction");
+#else
+            throw std::invalid_argument("Active design changes require the production constraint engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
     if (has_phase_room_review_completion(command)) {
         try { validate_phase_room_review_mode(command); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
@@ -4048,16 +4258,32 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
     const std::map<std::string, Asset, std::less<>>& source_assets,
-    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
+    bool active_phase_constraints = false) {
+    const bool active_policy=active_phase_constraints || !phase_constraint_authoring_proofs(command).empty();
+    if (has_phase_constraint_authoring(command) && !has_selection_completion(command) && !has_disto_measurement_completion(command)) {
+        try {
+            validate_phase_constraint_authoring_mode(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            auto result=replay_phase_constraint_authoring(source,command.phase_constraint_authoring_intent);
+            validate_active_design_preserved_dependents(source,result);
+            validate_boundary_identity_transition(history,source,result);
+            (void)validate_state(result,source_assets,true);
+            return result;
+#else
+            throw std::invalid_argument("Active design authoring requires the production constraint engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     if (has_phase_room_review_completion(command)) {
         try {
             validate_phase_room_review_mode(command);
             (void)command_to_json(Command{command});
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
-            const auto replay=replay_physical_wall_phase_room_review(source,command.phase_room_review_intent);
+            const auto replay=replay_physical_wall_phase_room_review(source,command.phase_room_review_intent,active_policy);
             validate_boundary_identity_transition(history,source,replay.entities);
-            (void)validate_constraint_integrity(replay.entities);
-            (void)validate_state(replay.entities,source_assets);
+            (void)validate_state(replay.entities,source_assets,active_policy);
             return replay.entities;
 #else
             throw std::invalid_argument("Phase room review requires the production physical-wall engine");
@@ -4070,13 +4296,23 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             (void)command_to_json(Command{command});
             validate_selection_changes(source, command);
             const auto geometry = without_selection_completion(command);
-            auto result = completed_boundary_constraint_entities(history, source, source_assets, geometry, retained_replay);
+            bool rigid_annotation_merge=geometry.joint_translation &&
+                (geometry.joint_translation->per_owner_rigid_completion || !geometry.joint_translation->owner_transformations.empty());
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (has_phase_constraint_authoring(geometry)) {
+                const auto intent=decode_phase_constraint_authoring_intent(geometry.phase_constraint_authoring_intent);
+                rigid_annotation_merge=intent.intent.joint_translation &&
+                    (intent.intent.joint_translation->per_owner_rigid_completion ||
+                        !intent.intent.joint_translation->owner_transformations.empty());
+            }
+#endif
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, geometry, retained_replay,active_policy);
             const auto geometry_assets = boundary_constraint_assets(source_assets, geometry);
-            (void)validate_state(result, geometry_assets);
+            (void)validate_state(result, geometry_assets,active_policy);
             validate_completed_constraint_change(source, result, geometry, retained_replay);
-            validate_physical_room_source_transition(source, result, nullptr, &geometry);
+            validate_physical_room_source_transition(source, result, nullptr, &geometry,active_policy);
             const auto ordinary = ordinary_entity_changes(source, command.selection_entity_changes);
-            (void)validate_state(ordinary, source_assets);
+            (void)validate_state(ordinary, source_assets,active_policy);
             validate_constraint_change(source, ordinary);
             validate_boundary_change(history, source, ordinary);
             validate_physical_room_source_transition(source, ordinary);
@@ -4087,16 +4323,15 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 const auto current = result.find(change.entity.id);
                 if (current == result.end()) throw std::invalid_argument("Selection completion lost a dependency identity");
                 if (!exact_entity_payload(current->second, original) && !exact_entity_payload(current->second, admitted)) {
-                    if (original.type != kAnnotationEntityType || !geometry.joint_translation ||
-                        (!geometry.joint_translation->per_owner_rigid_completion && geometry.joint_translation->owner_transformations.empty()))
+                    if (original.type != kAnnotationEntityType || !rigid_annotation_merge)
                         throw std::invalid_argument("Selection lanes require conflicting final dependency payloads: " + change.entity.id);
                     current->second = merge_selection_annotation_entities(original,current->second,admitted,
                         AnnotationMergeMode::source_callout_geometry);
                 } else current->second = admitted;
             }
-            (void)validate_state(result, geometry_assets);
-            (void)validate_constraint_integrity(result);
-            validate_physical_room_source_transition(source, result, nullptr, &geometry);
+            (void)validate_state(result, geometry_assets,active_policy);
+            if (!phase_constraint_authoring_proofs(geometry).empty()) validate_active_design_preserved_dependents(source,result);
+            validate_physical_room_source_transition(source, result, nullptr, &geometry,active_policy);
             return result;
         } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
@@ -4107,8 +4342,9 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     if (has_disto_measurement_completion(command)) {
         try {
             (void)command_to_json(Command{command});
-            auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay);
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay,active_policy);
             attach_disto_measurement(source, result, *command.disto_measurement);
+            if (!phase_constraint_authoring_proofs(command).empty()) validate_active_design_preserved_dependents(source,result);
             return result;
         } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
@@ -4122,9 +4358,9 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             if (has_room_review_geometry_completion(command)) {
                 const auto geometry=room_review_geometry_command(command);
                 if (const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&geometry)) {
-                    reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,*constrained,retained_replay);
+                    reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,*constrained,retained_replay,active_policy);
                     validate_completed_constraint_change(source,reviewed_source,*constrained,retained_replay);
-                    validate_physical_room_source_transition(source,reviewed_source,nullptr,constrained);
+                    validate_physical_room_source_transition(source,reviewed_source,nullptr,constrained,active_policy);
                     if (boundary_constraint_assets(source_assets,*constrained)!=source_assets)
                         throw std::invalid_argument("Wall room review cannot change assets");
                 } else {
@@ -4139,7 +4375,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 const bool deletion=is_physical_wall_room_deletion_review_command(geometry);
                 if (deletion) validate_physical_wall_room_deletion_review_source(source,reviewed_source,geometry,
                     command.room_review_geometry_proof);
-                (void)validate_state(reviewed_source,source_assets);
+                (void)validate_state(reviewed_source,source_assets,active_policy);
                 std::set<std::string> changed_walls,reviewed_rooms;
                 for (const auto& [id,entity] : source) {
                     if (entity.type!="wall") continue;
@@ -4178,10 +4414,14 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 }
             }
             const auto replay=has_room_review_batch_completion(command) ?
-                replay_physical_wall_room_review_batch(reviewed_source,room_review_intents(command)) :
-                replay_physical_wall_room_review(reviewed_source,command.room_review_intent);
+                replay_physical_wall_room_review_batch(reviewed_source,room_review_intents(command),active_policy) :
+                replay_physical_wall_room_review(reviewed_source,command.room_review_intent,active_policy);
             validate_boundary_identity_transition(history,source,replay.entities);
-            (void)validate_constraint_integrity(replay.entities);
+            if (active_policy) {
+                validate_active_design_preserved_dependents(source,replay.entities,false);
+                (void)validate_active_phase_constraint_integrity(replay.entities);
+            }
+            else (void)validate_constraint_integrity(replay.entities);
             return replay.entities;
 #else
             throw std::invalid_argument("Room review requires the production physical-wall engine");
@@ -5181,8 +5421,42 @@ Entity merge_selection_annotation_entities(const Entity& original, const Entity&
     return result;
 }
 
-std::map<std::string, Entity, std::less<>> joint_rigid_replay_source(
-    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
+nlohmann::json encode_joint_translation_intent(const JointTranslationIntent& intent) {
+    return joint_translation_to_json(intent);
+}
+
+JointTranslationIntent decode_joint_translation_intent(const nlohmann::json& value) {
+    return joint_translation_from_json(value);
+}
+
+static void validate_active_joint_targets(const std::map<std::string, Entity, std::less<>>& source,
+    const JointTranslationIntent& intent, const ConstraintPhaseScope& scope) {
+    (void)resolve_joint_translation_offsets(source,intent);
+    const auto require_active=[&](const auto& ids) {
+        for (const auto& id : ids) if (scope.inactive_owner_ids.contains(id))
+            throw std::invalid_argument("Joint edit target belongs to an inactive design: " + id);
+    };
+    require_active(intent.rigid_boundary_ids);
+    require_active(intent.rigid_stroke_ids);
+    require_active(intent.partial_wall_ids);
+    require_active(intent.dimension_ids);
+}
+
+static void validate_inactive_joint_records(const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Entity, std::less<>>& candidate, const ConstraintPhaseScope& scope) {
+    for (const auto& registry : scope.registries)
+        if (!candidate.contains(registry.registry_id) ||
+            !exact_entity_payload(source.at(registry.registry_id),candidate.at(registry.registry_id)))
+            throw std::invalid_argument("Joint constraint edits cannot change saved design choices");
+    for (const auto& id : scope.inactive_owner_ids)
+        if (!candidate.contains(id) || !exact_entity_payload(source.at(id),candidate.at(id)))
+            throw std::invalid_argument("Joint constraint edits cannot change an inactive design object: " + id);
+}
+
+static std::map<std::string, Entity, std::less<>> joint_rigid_replay_source_impl(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent,
+    const ConstraintPhaseScope* scope) {
+    if (scope) validate_active_joint_targets(source,intent,*scope);
     const auto resolved = resolve_joint_translation_offsets(source, intent);
     if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return source;
     std::vector<BoundaryTransformation> boundaries;
@@ -5193,12 +5467,29 @@ std::map<std::string, Entity, std::less<>> joint_rigid_replay_source(
             continue;
         boundaries.push_back({id, resolved.owner_transforms.at(id)});
     }
-    return boundaries.empty() ? source : transformed_boundary_entities_per_owner_batch(source, boundaries);
+    auto result=boundaries.empty() ? source : transformed_boundary_entities_per_owner_batch(source, boundaries);
+    if (scope) validate_inactive_joint_records(source,result,*scope);
+    return result;
 }
 
-void complete_joint_rigid_sources(const std::map<std::string, Entity, std::less<>>& source,
+std::map<std::string, Entity, std::less<>> joint_rigid_replay_source(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
+    return joint_rigid_replay_source_impl(source,intent,nullptr);
+}
+
+std::map<std::string, Entity, std::less<>> joint_rigid_replay_source_active_phase(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
+    const auto scope=constraint_phase_scope(source);
+    return joint_rigid_replay_source_impl(source,intent,&scope);
+}
+
+static void complete_joint_rigid_sources_impl(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
-    bool physical_sources_ready) {
+    bool physical_sources_ready, const ConstraintPhaseScope* scope) {
+    if (scope) {
+        validate_active_joint_targets(source,intent,*scope);
+        validate_inactive_joint_records(source,candidate,*scope);
+    }
     if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty())
         throw std::invalid_argument("Rigid source completion requires a captured v4 owner intent");
     const auto resolved = resolve_joint_translation_offsets(source,intent);
@@ -5289,15 +5580,35 @@ void complete_joint_rigid_sources(const std::map<std::string, Entity, std::less<
     const auto verified = measurement_linework_source_checks(candidate,&semantic_available);
     const auto previous = measurement_linework_source_checks(source,&semantic_available);
     for (const auto& [id,old] : previous)
-        if (old.current && !measurement_linework_source_current(verified,candidate.at(id)))
+        if ((!scope || !scope->inactive_owner_ids.contains(id)) && old.current &&
+            !measurement_linework_source_current(verified,candidate.at(id)))
             throw std::invalid_argument("Rigid joint redraw would stale a previously current measured consumer: " + id);
     for (const auto& id : intent.rigid_boundary_ids)
         if (source.at(id).properties.contains("wall_measurement_source") && !wall_measurement_source_current(candidate,candidate.at(id)))
             throw std::invalid_argument("Rigid joint physical redraw did not retain exact current source geometry");
+    if (scope) validate_inactive_joint_records(source,candidate,*scope);
 }
 
-void validate_joint_rigid_topology(const std::map<std::string, Entity, std::less<>>& source,
-    const std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
+void complete_joint_rigid_sources(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool physical_sources_ready) {
+    complete_joint_rigid_sources_impl(source,candidate,intent,physical_sources_ready,nullptr);
+}
+
+void complete_joint_rigid_sources_active_phase(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool physical_sources_ready) {
+    const auto scope=constraint_phase_scope(source);
+    complete_joint_rigid_sources_impl(source,candidate,intent,physical_sources_ready,&scope);
+}
+
+static void validate_joint_rigid_topology_impl(const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    const ConstraintPhaseScope* scope) {
+    if (scope) {
+        validate_active_joint_targets(source,intent,*scope);
+        validate_inactive_joint_records(source,candidate,*scope);
+    }
     if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty())
         throw std::invalid_argument("Rigid topology admission requires a captured v4 owner intent");
     const auto resolved = resolve_joint_translation_offsets(source,intent);
@@ -5364,6 +5675,7 @@ void validate_joint_rigid_topology(const std::map<std::string, Entity, std::less
         if (entity.type != "constraint") continue;
         const auto decoded = decode_constraint_entity(entity);
         if (!decoded.supported() || decoded.constraint->relation != ConstraintRelationKind::fixed_anchor) continue;
+        if (scope && !constraint_participates(*decoded.constraint,*scope)) continue;
         const auto& binding = decoded.constraint->bindings.front();
         Vec2 actual;
         if (binding.segment_id.empty()) {
@@ -5384,19 +5696,37 @@ void validate_joint_rigid_topology(const std::map<std::string, Entity, std::less
     }
     std::map<std::string,PlanarTransform,std::less<>> wall_transforms;
     for (const auto& id : intent.partial_wall_ids) wall_transforms.emplace(id,resolved.owner_transforms.at(id));
-    validate_constraint_edit_topology(topology_source,candidate,
-        std::set<std::string,std::less<>>(intent.partial_wall_ids.begin(),intent.partial_wall_ids.end()),wall_transforms);
+    const std::set<std::string,std::less<>> rigid_walls(intent.partial_wall_ids.begin(),intent.partial_wall_ids.end());
+    if (scope) validate_active_phase_constraint_edit_topology(topology_source,candidate,rigid_walls,wall_transforms);
+    else validate_constraint_edit_topology(topology_source,candidate,rigid_walls,wall_transforms);
 }
 
-void complete_joint_rigid_consequences(const std::map<std::string, Entity, std::less<>>& source,
+void validate_joint_rigid_topology(const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
+    validate_joint_rigid_topology_impl(source,candidate,intent,nullptr);
+}
+
+void validate_joint_rigid_topology_active_phase(const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
+    const auto scope=constraint_phase_scope(source);
+    validate_joint_rigid_topology_impl(source,candidate,intent,&scope);
+}
+
+static void complete_joint_rigid_consequences_impl(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
-    bool complete_area_callouts) {
+    bool complete_area_callouts, const ConstraintPhaseScope* scope) {
+    if (scope) {
+        validate_active_joint_targets(source,intent,*scope);
+        validate_inactive_joint_records(source,candidate,*scope);
+    }
     if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return;
     const auto resolved = resolve_joint_translation_offsets(source, intent);
     for (const auto& [id, original] : source) {
+        if (scope && scope->inactive_owner_ids.contains(id)) continue;
         if (original.type == "constraint") {
             const auto decoded = decode_constraint_entity(original);
             if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            if (scope && !constraint_participates(*decoded.constraint,*scope)) continue;
             auto expected = *decoded.constraint;
             if (expected.relation != ConstraintRelationKind::horizontal && expected.relation != ConstraintRelationKind::vertical)
                 continue; // Fixed anchors retain their saved world coordinates.
@@ -5420,6 +5750,7 @@ void complete_joint_rigid_consequences(const std::map<std::string, Entity, std::
         } else if (original.type == "opening") {
             std::string host, diagnostic;
             if (!read_document_wall_id(original, host, diagnostic)) throw std::invalid_argument(diagnostic);
+            if (scope && scope->inactive_owner_ids.contains(host)) continue;
             const auto found = resolved.owner_transforms.find(host);
             if (found == resolved.owner_transforms.end()) continue;
             const auto replacement = replay_rigid_source_opening(original, found->second);
@@ -5436,6 +5767,7 @@ void complete_joint_rigid_consequences(const std::map<std::string, Entity, std::
             for (const auto& record : original.properties.at("state").at("overrides")) {
                 const auto& kind = record.at("target_kind");
                 if (kind != "wall_dimension") continue;
+                if (scope && scope->inactive_owner_ids.contains(record.at("target_id").get<std::string>())) continue;
                 const auto found = resolved.owner_transforms.find(record.at("target_id").get<std::string>());
                 if (found == resolved.owner_transforms.end()) continue;
                 auto expected = record;
@@ -5471,6 +5803,20 @@ void complete_joint_rigid_consequences(const std::map<std::string, Entity, std::
             candidate.at(change.entity.id) = merge_selection_annotation_entities(source.at(change.entity.id),
                 change.entity,candidate.at(change.entity.id),AnnotationMergeMode::source_callout_proof);
     }
+    if (scope) validate_inactive_joint_records(source,candidate,*scope);
+}
+
+void complete_joint_rigid_consequences(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool complete_area_callouts) {
+    complete_joint_rigid_consequences_impl(source,candidate,intent,complete_area_callouts,nullptr);
+}
+
+void complete_joint_rigid_consequences_active_phase(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool complete_area_callouts) {
+    const auto scope=constraint_phase_scope(source);
+    complete_joint_rigid_consequences_impl(source,candidate,intent,complete_area_callouts,&scope);
 }
 
 nlohmann::json command_to_json(const Command& command) {
@@ -5604,7 +5950,7 @@ nlohmann::json command_to_json(const Command& command) {
                             throw std::invalid_argument("Selection completion requires unique supported nonwall upserts");
                     const auto proof = command_to_json(Command{without_selection_completion(typed)});
                     const auto version = proof.at("version").get<int>();
-                    if (version < 1 || (version > 21 && version != 23))
+                    if (version < 1 || (version > 21 && version != 23 && version != 34))
                         throw std::invalid_argument("Selection completion requires one preceding typed proof");
                     auto encoded = nlohmann::json{{"version",22},{"kind","apply_boundary_constraint_changes"},
                         {"expected_revision",typed.expected_revision},{"message",typed.message},
@@ -5614,6 +5960,30 @@ nlohmann::json command_to_json(const Command& command) {
                     if (encoded.dump().size() > 1024 * 1024)
                         throw std::invalid_argument("Selection completion exceeds the persisted proof budget");
                     return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
+            if (has_phase_constraint_authoring(typed) && !has_disto_measurement_completion(typed)) {
+                try {
+                    validate_phase_constraint_authoring_mode(typed);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    const auto intent=decode_phase_constraint_authoring_intent(typed.phase_constraint_authoring_intent);
+                    if (intent.expected_revision!=typed.expected_revision ||
+                        encode_phase_constraint_authoring_intent(intent).dump()!=typed.phase_constraint_authoring_intent.dump())
+                        throw std::invalid_argument("Active design authoring must retain its canonical source intent");
+                    if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message) ||
+                        intent.intent.message.size()>1024 || !is_valid_utf8_without_nul(intent.intent.message))
+                        throw std::invalid_argument("Serialized active design authoring message is invalid");
+                    auto encoded=nlohmann::json{{"version",34},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"phase_constraint_authoring_completion",true},
+                        {"phase_constraint_authoring_intent",typed.phase_constraint_authoring_intent}};
+                    if (encoded.dump().size()>1024*1024)
+                        throw std::invalid_argument("Active design authoring exceeds the persisted proof budget");
+                    return encoded;
+#else
+                    throw std::invalid_argument("Active design authoring requires the production constraint engine");
+#endif
                 } catch (const DocumentError&) { throw; }
                 catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
             }
@@ -5977,7 +6347,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>33) ||
+            (value.at("version")<1 || value.at("version")>34) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -6080,6 +6450,22 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==34) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "phase_constraint_authoring_completion","phase_constraint_authoring_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized active design authoring");
+                if (value.dump().size()>1024*1024 || !value.at("phase_constraint_authoring_completion").is_boolean() ||
+                    !value.at("phase_constraint_authoring_completion").get<bool>() || !value.at("message").is_string())
+                    throw std::invalid_argument("Active design authoring mode, message or proof budget is invalid");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Active design authoring revision");
+                result.message=value.at("message").get<std::string>();
+                result.phase_constraint_authoring_completion=true;
+                result.phase_constraint_authoring_intent=value.at("phase_constraint_authoring_intent");
+                if (command_to_json(Command{result}).dump()!=value.dump())
+                    throw std::invalid_argument("Active design authoring requires its canonical envelope");
+                return result;
+            }
             if (value.at("version")==33) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "phase_room_review_completion","phase_room_review_intent"},
@@ -6130,7 +6516,7 @@ Command command_from_json(const nlohmann::json& value,
                 const auto& proof = value.at("proof");
                 if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
                     proof.at("version").get<std::int64_t>() < 1 ||
-                    (proof.at("version").get<std::int64_t>() > 21 && proof.at("version") != 23) ||
+                    (proof.at("version").get<std::int64_t>() > 21 && proof.at("version") != 23 && proof.at("version") != 34) ||
                     !proof.contains("kind") || proof.at("kind") != kind)
                     throw std::invalid_argument("Selection completion requires one preceding unnested typed proof");
                 const auto decoded = command_from_json(proof, asset_resolver);
@@ -6190,7 +6576,8 @@ Command command_from_json(const nlohmann::json& value,
                     throw std::invalid_argument("DISTO completion mode or proof budget is invalid");
                 const auto& proof = value.at("proof");
                 if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
-                    proof.at("version").get<std::int64_t>() < 1 || proof.at("version").get<std::int64_t>() > 18)
+                    proof.at("version").get<std::int64_t>() < 1 ||
+                    (proof.at("version").get<std::int64_t>() > 18 && proof.at("version")!=34))
                     throw std::invalid_argument("DISTO completion requires a preceding command dialect");
                 const auto decoded = command_from_json(proof, asset_resolver);
                 const auto* original = std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
@@ -6756,6 +7143,13 @@ const std::vector<RevisionRecord>& DocumentSnapshot::history() const noexcept {
     static const std::vector<RevisionRecord> empty;
     return history_ ? *history_ : empty;
 }
+bool DocumentSnapshot::uses_active_phase_constraints() const {
+    const auto policies=active_constraint_history_policies(history());
+    if (policies.empty()) return false;
+    if (revision_>=policies.size())
+        document_error(DocumentErrorCode::invalid_history,"Constraint policy revision is absent");
+    return policies[static_cast<std::size_t>(revision_)];
+}
 bool DocumentSnapshot::shares_authoring_source_with(const DocumentSnapshot& other) const noexcept {
     return history_ && history_ == other.history_ && document_id_ == other.document_id_ &&
         revision_ == other.revision_ && named_revisions_ == other.named_revisions_;
@@ -6984,6 +7378,8 @@ Revision Document::apply(const Command& command) {
         [this](const auto& typed_command) -> Revision {
             validate_expected_revision(head_revision_, typed_command.expected_revision);
             const auto& current = head_record();
+            const bool source_active_policy=active_constraint_history_policies(history_).at(static_cast<std::size_t>(head_revision_));
+            bool next_active_policy=source_active_policy;
             RevisionRecord next;
             next.revision = static_cast<Revision>(history_.size());
             next.parent_revision = head_revision_;
@@ -7018,7 +7414,7 @@ Revision Document::apply(const Command& command) {
                         next.assets.erase(change.asset_id);
                     }
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
                 validate_constraint_change(current.entities, next.entities);
                 validate_boundary_change(boundary_identity_history_, current.entities, next.entities,
                                          next.action == "Propagate room relationships");
@@ -7034,7 +7430,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
                 validate_constraint_change(current.entities, next.entities, false, true, true);
                 if (same_state(next, current))
                     return head_revision_;
@@ -7044,7 +7440,7 @@ Revision Document::apply(const Command& command) {
                 validate_action(next.action);
                 next.boundary_translations = typed_command;
                 next.entities = boundary_translation_entities(boundary_identity_history_, current.entities, typed_command);
-                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
@@ -7052,6 +7448,10 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
+                next_active_policy=source_active_policy || !phase_constraint_authoring_proofs(typed_command).empty();
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                validate_phase_constraint_authoring_source(snapshot(),typed_command);
+#endif
                 if(typed_command.wall_split)validate_wall_split_lifetime(*typed_command.wall_split,history_,history_.size());
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                 if (has_phase_room_review_completion(typed_command)) {
@@ -7082,9 +7482,13 @@ Revision Document::apply(const Command& command) {
                 }
 #endif
                 next.boundary_constraint_changes = typed_command;
-                next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets, typed_command);
+                next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets, typed_command,false,source_active_policy);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
-                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                if (!phase_constraint_authoring_proofs(typed_command).empty())
+                    validate_phase_constraint_fresh_lifetime(current.entities,next.entities,history_,history_.size());
+#endif
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
                 try {
                     validate_boundary_identity_transition(
@@ -7106,7 +7510,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
@@ -7119,7 +7523,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
@@ -7134,7 +7538,7 @@ Revision Document::apply(const Command& command) {
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
-                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(
@@ -7154,7 +7558,7 @@ Revision Document::apply(const Command& command) {
             // explicit; supported source refresh will need typed authority.
             validate_physical_room_source_transition(current.entities, next.entities,
                 next.boundary_geometry_edit ? &*next.boundary_geometry_edit : nullptr,
-                next.boundary_constraint_changes ? &*next.boundary_constraint_changes : nullptr);
+                next.boundary_constraint_changes ? &*next.boundary_constraint_changes : nullptr,next_active_policy);
             auto next_stair_identity_history = stair_identity_history_;
             try {
                 next_stair_identity_history.initialize_if_needed(history_, current.entities, next.entities);
@@ -7191,7 +7595,8 @@ Revision Document::undo(Revision expected_revision) {
     }
     const auto target_revision = current.undo_stack.back();
     const auto& target = history_.at(static_cast<std::size_t>(target_revision));
-    if (const auto unsupported = validate_state(target.entities, target.assets))
+    if (const auto unsupported = validate_state(target.entities, target.assets,
+        active_constraint_history_policies(history_).at(static_cast<std::size_t>(target_revision))))
         document_error(DocumentErrorCode::read_only, *unsupported);
     RevisionRecord next;
     next.revision = static_cast<Revision>(history_.size());
@@ -7225,7 +7630,8 @@ Revision Document::redo(Revision expected_revision) {
     }
     const auto target_revision = current.redo_stack.back();
     const auto& target = history_.at(static_cast<std::size_t>(target_revision));
-    if (const auto unsupported = validate_state(target.entities, target.assets))
+    if (const auto unsupported = validate_state(target.entities, target.assets,
+        active_constraint_history_policies(history_).at(static_cast<std::size_t>(target_revision))))
         document_error(DocumentErrorCode::read_only, *unsupported);
     RevisionRecord next;
     next.revision = static_cast<Revision>(history_.size());
@@ -7303,13 +7709,14 @@ Document Document::restore(DocumentSnapshot snapshot) {
     std::optional<std::string> unsupported_constraint_history;
     BoundaryIdentityHistory identity_history;
     StairIdentityHistory stair_identity_history;
+    const auto active_policies=active_constraint_history_policies(snapshot.history());
     for (std::size_t index = 0; index < snapshot.history().size(); ++index) {
         const auto& record = snapshot.history()[index];
         validate_action(record.action);
         if (record.revision != index) {
             document_error(DocumentErrorCode::invalid_history, "stored revisions are not contiguous");
         }
-        auto unsupported = validate_state(record.entities, record.assets);
+        auto unsupported = validate_state(record.entities, record.assets,active_policies.at(index));
         if (unsupported && !unsupported_constraint_history)
             unsupported_constraint_history = std::move(unsupported);
 
@@ -7363,6 +7770,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes) ||
             has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes) ||
             has_phase_room_review_completion(*record.boundary_constraint_changes) ||
+            has_phase_constraint_authoring(*record.boundary_constraint_changes) ||
             has_disto_measurement_completion(*record.boundary_constraint_changes) || has_selection_completion(*record.boundary_constraint_changes) ||
             has_curve_construction_completion(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
@@ -7451,7 +7859,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             }
             validate_physical_room_source_transition(previous.entities, record.entities,
                 record.boundary_geometry_edit ? &*record.boundary_geometry_edit : nullptr,
-                record.boundary_constraint_changes ? &*record.boundary_constraint_changes : nullptr);
+                record.boundary_constraint_changes ? &*record.boundary_constraint_changes : nullptr,active_policies.at(index));
             if (record.boundary_transforms) {
                 const auto& proof = *record.boundary_transforms;
                 const auto action = proof.message.empty() ? "Transform boundaries" : proof.message;
@@ -7537,6 +7945,9 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 auto expected = previous;
                 try {
                     if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history(),index);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    validate_retained_phase_constraint_authoring_source(snapshot,previous,proof);
+#endif
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     if (has_phase_room_review_completion(proof)) {
                         validate_phase_room_review_mode(proof);
@@ -7562,7 +7973,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
                         }
                     }
 #endif
-                    expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets, proof, true);
+                    expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets, proof, true,active_policies.at(index-1));
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    if (!phase_constraint_authoring_proofs(proof).empty())
+                        validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index);
+#endif
                     expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
                         wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) :

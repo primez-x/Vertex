@@ -5,6 +5,7 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/constraint_wall_edit.hpp"
@@ -1383,12 +1384,14 @@ nlohmann::json encode_exterior_corner_move(const ExteriorCornerMoveIntent& inten
 
 namespace {
 using PhysicalContact = ExteriorCornerPhysicalContact;
-std::vector<PhysicalContact> physical_contacts(const std::map<std::string, Entity, std::less<>>& original) {
+std::vector<PhysicalContact> physical_contacts(const std::map<std::string, Entity, std::less<>>& original,
+    const ConstraintPhaseScope* scope = nullptr) {
     struct PhysicalWall { Segment geometry; std::string property, building, floor; Json phase; double low, high; };
     std::map<std::string, PhysicalWall, std::less<>> walls;
     const auto organization = organize_project(original);
     std::set<std::string, std::less<>> unavailable;
-    for (const auto& [id,entity] : original) {
+    if (scope) unavailable = scope->inactive_owner_ids;
+    else for (const auto& [id,entity] : original) {
         (void)id;
         if (entity.type != "model_phases") continue;
         const auto model = ModelPhases::from_json(entity.properties.at("model"));
@@ -1470,10 +1473,11 @@ std::vector<PhysicalContact> physical_contacts(const std::map<std::string, Entit
 std::vector<ExteriorCornerPhysicalContact> exterior_corner_physical_contact_graph(
     const std::map<std::string, Entity, std::less<>>& original) { return physical_contacts(original); }
 
-void validate_exterior_corner_physical_contacts(
+static void validate_exterior_corner_physical_contacts_impl(
     const std::map<std::string, Entity, std::less<>>& original,
-    const std::map<std::string, Entity, std::less<>>& proposed) {
-    for (const auto& contact : physical_contacts(original)) {
+    const std::map<std::string, Entity, std::less<>>& proposed,
+    const ConstraintPhaseScope* scope) {
+    for (const auto& contact : physical_contacts(original,scope)) {
         if (!proposed.contains(contact.owner) || !proposed.contains(contact.host))
             reject("Exterior corner cannot remove an existing physical wall contact owner");
         const auto after = baseline(proposed.at(contact.owner).properties);
@@ -1482,6 +1486,26 @@ void validate_exterior_corner_physical_contacts(
         if (distance(contact.start ? after.start : after.end,target) > default_geometry_tolerance_metres)
             reject("Exterior corner would detach an existing physical wall corner or T station");
     }
+}
+
+void validate_exterior_corner_physical_contacts(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed) {
+    validate_exterior_corner_physical_contacts_impl(original,proposed,nullptr);
+}
+
+std::vector<ExteriorCornerPhysicalContact> exterior_corner_physical_contact_graph_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original) {
+    const auto scope=constraint_phase_scope(original);
+    return physical_contacts(original,&scope);
+}
+
+void validate_exterior_corner_physical_contacts_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed) {
+    const auto scope=constraint_phase_scope(original);
+    (void)constraint_phase_scope(proposed);
+    validate_exterior_corner_physical_contacts_impl(original,proposed,&scope);
 }
 
 ExteriorCornerMoveIntent decode_exterior_corner_move(const nlohmann::json& value) {
@@ -1552,11 +1576,17 @@ static void validate_measured_arc_edge(const Segment& actual,const Segment& targ
 static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::string& boundary_id, const Boundary& requested, bool move_connected_objects,
-    bool restore_shared_vertices = false, bool measured_arc_authority = false) {
+    bool restore_shared_vertices = false, bool measured_arc_authority = false,
+    const ConstraintPhaseScope* scope = nullptr) {
+    if (scope && scope->inactive_owner_ids.contains(boundary_id))
+        reject("Inactive measured owner cannot author an exterior outline");
     const auto found = original.find(boundary_id);
     if (found == original.end()) reject("Exterior corner measured owner does not exist");
     const auto& owner = found->second;
     const auto ids = exterior_wall_measurement_source_ids(owner);
+    if (scope) for (const auto& id : ids)
+        if (scope->inactive_owner_ids.contains(id))
+            reject("Exterior outline requires active physical source walls");
     const auto identified = decode_identified_boundary_entity(owner);
     const auto actual = boundary_geometry(identified);
     std::optional<WallMeasurementResult> old;
@@ -1646,7 +1676,7 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     }
     // Preserve existing physical endpoint contacts and T stations, including
     // multiple-host agreement. A partition's unattached endpoint stays fixed.
-    const auto contacts = physical_contacts(original);
+    const auto contacts = physical_contacts(original,scope);
     std::map<std::string, std::vector<PhysicalContact>, std::less<>> contacts_by_owner;
     for (const auto& contact : contacts) contacts_by_owner[contact.owner].push_back(contact);
     const std::set<std::string, std::less<>> source_ids(old->ordered_wall_ids.begin(), old->ordered_wall_ids.end());
@@ -1654,7 +1684,8 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     for (std::size_t iteration = 0; iteration <= contacts_by_owner.size(); ++iteration) {
         const auto previous_targets = targets;
     for (const auto& [id, entity] : original) {
-        if (entity.type != "wall" || source_ids.contains(id) || !entity.properties.contains("baseline")) continue;
+        if ((scope && scope->inactive_owner_ids.contains(id)) ||
+            entity.type != "wall" || source_ids.contains(id) || !entity.properties.contains("baseline")) continue;
         const auto previous = baseline(entity.properties);
         auto next = previous;
         for (const bool start : {true, false}) {
@@ -1697,7 +1728,7 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
             recorded["sweep_radians"] = target.sweep_radians;
         }
     }
-    validate_exterior_corner_physical_contacts(original, candidate);
+    validate_exterior_corner_physical_contacts_impl(original, candidate,scope);
     for (const auto& id : source_ids) validate_constraint_wall_host(id, candidate);
     // Compare against the actual forward result; never replace these bytes with
     // the user's target coordinates merely to make exact currentness pass.
@@ -1734,9 +1765,11 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     return candidate;
 }
 
-std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
+static std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities_impl(
     const std::map<std::string, Entity, std::less<>>& original,
-    const ExteriorCornerMoveIntent& intent) {
+    const ExteriorCornerMoveIntent& intent,const ConstraintPhaseScope* scope) {
+    if (scope && scope->inactive_owner_ids.contains(intent.boundary_id))
+        reject("Inactive measured owner cannot author an exterior corner");
     (void)encode_exterior_corner_move(intent);
     const auto found = original.find(intent.boundary_id);
     if (found == original.end()) reject("Exterior corner measured owner does not exist");
@@ -1750,7 +1783,17 @@ std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
             vertex_found = true;
         }
     if (!vertex_found) reject("Exterior corner stable vertex does not exist");
-    return inverse_exterior_outline(original, intent.boundary_id, requested, intent.move_connected_objects);
+    return inverse_exterior_outline(original, intent.boundary_id, requested, intent.move_connected_objects,false,false,scope);
+}
+
+std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,const ExteriorCornerMoveIntent& intent) {
+    return exterior_corner_physical_entities_impl(original,intent,nullptr);
+}
+std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original,const ExteriorCornerMoveIntent& intent) {
+    const auto scope=constraint_phase_scope(original);
+    return exterior_corner_physical_entities_impl(original,intent,&scope);
 }
 
 nlohmann::json encode_exterior_segment_resize(const ExteriorSegmentResizeIntent& intent) {
@@ -1793,16 +1836,28 @@ ExteriorSegmentResizeIntent decode_exterior_segment_resize(const nlohmann::json&
     return result;
 }
 
-std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities(
+static std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities_impl(
     const std::map<std::string, Entity, std::less<>>& original,
-    const ExteriorSegmentResizeIntent& intent) {
+    const ExteriorSegmentResizeIntent& intent,const ConstraintPhaseScope* scope) {
+    if (scope && scope->inactive_owner_ids.contains(intent.boundary_id))
+        reject("Inactive measured owner cannot author an exterior resize");
     (void)encode_exterior_segment_resize(intent);
     const auto found = original.find(intent.boundary_id);
     if (found == original.end()) reject("Exterior resize measured owner does not exist");
     const auto identified = decode_identified_boundary_entity(found->second);
     const auto requested = set_boundary_segment_length(identified, intent.segment_id, intent.exact_length.metres,
                                                        intent.fixed_endpoint, intent.move_boundary_chain);
-    return inverse_exterior_outline(original, intent.boundary_id, boundary_geometry(requested), intent.move_connected_objects, true);
+    return inverse_exterior_outline(original, intent.boundary_id, boundary_geometry(requested), intent.move_connected_objects, true,false,scope);
+}
+
+std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,const ExteriorSegmentResizeIntent& intent) {
+    return exterior_segment_resize_physical_entities_impl(original,intent,nullptr);
+}
+std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original,const ExteriorSegmentResizeIntent& intent) {
+    const auto scope=constraint_phase_scope(original);
+    return exterior_segment_resize_physical_entities_impl(original,intent,&scope);
 }
 
 void validate_exterior_segment_resize_result(
@@ -1879,8 +1934,11 @@ ExteriorSegmentArcIntent decode_exterior_segment_arc(const nlohmann::json& value
     return result;
 }
 
-std::map<std::string,Entity,std::less<>> exterior_segment_arc_physical_entities(
-    const std::map<std::string,Entity,std::less<>>& original,const ExteriorSegmentArcIntent& intent) {
+static std::map<std::string,Entity,std::less<>> exterior_segment_arc_physical_entities_impl(
+    const std::map<std::string,Entity,std::less<>>& original,const ExteriorSegmentArcIntent& intent,
+    const ConstraintPhaseScope* scope) {
+    if (scope && scope->inactive_owner_ids.contains(intent.boundary_id))
+        reject("Inactive measured owner cannot author an exterior arc");
     (void)encode_exterior_segment_arc(intent);
     const auto found=original.find(intent.boundary_id);
     if (found==original.end()) reject("Exterior arc measured owner does not exist");
@@ -1888,7 +1946,17 @@ std::map<std::string,Entity,std::less<>> exterior_segment_arc_physical_entities(
         intent.segment_id,intent.arc_construction);
     const auto geometry=boundary_geometry(requested);
     (void)measured_arc_roundoff(geometry);
-    return inverse_exterior_outline(original,intent.boundary_id,geometry,intent.move_connected_objects,true,true);
+    return inverse_exterior_outline(original,intent.boundary_id,geometry,intent.move_connected_objects,true,true,scope);
+}
+
+std::map<std::string,Entity,std::less<>> exterior_segment_arc_physical_entities(
+    const std::map<std::string,Entity,std::less<>>& original,const ExteriorSegmentArcIntent& intent) {
+    return exterior_segment_arc_physical_entities_impl(original,intent,nullptr);
+}
+std::map<std::string,Entity,std::less<>> exterior_segment_arc_physical_entities_active_phase(
+    const std::map<std::string,Entity,std::less<>>& original,const ExteriorSegmentArcIntent& intent) {
+    const auto scope=constraint_phase_scope(original);
+    return exterior_segment_arc_physical_entities_impl(original,intent,&scope);
 }
 
 void validate_exterior_segment_arc_result(const std::map<std::string,Entity,std::less<>>& original,
@@ -1923,13 +1991,16 @@ void validate_exterior_segment_arc_result(const std::map<std::string,Entity,std:
     }
 }
 
-std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
+static std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates_impl(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed,
     bool validate_final_constraints,
     const std::map<std::string,Vec2,std::less<>>& rigid_offsets,
-    const std::map<std::string,PlanarTransform,std::less<>>& rigid_transforms) {
+    const std::map<std::string,PlanarTransform,std::less<>>& rigid_transforms,
+    const ConstraintPhaseScope* scope) {
     for (const auto& [id,offset]:rigid_offsets) {
+        if (scope && scope->inactive_owner_ids.contains(id))
+            reject("Inactive exterior measured owner cannot receive a rigid translation");
         const auto owner=original.find(id);
         if (owner==original.end() || owner->second.type!="measurement_boundary" ||
             !owner->second.properties.contains("wall_measurement_source") || !wall_measurement_source_current(original,owner->second) ||
@@ -1937,6 +2008,8 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
             reject("Rigid exterior translation requires a current retained source and a bounded nonzero offset");
     }
     for (const auto& [id,transform]:rigid_transforms) {
+        if (scope && scope->inactive_owner_ids.contains(id))
+            reject("Inactive exterior measured owner cannot receive a rigid transform");
         validate_boundary_transform({id,transform});
         const auto owner=original.find(id), retained=proposed.find(id);
         if (owner==original.end() || owner->second.id!=id || owner->second.type!="measurement_boundary" ||
@@ -2031,6 +2104,7 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     std::map<std::string, BoundaryGeometryEdit, std::less<>> updates;
     std::set<std::string,std::less<>> qualified_rigid_owners;
     for (const auto& [id, owner] : original) {
+        if (scope && scope->inactive_owner_ids.contains(id)) continue;
         // Generic and anonymous imported boundaries retain their existing
         // explicit-upgrade/source-repair contract.
         if (owner.type != "measurement_boundary" ||
@@ -2039,6 +2113,13 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
         std::vector<std::string> ids;
         try { ids = exterior_wall_measurement_source_ids(owner); }
         catch (const std::exception&) { continue; } // Independently stale original source schema.
+        if (scope && std::any_of(ids.begin(),ids.end(),[&](const auto& wall_id) {
+            return scope->inactive_owner_ids.contains(wall_id);
+        })) {
+            if (rigid_offsets.contains(id) || rigid_transforms.contains(id))
+                reject("Rigid exterior completion requires active physical source walls");
+            continue;
+        }
         bool affected = false;
         for (const auto& wall_id : ids) {
             const auto before = original.find(wall_id), after = proposed.find(wall_id);
@@ -2203,17 +2284,25 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     };
     for (const auto& [id, edit] : updates) { (void)edit; append(append, id); }
     auto completed = edited_boundary_entities_batch(proposed, result);
+    if (scope) for (const auto& id : scope->inactive_owner_ids) {
+        const auto before=original.find(id), after=completed.find(id);
+        if (before!=original.end() && (after==completed.end() || before->second!=after->second))
+            reject("Exterior source completion changed an inactive phase owner: " + id);
+    }
     for (const auto& [id,transform]:rigid_transforms) {
         (void)transform;
         if (!wall_measurement_source_current(completed,completed.at(id)))
             reject("Rigid exterior transform left its measured source owner stale");
     }
     if (const auto unsupported = validate_boundary_integrity(completed)) reject(*unsupported);
-    if (validate_final_constraints)
-        if (const auto unsupported = validate_constraint_integrity(completed)) reject(*unsupported);
+    if (validate_final_constraints) {
+        const auto unsupported=scope ? validate_active_phase_constraint_integrity(completed) :
+            validate_constraint_integrity(completed);
+        if (unsupported) reject(*unsupported);
+    }
     // Also validate unchanged parents of updated deductions against final state.
     for (const auto& [id, owner] : completed) {
-        (void)id;
+        if (scope && scope->inactive_owner_ids.contains(id)) continue;
         const auto deductions = owner.properties.find("deduction_ids");
         if (deductions == owner.properties.end() || !deductions->is_array() ||
             !can_recognize_boundary_entity_type(owner.type)) continue;
@@ -2231,6 +2320,34 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
                     reject("Updated deduction does not fit its retained parent: " + *diagnostic);
     }
     return result;
+}
+
+std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed,
+    bool validate_final_constraints,
+    const std::map<std::string,Vec2,std::less<>>& rigid_offsets,
+    const std::map<std::string,PlanarTransform,std::less<>>& rigid_transforms) {
+    return exterior_wall_measurement_source_updates_impl(original,proposed,validate_final_constraints,
+        rigid_offsets,rigid_transforms,nullptr);
+}
+
+std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed,
+    bool validate_final_constraints,
+    const std::map<std::string,Vec2,std::less<>>& rigid_offsets,
+    const std::map<std::string,PlanarTransform,std::less<>>& rigid_transforms) {
+    auto scope=constraint_phase_scope(original);
+    const auto after_scope=constraint_phase_scope(proposed);
+    scope.inactive_owner_ids.insert(after_scope.inactive_owner_ids.begin(),after_scope.inactive_owner_ids.end());
+    for (const auto& id : scope.inactive_owner_ids) {
+        const auto before=original.find(id), after=proposed.find(id);
+        if (before!=original.end() && (after==proposed.end() || before->second!=after->second))
+            reject("Exterior source completion requires unchanged inactive phase owners: " + id);
+    }
+    return exterior_wall_measurement_source_updates_impl(original,proposed,validate_final_constraints,
+        rigid_offsets,rigid_transforms,&scope);
 }
 
 std::map<std::string,Entity,std::less<>> complete_wall_split_measurement_sources(

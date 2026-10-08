@@ -18,6 +18,10 @@ struct JointTranslationOffsets {
     const std::map<std::string, Entity, std::less<>>& source,
     const JointTranslationIntent& intent);
 
+// Strict semantic codec; no placeholder geometry command grants authority.
+[[nodiscard]] nlohmann::json encode_joint_translation_intent(const JointTranslationIntent& intent);
+[[nodiscard]] JointTranslationIntent decode_joint_translation_intent(const nlohmann::json& value);
+
 // Source-only preparation/completion for nested v4. Ordinary selected boundary
 // receipts replay their rigid operator; physical and stroke-derived consumers
 // remain in the original map until final source redraw. No raw payload authority.
@@ -35,6 +39,19 @@ void complete_joint_rigid_sources(const std::map<std::string, Entity, std::less<
     std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
     bool physical_sources_ready = true);
 void validate_joint_rigid_topology(const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent);
+
+// Saved-active variants derive scope from the complete admitted source map.
+// Historical public helpers above retain their collect-all reconstruction.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> joint_rigid_replay_source_active_phase(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent);
+void complete_joint_rigid_consequences_active_phase(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool complete_area_callouts = true);
+void complete_joint_rigid_sources_active_phase(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool physical_sources_ready = true);
+void validate_joint_rigid_topology_active_phase(const std::map<std::string, Entity, std::less<>>& source,
     const std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent);
 
 // Reconstruct from source entities only. The returned lower-lane proof has no

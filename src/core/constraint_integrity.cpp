@@ -9,6 +9,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -129,12 +130,52 @@ WallEndpointRole reverse_role(WallEndpointRole role) {
 }
 } // namespace
 
-std::optional<std::string> validate_constraint_integrity(const Entities& entities) {
+namespace {
+void admit_constraint_owner_identity(const std::string& id,const Entities& entities) {
+    const auto owner = entities.find(id);
+    if (owner == entities.end() || owner->second.id != id)
+        invalid("Constraint owner identity is missing or inconsistent: " + id);
+}
+
+// Unknown semantics cannot establish suspension. Recognizable retained
+// endpoint envelopes still bind actual owners and stable endpoint identities;
+// unfamiliar feature/role semantics remain covered by the read-only diagnostic.
+void admit_unsupported_constraint_bindings(const Entity& entity,const Entities& entities,
+    const OpeningIndex& openings_by_wall,const std::set<std::string,std::less<>>& opaque_strokes) {
+    for (const auto& binding : entity.properties.at("bindings")) {
+        const auto id = binding.at("owner_id").get<std::string>();
+        admit_constraint_owner_identity(id,entities);
+        const auto feature = binding.at("feature").get<std::string>();
+        const auto role = binding.at("role").get<std::string>();
+        if (role != "start" && role != "end") continue;
+        const auto& owner = entities.at(id);
+        if (feature == "baseline") {
+            if (!binding.value("segment_id",std::string{}).empty() ||
+                !binding.value("vertex_id",std::string{}).empty())
+                invalid("Constraint baseline binding cannot contain boundary IDs");
+            (void)read_wall(id,entities,openings_by_wall);
+        } else if (feature == "boundary_segment" && !opaque_strokes.contains(id)) {
+            const auto boundary = resolve_constraint_segment_owner(owner);
+            const auto segment_id = binding.value("segment_id",std::string{});
+            const auto vertex_id = binding.value("vertex_id",std::string{});
+            const auto edge = std::find_if(boundary.segments.begin(),boundary.segments.end(),
+                [&](const auto& value) { return value.segment_id == segment_id; });
+            if (edge == boundary.segments.end() || vertex_id.empty())
+                invalid("Constraint stable boundary segment or vertex is missing");
+            if ((role == "start" ? edge->start_vertex_id : edge->end_vertex_id) != vertex_id)
+                invalid("Constraint endpoint identity does not match its segment");
+        }
+    }
+}
+
+std::optional<std::string> constraint_integrity(const Entities& entities,
+                                               const ConstraintPhaseScope* scope) {
     std::optional<std::string> unsupported;
     std::map<std::string, Wall, std::less<>> owners;
     std::set<std::string, std::less<>> opaque_strokes;
     for (const auto& [id, owner] : entities) {
         if (owner.type != "measurement_linework") continue;
+        if (scope) admit_constraint_owner_identity(id,entities);
         const auto decoded = decode_measurement_linework_model(owner.properties.at("model"));
         if (!decoded.supported()) {
             opaque_strokes.insert(id);
@@ -145,9 +186,11 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
     for (const auto& [id, entity] : entities) {
         if (entity.type != "constraint") continue;
         try {
+            if (scope && entity.id != id) invalid("Constraint entity key differs from its actual identity");
             const auto decoded = decode_constraint_entity(entity);
             for (const auto& owner_id : entity.properties.contains("wall_ids")
                      ? typed_wall_ids(entity) : std::vector<std::string>{}) {
+                if (scope) admit_constraint_owner_identity(owner_id,entities);
                 auto found = owners.find(owner_id);
                 if (found == owners.end()) {
                     found = owners.emplace(owner_id,
@@ -155,6 +198,7 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                 }
             }
             if (!decoded.constraint) {
+                if (scope) admit_unsupported_constraint_bindings(entity,entities,openings_by_wall,opaque_strokes);
                 if (entity.properties.contains("entity_ids")) {
                     for (const auto& value : entity.properties.at("entity_ids")) {
                         const auto owner = entities.find(value.get<std::string>());
@@ -172,6 +216,7 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
             std::vector<Vec2> points;
             bool opaque_owner = false;
             for (const auto& binding : constraint.bindings) {
+                if (scope) admit_constraint_owner_identity(binding.owner_id,entities);
                 if (!binding.segment_id.empty()) {
                     const auto owner = entities.find(binding.owner_id);
                     if (owner == entities.end()) invalid("Boundary constraint owner is missing");
@@ -199,6 +244,18 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
             // Keep an unknown measured model opaque while validating every
             // other known owner and every unrelated known relation.
             if (opaque_owner) continue;
+            // Genuine curve/type admission remains global. Chain continuity,
+            // coincidence, angle and measured-length satisfaction are residuals
+            // and run only for participating relations below this fence.
+            if (scope && constraint.relation==ConstraintRelationKind::tangent)
+                (void)resolve_constraint_tangent_segments(constraint,entities);
+            if (scope && constraint.relation==ConstraintRelationKind::fixed_arc_length)
+                for (std::size_t index=0;index<constraint.bindings.size();index+=2) {
+                    auto single=constraint;
+                    single.bindings={constraint.bindings.at(index),constraint.bindings.at(index+1)};
+                    (void)resolve_constraint_arc_segment(single,entities);
+                }
+            if (scope && !constraint_participates(constraint,*scope)) continue;
             bool satisfied = false;
             switch (constraint.relation) {
             case ConstraintRelationKind::horizontal:
@@ -251,6 +308,16 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
         }
     }
     return unsupported;
+}
+} // namespace
+
+std::optional<std::string> validate_constraint_integrity(const Entities& entities) {
+    return constraint_integrity(entities,nullptr);
+}
+
+std::optional<std::string> validate_active_phase_constraint_integrity(const Entities& entities) {
+    const auto scope = constraint_phase_scope(entities);
+    return constraint_integrity(entities,&scope);
 }
 
 void validate_constraint_transition(const Entities& before, const Entities& after,
@@ -442,14 +509,23 @@ void validate_topology_cycle(const std::vector<std::pair<std::string,bool>>& edg
 }
 }
 
-void validate_constraint_edit_topology(const Entities& before,const Entities& after,
+namespace {
+bool topology_owner_active(const std::string& id,const ConstraintPhaseScope* scope) {
+    return !scope || !scope->inactive_owner_ids.contains(id);
+}
+
+void constraint_edit_topology(const Entities& before,const Entities& after,
     const std::set<std::string,std::less<>>& verified_rigid_wall_ids,
-    const TopologyRigidTransforms& verified_rigid_wall_transforms) {
-    validate_topology_rigid_transforms(before,after,verified_rigid_wall_ids,verified_rigid_wall_transforms);
+    const TopologyRigidTransforms& verified_rigid_wall_transforms,
+    const ConstraintPhaseScope* before_scope,const ConstraintPhaseScope* after_scope,
+    bool rigid_transforms_admitted = false) {
+    if (!rigid_transforms_admitted)
+        validate_topology_rigid_transforms(before,after,verified_rigid_wall_ids,verified_rigid_wall_transforms);
     std::set<std::string,std::less<>> changed_walls;
     for (const auto& [id,owner] : after) {
         const auto previous=before.find(id);
         if (previous==before.end() || owner==previous->second) continue;
+        if (!topology_owner_active(id,before_scope) || !topology_owner_active(id,after_scope)) continue;
         if (topology_physical_wall(owner)) {
             if (previous->second.type!="wall") invalid("Constraint edit changed wall owner type");
             if (owner.properties.at("baseline")!=previous->second.properties.at("baseline")) {
@@ -474,13 +550,15 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
         (void)id;
         if (owner.type!="constraint") continue;
         const auto decoded=decode_constraint_entity(owner);
-        if (decoded.constraint && decoded.constraint->relation==ConstraintRelationKind::coincident)
+        if (decoded.constraint && decoded.constraint->relation==ConstraintRelationKind::coincident &&
+            (!after_scope || constraint_participates(*decoded.constraint,*after_scope)))
             points.join(topology_point(decoded.constraint->bindings.at(0)),topology_point(decoded.constraint->bindings.at(1)));
     }
     std::set<std::pair<std::string,std::string>> checked;
     for (const auto& id : changed_walls) {
         for (const auto& [other,owner] : after) {
-            if (id==other || !topology_physical_wall(owner)) continue;
+            if (id==other || !topology_physical_wall(owner) ||
+                !topology_owner_active(other,before_scope) || !topology_owner_active(other,after_scope)) continue;
             const auto pair=std::minmax(id,other);
             if (!checked.emplace(pair.first,pair.second).second) continue;
             if (!before.contains(other) || before.at(other).type!="wall")
@@ -533,6 +611,7 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
     std::set<long double> levels;
     for (const auto& [id,owner] : after) {
         if (!topology_physical_wall(owner) || !before.contains(id) || !topology_physical_wall(before.at(id))) continue;
+        if (!topology_owner_active(id,before_scope) || !topology_owner_active(id,after_scope)) continue;
         const auto context=organization.drawing_context(id);
         if ((owner.properties.contains("floor_id") || owner.properties.contains("layer_id") ||
             owner.properties.contains("building_id") || owner.properties.contains("property_id")) && !context)
@@ -574,13 +653,15 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
         if (std::any_of(group.begin(),group.end(),[&](const auto& id) { return changed_walls.contains(id); }))
             groups.insert(std::move(group));
     }
-    const auto validate_cycles=[&](const Entities& relations,const std::vector<std::string>& group) {
+    const auto validate_cycles=[&](const Entities& relations,const std::vector<std::string>& group,
+                                 const ConstraintPhaseScope* scope) {
     TopologyPoints cycle_points;
     for (const auto& [id,owner] : relations) {
         (void)id;
         if (owner.type!="constraint") continue;
         const auto decoded=decode_constraint_entity(owner);
-        if (decoded.constraint && decoded.constraint->relation==ConstraintRelationKind::coincident)
+        if (decoded.constraint && decoded.constraint->relation==ConstraintRelationKind::coincident &&
+            (!scope || constraint_participates(*decoded.constraint,*scope)))
             cycle_points.join(topology_point(decoded.constraint->bindings.at(0)),topology_point(decoded.constraint->bindings.at(1)));
     }
     // Boundary vertex identities may provide transitive coincidence closure.
@@ -794,8 +875,51 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
         if (affected) validate_topology_cycle(loop,before,after,verified_rigid_wall_transforms);
     }
     };
-    for (const auto& group : groups) { validate_cycles(before,group); validate_cycles(after,group); }
+    for (const auto& group : groups) {
+        validate_cycles(before,group,before_scope); validate_cycles(after,group,after_scope);
+    }
 }
+} // namespace
+
+void validate_constraint_edit_topology(const Entities& before,const Entities& after,
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids,
+    const TopologyRigidTransforms& verified_rigid_wall_transforms) {
+    constraint_edit_topology(before,after,verified_rigid_wall_ids,verified_rigid_wall_transforms,nullptr,nullptr);
+}
+
+void validate_active_phase_constraint_edit_topology(const Entities& before,const Entities& after,
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids,
+    const TopologyRigidTransforms& verified_rigid_wall_transforms) {
+    const auto before_scope = constraint_phase_scope(before), after_scope = constraint_phase_scope(after);
+    const auto admit_active_rigid_owner = [&](const std::string& id) {
+        if (!topology_owner_active(id,&before_scope) || !topology_owner_active(id,&after_scope))
+            invalid("Active constraint topology cannot qualify an inactive rigid wall: " + id);
+    };
+    for (const auto& id : verified_rigid_wall_ids) admit_active_rigid_owner(id);
+    for (const auto& [id,transform] : verified_rigid_wall_transforms) {
+        (void)transform;
+        admit_active_rigid_owner(id);
+    }
+    // Transform authority is checked against the complete original records,
+    // before creating an analytical vertical-placement projection.
+    validate_topology_rigid_transforms(before,after,verified_rigid_wall_ids,verified_rigid_wall_transforms);
+    // Resolve only active wall placements for geometric analysis. Keep complete
+    // maps, identity bindings and organization in these temporary projections;
+    // they are neither snapshots nor an authoritative candidate result.
+    const auto geometry = [](const Entities& source,const ConstraintPhaseScope& scope) {
+        auto result = source;
+        std::vector<std::string> walls;
+        for (const auto& [id,owner] : source)
+            if (topology_physical_wall(owner) && topology_owner_active(id,&scope)) walls.push_back(id);
+        for (auto& [id,placement] : resolve_vertical_placements(source,walls))
+            result.at(id) = std::move(placement);
+        return result;
+    };
+    const auto geometric_before = geometry(before,before_scope), geometric_after = geometry(after,after_scope);
+    constraint_edit_topology(geometric_before,geometric_after,verified_rigid_wall_ids,
+        verified_rigid_wall_transforms,&before_scope,&after_scope,true);
+}
+
 void validate_exterior_corner_edit_topology(const Entities& before,const Entities& after) {
     const auto active_physical = [](const Entities& entities) {
         auto result = entities;

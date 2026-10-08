@@ -132,7 +132,8 @@ struct PreparedPhysicalWallPhaseRoomReview : ReplayedPhysicalWallPhaseRoomReview
 // Pure source-map replay. Registry proof is a canonical single raw upsert;
 // all room geometry is rederived from explicit phase detection.
 [[nodiscard]] ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(
-    const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent);
+    const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent,
+    bool active_phase_constraints=false);
 // Binds complete original source/history/save state without Document mutation,
 // preview, application or command-authority admission.
 [[nodiscard]] PreparedPhysicalWallPhaseRoomReview prepare_physical_wall_phase_room_review(

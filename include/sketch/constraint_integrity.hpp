@@ -11,6 +11,12 @@ namespace sketch {
 [[nodiscard]] std::optional<std::string> validate_constraint_integrity(
     const std::map<std::string, Entity, std::less<>>& entities);
 
+// The complete source is structurally admitted, including inactive owners.
+// Only known relation residuals involving an actually inactive saved-phase
+// owner are suspended. Unsupported semantics remain globally read-only.
+[[nodiscard]] std::optional<std::string> validate_active_phase_constraint_integrity(
+    const std::map<std::string, Entity, std::less<>>& entities);
+
 // A named wall endpoint cannot silently change identity during reversal.
 // Removing its constraints or remapping every surviving binding is explicit
 // in the same atomic candidate state.
@@ -26,6 +32,14 @@ void validate_constraint_transition(
 // A shared reflection may reverse a complete physical cycle/block only after
 // each supplied operator is checked against that wall's retained source.
 void validate_constraint_edit_topology(
+    const std::map<std::string, Entity, std::less<>>& before,
+    const std::map<std::string, Entity, std::less<>>& after,
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids = {},
+    const std::map<std::string,PlanarTransform,std::less<>>& verified_rigid_wall_transforms = {});
+
+// Explicit saved-phase authoring policy. Contacts, coincidence closure and
+// physical cycles use admitted active owners; all source records are retained.
+void validate_active_phase_constraint_edit_topology(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const std::set<std::string,std::less<>>& verified_rigid_wall_ids = {},

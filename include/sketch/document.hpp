@@ -415,6 +415,11 @@ struct ApplyBoundaryConstraintChanges {
     // This lane is exclusive; it never borrows ordinary room retirement.
     nlohmann::json phase_room_review_intent=nullptr;
     bool phase_room_review_completion{};
+    // Envelope thirty-four reconstructs active-design constraint authoring
+    // from complete source-bound intent, including relation-only changes.
+    // Raw geometry and competing completion fields cannot grant this authority.
+    nlohmann::json phase_constraint_authoring_intent=nullptr;
+    bool phase_constraint_authoring_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
@@ -490,6 +495,9 @@ public:
     [[nodiscard]] const std::map<std::string, Entity, std::less<>>& entities() const noexcept;
     [[nodiscard]] const std::map<std::string, Asset, std::less<>>& assets() const noexcept;
     [[nodiscard]] const std::vector<RevisionRecord>& history() const noexcept;
+    // Derived from actual retained command/navigation ancestry. Metadata or
+    // a saved registry alone cannot reinterpret a legacy historical state.
+    [[nodiscard]] bool uses_active_phase_constraints() const;
     [[nodiscard]] const std::map<std::string, Revision, std::less<>>&
     named_revisions() const noexcept;
 

@@ -3,6 +3,7 @@
 #include "sketch/architecture.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -101,9 +102,21 @@ QString editable_dimension(double metres, bool metric) {
 
 PersistentConstraintComponentAnalysis stored_component_analysis(
     const std::map<std::string, Entity, std::less<>>& entities,
-    const std::vector<std::string>& owners, std::optional<Revision> revision = std::nullopt) {
+    const std::vector<std::string>& owners, bool active_phase) {
     try {
-        return analyze_persistent_constraint_component(entities, owners, revision);
+        return active_phase ? analyze_active_phase_persistent_constraint_component(entities, owners)
+                            : analyze_persistent_constraint_component(entities, owners);
+    } catch (const std::exception& exception) {
+        PersistentConstraintComponentAnalysis unavailable;
+        unavailable.diagnostics.push_back(exception.what());
+        return unavailable;
+    }
+}
+
+PersistentConstraintComponentAnalysis stored_component_analysis(
+    const DocumentSnapshot& snapshot, const std::vector<std::string>& owners) {
+    try {
+        return analyze_persistent_constraint_component(snapshot, owners);
     } catch (const std::exception& exception) {
         PersistentConstraintComponentAnalysis unavailable;
         unavailable.diagnostics.push_back(exception.what());
@@ -146,6 +159,12 @@ public:
     Impl(ConstraintDialog* owner, DocumentSnapshot source, QString wall_id, bool metric_units)
         : owner(owner), snapshot(std::move(source)), selected_id(wall_id.toStdString()), metric(metric_units) {
         owner->setObjectName(QStringLiteral("constraintDialog"));
+        active_phase = snapshot.uses_active_phase_constraints() ||
+            std::any_of(snapshot.entities().begin(), snapshot.entities().end(),
+                [](const auto& entry) { return entry.second.type == "model_phases"; });
+        if (active_phase) phase_scope = constraint_phase_scope(snapshot.entities());
+        if (!ownerParticipates(selected_id))
+            throw std::invalid_argument("The selected object is inactive in the saved phase. Select an active object to edit its constraints.");
         const auto& selected = snapshot.entities().at(selected_id);
         if (!ConstraintDialog::supportsEntity(selected))
             throw std::invalid_argument("Select a valid wall, measured stroke or identified boundary");
@@ -191,6 +210,7 @@ public:
         existing->setMinimumContentsLength(12);
         prepareOwnerLabels();
         for (const auto& [id, entity] : snapshot.entities()) {
+            if (!ownerParticipates(id)) continue;
             if (entity.type == "wall") {
                 try {
                     if (!ConstraintDialog::supportsEntity(entity)) continue;
@@ -212,6 +232,7 @@ public:
             } else if (entity.type == "constraint") {
                 const auto decoded = decode_constraint_entity(entity);
                 if (!decoded.constraint) continue;
+                if (active_phase && !constraint_participates(*decoded.constraint, phase_scope)) continue;
                 const auto& owners = decoded.constraint->bindings;
                 if (std::any_of(owners.begin(), owners.end(), [&](const auto& b) { return b.owner_id == selected_id; })) {
                     existing->addItem(relation_label(decoded.constraint->relation) +
@@ -321,7 +342,7 @@ public:
             });
         QObject::connect(anchor, &QComboBox::currentIndexChanged, owner, [this] { invalidate(); });
         QObject::connect(connected, &QCheckBox::toggled, owner, [this] { invalidate(); });
-        source_freedom = stored_component_analysis(snapshot.entities(), {selected_id}, snapshot.revision());
+        source_freedom = stored_component_analysis(snapshot, {selected_id});
         configure(true);
     }
 
@@ -355,8 +376,8 @@ public:
             // Expand through both states until they share one owner universe.
             for (;;) {
                 const std::vector<std::string> seeds(owners.begin(), owners.end());
-                before = stored_component_analysis(snapshot.entities(), seeds, snapshot.revision());
-                after = stored_component_analysis(candidate->candidate_entities(), seeds);
+                before = stored_component_analysis(snapshot, seeds);
+                after = stored_component_analysis(candidate->candidate_entities(), seeds, active_phase);
                 auto expanded = owners;
                 expanded.insert(before.owner_ids.begin(), before.owner_ids.end());
                 expanded.insert(after->owner_ids.begin(), after->owner_ids.end());
@@ -410,6 +431,7 @@ public:
         // Count only unnamed supported owners of the same displayed type.
         std::map<QString, int> ordinals;
         for (const auto& [id, entity] : snapshot.entities()) {
+            if (!ownerParticipates(id)) continue;
             if (!ConstraintDialog::supportsEntity(entity)) continue;
             const auto type = type_label(entity);
             const auto name = authored_name(entity);
@@ -423,6 +445,10 @@ public:
         return owner_labels.at(id);
     }
 
+    bool ownerParticipates(const std::string& id) const {
+        return !active_phase || !phase_scope.inactive_owner_ids.contains(id);
+    }
+
     QString endpoint_identity(const WallEndpointBinding& binding) const {
         QStringList identity{text(binding.owner_id), text(wall_endpoint_role_name(binding.role))};
         if (!binding.segment_id.empty()) identity.push_back(QStringLiteral("Segment: ") + text(binding.segment_id));
@@ -431,6 +457,7 @@ public:
     }
 
     void appendCurrentGeometry(std::vector<WallPreviewDrawing>& drawing, const std::string& id) const {
+        if (!ownerParticipates(id)) return;
         const auto& entity = snapshot.entities().at(id);
         if (!ConstraintDialog::supportsEntity(entity)) return;
         if (entity.type == "wall") {
@@ -463,6 +490,7 @@ public:
     }
 
     std::optional<Segment> bindingSegment(const WallEndpointBinding& binding) const {
+        if (!ownerParticipates(binding.owner_id)) return std::nullopt;
         const auto found = snapshot.entities().find(binding.owner_id);
         if (found == snapshot.entities().end()) return std::nullopt;
         if (found->second.type == "wall") return baseline(found->second);
@@ -851,6 +879,8 @@ public:
     DocumentSnapshot snapshot;
     std::string selected_id;
     bool metric{};
+    bool active_phase{};
+    ConstraintPhaseScope phase_scope;
     bool boundary_mode{};
     bool measured_mode{};
     bool curved_wall{};

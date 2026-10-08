@@ -3,6 +3,7 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
@@ -511,9 +512,12 @@ Json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent&
     (void)decode_physical_wall_room_review_intent(result);return result;
 }
 
-ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& source,const Json& encoded) {
+ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& source,const Json& encoded,
+    bool active_phase_constraints) {
     const auto intent=decode_physical_wall_room_review_intent(encoded);
     if (entity_map_digest(source)!=intent.source_entities_digest) invalid("preceding entity map differs from reviewed source");
+    const auto constraint_scope=active_phase_constraints
+        ? std::optional<ConstraintPhaseScope>{constraint_phase_scope(source)} : std::nullopt;
     const auto detection=intent.context_plane_selection
         ? detect_physical_wall_spaces(source,intent.context,intent.effective_elevation_m)
         : detect_physical_wall_spaces(source,intent.selected_wall_id);
@@ -610,7 +614,7 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
     Entities result=source;std::vector<BoundaryGeometryEdit> retained_edits;std::vector<std::string> created_room_ids;
     std::set<std::string> removed(intent.removed_reference_ids.begin(),intent.removed_reference_ids.end());
     const std::set<std::string> kept(intent.kept_reference_ids.begin(),intent.kept_reference_ids.end());
-    std::set<std::string> expected_references;
+    std::set<std::string> expected_references,preserved_constraints;
     for (const auto& [reference_id,e]:source) {
         if (can_recognize_boundary_dimension_entity_type(e.type)) {
             const auto decoded=decode_boundary_dimension_entity(e);
@@ -618,12 +622,18 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
         } else if (e.type=="constraint") {
             const auto decoded=decode_constraint_entity(e);
             if (decoded.supported() && std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
-                [&](const auto& binding){return expected_rooms.contains(binding.owner_id);})) expected_references.insert(reference_id);
+                [&](const auto& binding){return expected_rooms.contains(binding.owner_id);})) {
+                expected_references.insert(reference_id);
+                if (constraint_scope && !constraint_participates(*decoded.constraint,*constraint_scope))
+                    preserved_constraints.insert(reference_id);
+            }
         }
     }
     auto reviewed_references=removed;
     reviewed_references.insert(kept.begin(),kept.end());
     if (reviewed_references!=expected_references) invalid("every affected reference requires an explicit Keep or Remove decision");
+    for (const auto& reference_id:preserved_constraints)
+        if (removed.contains(reference_id)) invalid("constraint attached to an inactive design must remain unchanged: "+reference_id);
     // Include every identity that this review can retire, not only room and
     // boundary-child IDs. Unknown incoming references must never be stranded.
     affected_tokens.insert(removed.begin(),removed.end());
@@ -805,6 +815,14 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
         // owners, without changing any evaluated or saved phase selection.
         (void)active_physical_wall_room_ids(result);
     }
+    for (const auto& reference_id:preserved_constraints) {
+        const auto found=result.find(reference_id);
+        const auto& original=source.at(reference_id);
+        if (found==result.end() || found->second!=original ||
+            found->second.properties.dump()!=original.properties.dump() ||
+            found->second.extensions.dump()!=original.extensions.dump())
+            invalid("room redraw would rewrite a constraint attached to an inactive design: "+reference_id);
+    }
     if (const auto error=validate_boundary_integrity(result)) invalid(*error);
     for (const auto& id:kept) {
         if (!result.contains(id)) {
@@ -831,18 +849,18 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
     return {std::move(result),std::move(retained_edits),std::move(created_room_ids),{retiring.begin(),retiring.end()}};
 }
 
-Entities replay_physical_wall_room_review_entities(const Entities& source,const Json& encoded) {
-    return replay_physical_wall_room_review(source,encoded).entities;
+Entities replay_physical_wall_room_review_entities(const Entities& source,const Json& encoded,bool active_phase_constraints) {
+    return replay_physical_wall_room_review(source,encoded,active_phase_constraints).entities;
 }
 
 ReplayedPhysicalWallRoomReview replay_physical_wall_room_review_batch(const Entities& source,
-    const std::vector<Json>& intents) {
+    const std::vector<Json>& intents,bool active_phase_constraints) {
     require_room_review_batch_size(intents.size());
     RoomReviewBatchGuard guard(source);
     ReplayedPhysicalWallRoomReview result;result.entities=source;
     for (const auto& encoded:intents) {
         guard.admit(decode_physical_wall_room_review_intent(encoded));
-        auto stage=replay_physical_wall_room_review(result.entities,encoded);
+        auto stage=replay_physical_wall_room_review(result.entities,encoded,active_phase_constraints);
         result.entities=std::move(stage.entities);
         result.retained_edits.insert(result.retained_edits.end(),stage.retained_edits.begin(),stage.retained_edits.end());
         result.created_room_ids.insert(result.created_room_ids.end(),stage.created_room_ids.begin(),stage.created_room_ids.end());
@@ -866,7 +884,7 @@ PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(const DocumentS
     // caller's unchecked marker or an explicit destination-phase report.
     captured_intent.active_phase_room_scope=report.active_phase_room_scope;
     auto encoded=encode_physical_wall_room_review_intent(captured_intent);
-    auto replayed=replay_physical_wall_room_review(source.entities(),encoded);
+    auto replayed=replay_physical_wall_room_review(source.entities(),encoded,source.uses_active_phase_constraints());
     return {std::move(replayed),std::move(encoded)};
 }
 
@@ -901,6 +919,7 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
     if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_rigid_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_joint_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_active_constraint_review_command(geometry_command)) return command_to_json(geometry_command);
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if (!geometry || geometry->wall_edits.empty()) invalid("review requires a direct command with explicit wall edits");
     // Inspect typed lanes as well as the serialized discriminator: retained or
@@ -1008,6 +1027,20 @@ bool is_physical_wall_room_rigid_review_command(const Command& command) {
         // The existing wall-edit codec validates curved/straight rigid proof
         // meanings, and v21 validates one shared wall/stroke operator. Direct
         // v10/v11 decoding never consults room-review admission.
+        return command_to_json(command_from_json(proof)).dump()==proof.dump();
+    } catch (const std::exception&) { return false; }
+}
+
+bool is_physical_wall_room_active_constraint_review_command(const Command& command) {
+    try {
+        const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!geometry || !geometry->phase_constraint_authoring_completion ||
+            geometry->phase_constraint_authoring_intent.is_null() || geometry->selection_completion ||
+            !geometry->selection_entity_changes.empty()) return false;
+        const auto proof=command_to_json(command);
+        if (proof.at("kind")!="apply_boundary_constraint_changes") return false;
+        if (proof.at("version")!=34 &&
+            (proof.at("version")!=19 || proof.at("proof").at("version")!=34)) return false;
         return command_to_json(command_from_json(proof)).dump()==proof.dump();
     } catch (const std::exception&) { return false; }
 }

@@ -1,6 +1,8 @@
 #include "sketch/constraint_authoring.hpp"
 
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
+#include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/document_digest.hpp"
@@ -35,6 +37,10 @@ namespace {
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 using Entities = std::map<std::string, Entity, std::less<>>;
+
+bool has_phase_registry(const Entities& entities) {
+    return std::any_of(entities.begin(),entities.end(),[](const auto& item) { return item.second.type=="model_phases"; });
+}
 
 constexpr double kPointComparisonTolerance = 1e-10;
 
@@ -419,12 +425,10 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
             std::sort(targets->begin(), targets->end(), [](const auto& a, const auto& b) { return a.owner_id < b.owner_id; });
         std::sort(move.owner_transformations.begin(), move.owner_transformations.end(),
             [](const auto& a, const auto& b) { return a.owner_id < b.owner_id; });
-        // Use the command codec's stable-identity validation for the typed lane.
+        // Validate the semantic typed lane without constructing child command
+        // geometry or presentation authority.
         if (move.per_target_presentation_completion) {
-            ApplyBoundaryConstraintChanges check;
-            check.joint_translation = move;
-            check.joint_translation_completion = true;
-            (void)command_to_json(Command{check});
+            (void)encode_joint_translation_intent(move);
         }
         if (!result.relation_mutations.empty() || result.relation_anchor)
             invalid("Joint translation preserves source relations and cannot author relation changes");
@@ -572,7 +576,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
 }
 
 std::map<std::string, PersistentConstraint, std::less<>>
-decode_supported_constraints(const Entities& entities) {
+decode_supported_constraints(const Entities& entities, const ConstraintPhaseScope* scope = nullptr) {
     std::map<std::string, PersistentConstraint, std::less<>> result;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "constraint") {
@@ -583,7 +587,8 @@ decode_supported_constraints(const Entities& entities) {
             invalid("Unsupported persistent constraint cannot be authored: " + id + ": " +
                     decoded.unsupported_reason);
         }
-        result.emplace(id, *decoded.constraint);
+        if (!scope || constraint_participates(*decoded.constraint,*scope))
+            result.emplace(id, *decoded.constraint);
     }
     return result;
 }
@@ -971,6 +976,7 @@ public:
     struct Source {
         const Entities& values;
         const DocumentSnapshot* retained{};
+        ConstraintPhasePolicy phase_policy{ConstraintPhasePolicy::legacy_all};
         const Entities& entities() const { return values; }
         Revision revision() const { return retained ? retained->revision() : 0; }
     };
@@ -983,7 +989,9 @@ public:
 
 ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
     const DocumentSnapshot& snapshot, const ConstraintAuthoringIntent& raw_intent) {
-    return build(Source{snapshot.entities(),&snapshot},raw_intent);
+    const auto policy=(has_phase_registry(snapshot.entities()) || snapshot.uses_active_phase_constraints())
+        ? ConstraintPhasePolicy::saved_active : ConstraintPhasePolicy::legacy_all;
+    return build(Source{snapshot.entities(),&snapshot,policy},raw_intent);
 }
 ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,const ConstraintAuthoringIntent& raw_intent) {
     ConstraintAuthoringPreview result;
@@ -991,6 +999,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
     result.expected_revision_ = snapshot.revision();
     if (snapshot.retained) result.source_snapshot_digest_=document_snapshot_digest(*snapshot.retained);
     result.candidate_entities_ = snapshot.entities();
+    result.saved_active_phase_policy_=snapshot.phase_policy==ConstraintPhasePolicy::saved_active;
 
     try {
         if (snapshot.retained && !snapshot.retained->is_editable()) {
@@ -998,6 +1007,78 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                                                         : snapshot.retained->read_only_reason());
         }
         result.normalized_intent_ = normalize_intent(raw_intent);
+        result.original_normalized_intent_=result.normalized_intent_;
+        const auto scope=result.saved_active_phase_policy_ ? constraint_phase_scope(snapshot.entities()) : ConstraintPhaseScope{};
+        const auto* phase_scope=result.saved_active_phase_policy_ ? &scope : nullptr;
+        std::set<std::string,std::less<>> active_owner_ids;
+        if (result.saved_active_phase_policy_)
+            for (const auto& [id,entity] : snapshot.entities()) {
+                (void)entity;
+                if (!scope.inactive_owner_ids.contains(id)) active_owner_ids.insert(id);
+            }
+        if (result.saved_active_phase_policy_) {
+            if (const auto unsupported=validate_active_phase_constraint_integrity(snapshot.entities())) invalid(*unsupported);
+            if (snapshot.retained) (void)make_phase_constraint_authoring_intent(
+                *snapshot.retained,result.original_normalized_intent_);
+        }
+        const auto admit_owner=[&](const std::string& id) {
+            if (scope.inactive_owner_ids.contains(id)) invalid("Inactive phase owner cannot be selected or changed: " + id);
+        };
+        const auto admit_relation=[&](const PersistentConstraint& relation) {
+            for (const auto& binding : relation.bindings) admit_owner(binding.owner_id);
+        };
+        const auto physical_contacts=[&]() {
+            return result.saved_active_phase_policy_ ? exterior_corner_physical_contact_graph_active_phase(snapshot.entities())
+                : exterior_corner_physical_contact_graph(snapshot.entities());
+        };
+        const auto source_updates=[&](const Entities& candidate,bool validate_final,
+            const std::map<std::string,Vec2,std::less<>>& offsets={},
+            const std::map<std::string,PlanarTransform,std::less<>>& transforms={}) {
+            return result.saved_active_phase_policy_ ? exterior_wall_measurement_source_updates_active_phase(
+                snapshot.entities(),candidate,validate_final,offsets,transforms) : exterior_wall_measurement_source_updates(
+                snapshot.entities(),candidate,validate_final,offsets,transforms);
+        };
+        const auto complete_stroke_sources=[&](const Entities& candidate) {
+            return result.saved_active_phase_policy_ ? complete_measurement_linework_sources_active_phase(snapshot.entities(),candidate)
+                : complete_measurement_linework_sources(snapshot.entities(),candidate);
+        };
+        const auto complete_rigid_sources=[&](Entities& candidate,const JointTranslationIntent& move,bool physical_ready=true) {
+            if (result.saved_active_phase_policy_) complete_joint_rigid_sources_active_phase(snapshot.entities(),candidate,move,physical_ready);
+            else complete_joint_rigid_sources(snapshot.entities(),candidate,move,physical_ready);
+        };
+        const auto complete_rigid_consequences=[&](Entities& candidate,const JointTranslationIntent& move,bool area_callouts=true) {
+            if (result.saved_active_phase_policy_) complete_joint_rigid_consequences_active_phase(snapshot.entities(),candidate,move,area_callouts);
+            else complete_joint_rigid_consequences(snapshot.entities(),candidate,move,area_callouts);
+        };
+        const auto& entered=result.original_normalized_intent_;
+        if (entered.wall_resize) admit_owner(entered.wall_resize->wall_id);
+        if (entered.wall_curve_construction) admit_owner(entered.wall_curve_construction->edit.wall_id);
+        if (entered.wall_geometry_move) for (const auto& target : entered.wall_geometry_move->targets) admit_owner(target.wall_id);
+        if (entered.boundary_resize) admit_owner(entered.boundary_resize->edit.boundary_id);
+        if (entered.boundary_vertex_move) admit_owner(entered.boundary_vertex_move->edit.boundary_id);
+        if (entered.exterior_corner_move) admit_owner(entered.exterior_corner_move->boundary_id);
+        if (entered.exterior_segment_resize) admit_owner(entered.exterior_segment_resize->boundary_id);
+        if (entered.exterior_segment_arc) admit_owner(entered.exterior_segment_arc->boundary_id);
+        if (entered.measured_stroke_resize) admit_owner(entered.measured_stroke_resize->edit.boundary_id);
+        if (entered.measured_stroke_vertex_move) admit_owner(entered.measured_stroke_vertex_move->edit.boundary_id);
+        if (entered.measured_stroke_transform) for (const auto& target : entered.measured_stroke_transform->targets) admit_owner(target.stroke_id);
+        if (entered.relation_anchor) admit_owner(entered.relation_anchor->owner_id);
+        for (const auto& mutation : entered.relation_mutations) {
+            const auto old=snapshot.entities().find(mutation.constraint_id);
+            if (old!=snapshot.entities().end() && old->second.type=="constraint") {
+                const auto decoded=decode_constraint_entity(old->second);
+                if (!decoded.supported()) invalid("Unsupported constraint semantics remain read-only");
+                admit_relation(*decoded.constraint);
+            }
+            if (mutation.kind==ConstraintRelationMutationKind::upsert) admit_relation(mutation.constraint);
+        }
+        if (entered.joint_translation) {
+            const auto& move=*entered.joint_translation;
+            for (const auto* ids : {&move.rigid_boundary_ids,&move.rigid_stroke_ids,&move.partial_wall_ids,&move.dimension_ids})
+                for (const auto& id : *ids) admit_owner(id);
+            for (const auto& target : move.annotation_translations) admit_owner(target.owner_id);
+            for (const auto& target : move.reference_translations) admit_owner(target.reference_id);
+        }
         Entities presentation_changes;
         if (result.normalized_intent_.joint_translation) {
             auto& move=*result.normalized_intent_.joint_translation;
@@ -1038,7 +1119,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 if ((move.per_owner_translation_completion || move.per_owner_rigid_completion) &&
                     (found->second.extensions.contains("measurement_linework_sources") ||
                      found->second.extensions.contains("measurement_linework_group"))) {
-                    if (!measured_checks) measured_checks = measurement_linework_source_checks(snapshot.entities());
+                    if (!measured_checks) measured_checks = measurement_linework_source_checks(snapshot.entities(),
+                        result.saved_active_phase_policy_ ? &active_owner_ids : nullptr);
                     if (!measurement_linework_source_current(*measured_checks, found->second))
                         invalid("Joint selected measured boundary is stale and requires explicit source repair");
                     const auto inherit_uses = [&](const auto& self, const json& value) -> void {
@@ -1075,6 +1157,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 (void)resolve_joint_translation_offsets(snapshot.entities(), move);
             }
             for (const auto& id:move.partial_wall_ids) (void)require_wall(snapshot.entities(),id);
+            for (const auto& id:move.partial_wall_ids) admit_owner(id);
+            for (const auto& id:move.rigid_stroke_ids) admit_owner(id);
             if (move.partial_wall_ids.size()+move.rigid_boundary_ids.size()+move.rigid_stroke_ids.size()+move.dimension_ids.size()>4096)
                 invalid("Expanded joint translation targets exceed their aggregate budget");
             for (const auto& id:move.dimension_ids) {
@@ -1083,6 +1167,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     invalid("Joint selected callout does not exist or has the wrong owner type");
                 const auto decoded=decode_boundary_dimension_entity(found->second);
                 if (!decoded.supported()) invalid(decoded.unsupported_reason);
+                admit_owner(decoded.dimension->boundary_id);
                 (void)decoded.dimension->resolve(snapshot.entities().at(decoded.dimension->boundary_id));
             }
         }
@@ -1124,7 +1209,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             ? intent.boundary_resize->move_related_objects
             : intent.boundary_vertex_move && intent.boundary_vertex_move->move_related_objects;
         const auto organization = organize_project(snapshot.entities());
-        const auto before_constraints = decode_supported_constraints(snapshot.entities());
+        const auto before_constraints = decode_supported_constraints(snapshot.entities(),phase_scope);
         auto candidate = snapshot.entities();
         std::optional<Entity> constructed_wall;
         if (intent.wall_curve_construction) {
@@ -1138,17 +1223,23 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         std::vector<ExteriorCornerPhysicalContact> exterior_contacts;
         std::vector<ExteriorCornerPhysicalContact> exterior_t_contacts;
         if (intent.wall_curve_construction) {
-            exterior_contacts = exterior_corner_physical_contact_graph(snapshot.entities());
+            exterior_contacts = physical_contacts();
             for (const auto& contact : exterior_contacts)
                 if (contact.station != 0 && contact.station != 1) exterior_t_contacts.push_back(contact);
         }
         if (exterior_edit) {
             const auto ring_ids = exterior_corner_perimeter_ids(snapshot.entities(),snapshot.entities().at(exterior_boundary_id));
+            for (const auto& id : ring_ids) admit_owner(id);
             exterior_ring_ids.insert(ring_ids.begin(),ring_ids.end());
-            exterior_contacts = exterior_corner_physical_contact_graph(snapshot.entities());
+            exterior_contacts = physical_contacts();
             for (const auto& contact : exterior_contacts)
                 if (contact.station != 0 && contact.station != 1) exterior_t_contacts.push_back(contact);
-            exterior_physical = intent.exterior_corner_move ?
+            if (result.saved_active_phase_policy_) exterior_physical = intent.exterior_corner_move ?
+                exterior_corner_physical_entities_active_phase(snapshot.entities(),*intent.exterior_corner_move) :
+                intent.exterior_segment_resize ?
+                exterior_segment_resize_physical_entities_active_phase(snapshot.entities(),*intent.exterior_segment_resize) :
+                exterior_segment_arc_physical_entities_active_phase(snapshot.entities(),*intent.exterior_segment_arc);
+            else exterior_physical = intent.exterior_corner_move ?
                 exterior_corner_physical_entities(snapshot.entities(),*intent.exterior_corner_move) :
                 intent.exterior_segment_resize ?
                 exterior_segment_resize_physical_entities(snapshot.entities(),*intent.exterior_segment_resize) :
@@ -1156,7 +1247,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             for (const auto& [id, entity] : *exterior_physical)
                 if (entity != snapshot.entities().at(id)) exterior_physical_ids.insert(id);
             candidate = *exterior_physical;
-            const auto redraws = exterior_wall_measurement_source_updates(snapshot.entities(), candidate, false);
+            const auto redraws = source_updates(candidate,false);
             for (const auto& redraw : redraws) exterior_owner_ids.insert(redraw.boundary_id);
             candidate = edited_boundary_entities_batch(candidate, redraws);
         }
@@ -1167,7 +1258,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             seeds.insert(move.rigid_boundary_ids.begin(),move.rigid_boundary_ids.end());
             seeds.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
             if (move.per_owner_rigid_completion) {
-                exterior_contacts = exterior_corner_physical_contact_graph(snapshot.entities());
+                exterior_contacts = physical_contacts();
                 for (const auto& contact : exterior_contacts)
                     if (contact.station != 0 && contact.station != 1) exterior_t_contacts.push_back(contact);
             }
@@ -1263,7 +1354,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             for (const auto& id:intent.joint_translation->rigid_stroke_ids)
                 admit_stroke({id,std::nullopt,std::nullopt,joint_owner_transform(*intent.joint_translation,id),{}});
         if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion) {
-            const auto prepared = joint_rigid_replay_source(snapshot.entities(), *intent.joint_translation);
+            const auto prepared = result.saved_active_phase_policy_ ?
+                joint_rigid_replay_source_active_phase(snapshot.entities(),*intent.joint_translation) :
+                joint_rigid_replay_source(snapshot.entities(), *intent.joint_translation);
             for (const auto& id : intent.joint_translation->rigid_boundary_ids) {
                 candidate.at(id) = prepared.at(id);
                 if (candidate.at(id).properties.contains("wall_measurement_source") ||
@@ -1290,9 +1383,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     {id, proposed, unchanged_wall_length_entry(original,old,proposed),
                         old.sweep_radians == 0.0 ? 5ULL : 4ULL, transform}) : original;
             }
-            complete_joint_rigid_consequences(snapshot.entities(), candidate, *intent.joint_translation,false);
+            complete_rigid_consequences(candidate,*intent.joint_translation,false);
         }
-        const auto constraints = decode_supported_constraints(candidate);
+        const auto constraints = decode_supported_constraints(candidate,phase_scope);
         std::map<std::string, std::set<std::string, std::less<>>, std::less<>> adjacency;
         for (const auto& [id, value] : constraints) {
             (void)id;
@@ -1311,10 +1404,12 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             }
         }
         for (const auto& seed : seeds) {
+            admit_owner(seed);
             adjacency[seed];
         }
 
         for (const auto& contact : exterior_contacts) {
+            if (scope.inactive_owner_ids.contains(contact.owner) || scope.inactive_owner_ids.contains(contact.host)) continue;
             adjacency[contact.owner].insert(contact.host);
             adjacency[contact.host].insert(contact.owner);
         }
@@ -1339,6 +1434,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             invalid("Relation anchor is outside the changed relation component");
         }
         for (const auto& wall_id : affected) {
+            admit_owner(wall_id);
             const auto& wall_entity = candidate.at(wall_id);
             if (has_organization_reference(wall_entity) &&
                 !organization.drawing_context(wall_id).has_value()) {
@@ -1481,6 +1577,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
 
         std::set<std::pair<std::string,std::string>> physical_joints;
         for (const auto& contact : exterior_contacts) {
+            if (scope.inactive_owner_ids.contains(contact.owner) || scope.inactive_owner_ids.contains(contact.host)) continue;
             if ((contact.station != 0 && contact.station != 1) ||
                 !affected.contains(contact.owner) || !affected.contains(contact.host)) continue;
             const auto first = resolve({contact.owner,contact.start ? WallEndpointRole::start : WallEndpointRole::end});
@@ -1494,6 +1591,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         }
 
         for (const auto& contact : exterior_t_contacts) {
+            if (scope.inactive_owner_ids.contains(contact.owner) || scope.inactive_owner_ids.contains(contact.host)) continue;
             if (!affected.contains(contact.owner) || !affected.contains(contact.host)) continue;
             const auto point = resolve({contact.owner,contact.start ? WallEndpointRole::start : WallEndpointRole::end});
             const auto start = resolve({contact.host,WallEndpointRole::start});
@@ -1982,9 +2080,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             else if (joint_source_boundaries.contains(id))
                 rigid_source_transforms.emplace(id,joint_owner_transform(*intent.joint_translation,id));
         const bool rigid_joint = intent.joint_translation && intent.joint_translation->per_owner_rigid_completion;
-        if (rigid_joint) complete_joint_rigid_sources(snapshot.entities(),candidate,*intent.joint_translation,false);
-        result.exterior_source_edits_ = exterior_wall_measurement_source_updates(
-            snapshot.entities(), candidate,!rigid_joint,rigid_source_offsets,rigid_source_transforms);
+        if (rigid_joint) complete_rigid_sources(candidate,*intent.joint_translation,false);
+        result.exterior_source_edits_ = source_updates(candidate,!rigid_joint,rigid_source_offsets,rigid_source_transforms);
         for (const auto& edit : result.exterior_source_edits_) {
             if (std::any_of(result.boundary_edits_.begin(), result.boundary_edits_.end(),
                 [&](const auto& authored) { return authored.boundary_id == edit.boundary_id; }))
@@ -1994,7 +2091,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         }
         candidate = edited_boundary_entities_batch(candidate, result.exterior_source_edits_);
         for (const auto& [id, owner] : snapshot.entities())
-            if (owner.properties.contains("wall_measurement_source") &&
+            if (!scope.inactive_owner_ids.contains(id) && owner.properties.contains("wall_measurement_source") &&
                 wall_measurement_source_current(snapshot.entities(), owner) &&
                 (!candidate.contains(id) || !wall_measurement_source_current(candidate, candidate.at(id))))
                 invalid("Constraint authoring would stale the current source walls: " + id);
@@ -2004,29 +2101,40 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             // Selected source-bound consumers are reconstructed from the final
             // solved strokes, after physical source transitions. Validate their
             // persisted contacts at that final geometry, not at the old face.
-            candidate = complete_measurement_linework_sources(snapshot.entities(), candidate);
+            candidate = complete_stroke_sources(candidate);
         }
-        if (rigid_joint) complete_joint_rigid_sources(snapshot.entities(),candidate,*intent.joint_translation);
+        if (rigid_joint) complete_rigid_sources(candidate,*intent.joint_translation);
         for (const auto& [id, before] : boundaries) {
             const auto after = decode_identified_boundary_entity(candidate.at(id));
             if (after != before) result.changed_boundaries_.push_back({before, after});
         }
-        if (exterior_edit) validate_exterior_corner_edit_topology(snapshot.entities(),candidate);
+        if (result.saved_active_phase_policy_) {
+            std::map<std::string,PlanarTransform,std::less<>> transforms;
+            for (const auto& id : selected_rigid_ids)
+                if (const auto transform=selected_wall_rigid_transform(intent,id)) transforms.emplace(id,*transform);
+            validate_active_phase_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids,transforms);
+            if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
+                validate_joint_rigid_topology_active_phase(snapshot.entities(),candidate,*intent.joint_translation);
+        }
+        else if (exterior_edit) validate_exterior_corner_edit_topology(snapshot.entities(),candidate);
         else if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
             validate_joint_rigid_topology(snapshot.entities(),candidate,*intent.joint_translation);
         else validate_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids);
-        if (exterior_edit) validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
-        if (intent.wall_curve_construction)
-            validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
+        if (exterior_edit || intent.wall_curve_construction) {
+            if (result.saved_active_phase_policy_) validate_exterior_corner_physical_contacts_active_phase(snapshot.entities(),candidate);
+            else validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
+        }
         if (intent.exterior_segment_resize)
             validate_exterior_segment_resize_result(snapshot.entities(),candidate,*intent.exterior_segment_resize);
         if (intent.exterior_segment_arc)
             validate_exterior_segment_arc_result(snapshot.entities(),candidate,*intent.exterior_segment_arc);
         (void)validate_boundary_integrity(candidate);
-        (void)validate_constraint_integrity(candidate);
+        if (result.saved_active_phase_policy_) (void)validate_active_phase_constraint_integrity(candidate);
+        else (void)validate_constraint_integrity(candidate);
 
         if (intent.wall_geometry_move && intent.wall_geometry_move->complete_saved_dimensions) {
             for (const auto& [id, original] : snapshot.entities()) {
+                if (scope.inactive_owner_ids.contains(id)) continue;
                 if (!can_recognize_boundary_dimension_entity_type(original.type)) continue;
                 const auto decoded = decode_boundary_dimension_entity(original);
                 if (!decoded.supported()) {
@@ -2036,6 +2144,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                         invalid("Unsupported attached dimension cannot follow a rigid wall transform");
                     continue;
                 }
+                if (scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) continue;
                 const auto transform = selected_wall_rigid_transform(intent, decoded.dimension->boundary_id);
                 if (!transform) continue;
                 if (!candidate.contains(id) || candidate.at(id) != original)
@@ -2080,20 +2189,22 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         result.candidate_entities_ = std::move(candidate);
         if (result.measured_source_completion_ || intent.joint_translation || intent.wall_curve_construction ||
             (intent.wall_geometry_move && intent.wall_geometry_move->complete_saved_dimensions)) {
-            if (snapshot.retained && !intent.joint_translation) {
+            if (snapshot.retained && !result.saved_active_phase_policy_ && !intent.joint_translation) {
                 const auto completed=Document::preview_command(*snapshot.retained,command_for(*snapshot.retained,result));
                 result.candidate_entities_=completed.entities();
             } else if (result.measured_source_completion_ && !joint_measured_sources_completed)
-                result.candidate_entities_=complete_measurement_linework_sources(snapshot.entities(),result.candidate_entities_);
+                result.candidate_entities_=complete_stroke_sources(result.candidate_entities_);
             if (intent.joint_translation) {
                 const auto& move=*intent.joint_translation;
                 std::set<std::string,std::less<>> rigid(move.rigid_boundary_ids.begin(),move.rigid_boundary_ids.end());
                 rigid.insert(move.rigid_stroke_ids.begin(),move.rigid_stroke_ids.end());
                 if (move.per_owner_translation_completion || move.per_owner_rigid_completion) rigid.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
                 for (const auto& [id,entity]:snapshot.entities()) {
+                    if (scope.inactive_owner_ids.contains(id)) continue;
                     if (entity.type!="dimension") continue;
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) invalid(decoded.unsupported_reason);
+                    if (scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) continue;
                     const bool rigid_owner=rigid.contains(decoded.dimension->boundary_id);
                     if (!rigid_owner && !std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)) continue;
                     auto placed=*decoded.dimension;
@@ -2146,10 +2257,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 }
             }
             if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion)
-                complete_joint_rigid_consequences(snapshot.entities(),result.candidate_entities_,*intent.joint_translation);
+                complete_rigid_consequences(result.candidate_entities_,*intent.joint_translation);
             if (intent.exterior_segment_arc)
                 validate_exterior_segment_arc_result(snapshot.entities(),result.candidate_entities_,*intent.exterior_segment_arc);
-            (void)validate_constraint_integrity(result.candidate_entities_);
+            if (result.saved_active_phase_policy_) (void)validate_active_phase_constraint_integrity(result.candidate_entities_);
+            else (void)validate_constraint_integrity(result.candidate_entities_);
             result.changed_boundaries_.clear();
             for (const auto& [id, before] : snapshot.entities()) {
                 const auto after = result.candidate_entities_.find(id);
@@ -2167,6 +2279,33 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             for (const auto& [id, owner] : snapshot.entities())
                 if (owner.extensions.contains("physical_wall_room") && result.candidate_entities_.at(id) != owner)
                     invalid("Wall curve construction requires explicit repair of the affected physical-wall room");
+        }
+        for (const auto& id : scope.inactive_owner_ids) {
+            const auto after=result.candidate_entities_.find(id);
+            if (after==result.candidate_entities_.end() || after->second!=snapshot.entities().at(id))
+                invalid("Constraint authoring changed an inactive phase owner: " + id);
+        }
+        if (result.saved_active_phase_policy_) {
+            std::set<std::string,std::less<>> explicit_mutations;
+            for (const auto& mutation : entered.relation_mutations) explicit_mutations.insert(mutation.constraint_id);
+            std::optional<Entities> rigid_relation_consequences;
+            if (intent.joint_translation && intent.joint_translation->per_owner_rigid_completion) {
+                // Re-derive qualified axis-lock substitutions from the actual
+                // source and captured operators. No candidate relation lends
+                // authority to this independent expected relation inventory.
+                rigid_relation_consequences=snapshot.entities();
+                complete_rigid_consequences(*rigid_relation_consequences,*intent.joint_translation,false);
+            }
+            for (const auto& [id,before] : snapshot.entities()) {
+                if (before.type!="constraint" || explicit_mutations.contains(id)) continue;
+                const auto after=result.candidate_entities_.find(id);
+                const auto& expected=rigid_relation_consequences ? rigid_relation_consequences->at(id) : before;
+                if (after==result.candidate_entities_.end() || after->second!=expected)
+                    invalid("Phase constraint completion changed an unselected saved relation: " + id);
+            }
+            for (const auto& [id,after] : result.candidate_entities_)
+                if (after.type=="constraint" && !snapshot.entities().contains(id) && !explicit_mutations.contains(id))
+                    invalid("Phase constraint completion added an unselected saved relation: " + id);
         }
         if (snapshot.retained) {
             result.candidate_digest_ = entity_map_digest(result.candidate_entities_);
@@ -2242,15 +2381,19 @@ ConstraintAuthoringPreview preview_constraint_authoring(
     return ConstraintAuthoringBuilder::build(snapshot, intent);
 }
 
-PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
+static PersistentConstraintComponentAnalysis analyze_persistent_constraint_component_impl(
     const Entities& entities, const std::vector<std::string>& seed_owner_ids,
-    std::optional<Revision> revision) {
+    std::optional<Revision> revision, ConstraintPhasePolicy policy) {
     PersistentConstraintComponentAnalysis result;
     try {
+        const auto scope=policy==ConstraintPhasePolicy::saved_active ? constraint_phase_scope(entities) : ConstraintPhaseScope{};
+        if (policy==ConstraintPhasePolicy::saved_active)
+            if (const auto unsupported=validate_active_phase_constraint_integrity(entities)) invalid(*unsupported);
         if (seed_owner_ids.empty()) invalid("Select at least one endpoint owner for persistent analysis");
         std::set<std::string, std::less<>> affected;
         for (const auto& id : seed_owner_ids) {
             if (id.empty() || !entities.contains(id)) invalid("Persistent analysis seed owner does not exist: " + id);
+            if (scope.inactive_owner_ids.contains(id)) invalid("Inactive phase owner cannot seed persistent analysis: " + id);
             affected.insert(id);
         }
         struct ScopedRelation {
@@ -2292,6 +2435,7 @@ PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
                 if (entity.id != id) invalid("constraint map identity differs from its entity identity");
                 const auto decoded = decode_constraint_entity(entity);
                 item.relation = decoded.constraint;
+                if (item.relation && policy==ConstraintPhasePolicy::saved_active && !constraint_participates(*item.relation,scope)) continue;
                 if (!decoded.supported()) item.error = decoded.unsupported_reason;
             } catch (const std::exception& error) {
                 item.error = error.what();
@@ -2394,8 +2538,22 @@ PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
 }
 
 PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
+    const Entities& entities, const std::vector<std::string>& seed_owner_ids,
+    std::optional<Revision> revision) {
+    return analyze_persistent_constraint_component_impl(entities,seed_owner_ids,revision,ConstraintPhasePolicy::legacy_all);
+}
+
+PersistentConstraintComponentAnalysis analyze_active_phase_persistent_constraint_component(
+    const Entities& entities, const std::vector<std::string>& seed_owner_ids,
+    std::optional<Revision> revision) {
+    return analyze_persistent_constraint_component_impl(entities,seed_owner_ids,revision,ConstraintPhasePolicy::saved_active);
+}
+
+PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
     const DocumentSnapshot& snapshot, const std::vector<std::string>& seed_owner_ids) {
-    return analyze_persistent_constraint_component(snapshot.entities(), seed_owner_ids, snapshot.revision());
+    const auto policy=(has_phase_registry(snapshot.entities()) || snapshot.uses_active_phase_constraints())
+        ? ConstraintPhasePolicy::saved_active : ConstraintPhasePolicy::legacy_all;
+    return analyze_persistent_constraint_component_impl(snapshot.entities(),seed_owner_ids,snapshot.revision(),policy);
 }
 
 Command constraint_authoring_verified_command(const DocumentSnapshot& current,
@@ -2421,7 +2579,7 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
                             "Constraint preview display data was modified");
     }
 
-    const auto recomputed = ConstraintAuthoringBuilder::build(current, preview.normalized_intent_);
+    const auto recomputed = ConstraintAuthoringBuilder::build(current, preview.original_normalized_intent_);
     if (!recomputed.accepted_ || recomputed.candidate_digest_ != preview.candidate_digest_ ||
         recomputed.shown_result_digest_ != preview.shown_result_digest_) {
         throw DocumentError(DocumentErrorCode::stale_revision,
@@ -2439,6 +2597,15 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
 
 Command ConstraintAuthoringBuilder::command_for(const DocumentSnapshot& current,
     const ConstraintAuthoringPreview& recomputed) {
+    if (recomputed.saved_active_phase_policy_) {
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=current.revision();
+        command.message=recomputed.original_normalized_intent_.message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(
+            make_phase_constraint_authoring_intent(current,recomputed.original_normalized_intent_));
+        return Command{std::move(command)};
+    }
     return command_for(current.entities(),current.revision(),recomputed);
 }
 Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision revision,
@@ -2554,6 +2721,13 @@ Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision
         .message = recomputed.normalized_intent_.message,
     };
     return command;
+}
+
+Entities reconstruct_active_phase_constraint_authoring(const Entities& source,const ConstraintAuthoringIntent& intent) {
+    const auto preview=ConstraintAuthoringBuilder::build(
+        ConstraintAuthoringBuilder::Source{source,nullptr,ConstraintPhasePolicy::saved_active},intent);
+    if (!preview.accepted()) invalid(preview.diagnostics().empty() ? "Active phase constraint reconstruction rejected" : preview.diagnostics().front());
+    return preview.candidate_entities();
 }
 
 ApplyBoundaryConstraintChanges reconstruct_joint_translation(const Entities& source,const JointTranslationIntent& intent) {

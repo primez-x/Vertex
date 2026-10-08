@@ -112,6 +112,9 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // child. The original source must independently validate all declared roots.
 [[nodiscard]] Command decode_physical_wall_deletion_review_proof(const nlohmann::json& proof);
 [[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);
+// Exclusive semantic active-design authoring, independently replayed from the
+// actual source before it can lend geometry to reviewed room consequences.
+[[nodiscard]] bool is_physical_wall_room_active_constraint_review_command(const Command& command);
 void validate_physical_wall_room_deletion_review_source(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,const Command& command,
@@ -152,15 +155,17 @@ void validate_physical_wall_room_profile_review_source(
 // Reference topology is reviewed explicitly; numeric dimensions are resolved
 // against the complete rederived physical-room candidate, including holes.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_physical_wall_room_review_entities(
-    const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent);
+    const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent,
+    bool active_phase_constraints=false);
 // Typed transitions are reconstructed from decisions, never accepted as proof.
 [[nodiscard]] ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(
-    const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent);
+    const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent,
+    bool active_phase_constraints=false);
 // Sequential pure replay keeps every preceding entity-map digest exact and
 // prevents fresh identity reuse across the entire batch, including retired
 // owners, boundary children and replaced dimensions. No intermediate state is
 // published and no classification or correspondence is inferred.
 [[nodiscard]] ReplayedPhysicalWallRoomReview replay_physical_wall_room_review_batch(
     const std::map<std::string,Entity,std::less<>>& source,
-    const std::vector<nlohmann::json>& intents);
+    const std::vector<nlohmann::json>& intents,bool active_phase_constraints=false);
 } // namespace sketch

@@ -36,12 +36,18 @@ struct WallMeasurementResult {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
     const std::map<std::string, Entity, std::less<>>& original,
     const ExteriorCornerMoveIntent& intent);
+[[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorCornerMoveIntent& intent);
 [[nodiscard]] nlohmann::json encode_exterior_corner_move(const ExteriorCornerMoveIntent& intent);
 [[nodiscard]] ExteriorCornerMoveIntent decode_exterior_corner_move(const nlohmann::json& value);
 // Resizes the measured outline analytically, reconstructs physical sources,
 // then checks the final source-derived selected length, anchor and sweep after
 // solving and source completion. The two movement flags remain independent.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorSegmentResizeIntent& intent);
+[[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities_active_phase(
     const std::map<std::string, Entity, std::less<>>& original,
     const ExteriorSegmentResizeIntent& intent);
 [[nodiscard]] nlohmann::json encode_exterior_segment_resize(const ExteriorSegmentResizeIntent& intent);
@@ -53,6 +59,9 @@ void validate_exterior_segment_resize_result(
 // Reconstructs the selected measured chord arc through analytical physical
 // sources. The measured receipt is command authority, never a physical input.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_segment_arc_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorSegmentArcIntent& intent);
+[[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_segment_arc_physical_entities_active_phase(
     const std::map<std::string, Entity, std::less<>>& original,
     const ExteriorSegmentArcIntent& intent);
 [[nodiscard]] nlohmann::json encode_exterior_segment_arc(const ExteriorSegmentArcIntent& intent);
@@ -67,6 +76,13 @@ void validate_exterior_corner_physical_contacts(
 struct ExteriorCornerPhysicalContact { std::string owner; bool start; std::string host; double station; };
 [[nodiscard]] std::vector<ExteriorCornerPhysicalContact> exterior_corner_physical_contact_graph(
     const std::map<std::string, Entity, std::less<>>& original);
+// Saved choices are admitted from every actual registry before geometry discovery.
+// Legacy entry points above retain their historical contact policy.
+[[nodiscard]] std::vector<ExteriorCornerPhysicalContact> exterior_corner_physical_contact_graph_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original);
+void validate_exterior_corner_physical_contacts_active_phase(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed);
 [[nodiscard]] std::vector<std::string> exterior_corner_perimeter_ids(
     const std::map<std::string, Entity, std::less<>>& original, const Entity& owner);
 
@@ -81,6 +97,13 @@ struct ExteriorCornerPhysicalContact { std::string owner; bool start; std::strin
 // remain unchanged in a mixed group. False defers only final constraint checking
 // until other source cohorts are completed; final Document admission is required.
 [[nodiscard]] std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed,
+    bool validate_final_constraints = true,
+    const std::map<std::string, Vec2, std::less<>>& rigid_offsets = {},
+    const std::map<std::string, PlanarTransform, std::less<>>& rigid_transforms = {});
+// Inactive consumers are preserved before decoding or source reconstruction.
+[[nodiscard]] std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates_active_phase(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed,
     bool validate_final_constraints = true,

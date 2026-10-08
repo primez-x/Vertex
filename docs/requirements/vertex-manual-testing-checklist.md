@@ -1283,6 +1283,7 @@ drawing; switching modes does not change existing geometry.
   - Unchanged-room check: Define a clear room from physical walls, create an alternative with no wall changes, then switch between it and the baseline. The room's area remains available without redefining the room. Change or demolish a supporting wall: the previous area must not be presented as current until its room consequences are reviewed.
   - Expected: Only the intended alternative's changes appear.
   - Editing check: With reviewed proposed rooms displayed, edit or move a supporting wall and complete its room review. The room list includes the active design's rooms, not preserved inactive baseline rooms or another design's rooms. New room definitions stay in the displayed design. Switch to baseline and confirm its original room facts and outlines remain intact.
+  - Constraint check: Draw separate proposed walls in each alternative. In **Dimensions and constraints**, add a fixed length or parallel/perpendicular relationship to the displayed walls, then resize or move one. Only that design's endpoints and relationships should be offered. Its own locks must hold or explain a conflict; hidden walls and locks from the baseline or other alternative must not pull its geometry. Cancel once, then apply, Undo/Redo, save/reopen and switch designs. Each design's dimensions and labels should retain their intended positions. Repeat with a quarter-turn rotation of a group that has a horizontal or vertical lock.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

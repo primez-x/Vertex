@@ -29,6 +29,7 @@
 #include "sketch/architectural_schedule.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
@@ -46905,6 +46906,25 @@ private:
                     for (const auto& id:value.joint_translation->dimension_ids) targets.insert(id);
                 }
                 for (const auto& edit:value.dimension_placement_moves) targets.insert(edit.dimension_id);
+                const auto phase_constraint_targets=[&](const ApplyBoundaryConstraintChanges& typed) {
+                    if (!typed.phase_constraint_authoring_completion && typed.phase_constraint_authoring_intent.is_null()) return;
+                    // The full admitted source determines the footprint; raw
+                    // metadata or an empty typed edit vector cannot hide it.
+                    auto direct=typed;
+                    direct.selection_completion=false;direct.selection_entity_changes.clear();
+                    direct.disto_measurement_completion=false;direct.disto_measurement.reset();
+                    (void)command_to_json(Command{direct});
+                    const auto after=replay_phase_constraint_authoring(source.entities(),direct.phase_constraint_authoring_intent);
+                    for (const auto& [id,entity]:source.entities())
+                        if (!after.contains(id) || entity!=after.at(id) ||
+                            entity.properties.dump()!=after.at(id).properties.dump() ||
+                            entity.extensions.dump()!=after.at(id).extensions.dump()) targets.insert(id);
+                    for (const auto& [id,entity]:after) {
+                        (void)entity;
+                        if (!source.entities().contains(id)) targets.insert(id);
+                    }
+                };
+                phase_constraint_targets(value);
                 if (!value.room_review_geometry_proof.is_null()) {
                     // Retain the declared grouped wall inventory while resolving
                     // its original child footprint beneath the atomic room event.
@@ -46916,6 +46936,7 @@ private:
                         validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),geometry_command,proof);
                     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
                     if (geometry) {
+                        phase_constraint_targets(*geometry);
                         for (const auto& edit:geometry->wall_edits) targets.insert(edit.wall_id);
                         for (const auto& edit:geometry->boundary_edits) targets.insert(edit.boundary_id);
                         for (const auto& edit:geometry->exterior_source_edits) targets.insert(edit.boundary_id);
@@ -54437,7 +54458,8 @@ public:
                 (grouped_geometry
                     ? physicalWallRoomReviewSelection(source,authority.selection,selected_wall_id) &&
                         (is_physical_wall_room_rigid_review_command(geometry_command) ||
-                         is_physical_wall_room_joint_review_command(geometry_command))
+                         is_physical_wall_room_joint_review_command(geometry_command) ||
+                         is_physical_wall_room_active_constraint_review_command(geometry_command))
                     : authority.selection.size() == 1 &&
                         authority.selection.front() == QString::fromStdString(selected_wall_id));
         const auto current_source = [&] {

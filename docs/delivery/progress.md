@@ -14,6 +14,43 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 active-design connected constraint authoring
+
+Source implementation now derives actual saved-active scope from every admitted
+phase registry. Structural ownership, endpoint and genuine-curve admission stay
+global; known constraints bound to inactive owners suspend their residuals and
+solver participation. Contact discovery, topology, fixed anchors, producer
+redraw and current/candidate component freedom use the same active scope and
+complete entity maps. The constraint dialog excludes inactive endpoints and
+suspended relations from editable choices without deleting stored records.
+
+Exclusive command 34 carries complete original snapshot/history/save/entity and
+saved-choice bindings plus normalized semantic edit intent. The Document
+independently replays it, reserves fresh identities across retained history and
+preserves inactive owners and their constraint/opening/dimension/annotation
+dependents. Qualified quarter-turn changes to active axis locks are rederived
+from the captured rigid operator. Room, selection and DISTO completion and site
+editing retain the actual child footprint and source authority.
+
+History-derived validation policy preserves legacy states and restores the
+referenced policy on Undo/Redo. Native 86/extraction 84 floors cover every
+retained direct or wrapped proof, including after Undo. No global metadata flag
+can waive legacy validation. Independent source review approved the integrated
+changes after correcting genuine-curve admission before residual suspension
+and the ordinary room suffix's preservation of suspended cross-design relations.
+Room review cannot remove or retarget those relations; reviewed registry
+membership updates retain their separate authority. The dialog offers these
+relations as Keep unchanged. A redraw that cannot retain valid original bindings
+is refused rather than changing another design's stored relationship.
+No builds, tests, probes, scripts, launches, packages or installations run.
+Compilation, desktop interactions and persistence remain unverified, and the
+installed candidate stays unchanged.
+
+Next coding gap is separate proposed wall identity when editing a baseline wall
+shared with an alternative. Active solving alone does not preserve two different
+geometries for one shared entity. Existing cloning, membership and hosted-object
+seams are being inspected before implementing that replacement workflow.
+
 ### October 8 proposed-room phase completion
 
 Source implementation adds phase review intent 2 for redefinition and retirement

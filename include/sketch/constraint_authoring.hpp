@@ -41,6 +41,13 @@ struct PersistentConstraintComponentAnalysis {
     const std::vector<std::string>& seed_owner_ids,
     std::optional<Revision> revision = std::nullopt);
 
+// Candidate entity maps have no retained snapshot policy. Explicit active
+// analysis independently derives the actual saved phase choices from this map.
+[[nodiscard]] PersistentConstraintComponentAnalysis analyze_active_phase_persistent_constraint_component(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& seed_owner_ids,
+    std::optional<Revision> revision = std::nullopt);
+
 enum class WallResizeAnchor { start, end };
 
 // Rebase an existing exact-length receipt after a rigid transform. The wall
@@ -227,6 +234,8 @@ private:
     std::map<std::string, Entity, std::less<>> candidate_entities_;
     std::vector<std::string> diagnostics_;
     ConstraintAuthoringIntent normalized_intent_;
+    ConstraintAuthoringIntent original_normalized_intent_;
+    bool saved_active_phase_policy_{};
 
     friend ConstraintAuthoringPreview preview_constraint_authoring(
         const DocumentSnapshot&, const ConstraintAuthoringIntent&);
@@ -236,6 +245,12 @@ private:
         std::optional<DocumentSnapshot>*);
     friend class ConstraintAuthoringBuilder;
 };
+
+// Entity-only saved-active replay shares the live builder without constructing
+// a document or lending retained history authority to a filtered source.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> reconstruct_active_phase_constraint_authoring(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const ConstraintAuthoringIntent& intent);
 
 // Preview is side-effect free. Invalid, contradictory, unsupported, or no-op
 // intents return accepted()==false with diagnostics and the original entity map.

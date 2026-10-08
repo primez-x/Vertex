@@ -1,4 +1,5 @@
 #include "sketch/measurement_linework_source.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_area_graph.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -190,9 +191,9 @@ bool measurement_linework_copy_isolated(const Entity& entity) {
         throw std::invalid_argument("Measured linework copy scope schema, version or owner type is unsupported.");
     return true;
 }
-std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
-measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
-    const std::set<std::string,std::less<>>* semantic_visible) {
+static std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
+measurement_linework_source_checks_impl(const std::map<std::string,Entity,std::less<>>& entities,
+    const std::set<std::string,std::less<>>* semantic_visible,const ConstraintPhaseScope* scope) {
     std::map<std::string,MeasurementLineworkSourceCheck,std::less<>> result;
     if(std::none_of(entities.begin(),entities.end(),[](const auto& item){return has_source(item.second);}))return result;
     std::optional<ProjectOrganization> organization;
@@ -201,14 +202,17 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
     SourceOwners copy_owners;
     std::string copy_scope_error;
     try {
-        for(const auto& [id,entity]:entities)
+        for(const auto& [id,entity]:entities) {
+            if(scope && scope->inactive_owner_ids.contains(id))continue;
             if(measurement_linework_copy_isolated(entity))copy_owners.insert(id);
+        }
     }catch(const std::exception& error){copy_scope_error=error.what();}
     std::map<std::string,GraphState,std::less<>> graphs;
     std::map<CohortKey,GraphState> cohort_graphs;
     CohortWork cohort_work;
     std::size_t cohort_access=0;
     for(const auto& [id,area]:entities) if(has_source(area)) {
+        if(scope && scope->inactive_owner_ids.contains(id))continue;
         auto& check=result[id];
         try {
             if(!organization)throw std::invalid_argument(organization_error);
@@ -399,6 +403,11 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
     }
     return result;
 }
+std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
+measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
+    const std::set<std::string,std::less<>>* semantic_visible) {
+    return measurement_linework_source_checks_impl(entities,semantic_visible,nullptr);
+}
 bool measurement_linework_sources_visible(const Entity& area,const std::set<std::string,std::less<>>* semantic_visible) {
     if(!has_source(area))return true;
     try {
@@ -416,12 +425,17 @@ bool measurement_linework_sources_visible(const Entity& area,const std::set<std:
         return true;
     }catch(const std::exception&){return false;}
 }
-std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources(
+static std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources_impl(
     const std::map<std::string,Entity,std::less<>>& before,
-    const std::map<std::string,Entity,std::less<>>& candidate) {
-    const auto semantic_visibility=[](const auto& entities) {
+    const std::map<std::string,Entity,std::less<>>& candidate,
+    const ConstraintPhaseScope* before_scope,const ConstraintPhaseScope* after_scope) {
+    const auto semantic_visibility=[](const auto& entities,const ConstraintPhaseScope* scope) {
         std::set<std::string,std::less<>> visible;
         for(const auto& [id,entity]:entities) { (void)entity; visible.insert(id); }
+        if(scope) {
+            for(const auto& id:scope->inactive_owner_ids)visible.erase(id);
+            return visible;
+        }
         // The document admits one persisted registry; ignore no view masks.
         for(const auto& [id,entity]:entities) {
             (void)id;
@@ -436,11 +450,11 @@ std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources(
         }
         return visible;
     };
-    const auto before_visible=semantic_visibility(before);
-    const auto old_checks=measurement_linework_source_checks(before,&before_visible);
+    const auto before_visible=semantic_visibility(before,before_scope);
+    const auto old_checks=measurement_linework_source_checks_impl(before,&before_visible,before_scope);
     if(old_checks.empty())return candidate;
-    const auto after_visible=semantic_visibility(candidate);
-    const auto new_checks=measurement_linework_source_checks(candidate,&after_visible);
+    const auto after_visible=semantic_visibility(candidate,after_scope);
+    const auto new_checks=measurement_linework_source_checks_impl(candidate,&after_visible,after_scope);
     auto result=candidate;
     std::set<std::string,std::less<>> refreshed;
     for(const auto& [id,check]:new_checks) {
@@ -460,7 +474,7 @@ std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources(
         result.at(id)=std::move(replacement);refreshed.insert(id);
     }
     if(!refreshed.empty()) {
-        const auto verified=measurement_linework_source_checks(result,&after_visible);
+        const auto verified=measurement_linework_source_checks_impl(result,&after_visible,after_scope);
         for(const auto& id:refreshed) {
             const auto found=verified.find(id);
             if(found==verified.end() || !found->second.current)
@@ -468,5 +482,26 @@ std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources(
         }
     }
     return result;
+}
+std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources(
+    const std::map<std::string,Entity,std::less<>>& before,
+    const std::map<std::string,Entity,std::less<>>& candidate) {
+    return complete_measurement_linework_sources_impl(before,candidate,nullptr,nullptr);
+}
+std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources_active_phase(
+    const std::map<std::string,Entity,std::less<>>& before,
+    const std::map<std::string,Entity,std::less<>>& candidate) {
+    auto before_scope=constraint_phase_scope(before);
+    auto after_scope=constraint_phase_scope(candidate);
+    // A consumer inactive on either side cannot acquire inferred replacement
+    // geometry while an ordinary authoring change is being completed.
+    before_scope.inactive_owner_ids.insert(after_scope.inactive_owner_ids.begin(),after_scope.inactive_owner_ids.end());
+    after_scope.inactive_owner_ids=before_scope.inactive_owner_ids;
+    for(const auto& id:before_scope.inactive_owner_ids) {
+        const auto original=before.find(id), retained=candidate.find(id);
+        if(original!=before.end() && (retained==candidate.end() || retained->second!=original->second))
+            throw std::invalid_argument("Measured source completion requires unchanged inactive phase owners: "+id);
+    }
+    return complete_measurement_linework_sources_impl(before,candidate,&before_scope,&after_scope);
 }
 } // namespace sketch

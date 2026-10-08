@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v85
+# Vertex project formats v1 through v86
+
+## Active-design constraint authoring (v86)
+
+Native format 86 and JSON/assets extraction version 84 retain exclusive
+`apply_boundary_constraint_changes` envelope 34. Its version-one
+`phase_constraint_authoring_intent` binds the actual original revision, complete
+snapshot, authoring history, saved revision, entity map and independently
+evaluated saved choices for every admitted phase registry. The normalized
+semantic intent carries explicit geometry targets, exact quantities, anchors,
+movement choices, rigid operators and relation mutations. Raw entity/asset
+payloads and competing completion fields cannot grant this authority.
+
+Every recognized constraint and stable binding is structurally admitted across
+the complete map. Genuine curve/type requirements remain global. Only residual
+satisfaction and solver participation are suspended when a known relation binds
+an inactive owner. Unknown semantics retain the read-only diagnostic. Contact,
+topology, source redraw and component freedom use actual saved-active scope;
+inactive owners, their saved constraints, hosted openings, measurements and
+annotation placements remain intact. Qualified active axis-lock changes under
+captured quarter-turn rigid operators are independently reconstructed.
+
+Live edits and retained replay rederive the complete result with the same
+entity-only active builder. This creates no filtered or fabricated source
+snapshot. Reviewed rooms can follow the canonical geometry proof in the
+existing outer room envelope; selection and DISTO wrappers retain their own
+qualified suffixes and the original source binding. New identities cannot reuse
+retained entity or recognized boundary/linework child identities.
+
+State validation policy follows actual command/navigation ancestry. A canonical
+34 command establishes active semantics, subsequent events inherit them, and
+Undo/Redo restore the referenced event's policy. Registry metadata alone never
+reinterprets a historical state. Legacy builders and historical helpers retain
+their collect-all behavior. The minimum reader covers all retained proofs,
+including wrapped, undone and abandoned edits; old floors remain unchanged for
+projects without the new dialect. This source has not been compiled or qualified
+in the installed app.
 
 ## Reviewed proposed-room editing (v85)
 

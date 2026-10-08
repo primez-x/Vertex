@@ -1065,7 +1065,8 @@ std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> physical_wall_phase_ro
 
 namespace {
 ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entities& source,
-    const PhysicalWallRoomPhaseReviewIntent& intent,const RegistryTransition& transition,const PhaseReviewCoverage& coverage) {
+    const PhysicalWallRoomPhaseReviewIntent& intent,const RegistryTransition& transition,const PhaseReviewCoverage& coverage,
+    bool active_phase_constraints) {
     const PhysicalWallPhaseSelection destination{intent.registry_id,intent.alternative_id};
     // A v2 review may also contain only baseline decisions. Editing authority is
     // independently restricted to the original actual target proposals below.
@@ -1266,7 +1267,8 @@ ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entiti
         result.entities=edited_boundary_entities_for_phase_room_review(result.entities,edit,plane_owners,destination);
     }
     if (const auto error=validate_boundary_integrity(result.entities)) reject(*error);
-    if (const auto error=validate_constraint_integrity(result.entities)) reject(*error);
+    if (const auto error=active_phase_constraints ? validate_active_phase_constraint_integrity(result.entities) :
+        validate_constraint_integrity(result.entities)) reject(*error);
     (void)physical_wall_phase_states(result.entities,destination);
     // Numeric resolution alone evaluates the named target on a detached map.
     // This saved-choice adjustment never becomes source or published authority.
@@ -1329,12 +1331,13 @@ ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entiti
 }
 } // namespace
 
-ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(const Entities& source,const Json& encoded) {
+ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(const Entities& source,const Json& encoded,
+    bool active_phase_constraints) {
     const auto intent=decode_physical_wall_phase_room_review_intent(encoded);
     if (entity_map_digest(source)!=intent.source_entities_digest) reject("original entity map changed");
     auto transition=registry_transition(source,intent);
     const auto coverage=phase_review_coverage(source,intent,transition);
-    if (intent.proposed_room_completion) return replay_proposed_room_completion(source,intent,transition,coverage);
+    if (intent.proposed_room_completion) return replay_proposed_room_completion(source,intent,transition,coverage,active_phase_constraints);
     const PhysicalWallPhaseSelection destination_selection{intent.registry_id,intent.alternative_id};
     // Extra rows are allowed for explicit review of an unchanged plane, but
     // every semantic inventory/retained-lineage affected plane is mandatory.
@@ -1463,7 +1466,7 @@ PreparedPhysicalWallPhaseRoomReview prepare_physical_wall_phase_room_review(
         intent.source_saved_revision!=source.saved_revision_optional() || intent.source_entities_digest!=entity_map_digest(source.entities()))
         reject("complete original captured source changed");
     auto encoded=encode_physical_wall_phase_room_review_intent(intent);
-    auto replayed=replay_physical_wall_phase_room_review(source.entities(),encoded);
+    auto replayed=replay_physical_wall_phase_room_review(source.entities(),encoded,source.uses_active_phase_constraints());
     return {std::move(replayed),std::move(encoded)};
 }
 } // namespace sketch

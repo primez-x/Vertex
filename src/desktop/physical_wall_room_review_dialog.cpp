@@ -3,6 +3,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "plan_canvas.hpp"
 #include <QCheckBox>
 #include <QComboBox>
@@ -72,7 +73,7 @@ public:
         std::string allocated_room_id;LegacyBoundaryIdentityOptions ids;std::vector<std::string> dimension_ids;std::optional<Vec2> point;
     };
     struct Reference {
-        std::string id;std::set<std::string> owners;std::set<Child> children;bool dimension{};bool automatic_lengths{};bool area_dimension{};QComboBox* decision{};
+        std::string id;std::set<std::string> owners;std::set<Child> children;bool dimension{};bool automatic_lengths{};bool area_dimension{};bool preserved_constraint{};QComboBox* decision{};
     };
     struct Graph {
         std::string id;RoomRelationshipSnapshot model;
@@ -266,6 +267,8 @@ public:
         } catch (const std::exception& e) {rebuilding=false;fail(QString::fromUtf8(e.what()));scene();}
     }
     void inventory() {
+        const auto constraint_scope=source.uses_active_phase_constraints()
+            ? std::optional<ConstraintPhaseScope>{constraint_phase_scope(source.entities())} : std::nullopt;
         for (const auto& [id,e]:source.entities()) {
             Reference reference;reference.id=id;QString label;
             if (can_recognize_boundary_dimension_entity_type(e.type)) {
@@ -282,6 +285,7 @@ public:
                 }
             } else if (e.type=="constraint") {
                 const auto decoded=decode_constraint_entity(e);if (!decoded.supported()) continue;
+                reference.preserved_constraint=constraint_scope && !constraint_participates(*decoded.constraint,*constraint_scope);
                 label=text(id)+QStringLiteral(" · ")+text(std::string(constraint_relation_name(decoded.constraint->relation)));
                 for (const auto& b:decoded.constraint->bindings) if (retained.contains(b.owner_id)) {
                     reference.owners.insert(b.owner_id);reference.children.emplace(b.owner_id,false,b.segment_id);reference.children.emplace(b.owner_id,true,b.vertex_id);
@@ -305,8 +309,13 @@ public:
             const auto row=reference_table->rowCount();reference_table->insertRow(row);reference_table->setItem(row,0,new QTableWidgetItem(label));
             reference_table->setItem(row,2,new QTableWidgetItem);
             reference.decision=choice(reference_table,QStringLiteral("referenceDecision:")+text(id));
-            reference.decision->addItem(reference.automatic_lengths?QStringLiteral("Regenerate on new edges"):
-                reference.area_dimension?QStringLiteral("Keep area"):QStringLiteral("Keep and map"),"keep");reference.decision->addItem(QStringLiteral("Remove"),"remove");
+            reference.decision->addItem(reference.preserved_constraint?QStringLiteral("Keep unchanged"):
+                reference.automatic_lengths?QStringLiteral("Regenerate on new edges"):
+                reference.area_dimension?QStringLiteral("Keep area"):QStringLiteral("Keep and map"),"keep");
+            if (reference.preserved_constraint) {
+                reference.decision->setCurrentIndex(1);reference.decision->setEnabled(false);
+                reference.decision->setToolTip(QStringLiteral("This constraint also belongs to an inactive design. Its saved endpoints must stay unchanged."));
+            } else reference.decision->addItem(QStringLiteral("Remove"),"remove");
             reference_table->setCellWidget(row,1,reference.decision);QObject::connect(reference.decision,&QComboBox::currentIndexChanged,dialog,[this]{changed(true);});references.push_back(std::move(reference));
         }
     }
@@ -482,7 +491,8 @@ public:
                         if (!dimension.supported()) throw std::invalid_argument("The kept dimension cannot be resolved.");
                         description=quantity(resolve_boundary_dimension(*dimension.dimension,exact),metric);
                         if (reference.area_dimension) description+=QStringLiteral(" · net clear area");
-                    } else description=QStringLiteral("Keep on explicitly mapped edges / corners");
+                    } else description=reference.preserved_constraint?QStringLiteral("Keep saved endpoints unchanged"):
+                        QStringLiteral("Keep on explicitly mapped edges / corners");
                 }
                 reference_table->item(static_cast<int>(i),2)->setText(description);
             }

@@ -47,6 +47,11 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
 complete_measurement_linework_sources(
     const std::map<std::string,Entity,std::less<>>& before,
     const std::map<std::string,Entity,std::less<>>& candidate);
+// Uses all admitted saved registries; inactive consumers are skipped before decoding.
+[[nodiscard]] std::map<std::string,Entity,std::less<>>
+complete_measurement_linework_sources_active_phase(
+    const std::map<std::string,Entity,std::less<>>& before,
+    const std::map<std::string,Entity,std::less<>>& candidate);
 [[nodiscard]] bool measurement_linework_sources_visible(const Entity& area,
     const std::set<std::string,std::less<>>* semantic_visible);
 [[nodiscard]] inline bool measurement_linework_source_current(
