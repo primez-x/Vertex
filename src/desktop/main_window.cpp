@@ -5266,6 +5266,7 @@ class MainWindow::Impl {
     enum class DrawingMode { wall, measurement, measured_lines };
 
     struct SourceEditAuthority;
+    struct GeneratedLabelMoveCapture;
 
     struct SiteEndpointPreviewInput {
         std::vector<CanvasEntity> geometry;
@@ -6275,6 +6276,87 @@ public:
         }
     }
 
+    bool startGeneratedLabelMove(PlanCanvas* canvas,const CanvasLabelPresentationIdentity& identity) {
+        m_generated_label_move.reset();
+        try {
+            if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class ||
+                !m_selected_ids.contains(identity.id)) return false;
+            const auto source=captureCanvasGeometrySource(canvas);
+            const auto displayed=canvas->labelPresentation(identity);
+            if (!displayed || !displayed->avoid_components ||
+                (!identity.callout_role.isEmpty() && !area_callout_role(identity.callout_role.toStdString()))) return false;
+            const auto owner=source->entities().find(identity.id.toStdString());
+            if (owner==source->entities().end() ||
+                (!is_closed_boundary_entity(owner->second.type) && owner->second.type!="room")) return false;
+            const auto role=identity.callout_role.isEmpty() ? std::string{"area"} : identity.callout_role.toStdString();
+            std::optional<PresentationOverride> provider;
+            for (const auto& [id,entity]:source->entities()) {
+                (void)id;
+                if (entity.type!=kAnnotationEntityType) continue;
+                for (const auto& value:decode_annotation_entity(entity).overrides) {
+                    if (value.target_id!=owner->first || value.target_kind!=role) continue;
+                    if (provider) throw std::invalid_argument("The label has conflicting presentation records.");
+                    provider=value;
+                }
+            }
+            GeneratedLabelMoveCapture capture;
+            capture.canvas=canvas;capture.identity=identity;capture.source=source;
+            capture.authority=captureSourceEditAuthority(*source);
+            capture.displayed_anchor=displayed->position;
+            capture.rotation=provider ? provider->plan_label_rotation_radians.value_or(0.0) : 0.0;
+            capture.font=canvas->font();capture.dpi_x=canvas->logicalDpiX();capture.dpi_y=canvas->logicalDpiY();
+            capture.site_generation=m_site_publication_generation;
+            if (siteCanvas(canvas)) capture.site_frame=m_site_plan_frames.auxiliary.at(identity.id);
+            else capture.plan_frame=canvasTransformPlanFrame(*source);
+            m_generated_label_move=std::move(capture);
+            clearError();return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Label move: %1").arg(QString::fromUtf8(error.what())));return false;
+        }
+    }
+
+    bool generatedLabelMoveCurrent(const GeneratedLabelMoveCapture& capture,bool final) const {
+        const auto canvas=capture.canvas.data();
+        const auto active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        if (!canvas || canvas!=active || hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context ||
+            m_armed_area_class || !capture.source || !sourceEditAuthorityContextCurrent(capture.authority) ||
+            canvas->font()!=capture.font || canvas->logicalDpiX()!=capture.dpi_x || canvas->logicalDpiY()!=capture.dpi_y ||
+            !authoringSnapshot().shares_authoring_source_with(*capture.source)) return false;
+        if (capture.site_frame && (!siteCanvas(canvas) || capture.site_generation!=m_site_publication_generation ||
+            !m_site_publication_source || !m_site_publication_source->shares_authoring_source_with(*capture.source))) return false;
+        if (!capture.site_frame && (siteCanvas(canvas) || !m_plan_publication_source ||
+            !m_plan_publication_source->shares_authoring_source_with(*capture.source))) return false;
+        return !final || sourceEditAuthorityCurrent(capture.authority);
+    }
+
+    void moveGeneratedLabel(PlanCanvas* canvas,const CanvasLabelPresentationIdentity& identity,Vec2 position,bool finished) {
+        try {
+            if (!m_generated_label_move || m_generated_label_move->canvas.data()!=canvas ||
+                m_generated_label_move->identity!=identity || !std::isfinite(position.x) || !std::isfinite(position.y) ||
+                !generatedLabelMoveCurrent(*m_generated_label_move,finished))
+                throw std::invalid_argument("The project, selection or plan changed. Start the label move again.");
+            if (!finished) return; // Canvas moves only its retained paint anchor.
+            auto capture=std::move(*m_generated_label_move);m_generated_label_move.reset();
+            const auto unchanged=[](double a,double b) {return std::abs(a-b)<=1e-12*std::max({1.0,std::abs(a),std::abs(b)});};
+            if (unchanged(position.x,capture.displayed_anchor.x) && unchanged(position.y,capture.displayed_anchor.y)) {
+                clearError();return;
+            }
+            if (capture.site_frame) position=site_source_plan_point(position,*capture.site_frame);
+            else if (capture.plan_frame) position=unproject_plan_point(position,*capture.plan_frame);
+            const std::array<AreaCalloutPlacement,1> placement{{{identity.id.toStdString(),
+                identity.callout_role.isEmpty() ? std::string{"area"} : identity.callout_role.toStdString(),position,capture.rotation,true}}};
+            const auto command=area_callout_placement_command(*capture.source,placement,new_id("annotations"),capture.source->revision());
+            if (!generatedLabelMoveCurrent(capture,true))
+                throw std::invalid_argument("The label's source changed before placement could be applied.");
+            if (!command.entity_changes.empty()) {applyAuthoredCommand(command);refresh();}
+            clearError();
+        } catch (const std::exception& error) {
+            m_generated_label_move.reset();
+            setError(QStringLiteral("Label move: %1").arg(QString::fromUtf8(error.what())));
+            if (!finished) throw; // Retire the canvas preview on refusal.
+        }
+    }
+
     bool showAreaCalloutPlacementEditor(PlanCanvas* canvas,const CanvasLabelPresentationIdentity& identity) {
         const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
         if (canvas!=active || hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
@@ -6392,7 +6474,7 @@ public:
                     if (!moved && std::abs(std::remainder(desired_rotation-rotation,2.0*std::numbers::pi))<=1e-12) {
                         clearError();dialog.accept();return;
                     }
-                    const std::array<AreaCalloutPlacement,1> placement{{{entity.id,role,desired,desired_rotation}}};
+                    const std::array<AreaCalloutPlacement,1> placement{{{entity.id,role,desired,desired_rotation,moved}}};
                     auto command=area_callout_placement_command(source,placement,new_id("annotations"),source.revision());
                     if (!current()) throw std::invalid_argument(lastError().toStdString());
                     if (!command.entity_changes.empty()) {
@@ -42506,6 +42588,15 @@ private:
         canvas->setLabelDoubleClicked([this,canvas](CanvasLabelPresentationIdentity identity) {
             return showAreaCalloutPlacementEditor(canvas,identity);
         });
+        canvas->setGeneratedLabelMoveStarted([this,canvas](CanvasLabelPresentationIdentity identity) {
+            return startGeneratedLabelMove(canvas,identity);
+        });
+        canvas->setGeneratedLabelMoved([this,canvas](CanvasLabelPresentationIdentity identity,Vec2 position,bool finished) {
+            moveGeneratedLabel(canvas,identity,position,finished);
+        });
+        canvas->setGeneratedLabelMoveCanceled([this,canvas] {
+            if (m_generated_label_move && m_generated_label_move->canvas.data()==canvas) m_generated_label_move.reset();
+        });
         canvas->setEntityDoubleClicked([this,canvas](QString id) {
             try {
                 try { if (siteCanvas(canvas)) requireSitePublicationCurrent(false); }
@@ -51548,6 +51639,20 @@ private:
         bool recovery_authority;
     };
 
+    struct GeneratedLabelMoveCapture {
+        QPointer<PlanCanvas> canvas;
+        CanvasLabelPresentationIdentity identity;
+        std::shared_ptr<const DocumentSnapshot> source;
+        SourceEditAuthority authority;
+        Vec2 displayed_anchor;
+        double rotation{};
+        std::optional<BuildingViewFrame> plan_frame;
+        std::optional<SitePresentationPlacement> site_frame;
+        QFont font;
+        int dpi_x{},dpi_y{};
+        std::uint64_t site_generation{};
+    };
+
     // Desktop acceptance authority is transient, separate from portable proposal
     // provenance. Exact envelopes cannot inherit authority from an ID alone.
     struct AssistanceSourceBinding {
@@ -53854,6 +53959,7 @@ private:
     bool m_restored_boundary_navigation{};
     AssistanceSession m_assistance_session;
     std::map<std::string, AssistanceSourceBinding, std::less<>> m_assistance_sources;
+    std::optional<GeneratedLabelMoveCapture> m_generated_label_move;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     AreaClassPalette* m_area_class_palette{};
     std::optional<QString> m_armed_area_class;

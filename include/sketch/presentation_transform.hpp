@@ -14,6 +14,16 @@ struct PresentationAnnotationTarget {
     std::string child_id;
 };
 
+struct PresentationAnnotationTransformTarget {
+    PresentationAnnotationTarget target;
+    PlanarTransform transform;
+};
+
+struct PresentationReferenceTransformTarget {
+    std::string reference_id;
+    PlanarTransform transform;
+};
+
 inline constexpr std::size_t maximum_presentation_group_targets = 1000;
 // A 4096-entity numerical dependency graph can contain two generated role
 // callouts per area even when only its physical roots were explicitly selected.
@@ -26,11 +36,13 @@ struct AreaCalloutPlacement {
     std::string role; // area (combined), area_name, area_calculation
     Vec2 position;
     double rotation_radians{};
+    bool pin_position{false}; // Persist an explicit offset even at the default anchor.
 };
 
 // Changes only placement/rotation of the unique exact owner/role provider.
 // Missing nonidentity roles share one fresh annotation-only container. Identity
-// intent never creates providers or upgrades legacy annotation states.
+// intent never creates providers or upgrades legacy annotation states unless an
+// explicit position pin is requested.
 [[nodiscard]] ApplyEntityChanges area_callout_placement_command(
     const DocumentSnapshot& source, std::span<const AreaCalloutPlacement> placements,
     std::string_view fresh_annotation_owner_id, Revision expected_revision);
@@ -51,6 +63,16 @@ struct AreaCalloutPlacement {
     std::span<const PresentationAnnotationTarget> annotations,
     std::span<const std::string> reference_ids,
     const PlanarTransform& transform, Revision expected_revision);
+
+// Each transform is already conjugated into its target's stored position and
+// baseline frame. Children sharing an owner are aggregated into one upsert even
+// when their frames differ. Identity targets are validated but their placement
+// is never rewritten; another child's reflection may require owner-wide defaults.
+[[nodiscard]] ApplyEntityChanges presentation_group_transform_command(
+    const DocumentSnapshot& source,
+    std::span<const PresentationAnnotationTransformTarget> annotations,
+    std::span<const PresentationReferenceTransformTarget> references,
+    Revision expected_revision);
 
 // Detached presentation edits. The caller supplies source-plan anchors and
 // rotation with the source frame's handedness already applied.

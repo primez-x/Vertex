@@ -533,7 +533,11 @@ public:
                                           double pixels_per_metre) const;
     // Actual painted control, including rotation and annotation avoidance.
     [[nodiscard]] std::optional<QPointF> selectionRotationHandlePosition() const;
-    void setSelectionControlsVisible(bool visible) { m_selection_controls_visible = visible; update(); }
+    void setSelectionControlsVisible(bool visible) {
+        if (!visible && m_generated_label_move_identity) resetGesture();
+        m_selection_controls_visible = visible;
+        update();
+    }
 
     void setPointClicked(std::function<void(Vec2)> callback);
     // A temporary one-click command consumes input before picks or authoring.
@@ -545,6 +549,14 @@ public:
     void setEntityDoubleClicked(std::function<void(QString)> callback);
     // Returning true consumes the contextual request; false uses the body editor.
     void setLabelDoubleClicked(std::function<bool(CanvasLabelPresentationIdentity)> callback);
+    // Generated room/area callouts retain their canonical parent selection.
+    // Admission occurs after drag slop; coordinates are the painted label's
+    // absolute anchor in the currently presented model/scene XY.
+    void setGeneratedLabelMoveStarted(std::function<bool(CanvasLabelPresentationIdentity)> callback);
+    // false previews; true finishes after canvas gesture state is retired.
+    void setGeneratedLabelMoved(std::function<void(CanvasLabelPresentationIdentity, Vec2, bool)> callback);
+    // Retires an admitted capture once on cancellation or callback failure.
+    void setGeneratedLabelMoveCanceled(std::function<void()> callback);
     [[nodiscard]] std::optional<CanvasLabelPresentationIdentity> labelPresentationAt(QPointF point) const;
     [[nodiscard]] std::optional<CanvasLabel> labelPresentation(const CanvasLabelPresentationIdentity& identity) const;
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
@@ -1054,6 +1066,14 @@ private:
     };
     // Keep interactive picking warm while a separate output device is used.
     mutable std::array<LabelPlacementCache, 4> m_label_placement_cache;
+    std::optional<CanvasLabelPresentationIdentity> m_generated_label_move_identity;
+    std::size_t m_generated_label_move_index{};
+    Vec2 m_generated_label_move_anchor{};
+    Vec2 m_generated_label_move_press_pointer{};
+    std::optional<Vec2> m_generated_label_move_preview;
+    std::uint64_t m_generated_label_move_serial{};
+    bool m_generated_label_move_admitted{};
+    bool m_generated_label_move_refused{};
     bool m_sketch_composition_guide_enabled{};
     std::uint64_t m_sketch_content_revision{};
     mutable std::uint64_t m_sketch_guide_revision{std::numeric_limits<std::uint64_t>::max()};
@@ -1090,7 +1110,7 @@ private:
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
     enum class LeftGesture {
-        none, canvas_pan, object_move, selection_resize, selection_rotate, selection_axis_resize,
+        none, canvas_pan, object_move, generated_label_move, selection_resize, selection_rotate, selection_axis_resize,
         vertex_move, opening_width_resize, marquee, space_pan
     };
     LeftGesture m_left_gesture{LeftGesture::none};
@@ -1219,6 +1239,9 @@ private:
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString)> m_entity_double_clicked;
     std::function<bool(CanvasLabelPresentationIdentity)> m_label_double_clicked;
+    std::function<bool(CanvasLabelPresentationIdentity)> m_generated_label_move_started;
+    std::function<void(CanvasLabelPresentationIdentity, Vec2, bool)> m_generated_label_moved;
+    std::function<void()> m_generated_label_move_canceled;
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<bool(bool, QStringList)> m_overlap_selection_requested;
     std::function<void(QStringList, bool)> m_entities_selected;

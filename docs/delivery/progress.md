@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 direct dragging of generated area callouts
+
+Selected room/area labels now have a dedicated drag path for their exact
+combined, name or calculation role. The screen preview moves one retained
+paint anchor; it does not move the boundary or rebuild geometry/calculations
+on each pointer event. Release converts that anchor through the captured
+ordinary, saved-plan or Site frame and applies one annotation-only placement
+command. Escape, navigation, capture loss and source/selection/view changes
+retire the gesture and preview. An unchanged drag remains a no-op.
+
+Source review identified that a real drag to an automatic label's default
+anchor could be discarded as an identity request. Explicit position-pin intent
+now persists that placement, including a zero offset; rotation-only/default
+identity requests retain automatic placement. The presentation group core also
+accepts a distinct conjugated rigid transform per child/reference while merging
+children into one owner edit, preparing the mixed Site-frame controller work.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction, appearance, latency and save/history/reopen remain unverified;
+the installed candidate is unchanged and manual results remain Not tested.
+Independent role selection and mixed Site-frame group geometry remain open.
+
 ### October 7 distinct assembly identities in Site, native and schedules
 
 Embedded catalog instances now receive collision-safe render aliases, distinct

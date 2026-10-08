@@ -245,6 +245,7 @@ ApplyEntityChanges area_callout_placement_command(const DocumentSnapshot& source
         Vec2 position;
         Vec2 offset;
         double rotation{};
+        bool pin_position{};
     };
     std::map<Target, Request> requests;
     for (const auto& placement : placements) {
@@ -261,7 +262,7 @@ ApplyEntityChanges area_callout_placement_command(const DocumentSnapshot& source
         require(std::isfinite(offset.x) && std::isfinite(offset.y), "The area callout offset must be finite.");
         const auto rotation = canonical_callout_rotation(placement.rotation_radians);
         require(requests.emplace(Target{placement.owner_id, placement.role},
-                    Request{anchor, placement.position, offset, rotation}).second,
+                    Request{anchor, placement.position, offset, rotation, placement.pin_position}).second,
                 "The area callout placement contains a duplicate owner/role target.");
     }
 
@@ -315,9 +316,10 @@ ApplyEntityChanges area_callout_placement_command(const DocumentSnapshot& source
             current->plan_label_rotation_radians.value_or(0.0) : 0.0);
         // Comparing the absolute effective position also avoids introducing a
         // subtraction round-trip edit at a large source-model origin.
-        const bool same_position = (request.offset.x == current_offset.x && request.offset.y == current_offset.y) ||
+        const bool same_position = (!request.pin_position || (current && current->plan_label_offset.has_value())) &&
+            ((request.offset.x == current_offset.x && request.offset.y == current_offset.y) ||
             (request.position.x == request.anchor.x + current_offset.x &&
-             request.position.y == request.anchor.y + current_offset.y);
+             request.position.y == request.anchor.y + current_offset.y));
         const bool same_rotation = request.rotation == current_rotation;
         if (same_position && same_rotation) continue;
         if (!current) {
@@ -368,74 +370,97 @@ ApplyEntityChanges presentation_group_transform_command(const DocumentSnapshot& 
     std::span<const PresentationAnnotationTarget> annotations,
     std::span<const std::string> reference_ids, const PlanarTransform& requested,
     Revision expected_revision) {
-    check_source(source, expected_revision);
     require(annotations.size() <= maximum_presentation_group_targets &&
                 reference_ids.size() <= maximum_presentation_group_targets - annotations.size() &&
                 (!annotations.empty() || !reference_ids.empty()),
             "Presentation group selection must contain between one and 1000 targets.");
-    const bool identity = rigid_identity(requested);
-    const auto& transform = requested;
-    const PlanarTransform linear{{}, transform.rotation_radians,
-                                transform.flip_horizontal, transform.flip_vertical, {}};
-    const bool oriented = linear.rotation_radians != 0.0 || linear.flip_horizontal || linear.flip_vertical;
-    const bool reflected = linear.flip_horizontal != linear.flip_vertical;
+    std::vector<PresentationAnnotationTransformTarget> annotation_targets;
+    std::vector<PresentationReferenceTransformTarget> reference_targets;
+    annotation_targets.reserve(annotations.size());
+    reference_targets.reserve(reference_ids.size());
+    for (const auto& target : annotations) annotation_targets.push_back({target, requested});
+    for (const auto& id : reference_ids) reference_targets.push_back({id, requested});
+    return presentation_group_transform_command(source, annotation_targets, reference_targets, expected_revision);
+}
 
-    std::map<std::string, std::set<std::string>> selected;
-    for (const auto& target : annotations) {
+ApplyEntityChanges presentation_group_transform_command(const DocumentSnapshot& source,
+    std::span<const PresentationAnnotationTransformTarget> annotations,
+    std::span<const PresentationReferenceTransformTarget> reference_targets,
+    Revision expected_revision) {
+    check_source(source, expected_revision);
+    require(annotations.size() <= maximum_presentation_group_targets &&
+                reference_targets.size() <= maximum_presentation_group_targets - annotations.size() &&
+                (!annotations.empty() || !reference_targets.empty()),
+            "Presentation group selection must contain between one and 1000 targets.");
+
+    std::map<std::string, std::map<std::string, PlanarTransform>> selected;
+    for (const auto& request : annotations) {
+        (void)rigid_identity(request.transform); // Validate even identity targets.
+        const auto& target = request.target;
         require(!target.owner_id.empty() && target.owner_id.size() <= 256 &&
                     !target.child_id.empty() && target.child_id.size() <= 256,
                 "Presentation target IDs must be bounded and nonempty.");
-        require(selected[target.owner_id].insert(target.child_id).second,
+        require(selected[target.owner_id].emplace(target.child_id, request.transform).second,
                 "The presentation group contains a duplicate annotation target.");
     }
     struct AnnotationEdit {
         Entity entity;
         AnnotationState state;
-        std::vector<AnnotationChild> children;
+        std::vector<std::pair<AnnotationChild, PlanarTransform>> children;
     };
     std::vector<AnnotationEdit> edits;
     for (const auto& [owner_id, ids] : selected) {
         auto entity = owner(source, owner_id, kAnnotationEntityType);
         auto state = decode_annotation_entity(entity); // Includes model/version and identity validation.
-        std::vector<AnnotationChild> children;
+        std::vector<std::pair<AnnotationChild, PlanarTransform>> children;
         std::map<std::string,std::size_t> matches;
         for (std::size_t i = 0; i < state.labels.size(); ++i)
             if (ids.contains(state.labels[i].id)) {
                 ++matches[state.labels[i].id];
-                children.push_back({"labels", i, state.labels[i].placement});
+                children.push_back({{"labels", i, state.labels[i].placement}, ids.at(state.labels[i].id)});
             }
         for (std::size_t i = 0; i < state.symbols.size(); ++i) {
             const auto& symbol = state.symbols[i];
             if (ids.contains(symbol.id)) {
                 ++matches[symbol.id];
-                children.push_back({"symbols", i, symbol.placement, symbol.width_scale, symbol.depth_scale});
+                children.push_back({{"symbols", i, symbol.placement, symbol.width_scale, symbol.depth_scale}, ids.at(symbol.id)});
             }
         }
-        for (const auto& id : ids)
+        for (const auto& [id, transform] : ids) {
+            (void)transform;
             require(matches[id] == 1, "A selected annotation child is missing or ambiguous.");
+        }
         edits.push_back({std::move(entity), std::move(state), std::move(children)});
     }
     std::set<std::string> unique_references;
-    std::vector<std::pair<Entity, ReferencePlacement>> references;
-    for (const auto& id : reference_ids) {
+    struct ReferenceEdit { Entity entity; ReferencePlacement placement; PlanarTransform transform; };
+    std::vector<ReferenceEdit> references;
+    for (const auto& request : reference_targets) {
+        (void)rigid_identity(request.transform);
+        const auto& id = request.reference_id;
         require(!id.empty() && id.size() <= 256 && unique_references.insert(id).second,
                 "Reference target IDs must be bounded, nonempty and unique.");
         auto entity = owner(source, id, "reference_asset");
         auto placement = reference_placement(source, entity);
-        references.emplace_back(std::move(entity), placement);
+        references.push_back({std::move(entity), placement, request.transform});
     }
     // Identity never repairs or upgrades a source, but must refuse every invalid
     // selected owner/child/reference above just like a nonidentity request.
-    if (identity) return {expected_revision, {}, {}, {}};
-
     ApplyEntityChanges command{expected_revision, {}, {}, "Transform presentation group"};
     for (auto& edit : edits) {
-        for (const auto& selected_child : edit.children) {
+        for (const auto& [selected_child, transform] : edit.children) {
+            if (rigid_identity(transform)) continue;
+            const PlanarTransform linear{{}, transform.rotation_radians,
+                                        transform.flip_horizontal, transform.flip_vertical, {}};
+            const bool oriented = linear.rotation_radians != 0.0 || linear.flip_horizontal || linear.flip_vertical;
+            const bool reflected = linear.flip_horizontal != linear.flip_vertical;
             const bool symbol = std::string_view(selected_child.collection) == "symbols";
             if (symbol && reflected) upgrade_axes(edit.entity, edit.state);
             auto& raw = edit.entity.properties.at("state").at(selected_child.collection).at(selected_child.index);
             auto& placement = raw.at("placement");
             const auto position = transform_point(selected_child.placement.position, transform);
+            require(std::isfinite(position.x) && std::isfinite(position.y),
+                    "The resulting annotation position must be finite.");
             if (position.x != selected_child.placement.position.x) placement["x"] = position.x;
             if (position.y != selected_child.placement.position.y) placement["y"] = position.y;
             if (oriented) {
@@ -445,14 +470,21 @@ ApplyEntityChanges presentation_group_transform_command(const DocumentSnapshot& 
             if (symbol && reflected)
                 raw["flip_vertical"] = !edit.state.symbols[selected_child.index].flip_vertical;
             // Labels intentionally have no local mirror flags: glyphs remain
-            // readable while their anchor and baseline follow the shared edit.
+            // readable while their anchor and baseline follow the target edit.
         }
         validate_annotation_entity(edit.entity);
         if (edit.entity != source.entities().at(edit.entity.id))
             command.entity_changes.push_back(EntityChange::upsert(std::move(edit.entity)));
     }
-    for (auto& [entity, placement] : references) {
+    for (auto& [entity, placement, transform] : references) {
+        if (rigid_identity(transform)) continue;
+        const PlanarTransform linear{{}, transform.rotation_radians,
+                                    transform.flip_horizontal, transform.flip_vertical, {}};
+        const bool oriented = linear.rotation_radians != 0.0 || linear.flip_horizontal || linear.flip_vertical;
+        const bool reflected = linear.flip_horizontal != linear.flip_vertical;
         const auto position = transform_point(placement.position, transform);
+        require(std::isfinite(position.x) && std::isfinite(position.y),
+                "The resulting reference position must be finite.");
         if (position.x != placement.position.x) entity.properties.at("position_m")[0] = position.x;
         if (position.y != placement.position.y) entity.properties.at("position_m")[1] = position.y;
         if (oriented) {
@@ -464,6 +496,7 @@ ApplyEntityChanges presentation_group_transform_command(const DocumentSnapshot& 
         if (entity != source.entities().at(entity.id))
             command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
     }
+    if (command.entity_changes.empty()) return {expected_revision, {}, {}, {}};
     return command;
 }
 

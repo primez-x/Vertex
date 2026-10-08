@@ -930,6 +930,7 @@ void PlanCanvas::setSelectionFilter(CanvasSelectionFilter filter) {
     // and explicit selected transform controls do not capture a new pick.
     if (m_gesture_button == Qt::RightButton || m_left_gesture == LeftGesture::marquee ||
         m_left_gesture == LeftGesture::canvas_pan || m_left_gesture == LeftGesture::object_move ||
+        m_left_gesture == LeftGesture::generated_label_move ||
         m_transform_frame_start) {
         resetGesture();
         resetTouchInput();
@@ -1035,11 +1036,13 @@ void PlanCanvas::setReferenceGrids(std::vector<CanvasReferenceGrid> grids) {
 }
 
 void PlanCanvas::setBoundaryPreview(std::vector<Vec2> points) {
+    if (!points.empty() && m_generated_label_move_identity) resetGesture();
     m_boundary_preview = std::move(points);
     update();
 }
 
 void PlanCanvas::setWallPreview(std::optional<WallDraftPreview> wall) {
+    if (wall && m_generated_label_move_identity) resetGesture();
     m_wall_preview = std::move(wall);
     update();
 }
@@ -1050,6 +1053,7 @@ void PlanCanvas::setDrawingWitnesses(std::vector<DrawingWitness> witnesses) {
 }
 
 void PlanCanvas::setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> preview) {
+    if (preview && m_generated_label_move_identity) resetGesture();
     m_boundary_draft_preview = std::move(preview);
     update();
 }
@@ -1336,7 +1340,7 @@ void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_s
     clearComponentPlacementPreview();
     // Hosted station captures belong to the pressed view. Navigation must
     // invalidate a drag or released pending admission before it can reappear.
-    if (m_opening_move_active) resetGesture();
+    if (m_opening_move_active || m_generated_label_move_identity) resetGesture();
     ++m_navigation_generation;
     m_pending_dimension_space_tap.reset();
     const auto callback = m_navigation_changed;
@@ -2345,6 +2349,23 @@ void PlanCanvas::setLabelDoubleClicked(std::function<bool(CanvasLabelPresentatio
     m_label_double_clicked = std::move(callback);
 }
 
+void PlanCanvas::setGeneratedLabelMoveStarted(
+    std::function<bool(CanvasLabelPresentationIdentity)> callback) {
+    if (m_generated_label_move_identity) resetGesture();
+    m_generated_label_move_started = std::move(callback);
+}
+
+void PlanCanvas::setGeneratedLabelMoved(
+    std::function<void(CanvasLabelPresentationIdentity, Vec2, bool)> callback) {
+    if (m_generated_label_move_identity) resetGesture();
+    m_generated_label_moved = std::move(callback);
+}
+
+void PlanCanvas::setGeneratedLabelMoveCanceled(std::function<void()> callback) {
+    if (m_generated_label_move_identity) resetGesture();
+    m_generated_label_move_canceled = std::move(callback);
+}
+
 void PlanCanvas::setEntitySelectionClicked(std::function<void(QString, bool)> callback) {
     m_entity_selection_clicked = std::move(callback);
 }
@@ -2614,7 +2635,11 @@ QStringList PlanCanvas::areaIdsAt(Vec2 point) const {
     return ids;
 }
 
-void PlanCanvas::setAreaClassCaption(QString caption) {m_area_class_caption=std::move(caption);update();}
+void PlanCanvas::setAreaClassCaption(QString caption) {
+    if (!caption.isEmpty() && m_generated_label_move_identity) resetGesture();
+    m_area_class_caption = std::move(caption);
+    update();
+}
 
 void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
                                  std::function<bool(const QString&)> uses_raw_point) {
@@ -2864,6 +2889,7 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::StyleChange:
     case QEvent::ScreenChangeInternal:
     case QEvent::DevicePixelRatioChange:
+        if (m_generated_label_move_identity) resetGesture();
         if (event->type() == QEvent::ScreenChangeInternal ||
             event->type() == QEvent::DevicePixelRatioChange) ++m_navigation_generation;
         // System metrics can change while serialized QFont values remain equal.
@@ -3152,6 +3178,36 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_pan_view_start = m_view_center;
         return;
     }
+    if (selectionInteractionEnabled() && !m_wall_preview && m_boundary_preview.empty() &&
+        m_area_class_caption.isEmpty()) {
+        const auto identity = labelPresentationAt(position);
+        const auto label = identity ? labelPresentation(*identity) : std::nullopt;
+        if (label && label->avoid_components &&
+            (label->callout_role.isEmpty() || label->callout_role == QStringLiteral("area_name") ||
+             label->callout_role == QStringLiteral("area_calculation")) &&
+            selectedIds().contains(label->id)) {
+            // Capture the actual painted anchor, including automatic placement.
+            // It owns this press ahead of body/frame controls and never falls
+            // back to moving the boundary if the host refuses admission.
+            // Retain the parent's ordinary frame while its callout moves.
+            (void)selectionFrame(QRectF(rect()));
+            (void)selectionAxes();
+            const auto& labels = m_label_placement_cache[0].labels;
+            for (std::size_t i = 0; i < labels.size(); ++i) {
+                if (labels[i].id != identity->id || labels[i].callout_role != identity->callout_role ||
+                    labels[i].selection_type != identity->selection_type) continue;
+                m_left_gesture = LeftGesture::generated_label_move;
+                m_generated_label_move_identity = *identity;
+                m_generated_label_move_index = i;
+                m_generated_label_move_anchor = label->position;
+                m_generated_label_move_press_pointer = toModel(position, rect());
+                ++m_generated_label_move_serial;
+                m_label_placement_cache[0].retained_key.clear();
+                m_label_placement_cache[0].hit_index = {};
+                return;
+            }
+        }
+    }
     if (selectionInteractionEnabled()) {
         if (const auto jamb = openingWidthHandleAt(position, QRectF(rect()))) {
             m_left_gesture = LeftGesture::opening_width_resize;
@@ -3289,6 +3345,63 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             m_panning = true;
             setCursor(Qt::ClosedHandCursor);
         }
+    } else if (m_left_gesture == LeftGesture::generated_label_move) {
+        if (m_generated_label_move_refused) { setCursor(Qt::ForbiddenCursor); return; }
+        if (!m_left_dragging &&
+            (position - m_left_start).manhattanLength() >= QApplication::startDragDistance()) {
+            m_left_dragging = true;
+            const auto serial = m_generated_label_move_serial;
+            const auto identity = m_generated_label_move_identity;
+            const auto callback = m_generated_label_move_started;
+            const QPointer<PlanCanvas> guard(this);
+            // A nested refresh during admission must retire the host capture
+            // once, even if it runs before the callback returns.
+            m_generated_label_move_admitted = true;
+            bool accepted = false;
+            try { accepted = identity && callback && m_generated_label_moved && callback(*identity); }
+            catch (...) { if (guard) resetGesture(); return; }
+            if (!guard || serial != m_generated_label_move_serial ||
+                m_left_gesture != LeftGesture::generated_label_move) return;
+            m_generated_label_move_admitted = accepted;
+            if (!accepted) {
+                m_generated_label_move_refused = true;
+                setCursor(Qt::ForbiddenCursor);
+                return;
+            }
+        }
+        if (m_left_dragging && m_generated_label_move_identity) {
+            const auto point = toModel(position, rect());
+            const auto proposed = m_generated_label_move_anchor +
+                (point - m_generated_label_move_press_pointer);
+            if (!std::isfinite(proposed.x) || !std::isfinite(proposed.y)) {
+                resetGesture(); return;
+            }
+            const auto& labels = m_label_placement_cache[0].labels;
+            if (m_generated_label_move_index >= labels.size() ||
+                labels[m_generated_label_move_index].id != m_generated_label_move_identity->id ||
+                labels[m_generated_label_move_index].callout_role != m_generated_label_move_identity->callout_role ||
+                labels[m_generated_label_move_index].selection_type != m_generated_label_move_identity->selection_type) {
+                resetGesture(); return;
+            }
+            if (!m_generated_label_move_preview || proposed.x != m_generated_label_move_preview->x ||
+                proposed.y != m_generated_label_move_preview->y) {
+                m_generated_label_move_preview = proposed;
+                // All other painted labels and their collision placement remain
+                // exactly as captured. Only this indexed anchor changes.
+                m_label_placement_cache[0].labels[m_generated_label_move_index].position = proposed;
+                m_label_placement_cache[0].hit_index = {};
+                const auto callback = m_generated_label_moved;
+                const auto identity = *m_generated_label_move_identity;
+                const auto serial = m_generated_label_move_serial;
+                const QPointer<PlanCanvas> guard(this);
+                try { if (callback) callback(identity, proposed, false); }
+                catch (...) { if (guard) resetGesture(); return; }
+                if (!guard || serial != m_generated_label_move_serial) return;
+                update();
+            }
+            setCursor(Qt::ClosedHandCursor);
+        }
+        return;
     } else if (m_left_gesture == LeftGesture::object_move) {
         if (!m_left_dragging &&
             (position - m_left_start).manhattanLength() >= QApplication::startDragDistance()) {
@@ -3463,6 +3576,30 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         return;
     }
     if (button == Qt::LeftButton) {
+        if (m_left_gesture == LeftGesture::generated_label_move) {
+            const auto serial = m_generated_label_move_serial;
+            const QPointer<PlanCanvas> guard(this);
+            // Coalesced pen/touch/mouse release obeys the same slop/admission.
+            pointerMove(position, modifiers);
+            if (!guard || serial != m_generated_label_move_serial ||
+                m_left_gesture != LeftGesture::generated_label_move) return;
+            const auto identity = m_generated_label_move_identity;
+            const auto proposed = m_generated_label_move_preview;
+            const auto callback = m_generated_label_moved;
+            const bool finish = m_generated_label_move_admitted && identity && proposed && callback;
+            if (finish) m_generated_label_move_admitted = false;
+            // Retire preview and pointer authority before a command refresh.
+            resetGesture();
+            if (!guard) return;
+            if (finish) {
+                try { callback(*identity, *proposed, true); }
+                catch (...) {
+                    const auto canceled = guard ? m_generated_label_move_canceled : std::function<void()>{};
+                    if (canceled) { try { canceled(); } catch (...) {} }
+                }
+            }
+            return;
+        }
         // Consume the final location or fine-input change even if the platform
         // omitted a move event. An unchanged transform keeps its admitted serial.
         if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::canvas_pan ||
@@ -3643,6 +3780,21 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::resetGesture() {
+    const bool generated_label_capture = m_generated_label_move_identity.has_value();
+    const auto generated_label_canceled = m_generated_label_move_admitted
+        ? m_generated_label_move_canceled : std::function<void()>{};
+    m_generated_label_move_admitted = false;
+    m_generated_label_move_refused = false;
+    m_generated_label_move_identity.reset();
+    m_generated_label_move_preview.reset();
+    ++m_generated_label_move_serial;
+    if (generated_label_capture) {
+        m_label_placement_cache[0] = {};
+        m_selection_bounds_cache = {};
+        m_selection_frame_cache = {};
+        m_selection_axes_key.clear();
+        m_selection_axes_cache.reset();
+    }
     clearSymbolDragPreview();
     clearComponentPlacementPreview();
     m_pending_dimension_space_tap.reset();
@@ -3734,6 +3886,8 @@ void PlanCanvas::resetGesture() {
         setCursor(Qt::CrossCursor);
     }
     update();
+    // All gesture state is retired before cancellation can refresh the scene.
+    if (generated_label_canceled) { try { generated_label_canceled(); } catch (...) {} }
 }
 
 void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
@@ -4071,6 +4225,10 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     double dpi, bool output, bool content_only, Vec2 layout_origin, bool floor_ghost) const {
     auto& cache = m_label_placement_cache[floor_ghost ? 3 : content_only ? 2 : output ? 1 : 0];
     const bool interactive = !output && !floor_ghost;
+    // The ordinary screen lane retains the exact press-time paint layout.
+    // Pointer previews update one anchor directly, without source projection,
+    // geometry, label placement or text calculations. Output stays committed.
+    if (interactive && !content_only && m_generated_label_move_identity) return cache.labels;
     QByteArray retained_key;
     if (!interactive || !hasInteractivePresentation()) {
         QDataStream retained_signature(&retained_key, QIODevice::WriteOnly);
@@ -5944,6 +6102,7 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
 
 void PlanCanvas::resizeEvent(QResizeEvent* event) {
     if (event->oldSize() != event->size()) {
+        if (m_generated_label_move_identity) resetGesture();
         clearSymbolDragPreview();
         clearComponentPlacementPreview();
         ++m_navigation_generation;
@@ -7228,6 +7387,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlappi
 }
 
 void PlanCanvas::invalidateRetainedPresentation() {
+    if (m_generated_label_move_identity) resetGesture();
     clearSymbolDragPreview();
     clearComponentPlacementPreview();
     m_content_bounds_cache = {};
@@ -7357,7 +7517,11 @@ Vec2 PlanCanvas::dragDelta(QPointF position) const {
 }
 
 void PlanCanvas::updatePointerCursor(QPointF point) {
-    if (m_opening_move_active && m_left_dragging && m_move_preview_exact &&
+    if (m_left_gesture == LeftGesture::generated_label_move && m_generated_label_move_refused) {
+        setCursor(Qt::ForbiddenCursor);
+    } else if (m_left_gesture == LeftGesture::generated_label_move && m_left_dragging) {
+        setCursor(Qt::ClosedHandCursor);
+    } else if (m_opening_move_active && m_left_dragging && m_move_preview_exact &&
         !m_move_preview_valid && !m_move_preview_pending) {
         setCursor(Qt::ForbiddenCursor);
     } else if (m_panning ||
