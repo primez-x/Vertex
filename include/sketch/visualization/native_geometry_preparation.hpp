@@ -27,6 +27,8 @@ struct PreparedNativeMaterialRegion {
     std::optional<std::string> material_id;
     double gross_volume{};
     double net_volume{};
+    // Versioned assembly profile key; empty for other native material regions.
+    std::string presentation_key;
 };
 struct PreparedNativeSolid {
     std::string content;

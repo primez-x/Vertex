@@ -122,11 +122,12 @@ void append_material_summaries(const DocumentSnapshot& document,
         if (basis != row.cells.end() &&
             std::holds_alternative<std::string>(basis->second.value) &&
             std::get<std::string>(basis->second.value) == "source_gross") continue;
-        const auto source_id = material_source_id(row.object_id, &document);
-        const auto source = document.entities().find(source_id);
-        const auto name_cell = row.cells.find("name");
         const auto assembly_material = is_assembly_material_row(row) ||
                                        row.cells.contains("joined_roof_id");
+        const auto source_id = assembly_material ? std::string{} :
+            material_source_id(row.object_id, &document);
+        const auto source = document.entities().find(source_id);
+        const auto name_cell = row.cells.find("name");
         if ((source == document.entities().end() && !assembly_material) ||
             name_cell == row.cells.end() ||
             !std::holds_alternative<std::string>(name_cell->second.value)) {
@@ -492,6 +493,9 @@ void append_assembly_rows(const DocumentSnapshot& document,
     std::vector<ScheduleRow> rows;
     std::string context = "assembly scope";
     try {
+        // Resolve aliases against the complete captured source so visibility
+        // filtering cannot change an embedded root's presentation identity.
+        const auto embedded_ids = embedded_assembly_presentation_ids(document.entities());
         // Supporting catalogs may be hidden. Hidden independent owners neither
         // expand nor contribute diagnostics to a visibility-scoped schedule.
         for (const auto& [id, entity] : document.entities()) {
@@ -546,8 +550,13 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 [&](const auto& value) { return value.id == instance.type_id; });
             if (type == model.types().end()) throw std::invalid_argument("assembly root type is missing");
             const auto geometry = make_assembly_geometry(expansion);
-            const std::string stem = "assembly:" + assembly_row_component(catalog_id) +
-                ":instance:" + assembly_row_component(instance.id);
+            const std::optional<std::string> document_root = external
+                ? std::optional<std::string>{owner_id} : std::nullopt;
+            const auto root_key = nlohmann::json{{"version", 1},
+                {"origin", external ? "document_instance" : "embedded_catalog"},
+                {"catalog_id", catalog_id}, {"instance_id", instance.id},
+                {"document_entity_id", document_root
+                    ? nlohmann::json(*document_root) : nlohmann::json(nullptr)}};
             std::vector<ScheduleSourceRef> sources{{catalog_id, "model"}};
             if (external) sources.push_back({owner_id, "instance"});
             if (instance.placement) sources.push_back({instance.placement->host_entity_id, "geometry"});
@@ -556,10 +565,9 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 return ScheduleCell{std::move(value), false, sources, std::move(explanation)};
             };
             ScheduleRow row;
-            // Existing native/sidebar identities address the legacy catalog
-            // instance row directly. Preserve that public root identity; new
-            // profile paths use the unambiguous framed stem below.
-            row.object_id = external ? owner_id : catalog_id + ":instance:" + instance.id;
+            // Persisted roots retain their authored entity ID. Embedded roots
+            // share the collision-safe render alias used by native/sidebar rows.
+            row.object_id = external ? owner_id : embedded_ids.at({catalog_id, instance.id});
             row.mark = "A-" + catalog_id + "-" + instance.id;
             row.kind = ScheduleRowKind::assembly;
             const auto data = [&](const std::string& name, ScheduleValue value) {
@@ -612,8 +620,9 @@ void append_assembly_rows(const DocumentSnapshot& document,
             for (const auto& solid : geometry.solids) {
                 const auto& profile = solid.source;
                 const auto path = nlohmann::json(profile.part_path).dump();
-                const auto key = stem + ":path:" + assembly_row_component(path) +
-                    ":profile:" + assembly_row_component(profile.profile.id) + ":material";
+                const auto key = "assembly-profile:" +
+                    assembly_profile_presentation_key(catalog_id, instance, profile,
+                        document_root).dump() + ":material";
                 ScheduleRow material_row;
                 material_row.object_id = key;
                 material_row.mark = "AM-" + instance.id + "-" + profile.profile.id;
@@ -661,8 +670,11 @@ void append_assembly_rows(const DocumentSnapshot& document,
                     if (material == model.materials().end()) throw std::invalid_argument("assembly slot material is missing");
                     const auto path = nlohmann::json(node.part_path).dump();
                     ScheduleRow declared;
-                    declared.object_id = stem + ":path:" + assembly_row_component(path) +
-                        ":slot:" + assembly_row_component(slot) + ":material";
+                    auto slot_key = root_key;
+                    slot_key["part_path"] = node.part_path;
+                    slot_key["type_id"] = node.type_id;
+                    slot_key["slot"] = slot;
+                    declared.object_id = "assembly-slot:" + slot_key.dump() + ":material";
                     declared.mark = "AM-" + instance.id + "-" + slot;
                     declared.kind = ScheduleRowKind::material;
                     for (auto [key,value] : std::map<std::string,ScheduleValue>{
@@ -985,6 +997,7 @@ void append_roof_join_rows(const DocumentSnapshot& document,
             // Gross source quantities remain reviewable but never contribute
             // alongside this join to net material totals, including on failure.
             for (auto& row : projection.snapshot.rows) {
+                if (is_assembly_material_row(row)) continue;
                 if (std::find(join.roof_ids.begin(), join.roof_ids.end(),
                     row.kind == ScheduleRowKind::material ? material_source_id(row.object_id, &document) : row.object_id)
                     == join.roof_ids.end()) continue;
@@ -1150,6 +1163,7 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
     // The core adapter's generic homogeneous assignment row is replaced by
     // the complete architecture-specific joined partition, never added twice.
     std::erase_if(projection.snapshot.rows, [&](const auto& row) {
+        if (is_assembly_material_row(row)) return false;
         const auto source = document.entities().find(material_source_id(row.object_id, &document));
         return row.kind == ScheduleRowKind::material && source != document.entities().end() &&
                source->second.type == "roof_join";

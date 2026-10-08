@@ -2,6 +2,8 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/document.hpp"
 #include <span>
+#include <string_view>
+#include <utility>
 
 namespace sketch {
 struct ArchitecturalGroupTransform;
@@ -11,6 +13,41 @@ struct AssemblyDocumentInstance {
     AssemblyInstance instance;
     bool operator==(const AssemblyDocumentInstance&) const = default;
 };
+// Rebuilt presentation identity, independent of a displayed/synthetic entity ID.
+// A document root is explicit; absence identifies an embedded catalog instance.
+// Paths retain the expanded profile's exact local identities, including an
+// empty path for profiles owned directly by the root type.
+struct AssemblyProfilePresentationIdentity {
+    std::string catalog_id;
+    std::string instance_id;
+    std::optional<std::string> document_entity_id;
+    std::vector<std::string> part_path;
+    std::string type_id;
+    std::string profile_id;
+    bool operator==(const AssemblyProfilePresentationIdentity&) const = default;
+};
+[[nodiscard]] nlohmann::json encode_assembly_profile_presentation_identity(
+    const AssemblyProfilePresentationIdentity& identity);
+// Requires the versioned, qualified identity; no unqualified legacy fallback.
+// Additional provenance fields on native source records are ignored.
+[[nodiscard]] AssemblyProfilePresentationIdentity decode_assembly_profile_presentation_identity(
+    const nlohmann::json& value);
+[[nodiscard]] nlohmann::json assembly_profile_presentation_key(const std::string& catalog_id,
+    const AssemblyInstance& instance, const AssemblyExpandedProfile& profile,
+    const std::optional<std::string>& document_entity_id = std::nullopt);
+using EmbeddedAssemblyPresentationIds =
+    std::map<std::pair<std::string, std::string>, std::string>;
+// Render-only IDs retain a plain historical alias only when unique and unused
+// by a persisted entity or annotation child. Compute once for a captured source;
+// this lightweight index does not expand assembly geometry. Source admission
+// remains the caller's responsibility; malformed identity records are refused.
+[[nodiscard]] EmbeddedAssemblyPresentationIds embedded_assembly_presentation_ids(
+    const AssemblyDocumentEntities& entities);
+[[nodiscard]] std::string embedded_assembly_presentation_id(const AssemblyDocumentEntities& entities,
+    const std::string& catalog_id, const std::string& instance_id);
+// Resolves only the exact currently generated ID; persisted IDs take precedence.
+[[nodiscard]] std::optional<AssemblyDocumentInstance> resolve_embedded_assembly_presentation(
+    const AssemblyDocumentEntities& entities, std::string_view render_id);
 // Only the adapter's envelope fields are replaced. Document context and opaque
 // properties/extensions remain on the source entity.
 [[nodiscard]] Entity encode_document_assembly_instance(const Entity& source,

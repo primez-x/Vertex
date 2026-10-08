@@ -21,6 +21,25 @@ void identifier(const std::string& value) {
                 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':';
         }), "assembly catalog/entity identity must be a valid document identifier");
 }
+void local_identifier(const std::string& value) {
+    // Match AssemblyModel's local identity rules without imposing document-ID
+    // characters/length on authored part, type, profile or embedded instance IDs.
+    require(!value.empty() && !std::all_of(value.begin(), value.end(),
+        [](unsigned char c) { return std::isspace(c); }), "assembly identifier/name must not be blank");
+}
+void validate_profile_presentation_identity(const AssemblyProfilePresentationIdentity& identity) {
+    identifier(identity.catalog_id);
+    local_identifier(identity.instance_id);
+    if (identity.document_entity_id) {
+        identifier(*identity.document_entity_id);
+        require(identity.instance_id == *identity.document_entity_id,
+            "assembly profile instance identity differs from its document root");
+    }
+    require(identity.part_path.size() < 32, "assembly graph depth budget exceeded");
+    for (const auto& part : identity.part_path) local_identifier(part);
+    local_identifier(identity.type_id);
+    local_identifier(identity.profile_id);
+}
 AssemblyModel catalog(const Entity& entity) {
     require(entity.type == "assembly_model", "assembly catalog reference has the wrong entity type");
     require(entity.properties.is_object() && entity.properties.contains("model") &&
@@ -40,6 +59,126 @@ ApplyEntityChanges upsert(const DocumentSnapshot& source, Entity entity,
     validate_document_assembly_instances(candidate);
     return {expected, {EntityChange::upsert(std::move(entity))}, {}, label};
 }
+}
+
+nlohmann::json encode_assembly_profile_presentation_identity(
+    const AssemblyProfilePresentationIdentity& identity) {
+    validate_profile_presentation_identity(identity);
+    return {{"version", 1},
+        {"origin", identity.document_entity_id ? "document_instance" : "embedded_catalog"},
+        {"catalog_id", identity.catalog_id}, {"instance_id", identity.instance_id},
+        {"document_entity_id", identity.document_entity_id
+            ? nlohmann::json(*identity.document_entity_id) : nlohmann::json(nullptr)},
+        {"part_path", identity.part_path}, {"type_id", identity.type_id},
+        {"profile_id", identity.profile_id}};
+}
+AssemblyProfilePresentationIdentity decode_assembly_profile_presentation_identity(const nlohmann::json& value) {
+    require(value.is_object(), "assembly profile presentation identity must be an object");
+    require(value.contains("version") && value.at("version").is_number_integer() && value.at("version") == 1,
+        "unsupported assembly profile presentation identity version");
+    for (const auto* key : {"origin", "catalog_id", "instance_id", "type_id", "profile_id"})
+        require(value.contains(key) && value.at(key).is_string(),
+            "assembly profile presentation identity requires string identities and origin");
+    require(value.contains("part_path") && value.at("part_path").is_array() &&
+        value.at("part_path").size() < 32, "invalid assembly profile presentation path");
+    for (const auto& part : value.at("part_path"))
+        require(part.is_string(), "assembly profile presentation path identities must be strings");
+    require(value.contains("document_entity_id"), "assembly profile presentation identity requires document root field");
+    const auto& root = value.at("document_entity_id");
+    const auto& origin = value.at("origin");
+    require((origin == "document_instance" && root.is_string()) ||
+        (origin == "embedded_catalog" && root.is_null()),
+        "assembly profile presentation origin disagrees with its document root");
+    AssemblyProfilePresentationIdentity result{value.at("catalog_id").get<std::string>(),
+        value.at("instance_id").get<std::string>(), std::nullopt,
+        value.at("part_path").get<std::vector<std::string>>(),
+        value.at("type_id").get<std::string>(), value.at("profile_id").get<std::string>()};
+    if (!root.is_null()) result.document_entity_id = root.get<std::string>();
+    validate_profile_presentation_identity(result);
+    return result;
+}
+nlohmann::json assembly_profile_presentation_key(const std::string& catalog_id,
+    const AssemblyInstance& instance, const AssemblyExpandedProfile& profile,
+    const std::optional<std::string>& document_entity_id) {
+    return encode_assembly_profile_presentation_identity({catalog_id, instance.id,
+        document_entity_id, profile.part_path, profile.type_id, profile.profile.id});
+}
+
+EmbeddedAssemblyPresentationIds embedded_assembly_presentation_ids(const AssemblyDocumentEntities& entities) {
+    EmbeddedAssemblyPresentationIds aliases;
+    std::map<std::string, std::size_t, std::less<>> alias_counts;
+    std::set<std::string, std::less<>> occupied;
+    for (const auto& [id, entity] : entities) {
+        require(id == entity.id, "document map identity differs from entity identity");
+        occupied.insert(id);
+        if (entity.type == kAnnotationEntityType) {
+            require(entity.properties.is_object() && entity.properties.contains("state") &&
+                entity.properties.at("state").is_object(), "annotation requires a state object");
+            const auto& state = entity.properties.at("state");
+            for (const auto* key : {"labels", "symbols"}) {
+                require(state.contains(key) && state.at(key).is_array(), "annotation requires child arrays");
+                for (const auto& child : state.at(key)) {
+                    require(child.is_object() && child.contains("id") && child.at("id").is_string(),
+                        "annotation child requires an identity");
+                    const auto child_id = child.at("id").get<std::string>();
+                    local_identifier(child_id);
+                    occupied.insert(child_id);
+                }
+            }
+        } else if (entity.type == "assembly_model") {
+            identifier(id);
+            require(entity.properties.is_object() && entity.properties.contains("model") &&
+                entity.properties.at("model").is_object(), "assembly catalog requires a model object");
+            const auto& model = entity.properties.at("model");
+            require(model.contains("instances") && model.at("instances").is_array(),
+                "assembly catalog requires an instances array");
+            for (const auto& instance : model.at("instances")) {
+                require(instance.is_object() && instance.contains("id") && instance.at("id").is_string(),
+                    "embedded assembly requires an instance identity");
+                const auto instance_id = instance.at("id").get<std::string>();
+                local_identifier(instance_id);
+                const auto alias = id + ":instance:" + instance_id;
+                require(aliases.emplace(std::pair{id, instance_id}, alias).second,
+                    "duplicate embedded assembly instance identity");
+                ++alias_counts[alias];
+            }
+        }
+    }
+    // Reserve even ambiguous raw aliases so escaped IDs cannot claim another
+    // embedded instance's historical spelling. Framed payloads are injective;
+    // leading '@' escapes also cover arbitrary authored annotation child IDs.
+    auto reserved = occupied;
+    for (const auto& [alias, count] : alias_counts) { (void)count; reserved.insert(alias); }
+    for (auto& [binding, alias] : aliases) {
+        if (alias_counts.at(alias) == 1 && !occupied.contains(alias)) continue;
+        auto qualified = "@assembly-instance:" + nlohmann::json::array({binding.first, binding.second}).dump();
+        while (reserved.contains(qualified)) qualified.insert(qualified.begin(), '@');
+        reserved.insert(qualified);
+        alias = std::move(qualified);
+    }
+    return aliases;
+}
+std::string embedded_assembly_presentation_id(const AssemblyDocumentEntities& entities,
+    const std::string& catalog_id, const std::string& instance_id) {
+    identifier(catalog_id);
+    local_identifier(instance_id);
+    const auto aliases = embedded_assembly_presentation_ids(entities);
+    const auto found = aliases.find({catalog_id, instance_id});
+    require(found != aliases.end(), "embedded assembly presentation references a missing instance");
+    return found->second;
+}
+std::optional<AssemblyDocumentInstance> resolve_embedded_assembly_presentation(
+    const AssemblyDocumentEntities& entities, std::string_view render_id) {
+    if (render_id.empty() || entities.contains(render_id)) return std::nullopt;
+    const auto aliases = embedded_assembly_presentation_ids(entities);
+    const auto found = std::find_if(aliases.begin(), aliases.end(),
+        [&](const auto& value) { return value.second == render_id; });
+    if (found == aliases.end()) return std::nullopt;
+    const auto model = catalog(entities.at(found->first.first));
+    const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
+        [&](const auto& value) { return value.id == found->first.second; });
+    require(instance != model.instances().end(), "embedded assembly presentation source instance is missing");
+    return AssemblyDocumentInstance{found->first.first, *instance};
 }
 
 AssemblyDocumentInstance decode_document_assembly_instance(const Entity& entity) {

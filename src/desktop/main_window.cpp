@@ -930,62 +930,80 @@ std::optional<std::string> annotation_parent_for_child(const DocumentSnapshot& s
     return identity.owner_id;
 }
 
+struct CanvasEmbeddedAssemblyBinding {
+    AssemblyDocumentInstance value;
+    std::optional<bool> geometric;
+};
+
+CanvasEmbeddedAssemblyBinding* canvas_embedded_assembly_binding(const DocumentSnapshot& snapshot,
+    std::string_view render_id) {
+    if (render_id.empty() || snapshot.entities().contains(render_id)) return nullptr;
+    struct Cache {
+        std::optional<DocumentSnapshot> source;
+        std::map<std::string,std::pair<std::string,std::string>,std::less<>> targets;
+        std::map<std::string,AssemblyModel,std::less<>> catalogs;
+        std::map<std::string,CanvasEmbeddedAssemblyBinding,std::less<>> bindings;
+    };
+    // One immutable authoring source per thread. A same-ID/same-revision head
+    // replacement cannot reuse this index; save metadata cannot alter aliases.
+    static thread_local Cache cache;
+    if (!cache.source || !snapshot.shares_authoring_source_with(*cache.source)) {
+        Cache next;
+        const auto ids=embedded_assembly_presentation_ids(snapshot.entities());
+        for (const auto& [target,id]:ids) {
+            if (!next.targets.emplace(id,target).second)
+                throw std::invalid_argument("The embedded assembly presentation identity is ambiguous.");
+        }
+        next.source=snapshot;cache=std::move(next);
+    }
+    const auto target=cache.targets.find(render_id);
+    if (target==cache.targets.end()) return nullptr;
+    const auto& [catalog_id,instance_id]=target->second;
+    if (!cache.catalogs.contains(catalog_id))
+        cache.catalogs.emplace(catalog_id,AssemblyModel::from_json(snapshot.entities().at(catalog_id).properties.at("model")));
+    const auto& model=cache.catalogs.at(catalog_id);
+    auto found=cache.bindings.find(render_id);
+    if (found==cache.bindings.end()) {
+        const auto instance=std::find_if(model.instances().begin(),model.instances().end(),
+            [&](const auto& value){return value.id==instance_id;});
+        if (instance==model.instances().end()) throw std::invalid_argument("The embedded assembly source instance is unavailable.");
+        found=cache.bindings.emplace(target->first,CanvasEmbeddedAssemblyBinding{{catalog_id,*instance},std::nullopt}).first;
+    }
+    if (!found->second.geometric)
+        found->second.geometric=!model.expand(found->second.value.instance.id).profiles.empty();
+    return &found->second;
+}
+
 std::optional<std::string> assembly_host_for_child(const DocumentSnapshot& snapshot,
                                                     std::string_view child_id) {
-    constexpr std::string_view marker = ":instance:";
-    // Every matching catalog ID is a prefix ending at this delimiter. Prefixes
-    // in increasing length preserve the map's original lexicographic order.
-    for (auto separator = child_id.find(marker); separator != std::string_view::npos;
-         separator = child_id.find(marker, separator + 1)) {
-        const auto catalog = snapshot.entities().find(child_id.substr(0, separator));
-        if (catalog == snapshot.entities().end()) continue;
-        const auto& [catalog_id, catalog_entity] = *catalog;
-        if (catalog_entity.type != "assembly_model" ||
-            !catalog_entity.properties.contains("model")) continue;
-        const std::string prefix = catalog_id + ":instance:";
-        if (!child_id.starts_with(prefix)) continue;
-        try {
-            const auto model = AssemblyModel::from_json(catalog_entity.properties.at("model"));
-            const auto instance_id = std::string(child_id.substr(prefix.size()));
-            const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
-                [&](const auto& candidate) { return candidate.id == instance_id; });
-            if (instance != model.instances().end() && instance->placement && model.expand(instance_id).profiles.empty())
-                return instance->placement->host_entity_id;
-        } catch (const std::exception&) {
-            // A malformed catalog remains diagnosable through normal document
-            // validation; selection should simply fail closed for its child.
-        }
+    try {
+        const auto binding=canvas_embedded_assembly_binding(snapshot,child_id);
+        if (binding && !*binding->geometric && binding->value.instance.placement)
+            return binding->value.instance.placement->host_entity_id;
+    } catch (const std::exception&) {
+        // Invalid source remains diagnosable without rebinding an alias.
     }
     return std::nullopt;
 }
 
 // Embedded roots are derived selectable identities owned by their catalog;
 // they are never inserted as synthetic entities in the active document.
-std::optional<AssemblyDocumentInstance> geometric_assembly_for_catalog_child(const std::string& catalog_id,
-    const Entity& entity, std::string_view child_id) {
+std::optional<AssemblyDocumentInstance> geometric_assembly_for_catalog_child(const DocumentSnapshot& snapshot,
+    const std::string& catalog_id,const Entity& entity, std::string_view child_id) {
     if (entity.type != "assembly_model" || !entity.properties.contains("model")) return std::nullopt;
-    const std::string prefix = catalog_id + ":instance:";
-    if (!child_id.starts_with(prefix)) return std::nullopt;
     try {
-        const auto model = AssemblyModel::from_json(entity.properties.at("model"));
-        for (const auto& instance : model.instances()) {
-            if (instance.id == child_id.substr(prefix.size()) &&
-                !model.expand(instance.id).profiles.empty()) return AssemblyDocumentInstance{catalog_id, instance};
-        }
+        const auto binding=canvas_embedded_assembly_binding(snapshot,child_id);
+        if (binding && binding->value.assembly_catalog_id==catalog_id && *binding->geometric) return binding->value;
     } catch (const std::exception&) { }
     return std::nullopt;
 }
 
 std::optional<AssemblyDocumentInstance> geometric_assembly_for_child(const DocumentSnapshot& snapshot,
                                                                    std::string_view child_id) {
-    constexpr std::string_view marker = ":instance:";
-    for (auto separator = child_id.find(marker); separator != std::string_view::npos;
-         separator = child_id.find(marker, separator + 1)) {
-        const auto catalog = snapshot.entities().find(child_id.substr(0, separator));
-        if (catalog != snapshot.entities().end())
-            if (const auto child = geometric_assembly_for_catalog_child(catalog->first, catalog->second, child_id))
-                return child;
-    }
+    try {
+        const auto binding=canvas_embedded_assembly_binding(snapshot,child_id);
+        if (binding && *binding->geometric) return binding->value;
+    } catch (const std::exception&) { }
     return std::nullopt;
 }
 
@@ -7290,7 +7308,7 @@ public:
         catalog.properties["model"] = AssemblyModel::create(model.materials(), model.types(), std::move(instances)).to_json();
         auto candidate = source.entities(); candidate.insert_or_assign(catalog.id, catalog);
         validate_document_assembly_instances(candidate);
-        const auto target = catalog.id + ":instance:" + instance.id;
+        const auto target = embedded_assembly_presentation_id(candidate,catalog.id,instance.id);
         std::vector<EntityChange> changes{EntityChange::upsert(std::move(catalog))};
         if (clone) for (const auto& [id, annotation] : source.entities()) {
             (void)id;
@@ -11532,8 +11550,8 @@ public:
                     if (identity.id!=primary_render_id || identity.type!=QStringLiteral("assembly_instance") ||
                         identity.presentation_key.isEmpty() ||
                         std::count_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& profile) {
-                            return identity.presentation_key==QString::fromStdString(json{
-                                {"part_path",profile.part_path},{"type_id",profile.type_id},{"profile_id",profile.profile.id}}.dump());
+                            return identity.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
+                                embedded->assembly_catalog_id,embedded->instance,profile).dump());
                         })!=1)
                         throw std::invalid_argument("A selected embedded profile has no unique canonical source identity.");
                 }
@@ -11572,6 +11590,7 @@ public:
         std::map<std::string,AssemblyModel,std::less<>> selection_catalogs;
         std::map<std::string,std::optional<AssemblyDocumentInstance>,std::less<>> selection_embedded_bindings;
         std::map<std::string,AssemblyExpansion,std::less<>> selection_assembly_expansions;
+        std::optional<EmbeddedAssemblyPresentationIds> selection_embedded_ids;
         AssemblyExpansionBudget selection_assembly_budget;
         const auto selection_catalog = [&](const std::string& id) -> const AssemblyModel& {
             if (!selection_catalogs.contains(id)) {
@@ -11585,18 +11604,16 @@ public:
         const auto selection_embedded_binding = [&](const std::string& alias) -> std::optional<AssemblyDocumentInstance> {
             if (const auto cached=selection_embedded_bindings.find(alias);cached!=selection_embedded_bindings.end())
                 return cached->second;
-            constexpr std::string_view marker=":instance:";
             std::optional<AssemblyDocumentInstance> binding;
-            for (auto separator=alias.find(marker);separator!=std::string::npos;
-                separator=alias.find(marker,separator+1)) {
-                const auto catalog=source.entities().find(alias.substr(0,separator));
-                if (catalog==source.entities().end() || catalog->second.type!="assembly_model") continue;
-                const auto& model=selection_catalog(catalog->first);
-                for (const auto& instance : model.instances()) {
-                    if (instance.id!=alias.substr(separator+marker.size())) continue;
-                    if (binding) throw std::invalid_argument("The assembly child identity is ambiguous.");
-                    binding=AssemblyDocumentInstance{catalog->first,instance};
-                }
+            if (!selection_embedded_ids) selection_embedded_ids=embedded_assembly_presentation_ids(source.entities());
+            const auto target=std::find_if(selection_embedded_ids->begin(),selection_embedded_ids->end(),
+                [&](const auto& entry){return entry.second==alias;});
+            if (target!=selection_embedded_ids->end()) {
+                const auto& model=selection_catalog(target->first.first);
+                const auto instance=std::find_if(model.instances().begin(),model.instances().end(),
+                    [&](const auto& value){return value.id==target->first.second;});
+                if (instance==model.instances().end()) throw std::invalid_argument("The assembly child identity is unavailable.");
+                binding=AssemblyDocumentInstance{target->first.first,*instance};
             }
             selection_embedded_bindings.emplace(alias,binding);
             return binding;
@@ -11646,9 +11663,11 @@ public:
                         (!embedded && (persisted==source.entities().end() || persisted->second.type!="assembly_instance")))
                         throw std::invalid_argument("A selected profile has no unambiguous assembly source owner.");
                     const auto& expansion=selection_assembly_expansion(identity.id.toStdString(),embedded);
+                    const auto binding=embedded ? *embedded : decode_document_assembly_instance(persisted->second);
                     if (std::count_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& profile) {
-                        return identity.presentation_key==QString::fromStdString(json{
-                            {"part_path",profile.part_path},{"type_id",profile.type_id},{"profile_id",profile.profile.id}}.dump());
+                        return identity.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
+                            binding.assembly_catalog_id,binding.instance,profile,
+                            embedded ? std::optional<std::string>{} : std::optional{persisted->first}).dump());
                     })!=1)
                         throw std::invalid_argument("A selected assembly profile has no unique canonical source identity.");
                 }
@@ -12046,7 +12065,7 @@ public:
                                 presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities);
                         if (!embedded_targets.empty()) {
                             for (auto& target : embedded_targets) {
-                                const auto alias=target.catalog_id+":instance:"+target.instance_id;
+                                const auto alias=selection_embedded_ids->at({target.catalog_id,target.instance_id});
                                 std::string fresh;
                                 do { fresh=new_id("assembly_instance"); }
                                 while (source.entities().contains(fresh) || annotation_child_exists(source,fresh) ||
@@ -12490,13 +12509,16 @@ public:
                             // Reuse the captured canonical keys rather than
                             // revalidating a whole catalog for every profile.
                             const auto& expansion=selection_assembly_expansions.at(alias);
+                            const auto copied=selected && clone->isChecked();
+                            const auto presented_binding=copied ? decode_document_assembly_instance(snapshot.entities().at(id)) : binding;
                             std::size_t retained{};
                             for (const auto& key : admitted_physical) if (key.first.toStdString()==id) ++retained;
                             if (expansion.profiles.empty() || retained!=expansion.profiles.size())
                                 throw std::invalid_argument("A selected embedded assembly has an incomplete canonical preview: "+id);
                             for (const auto& profile : expansion.profiles) {
-                                const auto key=QString::fromStdString(json{{"part_path",profile.part_path},
-                                    {"type_id",profile.type_id},{"profile_id",profile.profile.id}}.dump());
+                                const auto key=QString::fromStdString(assembly_profile_presentation_key(
+                                    presented_binding.assembly_catalog_id,presented_binding.instance,profile,
+                                    copied ? std::optional{id} : std::optional<std::string>{}).dump());
                                 if (!admitted_physical.contains({id_from(id),key}))
                                     throw std::invalid_argument("A selected embedded profile is missing from the canonical preview: "+id);
                             }
@@ -22757,20 +22779,32 @@ public:
 
     static std::optional<AssemblyDocumentInstance> embeddedAssemblyChild(
         const DocumentSnapshot& snapshot, std::string_view child_id) {
-        constexpr std::string_view marker=":instance:";
-        std::optional<AssemblyDocumentInstance> result;
-        for (auto separator=child_id.find(marker);separator!=std::string_view::npos;
-             separator=child_id.find(marker,separator+1)) {
-            const auto catalog=snapshot.entities().find(child_id.substr(0,separator));
-            if (catalog==snapshot.entities().end() || catalog->second.type!="assembly_model") continue;
-            const auto model=AssemblyModel::from_json(catalog->second.properties.at("model"));
-            for (const auto& instance : model.instances()) {
-                if (instance.id!=child_id.substr(separator+marker.size())) continue;
-                if (result) throw std::invalid_argument("The assembly child identity is ambiguous.");
-                result=AssemblyDocumentInstance{catalog->first,instance};
+        const auto binding=canvas_embedded_assembly_binding(snapshot,child_id);
+        return binding ? std::optional{binding->value} : std::nullopt;
+    }
+
+    static CanvasEntity assemblyPlanProfile(const QString& id,const QString& key,
+        const AssemblyExpandedProfile& profile,const AssemblyModel& model,bool selected) {
+        AssemblyExpansion expansion;expansion.profiles.push_back(profile);
+        CanvasEntity item{id,QStringLiteral("assembly_instance"),project_assembly_plan(expansion),0.0,selected};
+        item.presentation_key=key;
+        item.hit_segments=item.segments;
+        const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
+            profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
+        item.segments=assembly_placement_boundary(profile.profile.outer,xy);
+        for (const auto& hole:profile.profile.holes)
+            item.holes.push_back(assembly_placement_boundary(hole,xy));
+        if (profile.material_id) {
+            const auto material=std::find_if(model.materials().begin(),model.materials().end(),
+                [&](const auto& value){return value.id==*profile.material_id;});
+            if (material!=model.materials().end() && material->color_srgb) {
+                const QColor color(QString::fromStdString(*material->color_srgb));
+                if (color.isValid()) {
+                    item.filled=true;item.hatch_pattern=QStringLiteral("solid");item.fill_color=color;
+                }
             }
         }
-        return result;
+        return item;
     }
 
     static TopoDS_Shape makeAssemblyHostShape(const DocumentSnapshot& snapshot,
@@ -23149,6 +23183,55 @@ public:
                 captured_presentations.insert(presentation_identity(item));
             }
             std::map<PresentationIdentity,Bounds2> candidate_component_bounds;
+            std::map<std::string,AssemblyExpansion,std::less<>> candidate_assembly_expansions;
+            std::map<std::string,AssemblyModel,std::less<>> source_assembly_catalogs,candidate_assembly_catalogs;
+            std::map<std::string,std::optional<AssemblyDocumentInstance>,std::less<>> source_assembly_bindings,candidate_assembly_bindings;
+            using AssemblyAliasIndex=std::map<std::string,std::pair<std::string,std::string>,std::less<>>;
+            std::optional<AssemblyAliasIndex> source_assembly_aliases,candidate_assembly_aliases;
+            AssemblyExpansionBudget candidate_assembly_budget;
+            const auto assembly_binding=[&](const std::string& id,bool proposed) -> std::optional<AssemblyDocumentInstance> {
+                const auto& entities=proposed ? candidate : source.entities();
+                if (entities.contains(id)) return std::nullopt;
+                auto& bindings=proposed ? candidate_assembly_bindings : source_assembly_bindings;
+                if (!bindings.contains(id)) {
+                    auto& aliases=proposed ? candidate_assembly_aliases : source_assembly_aliases;
+                    if (!aliases) {
+                        aliases.emplace();
+                        for (const auto& [target,render]:embedded_assembly_presentation_ids(entities))
+                            if (!aliases->emplace(render,target).second)
+                                throw std::invalid_argument("An assembly preview alias has conflicting targets.");
+                    }
+                    const auto target=aliases->find(id);
+                    std::optional<AssemblyDocumentInstance> binding;
+                    if (target!=aliases->end()) {
+                        auto& catalogs=proposed ? candidate_assembly_catalogs : source_assembly_catalogs;
+                        const auto& [catalog_id,instance_id]=target->second;
+                        if (!catalogs.contains(catalog_id))
+                            catalogs.emplace(catalog_id,AssemblyModel::from_json(entities.at(catalog_id).properties.at("model")));
+                        const auto& model=catalogs.at(catalog_id);
+                        const auto instance=std::find_if(model.instances().begin(),model.instances().end(),
+                            [&](const auto& value){return value.id==instance_id;});
+                        if (instance==model.instances().end()) throw std::invalid_argument("The assembly preview instance is unavailable.");
+                        binding=AssemblyDocumentInstance{catalog_id,*instance};
+                    }
+                    bindings.emplace(id,std::move(binding));
+                }
+                return bindings.at(id);
+            };
+            const auto candidate_assembly=[&](const std::string& id,
+                const std::optional<AssemblyDocumentInstance>& embedded) -> const AssemblyExpansion& {
+                if (!candidate_assembly_expansions.contains(id)) {
+                    const auto binding=embedded ? *embedded : decode_document_assembly_instance(candidate.at(id));
+                    if (!candidate_assembly_catalogs.contains(binding.assembly_catalog_id)) {
+                        const auto& catalog=candidate.at(binding.assembly_catalog_id);
+                        if (catalog.type!="assembly_model") throw std::invalid_argument("The candidate assembly catalog changed type.");
+                        candidate_assembly_catalogs.emplace(binding.assembly_catalog_id,AssemblyModel::from_json(catalog.properties.at("model")));
+                    }
+                    candidate_assembly_expansions.emplace(id,candidate_assembly_catalogs.at(binding.assembly_catalog_id)
+                        .expand(binding.instance,candidate_assembly_budget));
+                }
+                return candidate_assembly_expansions.at(id);
+            };
             for (const auto& [item_id, item] : projection_sources) {
                 (void)item_id;
                 const bool typed_annotation=site_input && site_input->move_frame &&
@@ -23157,21 +23240,18 @@ public:
                 // when an independent persisted object has the same ID.
                 const auto embedded=!typed_annotation && item.type==QStringLiteral("assembly_instance") &&
                     (!item.presentation_key.isEmpty() || !source.entities().contains(item.id.toStdString()))
-                    ? embeddedAssemblyChild(source,item.id.toStdString()) : std::nullopt;
+                    ? assembly_binding(item.id.toStdString(),false) : std::nullopt;
                 const auto found=typed_annotation || embedded ? candidate.end() : candidate.find(item.id.toStdString());
                 if (found==candidate.end()) {
                     if (const auto original=embedded) {
-                        const auto original_model=AssemblyModel::from_json(source.entities().at(
-                            original->assembly_catalog_id).properties.at("model"));
-                        if (!original_model.expand(original->instance.id).profiles.empty()) {
-                            const auto binding=geometric_assembly_for_child(candidate_snapshot,item.id.toStdString());
-                            if (!binding) throw std::invalid_argument("The admitted geometric assembly child is unavailable.");
-                            if (candidate.at(binding->assembly_catalog_id)==source.entities().at(original->assembly_catalog_id)) continue;
-                            const auto model=AssemblyModel::from_json(candidate.at(binding->assembly_catalog_id).properties.at("model"));
-                            const auto expansion=model.expand(binding->instance.id);
+                        if (!item.presentation_key.isEmpty()) {
+                            const auto binding=assembly_binding(item.id.toStdString(),true);
+                        if (!binding) throw std::invalid_argument("The admitted geometric assembly child is unavailable.");
+                        if (candidate.at(binding->assembly_catalog_id)==source.entities().at(original->assembly_catalog_id)) continue;
+                        const auto& expansion=candidate_assembly(item.id.toStdString(),binding);
                             const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& part) {
-                                return item.presentation_key==QString::fromStdString(json{
-                                    {"part_path",part.part_path},{"type_id",part.type_id},{"profile_id",part.profile.id}}.dump());
+                                return item.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
+                                    binding->assembly_catalog_id,binding->instance,part).dump());
                             });
                             if (profile==expansion.profiles.end())
                                 throw std::invalid_argument("The admitted assembly profile presentation changed.");
@@ -23211,11 +23291,10 @@ public:
                                 result.entities.push_back(std::move(proposed));
                             continue;
                         }
-                        const auto binding=embeddedAssemblyChild(candidate_snapshot,item.id.toStdString());
+                        const auto binding=assembly_binding(item.id.toStdString(),true);
                         if (!binding || !binding->instance.placement)
                             throw std::invalid_argument("The admitted assembly child placement is unavailable.");
-                        const auto model=AssemblyModel::from_json(candidate.at(binding->assembly_catalog_id).properties.at("model"));
-                        if (!model.expand(binding->instance.id).profiles.empty())
+                        if (!candidate_assembly(item.id.toStdString(),binding).profiles.empty())
                             throw std::invalid_argument("The admitted host-copy assembly changed geometry ownership.");
                         const auto& placement=*binding->instance.placement;
                         if (candidate.at(binding->assembly_catalog_id)==source.entities().at(original->assembly_catalog_id) &&
@@ -23369,9 +23448,18 @@ public:
                     const auto binding=decode_document_assembly_instance(entity);
                     if (entity == source.entities().at(entity.id) &&
                         candidate.at(binding.assembly_catalog_id)==source.entities().at(binding.assembly_catalog_id)) continue;
-                    AssemblyExpansionBudget budget;
-                    const auto expansion = expand_document_assembly_instance(entity, candidate, budget);
-                    auto canonical=project_assembly_plan(expansion);
+                    const auto& expansion=candidate_assembly(entity.id,std::nullopt);
+                    AssemblyExpansion presented;
+                    if (item.presentation_key.isEmpty()) presented=expansion;
+                    else {
+                        const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& value) {
+                            return item.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
+                                binding.assembly_catalog_id,binding.instance,value,entity.id).dump());
+                        });
+                        if (profile==expansion.profiles.end()) throw std::invalid_argument("The admitted document assembly profile changed.");
+                        presented.profiles.push_back(*profile);
+                    }
+                    auto canonical=project_assembly_plan(presented);
                     if (component_sources && !canonical.empty())
                         candidate_component_bounds.emplace(presentation_identity(item),boundary_bounds(canonical));
                     proposed.stroke_segments.reset();
@@ -23383,9 +23471,16 @@ public:
                     proposed.drawing_alignment_segments.clear();
                     proposed.vertex_handles.clear();
                     if (view_context && !analytical_plan_context(BuildingViewKind::plan, *view_context)) {
-                        proposed.segments = project_architectural_view_shape(make_assembly_geometry(expansion).shape,
+                        proposed.segments = project_architectural_view_shape(make_assembly_geometry(presented).shape,
                             BuildingViewKind::plan, *view_context).value_or(Boundary{});
                         world_paths = false;
+                    } else if (!item.presentation_key.isEmpty()) {
+                        const auto& profile=presented.profiles.front();
+                        const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
+                            profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
+                        proposed.hit_segments=std::move(canonical);
+                        proposed.segments=assembly_placement_boundary(profile.profile.outer,xy);
+                        for (const auto& hole:profile.profile.holes) proposed.holes.push_back(assembly_placement_boundary(hole,xy));
                     } else proposed.segments = std::move(canonical);
                 } else if (entity.type == "roof_join") {
                     const auto join = parse_roof_join(entity.properties, entity.id);
@@ -23554,6 +23649,8 @@ public:
                 if (entity.type!="wall") proposed.endpoint_baseline.reset();
                 if (view_context && world_paths) {
                     proposed.segments = project_plan_path(std::move(proposed.segments), view_context->frame);
+                    if (entity.type=="assembly_instance")
+                        proposed.hit_segments=project_plan_path(std::move(proposed.hit_segments),view_context->frame);
                     if (proposed.stroke_segments)
                         proposed.stroke_segments = project_plan_path(std::move(*proposed.stroke_segments), view_context->frame);
                     for (auto& hole : proposed.holes)
@@ -23613,15 +23710,14 @@ public:
                     }
                     const auto embedded=component.type==QStringLiteral("assembly_instance") &&
                         (!component.presentation_key.isEmpty() || !source.entities().contains(component.id.toStdString()))
-                        ? embeddedAssemblyChild(source,component.id.toStdString()) : std::nullopt;
+                        ? assembly_binding(component.id.toStdString(),false) : std::nullopt;
                     const auto before=embedded ? source.entities().end() : source.entities().find(component.id.toStdString());
                     const auto after=embedded ? candidate.end() : candidate.find(component.id.toStdString());
                     if (after!=candidate.end() && after->second.type=="assembly_instance" &&
                         (before==source.entities().end() || before->second!=after->second)) {
                         // The saved view may exclude this body after cropping,
                         // but settled label layout uses its full canonical plan.
-                        AssemblyExpansionBudget budget;
-                        const auto plan=project_assembly_plan(expand_document_assembly_instance(after->second,candidate,budget));
+                        const auto plan=project_assembly_plan(candidate_assembly(after->first,std::nullopt));
                         if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
                         continue;
                     }
@@ -23636,15 +23732,14 @@ public:
                             continue;
                         }
                         const auto original=embedded;
-                        if (original && geometric_assembly_for_child(source,component.id.toStdString()) &&
+                        if (original && !component.presentation_key.isEmpty() &&
                             candidate.at(original->assembly_catalog_id)!=source.entities().at(original->assembly_catalog_id)) {
-                            const auto placed=geometric_assembly_for_child(candidate_snapshot,component.id.toStdString());
+                            const auto placed=assembly_binding(component.id.toStdString(),true);
                             if (!placed) throw std::invalid_argument("The admitted component assembly is unavailable.");
-                            const auto model=AssemblyModel::from_json(candidate.at(placed->assembly_catalog_id).properties.at("model"));
-                            const auto expansion=model.expand(placed->instance.id);
+                            const auto& expansion=candidate_assembly(component.id.toStdString(),placed);
                             const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& part) {
-                                return component.presentation_key==QString::fromStdString(json{
-                                    {"part_path",part.part_path},{"type_id",part.type_id},{"profile_id",part.profile.id}}.dump());
+                                return component.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
+                                    placed->assembly_catalog_id,placed->instance,part).dump());
                             });
                             if (profile==expansion.profiles.end()) throw std::invalid_argument("The admitted component profile changed.");
                             AssemblyExpansion part;part.profiles.push_back(*profile);
@@ -23653,7 +23748,7 @@ public:
                             continue;
                         }
                         if (original && original->instance.placement) {
-                            const auto placed=embeddedAssemblyChild(candidate_snapshot,component.id.toStdString());
+                            const auto placed=assembly_binding(component.id.toStdString(),true);
                             if (!placed || !placed->instance.placement) continue;
                             const auto& placement=*placed->instance.placement;
                             if (candidate.at(placed->assembly_catalog_id)!=source.entities().at(original->assembly_catalog_id) ||
@@ -43320,10 +43415,14 @@ private:
             result.diagnostics += message;
         };
         std::map<std::string, AssemblyExpansion, std::less<>> independent_assemblies;
+        EmbeddedAssemblyPresentationIds embedded_presentation_ids;
+        std::set<QString> embedded_render_ids;
         bool assembly_document_valid = false;
         try {
             AssemblyExpansionBudget budget;
             independent_assemblies = expand_document_assembly_instances(snapshot.entities(), budget);
+            embedded_presentation_ids=embedded_assembly_presentation_ids(snapshot.entities());
+            for (const auto& [binding,id]:embedded_presentation_ids) {(void)binding;embedded_render_ids.insert(id_from(id));}
             assembly_document_valid = true;
         } catch (const std::exception& error) {
             append_geometry_error(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
@@ -43648,17 +43747,13 @@ private:
             if (entity.type == "assembly_instance") {
                 try {
                     const auto& expansion = independent_assemblies.at(id);
-                    const auto& catalog = snapshot.entities().at(
-                        decode_document_assembly_instance(entity).assembly_catalog_id);
-                    const auto key = entity.properties.dump() + '\n' + catalog.properties.dump();
-                    auto cached = caches.projections.find(id);
-                    if (cached == caches.projections.end() || cached->second.first != key) {
-                        auto projection = project_assembly_plan(expansion);
-                        cached = caches.projections.insert_or_assign(id,
-                            std::make_pair(key, std::move(projection))).first;
+                    const auto binding=decode_document_assembly_instance(entity);
+                    const auto model=AssemblyModel::from_json(snapshot.entities().at(binding.assembly_catalog_id).properties.at("model"));
+                    for (const auto& profile:expansion.profiles) {
+                        const auto key=QString::fromStdString(assembly_profile_presentation_key(
+                            binding.assembly_catalog_id,binding.instance,profile,id).dump());
+                        all_geometry.push_back(assemblyPlanProfile(id_from(id),key,profile,model,id_from(id)==options.selected_id));
                     }
-                    all_geometry.push_back(CanvasEntity{id_from(id), QStringLiteral("assembly_instance"),
-                        cached->second.second, 0.0, id_from(id) == options.selected_id});
                 } catch (const std::exception& error) {
                     caches.projections.erase(id);
                     append_geometry_error(QStringLiteral("Assembly %1: %2")
@@ -43948,7 +44043,7 @@ private:
                     if (!label.visible) continue;
                     const SiteAnnotationTarget target{id,label.id};
                     const auto render_id=options.site_plan
-                        ? allocateSiteAnnotationRenderId(snapshot,target,result.annotation_targets) : id_from(label.id);
+                        ? allocateSiteAnnotationRenderId(snapshot,target,result.annotation_targets,embedded_render_ids) : id_from(label.id);
                     if (options.site_plan) result.annotation_targets.emplace(render_id,target);
                     annotation_child_layers.emplace_back(render_id.toStdString(), label.placement.layer_id);
                     CanvasLabel canvas_label{render_id, label.placement.position,
@@ -43981,7 +44076,7 @@ private:
                     }
                     const SiteAnnotationTarget target{id,symbol.id};
                     const auto render_id=options.site_plan
-                        ? allocateSiteAnnotationRenderId(snapshot,target,result.annotation_targets) : id_from(symbol.id);
+                        ? allocateSiteAnnotationRenderId(snapshot,target,result.annotation_targets,embedded_render_ids) : id_from(symbol.id);
                     if (options.site_plan) result.annotation_targets.emplace(render_id,target);
                     annotation_child_layers.emplace_back(render_id.toStdString(), symbol.placement.layer_id);
                     CanvasEntity canvas_symbol{render_id, QStringLiteral("symbol"),
@@ -44149,41 +44244,13 @@ private:
                 const auto model = AssemblyModel::from_json(catalog_entity.properties.at("model"));
                 for (const auto& instance : model.instances()) {
                     const auto expansion = model.expand(instance, embedded_materialization_budget);
-                    const auto child_id = catalog_id + ":instance:" + instance.id;
+                    const auto child_id = embedded_presentation_ids.at({catalog_id,instance.id});
                     if (!expansion.profiles.empty()) {
                         // Resolve each actual profile's material rather than
                         // painting the entire compound with a root slot.
                         for (const auto& source : expansion.profiles) {
-                            AssemblyExpansion profile_expansion;
-                            profile_expansion.profiles.push_back(source);
-                            CanvasEntity preview{id_from(child_id), QStringLiteral("assembly_instance"),
-                                project_assembly_plan(profile_expansion), 0.0,
-                                id_from(child_id) == options.selected_id};
-                            preview.presentation_key = QString::fromStdString(json{
-                                {"part_path", source.part_path}, {"type_id", source.type_id},
-                                {"profile_id", source.profile.id}}.dump());
-                            // Horizontal analytic extrusions retain distinct
-                            // outer/void loops for physical fill and picking.
-                            const AssemblyPlacement xy{ {},
-                                {source.transform.translation_m.x, source.transform.translation_m.y},
-                                source.transform.rotation_radians, source.transform.scale, source.transform.mirrored_y };
-                            preview.hit_segments = preview.segments;
-                            preview.segments = assembly_placement_boundary(source.profile.outer, xy);
-                            for (const auto& hole : source.profile.holes)
-                                preview.holes.push_back(assembly_placement_boundary(hole, xy));
-                            if (source.material_id) {
-                                const auto material = std::find_if(model.materials().begin(), model.materials().end(),
-                                    [&](const auto& candidate) { return candidate.id == *source.material_id; });
-                                if (material != model.materials().end() && material->color_srgb) {
-                                    const QColor color(QString::fromStdString(*material->color_srgb));
-                                    if (color.isValid()) {
-                                        preview.filled = true;
-                                        preview.hatch_pattern = QStringLiteral("solid");
-                                        preview.fill_color = color;
-                                    }
-                                }
-                            }
-                            all_geometry.push_back(std::move(preview));
+                            const auto key=QString::fromStdString(assembly_profile_presentation_key(catalog_id,instance,source).dump());
+                            all_geometry.push_back(assemblyPlanProfile(id_from(child_id),key,source,model,id_from(child_id)==options.selected_id));
                         }
                         const auto host_id = instance.placement ? instance.placement->host_entity_id : std::string{};
                         assembly_previews.push_back({child_id, host_id,
@@ -44508,11 +44575,12 @@ private:
     }
 
     static QString allocateSiteAnnotationRenderId(const DocumentSnapshot& source,
-        const SiteAnnotationTarget& target,const std::map<QString,SiteAnnotationTarget>& allocated) {
+        const SiteAnnotationTarget& target,const std::map<QString,SiteAnnotationTarget>& allocated,
+        const std::set<QString>& embedded_ids) {
         auto id=siteAnnotationToken(target);
         // Both labels and symbols use the snapshot's deterministic traversal.
         // Presentation aliases never shadow a persisted root or another child.
-        while(source.entities().contains(id.toStdString()) || allocated.contains(id)) id+=QLatin1Char(':');
+        while(source.entities().contains(id.toStdString()) || allocated.contains(id) || embedded_ids.contains(id)) id+=QLatin1Char(':');
         return id;
     }
 
@@ -44958,9 +45026,8 @@ private:
                 throw std::invalid_argument("The selected Site Plan presentation is not present in the displayed selection.");
             const auto persisted=source.entities().find(id.toStdString());
             const auto assembly_alias=embeddedAssemblyChild(source,id.toStdString());
-            // Existing commands address persisted bodies and catalog instances
-            // by raw IDs. They cannot choose between these separate owners,
-            // including a typed body selection with an unselected alias.
+            // Qualified aliases never claim a persisted body. Keep this guard
+            // at the captured Site boundary instead of trusting an ID prefix.
             if (assembly_alias && persisted!=source.entities().end())
                 throw std::invalid_argument("The selected Site Plan ID names both an embedded assembly presentation and a persisted object. Select an unambiguous semantic target before editing.");
             bool geometry_selected{};
@@ -45317,7 +45384,7 @@ private:
         if (const auto catalog = assembly_root_catalog_for_child(snapshot, id)) result.insert(*catalog);
         if (const auto host = assembly_host_for_child(snapshot, id)) {
             result.insert(*host);
-            if (const auto split = id.find(":instance:"); split != std::string::npos) result.insert(id.substr(0, split));
+            if (const auto binding=embeddedAssemblyChild(snapshot,id)) result.insert(binding->assembly_catalog_id);
         }
         if (const auto found = snapshot.entities().find(id); found != snapshot.entities().end()) {
             if (found->second.type == "opening")
@@ -45923,13 +45990,29 @@ private:
                         continue;
                     }
                     if (entity.type == "assembly_instance") {
-                        const auto projection = cached_projection(id, [&] {
-                            return make_assembly_geometry(independent_assemblies.at(id)).shape;
-                        });
-                        if (projection && !projection->empty())
-                            result.push_back(decorate_projection(CanvasEntity{
-                                id_from(id), QStringLiteral("assembly_instance"), *projection, 0.0,
-                                id_from(id) == m_selected_id}));
+                        const auto binding=decode_document_assembly_instance(entity);
+                        const auto& expansion=independent_assemblies.at(id);
+                        const auto geometry=make_assembly_geometry(expansion);
+                        const auto model=AssemblyModel::from_json(snapshot.entities().at(binding.assembly_catalog_id).properties.at("model"));
+                        for (const auto& profile:geometry.solids) {
+                            const auto clipped=clip_to_view(profile.shape);
+                            if (clipped.IsNull()) continue;
+                            auto item=decorate_projection(CanvasEntity{id_from(id),QStringLiteral("assembly_instance"),
+                                project_shape_view(clipped,kind,frame),0.0,id_from(id)==m_selected_id});
+                            item.presentation_key=QString::fromStdString(assembly_profile_presentation_key(
+                                binding.assembly_catalog_id,binding.instance,profile.source,id).dump());
+                            if (profile.source.material_id) {
+                                const auto material=std::find_if(model.materials().begin(),model.materials().end(),
+                                    [&](const auto& value){return value.id==*profile.source.material_id;});
+                                if (material!=model.materials().end() && material->color_srgb) {
+                                    const QColor color(QString::fromStdString(*material->color_srgb));
+                                    if (color.isValid()) {
+                                        item.filled=true;item.hatch_pattern=QStringLiteral("solid");item.fill_color=color;
+                                    }
+                                }
+                            }
+                            result.push_back(std::move(item));
+                        }
                         continue;
                     }
                     if (entity.type == "terrain_surface") {
@@ -46114,9 +46197,8 @@ private:
                             auto entity = decorate_projection(CanvasEntity{id_from(assembly.child_id),
                                 QStringLiteral("assembly_instance"), project_shape_view(clipped, kind, frame),
                                 0.0, id_from(assembly.child_id) == m_selected_id});
-                            entity.presentation_key = QString::fromStdString(json{
-                                {"part_path", profile.source.part_path}, {"type_id", profile.source.type_id},
-                                {"profile_id", profile.source.profile.id}}.dump());
+                            entity.presentation_key = QString::fromStdString(assembly_profile_presentation_key(
+                                assembly.catalog_id,assembly.expansion->source_instance,profile.source).dump());
                             if (profile.source.material_id) {
                                 const auto material = std::find_if(model.materials().begin(), model.materials().end(),
                                     [&](const auto& candidate) { return candidate.id == *profile.source.material_id; });
@@ -46282,7 +46364,7 @@ private:
                 geometric_assembly_catalogs.emplace_back(&id, &entity);
         const auto frame_assembly_child = [&](std::string_view child_id) -> std::optional<AssemblyDocumentInstance> {
             for (const auto& [id, entity] : geometric_assembly_catalogs)
-                if (const auto child = geometric_assembly_for_catalog_child(*id, *entity, child_id)) return child;
+                if (const auto child = geometric_assembly_for_catalog_child(snapshot,*id, *entity, child_id)) return child;
             return std::nullopt;
         };
         capture_diagnostic_stage("refresh.assembly_catalog_index.end");

@@ -705,7 +705,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     // Both independent and catalog-owned roots publish the same resolved
     // profile geometry, provenance and appearance dependencies.
     const auto publish_assembly = [&](const std::string& id, const std::string& catalog_id,
-                                      const AssemblyExpansion& expansion) {
+                                      const AssemblyExpansion& expansion,
+                                      const std::optional<std::string>& document_entity_id) {
         const auto source=entities.find(id);
         const auto placement = source==entities.end()
             ? SitePresentationPlacement{} : site_placements.at(id);
@@ -716,12 +717,14 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         for (const auto& profile : geometry.solids) {
             if (cancelled && cancelled()) return false;
             PreparedNativeMaterialRegion region;
-            // JSON framing prevents collisions between part identities
-            // containing separators; nested path and local profile are
-            // preserved instead of inventing document child entities.
-            region.source_id = nlohmann::json{{"entity_id", id},
-                {"part_path", profile.source.part_path}, {"type_id", profile.source.type_id},
-                {"profile_id", profile.source.profile.id}}.dump();
+            // Qualified origin/catalog/root fields disambiguate equal displayed
+            // IDs and local profile triples. Retain the historical entity_id in
+            // provenance, while presentations use the shared structured key.
+            auto identity = assembly_profile_presentation_key(catalog_id,
+                expansion.source_instance, profile.source, document_entity_id);
+            region.presentation_key = identity.dump();
+            identity["entity_id"] = id;
+            region.source_id = identity.dump();
             region.shape = place_native_shape(profile.shape,placement);
             region.color = Quantity_Color(0.63, 0.48, 0.78, Quantity_TOC_RGB);
             region.catalog_id = catalog_id;
@@ -764,16 +767,18 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     // one budget. Embedded materialization below is permitted only after this
     // complete preflight; it must not publish a partial over-budget document.
     bool assembly_document_valid = false;
+    EmbeddedAssemblyPresentationIds embedded_presentation_ids;
     try {
         AssemblyExpansionBudget budget;
         const auto expansions = expand_document_assembly_instances(entities, budget);
+        embedded_presentation_ids = embedded_assembly_presentation_ids(entities);
         assembly_document_valid = true;
         if (cancelled && cancelled()) return std::nullopt;
         for (const auto& [id, expansion] : expansions) {
             if (cancelled && cancelled()) return std::nullopt;
             try {
                 const auto binding = decode_document_assembly_instance(entities.at(id));
-                if (!publish_assembly(id, binding.assembly_catalog_id, expansion)) return std::nullopt;
+                if (!publish_assembly(id, binding.assembly_catalog_id, expansion, id)) return std::nullopt;
             } catch (const std::exception& error) {
                 append_unique(errors, "assembly instance '" + id + "': " + error.what());
             } catch (...) {
@@ -881,11 +886,11 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             const auto catalog = AssemblyModel::from_json(catalog_entity.properties.at("model"));
             for (const auto& instance : catalog.instances()) {
                     if (cancelled && cancelled()) return std::nullopt;
-                const auto child_id = catalog_id + ":instance:" + instance.id;
+                const auto child_id = embedded_presentation_ids.at({catalog_id, instance.id});
                 try {
                 const auto expansion = catalog.expand(instance, embedded_materialization_budget);
                 if (!expansion.profiles.empty()) {
-                    if (!publish_assembly(child_id, catalog_id, expansion)) return std::nullopt;
+                    if (!publish_assembly(child_id, catalog_id, expansion, std::nullopt)) return std::nullopt;
                     continue;
                 }
                 // Genuine V1-V3 declarations retain their host-copy behavior.

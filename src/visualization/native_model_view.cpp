@@ -754,21 +754,16 @@ public:
         if (!snapshot || !snapshot->is_editable() || id.empty()) return false;
         const auto found = snapshot->entities().find(id);
         if (found == snapshot->entities().end()) {
-            // Catalog-owned geometric instances use derived root IDs. Their
-            // controller edits the catalog instance; legacy host copies do
-            // not gain independent transform authority.
-            for (const auto& [catalog_id, entity] : snapshot->entities()) {
-                if (entity.type != "assembly_model" || !entity.properties.contains("model")) continue;
-                const auto prefix = catalog_id + ":instance:";
-                if (!id.starts_with(prefix)) continue;
-                try {
-                    const auto model = AssemblyModel::from_json(entity.properties.at("model"));
-                    const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
-                        [&](const auto& value) { return value.id == id.substr(prefix.size()); });
-                    return instance != model.instances().end() && !model.expand(instance->id).profiles.empty();
-                } catch (...) { return false; }
-            }
-            return false;
+            // Resolve the exact alias generated for this captured source,
+            // including escaped collision aliases. Only geometric instances
+            // gain direct transform authority; metadata-only entries do not.
+            try {
+                const auto embedded = resolve_embedded_assembly_presentation(snapshot->entities(), id);
+                if (!embedded) return false;
+                const auto& catalog = snapshot->entities().at(embedded->assembly_catalog_id);
+                const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
+                return !model.expand(embedded->instance.id).profiles.empty();
+            } catch (...) { return false; }
         }
         if (found->second.type == "assembly_instance") {
             try {

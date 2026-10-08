@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 distinct assembly identities in Site, native and schedules
+
+Embedded catalog instances now receive collision-safe render aliases, distinct
+from persisted objects and annotation children. Each geometric profile also
+retains explicit catalog, instance, document/embedded origin and local path
+identity. Ordinary and named plans emit individual persisted assembly profiles;
+Site frames, direct native transforms, numerical selection and complete Copy
+resolve their actual captured targets. Copies verify every fresh document-root
+profile. Native provenance and schedule root/profile/material rows retain the
+same distinction instead of suppressing colliding objects.
+
+Source and candidate preview bindings/catalogs are cached separately, with one
+candidate expansion budget. The desktop lookup retains only one immutable
+authoring source per thread and refuses reuse after head replacement. Site
+annotation aliases also reserve embedded render IDs. Document geometry IDs and
+the native project format are unchanged; these keys are rebuilt presentations.
+
+Independent source review accepted corrections to an expansion signature,
+native transform admission, schedule row identity and repeated preview lookup.
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+native behavior, appearance, save/reopen and performance remain unverified.
+Existing mixed Site-frame group restrictions remain; this source change does
+not close that separate transform gap or production qualification.
+
 ### October 7 direct area-label properties
 
 Double-clicking a painted room/area label now routes its exact name,
