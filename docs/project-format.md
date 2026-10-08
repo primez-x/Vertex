@@ -22,7 +22,9 @@ operators and current lineage. Saved dimensions follow their validated source
 owner once, retaining automatic/manual placement. Raw boundary and dimension
 supplements cannot grant geometric authority. Source-derived boundaries refresh
 from the resulting source geometry; untouched consumers cannot silently become
-stale.
+stale. Boundary replay validates the original source once for the group,
+reconstructs each owner from that source and moves native saved dimensions in
+one pass. It never chains moved boundaries as another owner's proof.
 
 Hard relationships require every bound owner in the complete transformed set
 with compatible operators. Existing fixed anchors keep their source coordinates;

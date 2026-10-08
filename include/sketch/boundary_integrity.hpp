@@ -8,7 +8,15 @@ namespace sketch {
     const BoundaryTransformation& transformation);
 // Reconstruct all owners/dimensions from the same source revision. Plain
 // identified owners retain their topology origin as explicit derivation.
+// Requires a nonempty group with unique owners and one shared operator.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities_batch(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<BoundaryTransformation>& transformations);
+// Pure reconstruction with a distinct operator for each unique owner. All
+// owners/dimensions use the original source; this grants no authority to publish
+// geometry or history. Dependencies and source reconciliation remain with
+// Document. Targets must be nonempty.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities_per_owner_batch(
     const std::map<std::string, Entity, std::less<>>& source,
     const std::vector<BoundaryTransformation>& transformations);
 // Reconstruct an entire entity state from a qualified receipt-backed offset.

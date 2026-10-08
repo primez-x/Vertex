@@ -3284,20 +3284,10 @@ std::map<std::string, Entity, std::less<>> rigid_boundary_targets(
     const std::map<std::string, Entity, std::less<>>& source, const TransformBoundaries& command) {
     if (!per_owner_rigid_transform(command))
         return transformed_boundary_entities_batch(source, command.transformations);
-    auto result = source;
-    // Replay each target against the same captured source. Intermediate moved
-    // deductions must never become the source proof for the next target.
-    for (const auto& transformation : command.transformations) {
-        const auto replay = transformed_boundary_entities_batch(source, {transformation});
-        result.at(transformation.boundary_id) = replay.at(transformation.boundary_id);
-        for (const auto& [id, entity] : source) {
-            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
-            const auto decoded = decode_boundary_dimension_entity(entity);
-            if (decoded.dimension && decoded.dimension->boundary_id == transformation.boundary_id)
-                result.at(id) = replay.at(id);
-        }
-    }
-    return result;
+    // Wall/stroke-only rigid groups have no boundary targets. Every boundary
+    // in a mixed group otherwise replays against the original source once.
+    if (command.transformations.empty()) return source;
+    return transformed_boundary_entities_per_owner_batch(source, command.transformations);
 }
 
 Entity replay_rigid_source_wall(const Entity& original, const PlanarTransform& transform) {

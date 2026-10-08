@@ -650,27 +650,25 @@ std::map<std::string, Entity, std::less<>> translated_boundary_entities(
     return result;
 }
 
-static std::map<std::string, Entity, std::less<>> transformed_boundary_entities_impl(
-    const std::map<std::string, Entity, std::less<>>& source,
-    const BoundaryTransformation& transformation, bool permit_plain_origin, bool validate_source) {
-    validate_boundary_transform(transformation);
-    const auto found = source.find(transformation.boundary_id);
-    if (found == source.end())
-        throw std::invalid_argument("Transform boundary does not exist");
-    const auto& original = found->second;
+static IdentifiedBoundary boundary_transform_source(const Entity& original, bool permit_plain_origin) {
     auto boundary = decode_identified_boundary_entity(original);
     const bool derived = original.extensions.contains("boundary_geometry_derivation");
     if (!original.properties.contains("boundary_authoring") && !derived && !permit_plain_origin)
         throw std::invalid_argument(
             "Explicit boundary transform requires construction or geometry-derivation evidence");
-    if (validate_source) {
-        if (const auto unsupported = validate_boundary_integrity(source))
-            throw std::invalid_argument(*unsupported);
-    }
+    return boundary;
+}
+
+static bool identity_boundary_transform(const PlanarTransform& transform) {
+    return transform.rotation_radians == 0 && !transform.flip_horizontal && !transform.flip_vertical &&
+        transform.offset.x == 0 && transform.offset.y == 0;
+}
+
+static Entity replayed_transformed_boundary_entity(
+    const Entity& original, IdentifiedBoundary boundary, const BoundaryTransformation& transformation) {
     const auto& transform = transformation.transform;
-    if (transform.rotation_radians == 0 && !transform.flip_horizontal && !transform.flip_vertical &&
-        transform.offset.x == 0 && transform.offset.y == 0)
-        return source;
+    if (identity_boundary_transform(transform)) return original;
+    const bool derived = original.extensions.contains("boundary_geometry_derivation");
     auto metadata = original;
     Entity encoded;
     if (derived || !original.properties.contains("boundary_authoring")) {
@@ -698,33 +696,52 @@ static std::map<std::string, Entity, std::less<>> transformed_boundary_entities_
         encoded = encode_identified_boundary_entity(boundary, &metadata);
         encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(transformed);
     }
-    auto result = source;
-    result.at(transformation.boundary_id) = std::move(encoded);
-    for (auto& [id, entity] : result) {
-        (void)id;
+    return encoded;
+}
+
+static void transform_boundary_dimensions(
+    const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& result,
+    const std::map<std::string, const PlanarTransform*, std::less<>>& active_transforms) {
+    if (active_transforms.empty()) return;
+    for (const auto& [id, entity] : source) {
         if (entity.type != "dimension")
             continue;
+        // Historical nonidentity replay refuses every unsupported native
+        // dimension, including those belonging to unrelated owners.
         const auto dimension = decode_boundary_dimension_entity(entity);
         if (!dimension.supported())
             throw std::invalid_argument(dimension.unsupported_reason);
-        if (dimension.dimension->boundary_id != transformation.boundary_id)
+        const auto transform = active_transforms.find(dimension.dimension->boundary_id);
+        if (transform == active_transforms.end())
             continue;
         auto moved = *dimension.dimension;
-        moved.text_position = transform_point(moved.text_position, transform);
-        entity = encode_boundary_dimension_entity(moved, &entity);
+        moved.text_position = transform_point(moved.text_position, *transform->second);
+        result.at(id) = encode_boundary_dimension_entity(moved, &entity);
     }
-    return result;
 }
 
 std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryTransformation& transformation) {
-    return transformed_boundary_entities_impl(source, transformation, false, true);
+    validate_boundary_transform(transformation);
+    const auto found = source.find(transformation.boundary_id);
+    if (found == source.end())
+        throw std::invalid_argument("Transform boundary does not exist");
+    auto boundary = boundary_transform_source(found->second, false);
+    if (const auto unsupported = validate_boundary_integrity(source))
+        throw std::invalid_argument(*unsupported);
+    if (identity_boundary_transform(transformation.transform)) return source;
+    auto result = source;
+    result.at(transformation.boundary_id) = replayed_transformed_boundary_entity(
+        found->second, std::move(boundary), transformation);
+    transform_boundary_dimensions(source, result, {{transformation.boundary_id, &transformation.transform}});
+    return result;
 }
 
-std::map<std::string, Entity, std::less<>> transformed_boundary_entities_batch(
+static std::map<std::string, Entity, std::less<>> transformed_boundary_entities_batch_impl(
     const std::map<std::string, Entity, std::less<>>& source,
-    const std::vector<BoundaryTransformation>& transformations) {
+    const std::vector<BoundaryTransformation>& transformations, bool require_shared_transform) {
     if (transformations.empty())
         throw std::invalid_argument("Boundary transform group is empty");
     if (const auto unsupported = validate_boundary_integrity(source))
@@ -733,22 +750,38 @@ std::map<std::string, Entity, std::less<>> transformed_boundary_entities_batch(
     const auto& shared = transformations.front().transform;
     for (const auto& transformation : transformations) {
         validate_boundary_transform(transformation);
-        if (!owners.insert(transformation.boundary_id).second || !(transformation.transform == shared))
-            throw std::invalid_argument("Boundary transform group requires unique owners and one shared transform");
+        if (!owners.insert(transformation.boundary_id).second ||
+            (require_shared_transform && !(transformation.transform == shared)))
+            throw std::invalid_argument(require_shared_transform
+                ? "Boundary transform group requires unique owners and one shared transform"
+                : "Boundary transform group requires unique owners");
     }
     auto result = source;
+    std::map<std::string, const PlanarTransform*, std::less<>> active_transforms;
     for (const auto& transformation : transformations) {
-        const auto transformed = transformed_boundary_entities_impl(source, transformation, true, false);
-        result.at(transformation.boundary_id) = transformed.at(transformation.boundary_id);
-        for (const auto& [id, entity] : source) {
-            if (entity.type != "dimension")
-                continue;
-            const auto dimension = decode_boundary_dimension_entity(entity);
-            if (dimension.dimension && dimension.dimension->boundary_id == transformation.boundary_id)
-                result.at(id) = transformed.at(id);
-        }
+        const auto found = source.find(transformation.boundary_id);
+        if (found == source.end())
+            throw std::invalid_argument("Transform boundary does not exist");
+        auto boundary = boundary_transform_source(found->second, true);
+        result.at(transformation.boundary_id) = replayed_transformed_boundary_entity(
+            found->second, std::move(boundary), transformation);
+        if (!identity_boundary_transform(transformation.transform))
+            active_transforms.emplace(transformation.boundary_id, &transformation.transform);
     }
+    transform_boundary_dimensions(source, result, active_transforms);
     return result;
+}
+
+std::map<std::string, Entity, std::less<>> transformed_boundary_entities_batch(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<BoundaryTransformation>& transformations) {
+    return transformed_boundary_entities_batch_impl(source, transformations, true);
+}
+
+std::map<std::string, Entity, std::less<>> transformed_boundary_entities_per_owner_batch(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<BoundaryTransformation>& transformations) {
+    return transformed_boundary_entities_batch_impl(source, transformations, false);
 }
 
 static bool exact_replacement_outline(const Boundary& requested, const Boundary& derived) {

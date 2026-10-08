@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 group replay and copied dependent selection
+
+Rigid boundary groups now validate their original source once, copy its entity
+map once and reconstruct every owner independently before one saved-dimension
+pass. The shared-operator API retains its admission; the per-owner API supplies
+the Site rigid command without singleton document copies. Source review found
+no required correction. Simultaneous invalid inputs can report a different first
+diagnostic because owner reconstruction precedes dimension replay.
+
+Numerical selection copies retain explicitly selected hosted doors/windows and
+saved dimensions, including when either is the last-clicked primary object.
+Previously these dependent copies existed in the candidate but were excluded
+from the selectable result, so applying that primary could fail. Unselected
+dependencies follow their hosts without being added as selected items.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction, persistence and performance remain unverified; the installed
+candidate is unchanged.
+
 ### October 8 per-owner Site rotation and reflection
 
 Numerical group rotation/reflection now carries each measured area's, wall's and
@@ -2252,12 +2271,15 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Debounce heavyweight numerical transform previews. Retire the previous
-   candidate and disable Apply immediately when inputs change; compute after
-   typing settles instead of replaying geometry and the complete scene for
-   every keystroke. Preserve source/selection fences, cancellation and the
-   exact preview-to-Apply contract. Per-owner Site movement, rotation and
-   reflection source work is recorded above and requires later qualification.
+1. Extend the connected geometry solve to rigid owner operators, so a selected
+   rigid group can rotate or reflect while unselected related geometry solves
+   in the same event. Preserve exact selected geometry and fixed anchors.
+   Per-owner group replay and copied-dependent selection source changes are
+   recorded above; do not restart them.
+   Numerical preview typing already uses a 120 ms debounce and immediately
+   retires the previous candidate/Apply authority; preserve that implementation.
+   Per-owner Site movement, rotation and reflection source work is recorded
+   above and requires later qualification.
 2. Continue concrete source implementation and D01/D02 acquisition from the
    current checkout. Resolve source-review defects in each coherent batch,
    then commit, push and verify the remote ref. Preserve completed canvas,

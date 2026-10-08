@@ -13062,12 +13062,24 @@ public:
                         std::map<QString,SiteAnnotationTarget> copied_children;
                         if (group && clone->isChecked()) {
                             if (!changes) throw std::invalid_argument("A selection copy requires its complete previewed command.");
+                            std::set<std::string,std::less<>> selected_copy_dependents;
+                            for (const auto& selected : selection) {
+                                const auto original=source.entities().find(selected.toStdString());
+                                if (original==source.entities().end() || (original->second.type!="opening" &&
+                                    !can_recognize_boundary_dimension_entity_type(original->second.type))) continue;
+                                const auto copied=candidate_copy_ids.find(original->first);
+                                if (copied==candidate_copy_ids.end() || source.entities().contains(copied->second) ||
+                                    !selected_copy_dependents.insert(copied->second).second)
+                                    throw std::invalid_argument("A selected opening or dimension has no unique fresh copy.");
+                            }
                             for (const auto& change : changes->entity_changes) {
                                 if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id)) continue;
                                 // Joined-roof relations belong to the copied
                                 // graph, but the selectable roots are their
-                                // physical hosts.
-                                if (geometry_root(change.entity) || architectural_root(change.entity) || change.entity.type=="reference_asset")
+                                // physical hosts. Retain openings/dimensions
+                                // only when explicitly selected with their host.
+                                if (geometry_root(change.entity) || architectural_root(change.entity) || change.entity.type=="reference_asset" ||
+                                    selected_copy_dependents.contains(change.entity.id))
                                     copied_selection.push_back(id_from(change.entity.id));
                                 if (change.entity.type==kAnnotationEntityType) {
                                     const auto state=decode_annotation_entity(change.entity);
@@ -13080,6 +13092,9 @@ public:
                                     for (const auto& child : state.symbols) add_child(child);
                                 }
                             }
+                            for (const auto& copied : selected_copy_dependents)
+                                if (!copied_selection.contains(id_from(copied)))
+                                    throw std::invalid_argument("The complete copy lost a selected opening or dimension.");
                             if (copied_selection.isEmpty()) throw std::invalid_argument("The complete selection copy has no selectable roots.");
                             const auto primary=id_from(candidate_command->second);
                             if (!copied_selection.contains(primary))
