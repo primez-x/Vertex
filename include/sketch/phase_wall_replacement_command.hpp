@@ -1,10 +1,12 @@
 #pragma once
 
 #include "sketch/phase_wall_replacement.hpp"
+#include "sketch/phase_wall_replacement_request.hpp"
 #include "sketch/phase_wall_profile_edit.hpp"
 #include "sketch/phase_hosted_opening_edit.hpp"
 #include "sketch/phase_hosted_opening_rehost.hpp"
 #include "sketch/phase_hosted_opening_family_edit.hpp"
+#include "sketch/wall_layer_stack_edit.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
 
@@ -42,6 +44,10 @@ struct PhaseWallReplacementAuthoring {
     // Record dialect five: same-host conversion with explicit final family,
     // assembly and optional operation. Exclusive from all other edit authority.
     std::vector<HostedOpeningFamilyEditIntent> opening_families;
+    // Record dialect six: complete proposed stack inventory and materials.
+    // Existing original children map once; authored fresh row IDs stay exact.
+    // Exclusive from every other edit dialect, geometry and relationships.
+    std::vector<WallLayerStackEditIntent> wall_stacks;
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;
@@ -54,6 +60,11 @@ struct PhaseWallReplacementAuthoringPreview {
 
 [[nodiscard]] nlohmann::json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value);
 [[nodiscard]] PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const nlohmann::json& value);
+// Replay actual stack decisions to derive changed saved-active baseline roots.
+// Exact no-ops return null; mixed ordinary/proposed and baseline roles refuse.
+// Fresh row IDs still need document reservations by the publishing controller.
+[[nodiscard]] std::optional<PhaseWallReplacementRequest> phase_wall_layer_stack_replacement_request(
+    const PhaseWallReplacementEntities& source,const std::vector<WallLayerStackEditIntent>& stacks);
 [[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_wall_replacement_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);
 [[nodiscard]] PhaseWallReplacementEntities replay_phase_wall_replacement_authoring(

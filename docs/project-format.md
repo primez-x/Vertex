@@ -1,4 +1,118 @@
-# Vertex project formats v1 through v104
+# Vertex project formats v1 through v108
+
+## Retained horizontal-layer thickness input (v108)
+
+Native format 108 and JSON/assets extraction version 106 retain slab profile
+version two inside existing slab replacement one/phase envelope five. The exact
+fields remain `version`, `slab_id`, `thickness`, `elevation` and
+`layer_thicknesses`. Each ordered row has `layer_id` and `thickness`; a version-two
+null thickness retains the actual source row's native value and quantity receipt.
+The complete source inventory and order are required. Changed rows carry actual
+entered quantities. Version two requires a retained row and an authored scalar
+or layer dimension; retention alone is not an edit. Version-one wire and replay
+remain unchanged and do not admit null row thickness.
+
+Source/native/receipt admission precedes staging. Inferred capture retains
+unchanged rows and requires genuine candidate receipts for changed rows. Exact
+source no-ops preserve payloads. Shared-baseline replay maps actual layer IDs
+once while retaining source values. Direct/wrapped historical profile intents
+raise the required reader floor, including after Undo.
+
+The desktop horizontal profile parses only changed fields. Native values are
+displayed without inventing quantities for untouched rows; editing one layer
+therefore no longer reconstructs the remaining native dimensions. Layer names
+are readable and the read-only sum follows imperial or metric display units.
+
+## Source-derived wall layer inventories (v107)
+
+Native format 107 and JSON/assets extraction version 105 retain wall layer
+inventory/material decisions and retired entered layer measurements. Stack
+intent version one has exactly `version`, `wall_id`, `thickness` and `layers`.
+Each ordered row has `layer_id`, `thickness`, `material_mode` and `material`.
+Null thickness retains the actual existing value and receipt. Material mode is
+`retain`, `clear` or `set`; only `set` carries an actual catalog/material reference.
+Rows declare the complete resulting inventory and order. Omitted old rows are
+removed; an empty array clears the stack. New rows require an entered positive
+thickness and explicit material choice. Total thickness is retained or explicitly
+entered and is never inferred from the layer sum.
+
+Qualified indexed thickness receipts follow their actual layer identity through
+reordering. Removed receipts are retained verbatim in
+`extensions.wall_layer_stack_retirement`, with version-one fields `version` and
+`receipts`. Each retired row has `layer_id`, `pointer` and `receipt`. Its layer
+identity is historical provenance, never a live child binding or copy-remapping
+target. Opaque receipt siblings remain subject to affected-reference checks.
+Unknown affected bindings and archive versions refuse without mutation.
+
+Shared-baseline changes use exclusive wall replacement version six inside phase
+envelope two. The exact fields are `version`, `registry_id`, `alternative_id`,
+`seed_wall_ids`, `identities`, `room_review_intent`, `room_constraint_decisions`
+and `wall_stacks`. Replay independently derives the changed baseline roots from
+actual saved membership. Existing layer IDs map once; actual new row IDs retain
+their declared fresh identities. Removed original child mappings remain reserved.
+Original baseline owners and other alternatives stay exact. Native source/result
+profiles, hosted cuts, opening assemblies, affected joins, context and catalog
+materials undergo admission. Room and relationship review finishes the same
+atomic edit before final publication. Prior replacement wires remain unchanged.
+
+The desktop table exposes Add, Remove, Up and Down, editable total and layer
+thicknesses, actual material choices and a read-only layer sum. Source/saved/
+workspace fences and retained-history reservations protect publication.
+Native retirement archives and direct/wrapped retained replacement intents raise
+the reader floor throughout history, including after Undo.
+
+## Mixed-role horizontal geometry editing (v106)
+
+Native format 106 and JSON/assets extraction version 104 retain exclusive slab
+replacement version four inside phase envelope five. Its exact fields are
+`version`, `registry_id`, `alternative_id`, `seed_slab_ids`, `identities`,
+`slab_geometry` and `ordinary_geometry`. Both geometry lists are nonempty,
+disjoint and contain actual changed targets. Earlier replacement versions and
+their replay policies remain unchanged.
+
+Replay independently derives each target's role from the actual saved source.
+The baseline geometry list requires one registry and its saved active
+alternative, and its exact changed owner IDs establish the replacement seeds.
+Ordinary or proposed owners retain their actual identities. A baseline owner
+in a registry without an active alternative may use the ordinary lane. Inactive,
+ambiguous or multiply registered owners refuse; supplied role lists provide
+no authority. Exact no-ops are discarded before classification.
+
+The same atomic operation derives fresh proposed baseline owners and applies
+ordinary geometry to its actual owners. Original shared baselines, other
+alternatives and unaffected content remain exact. Geometry archives and qualified
+presentation copies retain existing provenance rules. Direct and wrapped
+retained history raise the reader floor even after Undo.
+
+## Retained wall-layer thickness input (v105)
+
+Native format 105 and JSON/assets extraction version 103 retain wall profile
+version three inside existing wall replacement two/phase envelope two. Its
+exact fields are `version`, `wall_id`, `thickness`, `height`,
+`layer_thicknesses` and nullable `top_rise`. Existing profile versions one and
+two retain their original wire and admission policy.
+
+Each ordered layer row still has `layer_id` and `thickness`. A version-three
+null thickness retains the actual source row's native value and quantity
+receipt. The complete source inventory and order are required. Changed rows
+carry actual entered quantities; untouched rows need no reconstruction from
+a floating-point value or reentry merely because another row changes. Version
+three requires at least one retained row. A retention-only empty edit refuses;
+an authored equal dimension remains an exact no-op.
+
+Actual source profile/receipt admission precedes staging. Strict native
+source/result dependency checks cover hosted openings and affected joins,
+including all copied proposed walls. Inferred capture records retained rows
+only where actual source thickness is unchanged; changed rows require actual
+candidate receipts. Total thickness remains explicit or retained, with no
+implicit redistribution. Historical direct/wrapped proposed intents raise the
+required reader floor, including after Undo.
+
+The desktop wall profile uses thickness, height, top-rise and existing-layer
+measurement fields instead of JSON. Base elevation is displayed from actual
+resolved placement. Source, saved-state and workspace fences precede final
+controller publication. Temporary profile admission leaves final room and
+relationship completion to the enclosing atomic edit.
 
 ## Source-derived horizontal outline edits (v104)
 

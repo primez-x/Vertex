@@ -391,6 +391,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (intent.is_object() && intent.value("version",0)==5) {
                     const auto replacement = intent.find("slab_replacement");
                     if (replacement != intent.end() && replacement->is_object()) {
+                        const auto profiles = replacement->find("slab_profiles");
+                        if (replacement->value("version", 0) == 1 && profiles != replacement->end() && profiles->is_array() &&
+                            std::any_of(profiles->begin(), profiles->end(), [](const auto& profile) {
+                                return profile.is_object() && profile.value("version", 0) == 2;
+                            })) return 108U;
+                        if (replacement->value("version", 0) == 4) return 106U;
                         if (replacement->value("version", 0) == 3) return 104U;
                         if (replacement->value("version", 0) == 2) return 103U;
                     }
@@ -422,6 +428,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!intent.is_object() || intent.value("version",0)!=2 || replacement==intent.end() ||
                     !replacement->is_object()) return 0;
                 const auto version=replacement->value("version",0);
+                if (version==6) return 107U;
+                if (version==2 && replacement->contains("wall_profiles") && replacement->at("wall_profiles").is_array() &&
+                    std::any_of(replacement->at("wall_profiles").begin(),replacement->at("wall_profiles").end(),[](const auto& profile) {
+                        return profile.is_object() && profile.value("version",0)==3;
+                    })) return 105U;
                 if (version==2 && replacement->contains("wall_profiles") && replacement->at("wall_profiles").is_array() &&
                     std::any_of(replacement->at("wall_profiles").begin(),replacement->at("wall_profiles").end(),[](const auto& profile) {
                         return profile.is_object() && profile.value("version",0)==2;
@@ -569,6 +580,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required = std::max(required, 103U);
             if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations"))
                 required = std::max(required, 104U);
+            if (entity.type == "wall" && entity.extensions.contains("wall_layer_stack_retirement"))
+                required = std::max(required, 107U);
             if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations"))
                 required = std::max(required, 99U);
             if (entity.type == "roof" && entity.extensions.contains("roof_plan_resize_derivations"))
@@ -2215,6 +2228,10 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 108 &&
+         sqlite3_column_int(user_version.get(), 0) != 107 &&
+         sqlite3_column_int(user_version.get(), 0) != 106 &&
+         sqlite3_column_int(user_version.get(), 0) != 105 &&
          sqlite3_column_int(user_version.get(), 0) != 104 &&
          sqlite3_column_int(user_version.get(), 0) != 103 &&
          sqlite3_column_int(user_version.get(), 0) != 102 &&
@@ -2774,6 +2791,14 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=108)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 108 for exact retained horizontal-layer thickness editing");
+        if (required_format>=107)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 107 for source-derived wall layer inventory and material edits");
+        if (required_format>=106)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 106 for mixed-role horizontal assembly geometry edits");
+        if (required_format>=105)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 105 for exact retained wall-layer thickness editing");
         if (required_format>=104)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 104 for source-derived horizontal assembly outline edits and transformations");
         if (required_format>=103)

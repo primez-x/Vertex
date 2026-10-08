@@ -231,28 +231,37 @@ Quantity captured_quantity(const Entity& original, const Entity& candidate,
         if (!known_receipt(*new_receipt)) invalid("Slab profile capture cannot author a future quantity receipt");
         return admitted_receipt(*new_receipt, metres);
     }
-    invalid("Slab profile capture requires exact entered quantities for its complete authored inventory");
+    invalid("Slab profile capture requires exact entered quantities for changed dimensions");
 }
 bool any(const SlabProfileEditIntent& intent) {
-    return intent.thickness || intent.elevation || intent.layer_thicknesses;
+    return intent.thickness || intent.elevation || (intent.layer_thicknesses &&
+        std::any_of(intent.layer_thicknesses->begin(), intent.layer_thicknesses->end(),
+            [](const auto& layer) { return !layer.retain_source_thickness; }));
+}
+bool retains_layer_thickness(const SlabProfileEditIntent& intent) {
+    return intent.layer_thicknesses &&
+        std::any_of(intent.layer_thicknesses->begin(), intent.layer_thicknesses->end(),
+            [](const auto& layer) { return layer.retain_source_thickness; });
 }
 } // namespace
 
 nlohmann::json encode_slab_profile_edit_intent(const SlabProfileEditIntent& intent) {
     (void)identity(intent.slab_id);
+    if (intent.layer_thicknesses &&
+        (intent.layer_thicknesses->empty() || intent.layer_thicknesses->size() > layer_limit))
+        invalid("Slab profile layer inventory budget is invalid");
     if (!any(intent)) invalid("Slab profile edit requires an authored dimension");
-    Json result{{"version", 1}, {"slab_id", intent.slab_id},
+    Json result{{"version", retains_layer_thickness(intent) ? 2 : 1}, {"slab_id", intent.slab_id},
         {"thickness", intent.thickness ? quantity(*intent.thickness, true) : Json(nullptr)},
         {"elevation", intent.elevation ? quantity(*intent.elevation, false) : Json(nullptr)},
         {"layer_thicknesses", nullptr}};
     if (intent.layer_thicknesses) {
-        if (intent.layer_thicknesses->empty() || intent.layer_thicknesses->size() > layer_limit)
-            invalid("Slab profile layer inventory budget is invalid");
         auto rows = Json::array();
         std::set<std::string, std::less<>> ids;
         for (const auto& layer : *intent.layer_thicknesses) {
             if (!ids.insert(identity(layer.layer_id)).second) invalid("Slab profile layer identities are duplicated");
-            rows.push_back({{"layer_id", layer.layer_id}, {"thickness", quantity(layer.thickness, true)}});
+            rows.push_back({{"layer_id", layer.layer_id}, {"thickness",
+                layer.retain_source_thickness ? Json(nullptr) : quantity(layer.thickness, true)}});
         }
         result["layer_thicknesses"] = std::move(rows);
     }
@@ -263,21 +272,29 @@ nlohmann::json encode_slab_profile_edit_intent(const SlabProfileEditIntent& inte
 SlabProfileEditIntent decode_slab_profile_edit_intent(const nlohmann::json& value) {
     if (value.dump().size() > proof_limit) invalid("Slab profile edit proof byte budget exceeded");
     keys(value, {"version", "slab_id", "thickness", "elevation", "layer_thicknesses"});
-    if (!version_one(value.at("version"))) invalid("Slab profile edit version is unsupported");
+    const auto& version = value.at("version");
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) || (version != 1 && version != 2))
+        invalid("Slab profile edit version is unsupported");
+    const bool retained_layers = version == 2;
     SlabProfileEditIntent result;
     result.slab_id = identity(value.at("slab_id"));
     if (!value.at("thickness").is_null()) result.thickness = quantity(value.at("thickness"), true);
     if (!value.at("elevation").is_null()) result.elevation = quantity(value.at("elevation"), false);
     const auto& layers = value.at("layer_thicknesses");
+    if (retained_layers && layers.is_null()) invalid("Slab profile retention requires a layer inventory");
     if (!layers.is_null()) {
         if (!layers.is_array() || layers.empty() || layers.size() > layer_limit)
             invalid("Slab profile layer inventory budget is invalid");
         result.layer_thicknesses.emplace();
         for (const auto& row : layers) {
             keys(row, {"layer_id", "thickness"});
-            result.layer_thicknesses->push_back({identity(row.at("layer_id")), quantity(row.at("thickness"), true)});
+            const bool retain = retained_layers && row.at("thickness").is_null();
+            result.layer_thicknesses->push_back({identity(row.at("layer_id")),
+                retain ? Quantity{} : quantity(row.at("thickness"), true), retain});
         }
     }
+    if (retained_layers && !retains_layer_thickness(result))
+        invalid("Slab profile version 2 requires retained layer thickness");
     (void)encode_slab_profile_edit_intent(result);
     return result;
 }
@@ -316,6 +333,7 @@ Entity replay_slab_profile_entity(const Entity& source, const SlabProfileEditInt
             const auto& replacement = intent.layer_thicknesses->at(i);
             const auto& retained = original.layers[i];
             if (replacement.layer_id != retained.id) invalid("Slab profile edit must retain layer identities and order");
+            if (replacement.retain_source_thickness) continue;
             if (replacement.thickness.metres == retained.thickness) continue;
             result.properties.at("layers").at(i).at("thickness_m") = replacement.thickness.metres;
             replace_receipt(result, "/layers/" + std::to_string(i) + "/thickness_m", replacement.thickness, true);
@@ -386,8 +404,12 @@ std::optional<SlabProfileEditIntent> capture_slab_profile_edit(
         for (std::size_t i = 0; i < before.layers.size(); ++i) {
             const auto& retained = before.layers[i];
             const auto metres = after.layers[i].thickness;
+            if (retained.thickness == metres) {
+                intent.layer_thicknesses->push_back({retained.id, Quantity{}, true});
+                continue;
+            }
             intent.layer_thicknesses->push_back({retained.id, captured_quantity(original, candidate,
-                {"/layers/" + std::to_string(i) + "/thickness_m"}, metres, retained.thickness != metres)});
+                {"/layers/" + std::to_string(i) + "/thickness_m"}, metres, true)});
         }
     }
     const auto expected = any(intent) ? replay_slab_profile_entity(original, intent) : original;

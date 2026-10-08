@@ -50,6 +50,7 @@
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
+#include "sketch/wall_layer_stack_edit.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -482,6 +483,22 @@ void validate_entity(const Entity& entity) {
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid wall join entity: ") + error.what());
+        }
+    }
+    if (entity.type == "wall" && entity.extensions.contains("wall_layer_stack_retirement")) {
+        try {
+            const auto& archive = entity.extensions.at("wall_layer_stack_retirement");
+            if (!archive.is_object() || !archive.contains("version") ||
+                !archive.at("version").is_number_integer() ||
+                (archive.at("version").is_number_unsigned() ? archive.at("version").get<std::uint64_t>() == 0 :
+                    archive.at("version").get<std::int64_t>() <= 0))
+                throw std::invalid_argument("Wall layer retirement requires a positive version");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            if (archive.at("version") == 1) validate_wall_layer_stack_retirement(archive);
+#endif
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                std::string("invalid wall layer retirement: ") + error.what());
         }
     }
     if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations")) {
@@ -2702,6 +2719,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     std::set<std::string,std::less<>> fresh;
     std::set<std::string,std::less<>> nested_fresh;
     bool complete_envelope_reservation=false;
+    bool wall_stack_asset_reservation=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -2749,8 +2767,25 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
         if (intent.wall_replacement.is_null()) continue;
         const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+        if (!replacement.wall_stacks.empty()) {
+            complete_envelope_reservation=true;
+            wall_stack_asset_reservation=true;
+        }
         for (const auto& [original,id]:replacement.identities) {
             (void)original;fresh.insert(id);
+            if (!replacement.wall_stacks.empty()) nested_fresh.insert(id);
+        }
+        for (const auto& stack : replacement.wall_stacks) {
+            const auto& original=source.at(stack.wall_id);
+            std::set<std::string,std::less<>> existing;
+            if (original.properties.contains("layers"))
+                for (const auto& layer:original.properties.at("layers"))
+                    existing.insert(layer.at("id").get<std::string>());
+            for (const auto& row:stack.layers) if (!existing.contains(row.layer_id)) {
+                if (!fresh.insert(row.layer_id).second)
+                    throw std::invalid_argument("A new wall layer overlaps another fresh replacement identity: "+row.layer_id);
+                nested_fresh.insert(row.layer_id);
+            }
         }
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
         if (!replacement.room_review_intent.is_null()) {
@@ -2784,6 +2819,11 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("Proposed identity aliases an entity envelope field: "+std::string(key));
     for (std::size_t index=0;index<preceding_records;++index) {
         const auto& record=history.at(index);
+        if (wall_stack_asset_reservation) for (const auto& [id,asset]:record.assets) {
+            (void)asset;
+            if (fresh.contains(id))
+                throw std::invalid_argument("Wall stack identity collides with a retained asset: "+id);
+        }
         // A deliberately omitted fresh relationship copy is still a declared
         // identity in the recorded semantic operation. Undo cannot release it.
         if (record.boundary_constraint_changes)
@@ -2795,8 +2835,13 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                         if (fresh.contains(id)) throw std::invalid_argument("Proposed identity was already reserved by retained replacement intent: "+id);
                     }
                 };
-                if (!intent.wall_replacement.is_null())
-                    require_unused(decode_phase_wall_replacement_authoring(intent.wall_replacement).identities);
+                if (!intent.wall_replacement.is_null()) {
+                    const auto wall=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+                    require_unused(wall.identities);
+                    for (const auto& stack:wall.wall_stacks)
+                        for (const auto& row:stack.layers) if (fresh.contains(row.layer_id))
+                            throw std::invalid_argument("Wall layer identity was already reserved by retained intent: "+row.layer_id);
+                }
                 if (!intent.slab_replacement.is_null()) {
                     const auto slab = decode_phase_slab_replacement_authoring(intent.slab_replacement);
                     require_unused(slab.identities);

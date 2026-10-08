@@ -295,10 +295,19 @@ std::optional<WallProfileEditIntent> capture_wall_profile_edit(
     }
     if (layers_changed && !authored) {
         captured.layer_thicknesses.emplace();
+        // Inferred partial edits retain actual unchanged native rows. Only a
+        // changed row needs candidate-authored authority; never manufacture it
+        // from the candidate's floating-point presentation value.
         for (std::size_t i = 0; i < before.layers.size(); ++i) {
+            if (before.layers[i].thickness == after.layers[i].thickness) {
+                captured.layer_thicknesses->push_back({before.layers[i].id, Quantity{}, true});
+                continue;
+            }
             const auto pointer = "/layers/" + std::to_string(i) + "/thickness_m";
+            const auto actual_receipt = receipt(entries(candidate), pointer);
+            if (!actual_receipt) invalid("Wall capture changed layer thickness requires its actual quantity receipt");
             captured.layer_thicknesses->push_back({before.layers[i].id,
-                captured_quantity(original, candidate, {pointer}, before.layers[i].thickness, after.layers[i].thickness)});
+                admitted_quantity(*actual_receipt, after.layers[i].thickness)});
         }
     }
     const auto old_gradient = wall_top_gradient(before), new_gradient = wall_top_gradient(after);

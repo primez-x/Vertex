@@ -34,6 +34,11 @@ std::string identity(const Json& value) {
 bool exact(const Entity& a,const Entity& b) {
     return a==b && a.properties.dump()==b.properties.dump() && a.extensions.dump()==b.extensions.dump();
 }
+bool strict_profile_admission(const WallProfileEditIntent& profile) {
+    return profile.top_rise.has_value() || (profile.layer_thicknesses &&
+        std::any_of(profile.layer_thicknesses->begin(), profile.layer_thicknesses->end(),
+            [](const auto& row) { return row.retain_source_thickness; }));
+}
 const char* disposition(PhaseWallRoomConstraintDisposition value) {
     switch (value) {
     case PhaseWallRoomConstraintDisposition::keep:return "keep";
@@ -75,6 +80,17 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     const PhaseWallReplacementAuthoring& edit) {
     if (intent.source_entities_digest!=entity_map_digest(source) ||
         intent.phase_selections!=phase_constraint_authoring_selections(source)) invalid("actual source or saved choice changed");
+    if (!edit.wall_stacks.empty()) {
+        if (!edit.wall_profiles.empty() || !edit.opening_profiles.empty() || !edit.opening_rehosts.empty() ||
+            !edit.opening_families.empty() || has_geometry_or_relation_intent(intent.intent))
+            invalid("wall stacks require a separate reviewed operation from other edit dialects, geometry and relationships");
+        // Only actual changes on active shared-baseline owners establish roots.
+        // Neither a caller's seed list nor another stack's closure lends authority.
+        const auto request=phase_wall_layer_stack_replacement_request(source,edit.wall_stacks);
+        if (!request || request->registry_id!=edit.registry_id || request->alternative_id!=edit.alternative_id ||
+            request->seed_wall_ids!=edit.seed_wall_ids)
+            invalid("wall stack replacement roots do not match actual changes and saved membership");
+    }
     if (!edit.opening_rehosts.empty()) {
         if (!edit.wall_profiles.empty() || !edit.opening_profiles.empty() || has_geometry_or_relation_intent(intent.intent))
             invalid("opening rehosts require a separate reviewed operation from geometry, relationships and profiles");
@@ -109,9 +125,48 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         return true;
     });
     stage.entities=stage.replacement.entities;
+    if (!edit.wall_stacks.empty()) {
+        std::set<std::string,std::less<>> original_walls,copied_walls,reserved;
+        for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
+            reserved.insert(copy);
+            const auto found=source.find(original);
+            if (found!=source.end() && found->second.type=="wall") {
+                original_walls.insert(original);copied_walls.insert(copy);
+            }
+        }
+        // Strictly admit the complete independently discovered cohort, including
+        // copied hosts and joins outside the authored stack target roster.
+        validate_active_wall_physical_dependencies(source,original_walls,true);
+        validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
+        auto stacks=edit.wall_stacks;
+        std::set<std::string,std::less<>> new_layers;
+        for (auto& stack:stacks) {
+            const auto& original=source.at(stack.wall_id);
+            std::set<std::string,std::less<>> existing;
+            if (original.properties.contains("layers"))
+                for (const auto& layer:original.properties.at("layers")) existing.insert(layer.at("id").get<std::string>());
+            stack.wall_id=stage.replacement.original_to_proposed.at(stack.wall_id);
+            for (auto& row:stack.layers) {
+                if (existing.contains(row.layer_id)) row.layer_id=stage.replacement.original_to_proposed.at(row.layer_id);
+                else {
+                    // Actual-source map replay already proves source freshness.
+                    // Also reserve all copies, including withheld relationships
+                    // and removed original children; never map authored rows.
+                    if (reserved.contains(row.layer_id) || !new_layers.insert(row.layer_id).second)
+                        invalid("new stack layer collides with a reserved proposed identity");
+                }
+            }
+        }
+        stage.entities=replay_wall_layer_stack_entities(stage.entities,stacks,false);
+        validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
+        // These exact IDs are additional publication reservations. Removed
+        // child copies remain in the original mapping as provenance only.
+        stage.replacement.fresh_identity_ids.insert(stage.replacement.fresh_identity_ids.end(),new_layers.begin(),new_layers.end());
+        std::sort(stage.replacement.fresh_identity_ids.begin(),stage.replacement.fresh_identity_ids.end());
+    }
     if (!edit.wall_profiles.empty()) {
         const bool strict_profiles=std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
-            [](const auto& profile) { return profile.top_rise.has_value(); });
+            strict_profile_admission);
         std::set<std::string,std::less<>> original_walls,copied_walls;
         if (strict_profiles) {
             for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
@@ -215,7 +270,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     if (has_geometry_or_relation_intent(mapped))
         stage.entities=reconstruct_active_phase_constraint_authoring(stage.entities,mapped);
     else if (edit.wall_profiles.empty() && edit.opening_profiles.empty() && edit.opening_rehosts.empty() &&
-        edit.opening_families.empty()) invalid("replacement has no semantic edit");
+        edit.opening_families.empty() && edit.wall_stacks.empty()) invalid("replacement has no semantic edit");
     preserve_baseline(source,stage.entities,stage.plan);
     // Incoming room evidence sees every independently reconstructed new
     // relationship. These copies were withheld from the physical solve; only
@@ -320,8 +375,46 @@ void complete_room_constraints(Stage& stage,const PhaseWallReplacementAuthoring&
 }
 } // namespace
 
+std::optional<PhaseWallReplacementRequest> phase_wall_layer_stack_replacement_request(
+    const Entities& source,const std::vector<WallLayerStackEditIntent>& stacks) {
+    if (stacks.size()>2048) invalid("invalid wall stack inventory");
+    if (stacks.empty()) return std::nullopt;
+    // Replay complete real source entities, including global row-ID freshness,
+    // context, material catalogs, hosted cuts and joined native profiles. Only
+    // final relationship residuals wait for enclosing physical-room review.
+    const auto physical=replay_wall_layer_stack_entities(source,stacks,false);
+    const auto scope=constraint_phase_scope(source);
+    std::optional<PhaseWallReplacementRequest> request;
+    std::size_t ordinary=0;
+    for (const auto& stack:stacks) {
+        if (exact(source.at(stack.wall_id),physical.at(stack.wall_id))) continue;
+        const PhysicalWallPhaseState* membership=nullptr;
+        for (const auto& registry:scope.registries)
+            if (std::find(registry.registered_entity_ids.begin(),registry.registered_entity_ids.end(),stack.wall_id)!=
+                registry.registered_entity_ids.end()) {
+                if (membership) invalid("wall stack target has overlapping registry membership");
+                membership=&registry;
+            }
+        if (!membership) { ++ordinary;continue; }
+        const auto model=ModelPhases::from_json(source.at(membership->registry_id).properties.at("model"));
+        if (!model.active_alternative() ||
+            std::find(model.baseline_ids().begin(),model.baseline_ids().end(),stack.wall_id)==model.baseline_ids().end()) {
+            ++ordinary;continue;
+        }
+        if (request && (request->registry_id!=membership->registry_id ||
+            request->alternative_id!=*model.active_alternative()))
+            invalid("wall stacks span different saved-active design registries");
+        if (!request) request=PhaseWallReplacementRequest{membership->registry_id,*model.active_alternative(),{}};
+        request->seed_wall_ids.push_back(stack.wall_id);
+    }
+    if (request && ordinary) invalid("wall stacks mix shared-baseline and ordinary/proposed owners");
+    if (request) std::sort(request->seed_wall_ids.begin(),request->seed_wall_ids.end());
+    return request;
+}
+
 Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value) {
     if (value.opening_families.size() > 2048) invalid("invalid opening family inventory");
+    if (value.wall_stacks.size()>2048) invalid("invalid wall stack inventory");
     Json decisions=Json::array();
     for (const auto& choice:value.room_constraint_decisions) {
         Json endpoints=Json::array();
@@ -364,6 +457,18 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
             result["opening_families"].push_back(encode_hosted_opening_family_edit_intent(family));
         }
     }
+    if (!value.wall_stacks.empty()) {
+        if (!value.wall_profiles.empty() || !value.opening_profiles.empty() || !value.opening_rehosts.empty() ||
+            !value.opening_families.empty()) invalid("wall stacks and other edit dialects require separate reviewed operations");
+        result["version"]=6;result["wall_stacks"]=Json::array();
+        std::set<std::string,std::less<>> targets;
+        for (const auto& stack:value.wall_stacks) {
+            if (!targets.insert(stack.wall_id).second) invalid("duplicate wall stack target");
+            result["wall_stacks"].push_back(encode_wall_layer_stack_edit_intent(stack));
+        }
+        if (std::vector<std::string>(targets.begin(),targets.end())!=value.seed_wall_ids)
+            invalid("wall stack seeds must exactly match the authored original targets");
+    }
     // The decoder below is the single strict semantic admission path. Encoding
     // never supplies geometry, inferred room mappings or arbitrary clone data.
     if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
@@ -373,7 +478,7 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
         (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 &&
-         value.at("version")!=5)) invalid("unsupported replacement version");
+         value.at("version")!=5 && value.at("version")!=6)) invalid("unsupported replacement version");
     const bool profiles=value.at("version")==2;
     if (profiles) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
         "room_review_intent","room_constraint_decisions","wall_profiles"});
@@ -383,6 +488,8 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
         "room_review_intent","room_constraint_decisions","opening_rehosts"});
     else if (value.at("version") == 5) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
         "room_review_intent","room_constraint_decisions","opening_families"});
+    else if (value.at("version") == 6) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
+        "room_review_intent","room_constraint_decisions","wall_stacks"});
     else keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities","room_review_intent","room_constraint_decisions"});
     PhaseWallReplacementAuthoring result;
     result.registry_id=identity(value.at("registry_id"));result.alternative_id=identity(value.at("alternative_id"));
@@ -439,6 +546,18 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
                 invalid("opening family must name a unique original opening and its own seeded host");
             result.opening_families.push_back(std::move(family));
         }
+    }
+    if (value.at("version") == 6) {
+        const auto& edits=value.at("wall_stacks");
+        if (!edits.is_array() || edits.empty() || edits.size()>2048) invalid("invalid wall stack inventory");
+        std::set<std::string,std::less<>> targets;
+        for (const auto& edit:edits) {
+            auto stack=decode_wall_layer_stack_edit_intent(edit);
+            if (!targets.insert(stack.wall_id).second) invalid("duplicate wall stack target");
+            result.wall_stacks.push_back(std::move(stack));
+        }
+        if (std::vector<std::string>(targets.begin(),targets.end())!=result.seed_wall_ids)
+            invalid("wall stack seeds must exactly match the authored original targets");
     }
     const auto& identities=value.at("identities");
     if (!identities.is_object() || identities.empty() || identities.size()>4096) invalid("invalid replacement identity inventory");
@@ -510,8 +629,8 @@ Entities replay_phase_wall_replacement_authoring(const Entities& source,const Ph
         stage.entities=replay.entities;
     }
     complete_room_constraints(stage,edit);
-    if (!edit.opening_families.empty() || std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
-            [](const auto& profile) { return profile.top_rise.has_value(); })) {
+    if (!edit.opening_families.empty() || !edit.wall_stacks.empty() || std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
+            strict_profile_admission)) {
         std::set<std::string,std::less<>> copied_walls;
         for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
             const auto found=source.find(original);

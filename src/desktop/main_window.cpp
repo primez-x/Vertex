@@ -12,6 +12,8 @@
 #include "plan_canvas.hpp"
 #include "horizontal_profile_dialog.hpp"
 #include "horizontal_layer_stack_dialog.hpp"
+#include "wall_profile_dialog.hpp"
+#include "wall_layer_stack_dialog.hpp"
 #include "site_canvas_presentation.hpp"
 #include "draft_image_stamp.hpp"
 #include "sketch_pdf_output.hpp"
@@ -45,6 +47,7 @@
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
+#include "sketch/slab_clone.hpp"
 #include "sketch/phase_roof_demolition.hpp"
 #include "sketch/roof_removal.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
@@ -5502,9 +5505,9 @@ class MainWindow::Impl {
         std::optional<PhaseWallCanvasProposal> alternative_wall;
         PhaseWallReplacementIdentityMap proposed_selection_redirect;
     };
-    struct IndependentRoofCopyCapture {
+    struct IndependentModelCopyCapture {
         std::string source_digest;
-        // Filled only by the source-derived roof copy producer after genuine
+        // Filled only by a source-derived physical copy producer after genuine
         // Document admission, including qualified presentation additions.
         std::optional<ApplyEntityChanges> intent;
     };
@@ -7742,9 +7745,19 @@ public:
         const ArchitecturalGroupTransform transform{{0.0,0.0,0.0},
             {gesture.x,gesture.y,gesture.z},gesture.rotation_z_radians,gesture.scale,
             flip_horizontal,flip_vertical};
+        if (clone && original.type == "slab" && gesture.scale == 1.0 && gesture.z == 0.0) {
+            SlabCloneIdentityMap identities;
+            IndependentModelCopyCapture capture;
+            auto command = sourceDerivedSlabCloneCommand(source, {original.id},
+                {{original.id, transform}}, "Copy transformed horizontal assembly", identities, &capture);
+            auto complete = augmentAuthoredCommand(command, source);
+            requireIndependentCopyRegistrations(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture);
+            return {std::move(complete), identities.at(original.id)};
+        }
         if (clone && original.type == "roof" && gesture.scale == 1.0) {
             RoofCloneIdentityMap identities;
-            IndependentRoofCopyCapture capture;
+            IndependentModelCopyCapture capture;
             auto command = sourceDerivedRoofCloneCommand(source, {original.id},
                 {{original.id, transform}}, "Copy transformed roof", identities, &capture);
             auto complete = augmentAuthoredCommand(command, source);
@@ -9156,12 +9169,12 @@ public:
     }
 
     ApplyEntityChanges validateIndependentAreaCopy(const DocumentSnapshot& source, ApplyEntityChanges command,
-        const IndependentRoofCopyCapture* roof_copy = nullptr) const {
-        if (roof_copy && roof_copy->intent) {
-            // Roof presentation containers retain their original rows. Admit
+        const IndependentModelCopyCapture* model_copy = nullptr) const {
+        if (model_copy && model_copy->intent) {
+            // Physical presentation containers retain their original rows. Admit
             // only the exact source-derived additions and phase/page enrollment,
             // rather than requiring those retained targets to become copies.
-            requireIndependentCopyRegistrations(source, *roof_copy->intent, command, roof_copy);
+            requireIndependentCopyRegistrations(source, *model_copy->intent, command, model_copy);
             (void)Document::preview_command(source, command);
             return command;
         }
@@ -9323,7 +9336,37 @@ public:
         std::map<std::pair<std::string,std::string>,std::string>& child_identities,
         std::size_t maximum_entities = kMaximumClipboardEntities,
         const std::function<PlanarTransform(const std::string&)>& owner_transform = {},
-        IndependentRoofCopyCapture* roof_copy = nullptr) {
+        IndependentModelCopyCapture* model_copy = nullptr) {
+        if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
+                return entity.type == "slab";
+            })) {
+            std::vector<std::string> owners;
+            std::vector<ArchitecturalGroupTransformTarget> operations;
+            for (const auto& entity : seeds) {
+                const auto& actual = source.entities().at(entity.id);
+                if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
+                    actual.extensions.dump() != entity.extensions.dump())
+                    throw std::invalid_argument("The horizontal copy no longer matches its captured source.");
+                owners.push_back(entity.id);
+                const auto operation = owner_transform ? owner_transform(entity.id) : transform;
+                operations.push_back({entity.id, {{operation.pivot.x, operation.pivot.y, 0.0},
+                    {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
+                    operation.flip_horizontal, operation.flip_vertical}});
+            }
+            if (!presentation.entity_changes.empty() || !presentation.asset_changes.empty() ||
+                presentation.expected_revision != source.revision())
+                throw std::invalid_argument("Copy horizontal assemblies separately from independent labels and references.");
+            auto command = sourceDerivedSlabCloneCommand(source, owners, operations,
+                "Copy horizontal assemblies", identities, model_copy);
+            if (command.entity_changes.size() > maximum_entities)
+                throw std::invalid_argument("The complete horizontal copy exceeds the selection entity limit.");
+            for (const auto& entity : seeds) if (entity.properties.contains("layers"))
+                for (const auto& layer : entity.properties.at("layers")) {
+                    const auto child = layer.at("id").template get<std::string>();
+                    child_identities.emplace(std::make_pair(entity.id, child), identities.at(child));
+                }
+            return command;
+        }
         if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
                 return entity.type == "roof" || entity.type == "roof_join";
             })) {
@@ -9345,7 +9388,7 @@ public:
                 presentation.expected_revision != source.revision())
                 throw std::invalid_argument("Copy roofs separately from independent labels and references.");
             auto command = sourceDerivedRoofCloneCommand(source, {owners.begin(), owners.end()},
-                operations, "Copy roofs", identities, roof_copy);
+                operations, "Copy roofs", identities, model_copy);
             if (command.entity_changes.size() > maximum_entities)
                 throw std::invalid_argument("The complete roof copy exceeds the selection entity limit.");
             for (const auto& id : owners) {
@@ -9599,6 +9642,18 @@ public:
 
     std::pair<Command,std::string> makeIndependentAreaCloneCommand(
         const DocumentSnapshot& source, const Entity& original, const PlanarTransform& transform) {
+        if (original.type == "slab") {
+            SlabCloneIdentityMap identities;
+            IndependentModelCopyCapture capture;
+            auto command = sourceDerivedSlabCloneCommand(source, {original.id}, {{original.id,
+                {{transform.pivot.x, transform.pivot.y, 0.0}, {transform.offset.x, transform.offset.y, 0.0},
+                 transform.rotation_radians, 1.0, transform.flip_horizontal, transform.flip_vertical}}},
+                "Copy horizontal assembly", identities, &capture);
+            auto complete = augmentAuthoredCommand(command, source);
+            requireIndependentCopyRegistrations(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture);
+            return {std::move(complete), identities.at(original.id)};
+        }
         std::map<std::string,std::string,std::less<>> identities;
         std::map<std::pair<std::string,std::string>,std::string> child_identities;
         auto command = makeIndependentSelectionCloneCommand(source,clipboard_entities_for_selection(source,original.id),
@@ -12778,7 +12833,7 @@ public:
                 if (!context_current()) throw std::invalid_argument(lastError().toStdString());
                 std::optional<PlanarTransform> shared_callout_transform;
                 std::function<PlanarTransform(const std::string&)> callout_owner_transform;
-                IndependentRoofCopyCapture roof_copy_capture;
+                IndependentModelCopyCapture roof_copy_capture;
                 auto candidate = [&]() -> std::pair<Command, std::string> {
                     if (!group) return makeSelectedTransformCommand(source,*original,rotation->text(),
                         flip_horizontal->isChecked(),flip_vertical->isChecked(),offset_x->text(),offset_y->text(),clone->isChecked());
@@ -23925,6 +23980,22 @@ public:
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
         const Entity& original, const ArchitecturalTransaction& transaction) {
         const auto& operations=transaction.operations();
+        if (original.type == "slab" && operations.size() == 2 &&
+            operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
+            operations[1].action == ArchitecturalAction::transform &&
+            operations[1].object_id == operations[0].duplicate_id && operations[1].transform &&
+            operations[1].transform->scale == 1.0 && operations[1].transform->z == 0.0) {
+            const auto& movement = *operations[1].transform;
+            SlabCloneIdentityMap identities{{original.id, operations[0].duplicate_id}};
+            IndependentModelCopyCapture capture;
+            auto command = sourceDerivedSlabCloneCommand(source, {original.id}, {{original.id,
+                {{}, {movement.x, movement.y, 0.0}, movement.rotation_z_radians, 1.0, false, false}}},
+                transaction.undo_label(), identities, &capture);
+            auto complete = augmentAuthoredCommand(command, source);
+            requireIndependentCopyRegistrations(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture);
+            return complete;
+        }
         if (original.type == "roof" && operations.size() == 2 &&
             operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
             operations[1].action == ArchitecturalAction::transform &&
@@ -41588,15 +41659,15 @@ private:
 
     static void requireIndependentCopyRegistrations(const DocumentSnapshot& source,
         const ApplyEntityChanges& intent, const ApplyEntityChanges& candidate,
-        const IndependentRoofCopyCapture* roof_copy = nullptr) {
-        if (roof_copy && roof_copy->intent) {
-            if (roof_copy->source_digest != document_snapshot_digest(source) ||
-                command_to_json(Command{intent}).dump() != command_to_json(Command{*roof_copy->intent}).dump())
-                throw std::invalid_argument("The roof copy no longer matches its admitted source-derived intent.");
+        const IndependentModelCopyCapture* model_copy = nullptr) {
+        if (model_copy && model_copy->intent) {
+            if (model_copy->source_digest != document_snapshot_digest(source) ||
+                command_to_json(Command{intent}).dump() != command_to_json(Command{*model_copy->intent}).dump())
+                throw std::invalid_argument("The copy no longer matches its admitted source-derived intent.");
             auto expected = intent;
             registerNewObjectMemberships(source, expected);
             if (command_to_json(Command{candidate}).dump() != command_to_json(Command{expected}).dump())
-                throw std::invalid_argument("A roof copy may add only its admitted geometry, qualified presentation and scope enrollment.");
+                throw std::invalid_argument("A copy may add only its admitted geometry, qualified presentation and scope enrollment.");
             return;
         }
         // Originals can gain only the exact phase/page registrations derived
@@ -41855,7 +41926,7 @@ private:
     static ApplyEntityChanges sourceDerivedRoofCloneCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& owners,
         const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
-        RoofCloneIdentityMap& identities, IndependentRoofCopyCapture* capture = nullptr) {
+        RoofCloneIdentityMap& identities, IndependentModelCopyCapture* capture = nullptr) {
         const auto plan = inspect_roof_clone_plan(source.entities(), owners);
         if (!plan.ready()) {
             std::string reasons;
@@ -42120,11 +42191,82 @@ private:
                 reserve_text(id); reserve_text(entity.type);
                 reserve(entity.properties); reserve(entity.extensions);
             }
+            for (const auto& [id, asset] : revision.assets) { (void)asset; reserve_text(id); }
             if (revision.boundary_constraint_changes)
                 reserve(command_to_json(Command{*revision.boundary_constraint_changes}));
         }
         for (const auto& [id, asset] : source.assets()) { (void)asset; reserve_text(id); }
         return occupied;
+    }
+
+    static ApplyEntityChanges sourceDerivedSlabCloneCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& owners,
+        const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
+        SlabCloneIdentityMap& identities, IndependentModelCopyCapture* capture = nullptr) {
+        const auto plan = inspect_slab_clone_plan(source.entities(), owners);
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons += '\n';
+                reasons += diagnostic.entity_id + ": " + diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons);
+        }
+        auto occupied = retainedSlabIdentityNames(source);
+        for (const auto& [original, copied] : identities) {
+            (void)original;
+            if (!occupied.insert(copied).second)
+                throw std::invalid_argument("A horizontal copy destination is already reserved in source or history.");
+        }
+        for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& original : *slots) {
+                if (identities.contains(original)) continue;
+                auto copied = new_id("assembly-copy");
+                while (!occupied.insert(copied).second) copied = new_id("assembly-copy");
+                identities.emplace(original, std::move(copied));
+            }
+        const auto copied = replay_slab_clone(source.entities(), plan, identities);
+        std::vector<SlabGeometryEditIntent> movement;
+        std::set<std::string, std::less<>> moved;
+        for (const auto& operation : operations) {
+            const auto& transform = operation.transform;
+            if (!std::binary_search(plan.selected_slab_ids.begin(), plan.selected_slab_ids.end(), operation.entity_id) ||
+                !moved.insert(operation.entity_id).second || transform.scale != 1.0 || transform.offset.z != 0.0 ||
+                !std::isfinite(transform.pivot.z))
+                throw std::invalid_argument("A horizontal copy requires one rigid plan operation for each selected assembly.");
+            SlabGeometryEditIntent edit;
+            edit.slab_id = identities.at(operation.entity_id);
+            edit.kind = SlabGeometryEditKind::transform_plan;
+            edit.transform = PlanarTransform{{transform.pivot.x, transform.pivot.y}, transform.rotation_z_radians,
+                transform.flip_horizontal, transform.flip_vertical, {transform.offset.x, transform.offset.y}};
+            movement.push_back(std::move(edit));
+        }
+        if (moved.size() != plan.selected_slab_ids.size())
+            throw std::invalid_argument("The horizontal copy is missing a selected assembly's transform.");
+        // Replay directly against the complete real copy map. A fabricated
+        // snapshot cannot lend source/history authority to a transformed copy.
+        const auto candidate = replay_slab_geometry_entities(copied.entities, movement);
+        ApplyEntityChanges creation{source.revision(), {}, {}, message};
+        for (const auto& [id, entity] : candidate) {
+            const auto before = source.entities().find(id);
+            if (before == source.entities().end() || before->second != entity ||
+                before->second.properties.dump() != entity.properties.dump() ||
+                before->second.extensions.dump() != entity.extensions.dump())
+                creation.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        for (const auto& id : plan.required_entity_ids) {
+            const auto& retained = candidate.at(id);
+            const auto& original = source.entities().at(id);
+            if (retained != original || retained.properties.dump() != original.properties.dump() ||
+                retained.extensions.dump() != original.extensions.dump())
+                throw std::invalid_argument("Copying a horizontal assembly would modify an original owner.");
+        }
+        (void)Document::preview_command(source, creation);
+        if (capture) {
+            capture->source_digest = document_snapshot_digest(source);
+            capture->intent = creation;
+        }
+        return creation;
     }
 
     static Command sourceDerivedSlabEditCommand(const DocumentSnapshot& source,
@@ -42139,7 +42281,9 @@ private:
         const auto physical = geometry_edit ? replay_slab_geometry_entities(source.entities(), geometry)
                               : stack_edit ? replay_slab_layer_stack_entities(source.entities(), stacks)
                                          : replay_slab_profile_entities(source.entities(), profiles);
-        const auto request = geometry_edit ? phase_slab_geometry_replacement_request(source.entities(), geometry)
+        const auto geometry_partition = geometry_edit
+            ? std::optional{partition_phase_slab_geometry_edits(source.entities(), geometry)} : std::nullopt;
+        const auto request = geometry_edit ? geometry_partition->replacement
                              : stack_edit ? phase_slab_layer_stack_replacement_request(source.entities(), stacks)
                                         : phase_slab_profile_replacement_request(source.entities(), profiles);
         std::optional<std::set<std::string, std::less<>>> occupied;
@@ -42185,7 +42329,10 @@ private:
         replacement.seed_slab_ids = request->seed_slab_ids;
         replacement.slab_profiles = profiles;
         replacement.slab_stacks = stacks;
-        replacement.slab_geometry = geometry;
+        if (geometry_partition) {
+            replacement.slab_geometry = geometry_partition->baseline_geometry;
+            replacement.ordinary_geometry = geometry_partition->ordinary_geometry;
+        }
         if (!occupied) occupied = retainedSlabIdentityNames(source);
         for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
             for (const auto& original : *slots) {
@@ -42478,6 +42625,71 @@ private:
             validate_active_wall_physical_dependencies(candidate.entities(),copied_walls,true);
         if (additional_fence) additional_fence();
         return Command{std::move(completed)};
+    }
+
+    bool applyWallLayerStackEdit(const DocumentSnapshot& source, const WallLayerStackEditIntent& intent,
+        const SourceEditAuthority& authority) {
+        const auto require_current = [&] {
+            if (fullSnapshotDigest(source) != authority.source_digest || !sourceEditAuthorityUnchanged(authority) ||
+                authority.selection.size() != 1 || authority.selection.front() != id_from(intent.wall_id) ||
+                hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The wall, project or drawing context changed. Reopen its layers.");
+        };
+        require_current();
+        const auto staged = replay_wall_layer_stack_entities(source.entities(), {intent}, false);
+        const auto captured = capture_wall_layer_stack_edit(source.entities().at(intent.wall_id),
+            staged.at(intent.wall_id), intent);
+        if (!captured) return true;
+        auto occupied = retainedSlabIdentityNames(source);
+        std::set<std::string, std::less<>> existing;
+        const auto& original = source.entities().at(intent.wall_id);
+        if (original.properties.contains("layers"))
+            for (const auto& layer : original.properties.at("layers")) existing.insert(layer.at("id").get<std::string>());
+        for (const auto& row : captured->layers) if (!existing.contains(row.layer_id) && !occupied.insert(row.layer_id).second)
+            throw std::invalid_argument("A new wall layer identity is already reserved in retained history.");
+        const auto request = phase_wall_layer_stack_replacement_request(source.entities(), {*captured});
+        if (request) {
+            const auto plan = inspect_phase_wall_replacement_plan(source.entities(), request->seed_wall_ids,
+                request->registry_id, request->alternative_id);
+            if (!plan.ready()) {
+                QStringList reasons;
+                for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
+                    reasons.push_back(QString::fromStdString(diagnostic.entity_id + ": " + diagnostic.reason));
+                throw std::invalid_argument(reasons.join('\n').toStdString());
+            }
+            PhaseWallReplacementAuthoring replacement;
+            replacement.registry_id = request->registry_id;
+            replacement.alternative_id = request->alternative_id;
+            replacement.seed_wall_ids = request->seed_wall_ids;
+            replacement.wall_stacks = {*captured};
+            for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
+                for (const auto& id : *slots) {
+                    auto proposed = new_id("proposed");
+                    while (!occupied.insert(proposed).second) proposed = new_id("proposed");
+                    replacement.identities.emplace(id, std::move(proposed));
+                }
+            ConstraintAuthoringIntent semantic; semantic.message = "Edit wall layers and materials";
+            auto phase = make_phase_constraint_authoring_intent(source, semantic);
+            phase.wall_replacement = encode_phase_wall_replacement_authoring(replacement);
+            PhaseWallReplacementIdentityMap proposed_ids;
+            const auto reviewed = finishAlternativeWallEdit(source, phase,
+                phase_wall_replacement_authoring_command(phase), proposed_ids, require_current, true);
+            if (!reviewed) { clearError(); refreshInspector(); return false; }
+            require_current();
+            return applyAuthoredCommand(*reviewed);
+        }
+        // Source replay owns the layer inventory and receipts. Existing
+        // exterior completion and room review finish this same atomic edit.
+        const auto command = augmentAuthoredCommand(Command{ApplyEntityChanges{
+            .expected_revision = source.revision(),
+            .entity_changes = {EntityChange::upsert(staged.at(intent.wall_id))},
+            .message = "Edit wall layers and materials",
+        }}, source);
+        const auto candidate = Document::preview_command(source, command);
+        if (entity_map_digest(candidate.entities()) != entity_map_digest(staged))
+            throw std::invalid_argument("The wall layer proposal differs from its actual physical and exterior changes.");
+        require_current();
+        return applyWallProfileCommand(source, candidate, command, intent.wall_id, authority);
     }
 
     std::optional<Command> reviewAlternativeWallProfileEdit(const Command& requested,
@@ -57719,7 +57931,7 @@ public:
         }
     }
 
-    void showWallLayerEditor(bool edit_horizontal_stack = false) {
+    void showWallLayerEditor(bool edit_layer_stack = false) {
         const auto selected = selectedEntity();
         const bool wall = selected && selected->type == "wall";
         const bool slab = selected && selected->type == "slab";
@@ -57727,7 +57939,7 @@ public:
             setError(QStringLiteral("Select an editable wall or horizontal assembly before editing its assembly."));
             return;
         }
-        if (slab && !edit_horizontal_stack) {
+        if (slab && !edit_layer_stack) {
             try {
                 const auto context = captureModalContext();
                 if (!context.source) throw std::invalid_argument("The horizontal assembly source is unavailable.");
@@ -57796,98 +58008,70 @@ public:
             }
             return;
         }
-        const auto thickness = read_finite_number(selected->properties, "thickness_m");
-        if (!thickness.has_value()) {
-            setError(QStringLiteral("Assembly thickness_m is required before editing its layers."));
+        if (wall && edit_layer_stack) {
+            try {
+                const auto context = captureModalContext();
+                if (!context.source) throw std::invalid_argument("The wall source is unavailable.");
+                const auto authority = captureSourceEditAuthority(*context.source);
+                auto reserved = retainedSlabIdentityNames(*context.source);
+                WallLayerStackDialog dialog(*context.source, selected->id, context.metric_units,
+                    [this, context, authority] {
+                        if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
+                            throw std::invalid_argument("The project or drawing context changed. Reopen the wall layers.");
+                        return authoringSnapshot();
+                    }, [this, context, authority, &reserved] {
+                        if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
+                            throw std::invalid_argument("The project or drawing context changed before adding a wall layer.");
+                        auto fresh = new_id("wall-layer");
+                        while (!reserved.insert(fresh).second) fresh = new_id("wall-layer");
+                        return fresh;
+                    }, owner);
+                styleDialog(dialog);
+                if (dialog.exec() != QDialog::Accepted) { refreshInspector(); return; }
+                if (!modalContextUnchanged(context) || !sourceEditAuthorityUnchanged(authority)) return;
+                if (const auto intent = dialog.acceptedIntent()) {
+                    if (!applyWallLayerStackEdit(*context.source, *intent, authority)) return;
+                    refresh();
+                }
+                clearError(); refreshInspector();
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Wall layers: %1").arg(QString::fromUtf8(error.what())));
+            }
             return;
         }
-        const auto context = captureModalContext();
-        std::optional<SourceEditAuthority> profile_authority;
-        if (context.source) profile_authority = captureSourceEditAuthority(*context.source);
-        QDialog dialog(owner);
-        styleDialog(dialog);
-        dialog.setObjectName(wall ? QStringLiteral("wallLayerDialog")
-                                  : QStringLiteral("slabLayerDialog"));
-        dialog.setWindowTitle(wall ? QStringLiteral("Wall assembly")
-                                   : QStringLiteral("Horizontal assembly"));
-        dialog.setModal(true);
-        dialog.resize(560, 400);
-        auto* layout = new QVBoxLayout(&dialog);
-        auto* description = new QLabel(
-            (wall ? QStringLiteral("Enter ordered layers from the negative to positive baseline normal. "
-                                  "Thicknesses must sum to %1.")
-                  : QStringLiteral("Enter ordered layers from the lower to upper surface. "
-                                   "Thicknesses must sum to %1."))
-                .arg(format_length(*thickness, m_metric_units)),
-            &dialog);
-        description->setWordWrap(true);
-        layout->addWidget(description);
-        auto* editor = new QPlainTextEdit(&dialog);
-        editor->setObjectName(wall ? QStringLiteral("wallLayersJson")
-                                   : QStringLiteral("slabLayersJson"));
-        editor->setPlaceholderText(QStringLiteral(
-            "[{\"id\":\"outer\",\"thickness_m\":0.02}, ...]"));
-        editor->setTabStopDistance(4 * QFontMetrics(editor->font()).horizontalAdvance(QLatin1Char(' ')));
         try {
-            if (const auto layers = selected->properties.find("layers");
-                layers != selected->properties.end()) {
-                editor->setPlainText(QString::fromStdString(layers.value().dump(2)));
-            } else {
-                editor->setPlainText(QStringLiteral("[]"));
+            const auto context = captureModalContext();
+            if (!context.source) throw std::invalid_argument("The wall source is unavailable.");
+            const auto authority = captureSourceEditAuthority(*context.source);
+            WallProfileDialog dialog(*context.source, selected->id, context.metric_units,
+                [this, context, authority] {
+                    if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
+                        throw std::invalid_argument("The project or drawing context changed. Reopen the wall profile.");
+                    return authoringSnapshot();
+                }, owner);
+            styleDialog(dialog);
+            bool edit_stack = false;
+            if (auto* buttons = dialog.findChild<QDialogButtonBox*>()) {
+                auto* stack = buttons->addButton(QStringLiteral("Edit layer stack"), QDialogButtonBox::ActionRole);
+                stack->setObjectName(QStringLiteral("wallLayerStackEditor"));
+                QObject::connect(stack, &QPushButton::clicked, &dialog, [&] { edit_stack = true; dialog.reject(); });
             }
-        } catch (const std::exception&) {
-            editor->setPlainText(QStringLiteral("[]"));
+            const auto result = dialog.exec();
+            if (edit_stack) {
+                if (modalContextUnchanged(context) && sourceEditAuthorityUnchanged(authority)) showWallLayerEditor(true);
+                return;
+            }
+            if (result != QDialog::Accepted) { refreshInspector(); return; }
+            if (!modalContextUnchanged(context) || !sourceEditAuthorityUnchanged(authority)) return;
+            if (const auto intent = dialog.acceptedIntent()) {
+                const auto candidate = replay_wall_profile_entity(context.source->entities().at(selected->id), *intent);
+                if (!sourceEditAuthorityUnchanged(authority) ||
+                    !editSelectedProperties(candidate.properties, "Edit wall profile", *intent)) return;
+            }
+            clearError(); refreshInspector();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Wall profile: %1").arg(QString::fromUtf8(error.what())));
         }
-        layout->addWidget(editor, 1);
-        auto* status = new QLabel(&dialog);
-        status->setObjectName(QStringLiteral("wallLayersStatus"));
-        status->setWordWrap(true);
-        layout->addWidget(status);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
-        buttons->setObjectName(QStringLiteral("wallLayersButtons"));
-        layout->addWidget(buttons);
-        const auto validate = [&] {
-            try {
-                const auto encoded = json::parse(editor->toPlainText().toUtf8().toStdString());
-                 const auto layer_count = wall
-                     ? parse_wall_layers(encoded, *thickness).size()
-                     : parse_slab_layers(encoded, *thickness).size();
-                 status->setText(layer_count == 0
-                     ? (wall ? QStringLiteral("Monolithic wall (no layers).")
-                             : QStringLiteral("Monolithic assembly (no layers)."))
-                     : QStringLiteral("%1 layers valid.").arg(layer_count));
-                status->setStyleSheet(QString());
-                buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
-            } catch (const std::exception& error) {
-                status->setText(QString::fromUtf8(error.what()));
-                status->setStyleSheet(QStringLiteral("color:#b42318;"));
-                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
-            }
-        };
-        QObject::connect(editor, &QPlainTextEdit::textChanged, &dialog, validate);
-        QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
-                         &dialog, &QDialog::reject);
-        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-                         &dialog, [&] {
-                             if (!modalContextUnchanged(context) ||
-                                 (!profile_authority || !sourceEditAuthorityUnchanged(*profile_authority))) {
-                                 status->setText(lastError());
-                                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
-                                 return;
-                             }
-                             const bool applied = wall
-                                 ? editSelectedWallLayers(editor->toPlainText(), context.revision)
-                                 : editSelectedSlabLayers(editor->toPlainText(), context.revision);
-                             if (applied) {
-                                 dialog.accept();
-                             } else {
-                                 status->setText(lastError());
-                             }
-                         });
-        validate();
-        editor->setFocus();
-        dialog.exec();
-        refreshInspector();
     }
 
 private:

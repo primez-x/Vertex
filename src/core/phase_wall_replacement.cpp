@@ -12,6 +12,7 @@
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/wall_layer_stack_edit.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -263,6 +264,13 @@ template<class Reference> void visit_boundary_copy_evidence(Entity& entity, cons
 // copy. A reference elsewhere in a copied payload needs its own typed codec.
 Entity opaque_remainder(const Entity& entity) {
     auto remainder = entity;
+    if (entity.type == "wall" && remainder.extensions.contains("wall_layer_stack_retirement")) {
+        auto& archive = remainder.extensions.at("wall_layer_stack_retirement");
+        validate_wall_layer_stack_retirement(archive);
+        // Retired layer IDs are historical provenance. Only this qualified
+        // slot is exempted; opaque receipt siblings still require a codec.
+        for (auto& row : archive.at("receipts")) row.erase("layer_id");
+    }
     auto& p = remainder.properties;
     const auto consumed = [](const std::string&, bool) { return std::string{}; };
     if (entity.type == "measurement_linework") visit_stroke_copy(remainder, consumed);

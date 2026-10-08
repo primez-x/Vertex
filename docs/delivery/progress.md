@@ -14,6 +14,62 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 wall layer authoring and horizontal copying source integration
+
+Wall layers now have Add/Remove/Up/Down, editable thickness, actual catalog
+materials and a read-only sum. The profile form opens this editor without JSON.
+Actual source replay preserves untouched dimensions/receipts and moves or retires
+known indexed receipts. Ordinary edits use atomic exterior/room completion;
+shared-baseline edits derive proposed walls with their hosted dependencies and
+room review. New row IDs remain exact and history-reserved; retired IDs remain
+historical provenance. Wall replacement six and native 107/extraction 105 retain
+this authority. Independent source review approved the integrated wall slice.
+
+Horizontal copies now derive fresh owners/layers and additive qualified
+presentation from actual source. Plan move/rotate/mirror and pure horizontal
+group copy use that producer, preserving originals and historical archive IDs.
+The shared allocator reserves asset names from every historical revision.
+Mixed baseline and ordinary/proposed horizontal movement uses independent saved
+source role partitioning in one atomic operation, with replacement four and
+native 106/extraction 104. Independent source review approved this slice.
+
+Horizontal profile two additionally retains untouched layer dimensions, avoiding
+reentry or numeric reconstruction when one row changes. The form parses only
+changed fields, uses readable layer names and unit-appropriate layer sums.
+Native 108/extraction 106 retains nested profile history; root reviewed this
+source integration. Earlier profile/wall replacement wires remain unchanged.
+
+Next source work is horizontal 3D movement/scaling and copying hosted assemblies,
+followed by remaining mixed-family authoring. Native bound-dimension copying and
+nonuniform arc resizing remain representation gaps. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. The installed
+candidate is unchanged; compilation, interaction and storage round trips remain
+unverified. No production acceptance, completion percentage or ETA is claimed.
+
+### October 8 wall profile form and retained-layer input integration
+
+The wall assembly action now opens a compact profile form with thickness,
+start height, signed top rise, actual resolved base elevation and an ordered
+layer-thickness table. The obsolete JSON entry dialog is removed. Changed
+fields supply actual entered quantities; untouched native values and receipts
+remain exact. Editing one layer no longer requires reentry or invented
+quantities for the remaining layers. Material labels and readable layer names
+keep implementation identities out of the main table.
+
+Wall profile three records null source-retained layer thicknesses; older profile
+wires remain unchanged. Actual source receipts, native openings/assemblies,
+joins and copied proposed dependencies undergo strict admission. The dialog
+prepares a profile stage; final room/relationship consequences use existing
+atomic ordinary/proposed publication. Source/saved/workspace fences remain
+active before either stage. Native 105/extraction 103 retains nested direct/
+wrapped profile intent across history.
+
+Independent source review approved this wall profile integration. Subsequent
+inventory and horizontal implementation is recorded above. No builds, tests,
+probes, scripts, native jobs, launches,
+packages or installations ran; installed candidate is unchanged. Compilation,
+interaction and storage round trips remain unverified.
+
 ### October 8 horizontal outline and canvas integration implementation
 
 Source now routes slab/floor/ceiling/foundation outer and hole vertex grips,

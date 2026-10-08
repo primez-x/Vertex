@@ -48,16 +48,20 @@ struct PhaseSlabReplacementResult {
     const std::string& registry_id, const std::string& alternative_id);
 
 // Reinspect the source, independently replay typed inputs and derive fresh
-// owners. Originals remain exact; qualified presentation rows are additive.
-// Exactly one edit family is nonempty. New stack rows retain their declared
-// fresh IDs; existing rows remap through the complete source-derived mapping.
+// owners. Shared-baseline originals remain exact; qualified presentation rows
+// are additive. Ordinary geometry retains its actual owner and child IDs.
+// Exactly one edit family is nonempty. Geometry may additionally include
+// actual ordinary/proposed owners, independently partitioned from the source.
+// New stack rows retain their declared fresh IDs; existing rows remap through
+// the complete source-derived mapping.
 // The enclosing Document reserves fresh identities across retained history.
 [[nodiscard]] PhaseSlabReplacementResult replay_phase_slab_replacement(
     const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementPlan& plan,
     const PhaseSlabReplacementIdentityMap& identities,
     const std::vector<SlabProfileEditIntent>& slab_profiles,
     const std::vector<SlabLayerStackEditIntent>& slab_stacks = {},
-    const std::vector<SlabGeometryEditIntent>& slab_geometry = {});
+    const std::vector<SlabGeometryEditIntent>& slab_geometry = {},
+    const std::vector<SlabGeometryEditIntent>& ordinary_geometry = {});
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -67,12 +71,15 @@ struct PhaseSlabReplacementAuthoring {
     std::vector<SlabProfileEditIntent> slab_profiles;
     std::vector<SlabLayerStackEditIntent> slab_stacks;
     std::vector<SlabGeometryEditIntent> slab_geometry;
+    std::vector<SlabGeometryEditIntent> ordinary_geometry;
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
 // identities and slab_profiles. Exclusive v2 replaces slab_profiles with
 // slab_stacks; exclusive v3 uses slab_geometry. Geometry carries mathematical
-// intent only. Seeds must exactly match changed edit targets in every family.
+// intent only. Exclusive v4 adds ordinary_geometry to v3's six fields and
+// requires both geometry lists nonempty. Seeds exactly match the changed
+// baseline targets; ordinary targets are disjoint actual changed owners.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(
@@ -86,6 +93,18 @@ struct PhaseSlabProfileReplacementRequest {
     std::vector<std::string> seed_slab_ids;
     bool operator==(const PhaseSlabProfileReplacementRequest&) const = default;
 };
+
+struct PhaseSlabGeometryEditPartition {
+    std::vector<SlabGeometryEditIntent> baseline_geometry;
+    std::vector<SlabGeometryEditIntent> ordinary_geometry;
+    std::optional<PhaseSlabProfileReplacementRequest> replacement;
+};
+
+// Independently replay the full actual map, discard exact no-ops and classify
+// changed targets from saved membership. Shared-baseline targets require one
+// actual active alternative; no supplied role list establishes authority.
+[[nodiscard]] PhaseSlabGeometryEditPartition partition_phase_slab_geometry_edits(
+    const PhaseSlabReplacementEntities& source, const std::vector<SlabGeometryEditIntent>& slab_geometry);
 
 // Source-equivalent batches and ordinary/proposed edits require no allocation.
 // Shared-baseline edits require one actual active alternative; mixed scopes,

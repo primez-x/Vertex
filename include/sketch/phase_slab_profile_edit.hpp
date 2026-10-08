@@ -8,6 +8,8 @@ namespace sketch {
 struct SlabProfileLayerThickness {
     std::string layer_id;
     Quantity thickness;
+    // Retain the actual native value and receipt; thickness is ignored.
+    bool retain_source_thickness{false};
 };
 
 struct SlabProfileEditIntent {
@@ -17,7 +19,9 @@ struct SlabProfileEditIntent {
     std::optional<std::vector<SlabProfileLayerThickness>> layer_thicknesses;
 };
 
-// Strict bounded version 1; all three optional inputs have explicit nulls.
+// Strict bounded versions 1/2; all three optional inputs have explicit nulls.
+// Version 2 is inferred only for source-retained layer rows (null thickness).
+// A retained inventory still requires an authored scalar or layer dimension.
 // Elevation admits exact signed/zero input; thicknesses must be positive.
 [[nodiscard]] nlohmann::json encode_slab_profile_edit_intent(const SlabProfileEditIntent& intent);
 [[nodiscard]] SlabProfileEditIntent decode_slab_profile_edit_intent(const nlohmann::json& value);

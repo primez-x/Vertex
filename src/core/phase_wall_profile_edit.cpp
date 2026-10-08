@@ -36,15 +36,24 @@ void keys(const Json& value, std::initializer_list<const char*> expected) {
         if (!value.contains(field)) invalid("Wall profile edit field is missing");
 }
 
-std::string identity(const Json& value) {
-    if (!value.is_string()) invalid("Wall profile identity must be a string");
-    const auto& result = value.get_ref<const std::string&>();
+void check_identity(const std::string& result) {
     if (result.empty() || result.size() > 128 ||
         !std::all_of(result.begin(), result.end(), [](unsigned char c) {
             return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':';
         })) invalid("Wall profile identity is invalid");
+}
+
+std::string identity(const Json& value) {
+    if (!value.is_string()) invalid("Wall profile identity must be a string");
+    const auto& result = value.get_ref<const std::string&>();
+    check_identity(result);
     return result;
+}
+
+bool retains_layer_thickness(const WallProfileEditIntent& intent) {
+    return intent.layer_thicknesses && std::any_of(intent.layer_thicknesses->begin(),
+        intent.layer_thicknesses->end(), [](const auto& layer) { return layer.retain_source_thickness; });
 }
 
 Quantity quantity(const Json& value) {
@@ -274,22 +283,40 @@ void admit_affected_joins(const std::map<std::string, Entity, std::less<>>& enti
 } // namespace
 
 nlohmann::json encode_wall_profile_edit_intent(const WallProfileEditIntent& intent) {
-    (void)identity(intent.wall_id);
-    if (!intent.thickness && !intent.height && !intent.layer_thicknesses && !intent.top_rise)
-        invalid("Wall profile edit requires an authored dimension");
-    Json result{{"version", intent.top_rise ? 2 : 1}, {"wall_id", intent.wall_id},
-        {"thickness", intent.thickness ? quantity(*intent.thickness) : Json(nullptr)},
-        {"height", intent.height ? quantity(*intent.height) : Json(nullptr)}, {"layer_thicknesses", nullptr}};
-    if (intent.top_rise) result["top_rise"] = rise_quantity(*intent.top_rise);
+    check_identity(intent.wall_id);
+    // Bound lexical inputs before constructing any quantity proof or rows.
+    for (const auto* value : {&intent.thickness, &intent.height, &intent.top_rise})
+        if (*value && (*value)->original_expression.size() > expression_limit)
+            invalid("Wall profile quantity expression budget exceeded");
+    bool retained_layers = false, authored_layers = false;
     if (intent.layer_thicknesses) {
         if (intent.layer_thicknesses->empty() || intent.layer_thicknesses->size() > collection_limit)
             invalid("Wall profile layer inventory budget is invalid");
+        for (const auto& layer : *intent.layer_thicknesses) {
+            check_identity(layer.layer_id);
+            if (layer.retain_source_thickness) retained_layers = true;
+            else {
+                authored_layers = true;
+                if (layer.thickness.original_expression.size() > expression_limit)
+                    invalid("Wall profile quantity expression budget exceeded");
+            }
+        }
+    }
+    if (!intent.thickness && !intent.height && !authored_layers && !intent.top_rise)
+        invalid("Wall profile edit requires an authored dimension");
+    Json result{{"version", retained_layers ? 3 : intent.top_rise ? 2 : 1}, {"wall_id", intent.wall_id},
+        {"thickness", intent.thickness ? quantity(*intent.thickness) : Json(nullptr)},
+        {"height", intent.height ? quantity(*intent.height) : Json(nullptr)}, {"layer_thicknesses", nullptr}};
+    if (retained_layers || intent.top_rise)
+        result["top_rise"] = intent.top_rise ? rise_quantity(*intent.top_rise) : Json(nullptr);
+    if (intent.layer_thicknesses) {
         auto rows = Json::array();
         std::set<std::string, std::less<>> ids;
         for (const auto& layer : *intent.layer_thicknesses) {
-            if (!ids.insert(identity(layer.layer_id)).second)
+            if (!ids.insert(layer.layer_id).second)
                 invalid("Wall profile layer inventory contains duplicate identities");
-            rows.push_back({{"layer_id", layer.layer_id}, {"thickness", quantity(layer.thickness)}});
+            rows.push_back({{"layer_id", layer.layer_id}, {"thickness",
+                layer.retain_source_thickness ? Json(nullptr) : quantity(layer.thickness)}});
         }
         result["layer_thicknesses"] = std::move(rows);
     }
@@ -300,26 +327,33 @@ nlohmann::json encode_wall_profile_edit_intent(const WallProfileEditIntent& inte
 WallProfileEditIntent decode_wall_profile_edit_intent(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") ||
         !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2))
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
         invalid("Wall profile edit version is unsupported");
+    const bool retained_layers = value.at("version") == 3;
     const bool with_rise = value.at("version") == 2;
-    if (with_rise) keys(value, {"version", "wall_id", "thickness", "height", "layer_thicknesses", "top_rise"});
+    if (with_rise || retained_layers) keys(value, {"version", "wall_id", "thickness", "height", "layer_thicknesses", "top_rise"});
     else keys(value, {"version", "wall_id", "thickness", "height", "layer_thicknesses"});
     WallProfileEditIntent result;
     result.wall_id = identity(value.at("wall_id"));
-    if (with_rise) result.top_rise = rise_quantity(value.at("top_rise"));
+    if (with_rise || (retained_layers && !value.at("top_rise").is_null()))
+        result.top_rise = rise_quantity(value.at("top_rise"));
     if (!value.at("thickness").is_null()) result.thickness = quantity(value.at("thickness"));
     if (!value.at("height").is_null()) result.height = quantity(value.at("height"));
     const auto& layers = value.at("layer_thicknesses");
+    if (retained_layers && layers.is_null()) invalid("Wall profile retention requires a layer inventory");
     if (!layers.is_null()) {
         if (!layers.is_array() || layers.empty() || layers.size() > collection_limit)
             invalid("Wall profile layer inventory budget is invalid");
         result.layer_thicknesses.emplace();
         for (const auto& row : layers) {
             keys(row, {"layer_id", "thickness"});
-            result.layer_thicknesses->push_back({identity(row.at("layer_id")), quantity(row.at("thickness"))});
+            const bool retain = retained_layers && row.at("thickness").is_null();
+            result.layer_thicknesses->push_back({identity(row.at("layer_id")),
+                retain ? Quantity{} : quantity(row.at("thickness")), retain});
         }
     }
+    if (retained_layers && !retains_layer_thickness(result))
+        invalid("Wall profile version 3 requires retained layer thickness");
     (void)encode_wall_profile_edit_intent(result);
     return result;
 }
@@ -328,20 +362,25 @@ Entity replay_wall_profile_entity(const Entity& source, const WallProfileEditInt
     (void)encode_wall_profile_edit_intent(intent);
     if (source.type != "wall" || source.id != intent.wall_id)
         invalid("Wall profile edit requires its actual wall target");
-    if (intent.top_rise) validate_wall_profile_source_entity(source);
+    if (intent.top_rise || retains_layer_thickness(intent)) validate_wall_profile_source_entity(source);
     const auto original = wall(source);
+    // Validate the complete roster before staging any scalar or layer change.
+    if (intent.layer_thicknesses) {
+        if (intent.layer_thicknesses->size() != original.layers.size())
+            invalid("Wall profile layer inventory must include every existing layer");
+        for (std::size_t i = 0; i < original.layers.size(); ++i)
+            if (intent.layer_thicknesses->at(i).layer_id != original.layers[i].id)
+                invalid("Wall profile layer inventory must retain its existing order and identities");
+    }
     auto result = source;
     if (intent.thickness) scalar(result, "thickness_m", "thickness", *intent.thickness, original.thickness);
     if (intent.height) scalar(result, "height_m", "height", *intent.height, original.height);
     if (intent.top_rise) top_rise(result, original, *intent.top_rise);
     if (intent.layer_thicknesses) {
-        if (intent.layer_thicknesses->size() != original.layers.size())
-            invalid("Wall profile layer inventory must include every existing layer");
         for (std::size_t i = 0; i < original.layers.size(); ++i) {
             const auto& replacement = intent.layer_thicknesses->at(i);
             const auto& retained = original.layers[i];
-            if (replacement.layer_id != retained.id)
-                invalid("Wall profile layer inventory must retain its existing order and identities");
+            if (replacement.retain_source_thickness) continue;
             if (replacement.thickness.metres == retained.thickness) continue;
             result.properties.at("layers").at(i).at("thickness_m") = replacement.thickness.metres;
             receipt(result, "/layers/" + std::to_string(i) + "/thickness_m", replacement.thickness, retained.thickness);
@@ -388,8 +427,6 @@ std::map<std::string, Entity, std::less<>> replay_wall_profile_entities(
     if (intents.empty()) return source;
     const auto scope = constraint_phase_scope(source);
     std::set<std::string, std::less<>> targets;
-    auto result = source;
-    bool depth_changed = false;
     std::size_t proof_bytes = 0;
     for (const auto& intent : intents) {
         const auto bytes = encode_wall_profile_edit_intent(intent).dump().size();
@@ -400,16 +437,22 @@ std::map<std::string, Entity, std::less<>> replay_wall_profile_entities(
         const auto found = source.find(intent.wall_id);
         if (found == source.end() || found->second.id != found->first)
             invalid("Wall profile target is missing or has inconsistent identity");
-        auto edited = replay_wall_profile_entity(found->second, intent);
-        depth_changed = depth_changed || wall(found->second).thickness != wall(edited).thickness;
+    }
+    // Versions 2/3 admit the actual captured physical graph before staging any
+    // edit, including exact no-ops. Version 1 retains historical admission.
+    const bool strict_profiles=strict_current_profiles ||
+        std::any_of(intents.begin(), intents.end(), [](const auto& intent) {
+            return intent.top_rise.has_value() || retains_layer_thickness(intent);
+        });
+    if (strict_profiles) validate_active_wall_physical_dependencies(source, targets,true);
+    auto result = source;
+    bool depth_changed = false;
+    for (const auto& intent : intents) {
+        const auto& original = source.at(intent.wall_id);
+        auto edited = replay_wall_profile_entity(original, intent);
+        depth_changed = depth_changed || wall(original).thickness != wall(edited).thickness;
         result.at(intent.wall_id) = std::move(edited);
     }
-    // Version 2 admits the captured physical graph independently before the
-    // changed graph (or exact no-op) can be accepted. Version 1 replay retains
-    // its established admission policy and meaning.
-    const bool strict_profiles=strict_current_profiles ||
-        std::any_of(intents.begin(), intents.end(), [](const auto& intent) { return intent.top_rise.has_value(); });
-    if (strict_profiles) validate_active_wall_physical_dependencies(source, targets,true);
     if (result == source) return source;
     validate_active_wall_physical_dependencies(result, targets,strict_profiles);
     if (depth_changed) {

@@ -41,30 +41,11 @@ QString label(const Entity& entity, const QString& fallback) {
     return fallback;
 }
 
-// The quantity parser uses bounded exact rationals rather than strtod. Check
-// its result explicitly; a conventional round-trip double string alone does
-// not prove that the visible input represents the native value.
-QString exact_metres(double value) {
+// Display native values without creating authored quantity authority. Untouched
+// fields retain the exact actual source; only changed fields enter the parser.
+QString native_metres(double value) {
     require(std::isfinite(value), "Profile dimensions must be finite");
     std::array<char, 768> buffer{};
-    for (int precision = 0; precision <= 18; ++precision) {
-        const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
-                                          value, std::chars_format::fixed, precision);
-        if (result.ec != std::errc{}) continue;
-        std::string text(buffer.data(), result.ptr);
-        if (text.find('.') != std::string::npos) {
-            while (text.back() == '0') text.pop_back();
-            if (text.back() == '.') text.pop_back();
-        }
-        text += " m";
-        try {
-            if (parse_quantity(text, Unit::metre).metres == value) return q(text);
-        } catch (const std::exception&) {
-            // A longer fixed decimal may exceed the parser's rational budget.
-        }
-    }
-    // An untouched native value needs no invented exact receipt. This fallback
-    // is display only; changed inputs still pass the actual quantity parser.
     const auto displayed = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
                                           std::chars_format::general);
     require(displayed.ec == std::errc{}, "The native dimension cannot be displayed");
@@ -101,12 +82,9 @@ Input input(QWidget* parent, const char* object_name, double metres,
         result.initial_text = q(saved.original_expression);
         // Bare original input may have been authored in different drawing units.
         // Keep the genuine receipt, but make the visible unit unambiguous.
-        bool same_units = false;
-        try { same_units = parse_quantity(saved.original_expression, unit).metres == metres; }
-        catch (const std::exception&) {}
-        if (!same_units) result.initial_text = q(format_quantity(saved, saved.entered_unit));
+        if (saved.entered_unit != unit) result.initial_text = q(format_quantity(saved, saved.entered_unit));
     } else {
-        result.initial_text = exact_metres(metres);
+        result.initial_text = native_metres(metres);
     }
     result.field = new QLineEdit(result.initial_text, parent);
     result.field->setObjectName(object_name);
@@ -221,11 +199,11 @@ public:
             for (std::size_t i = 0; i < slab.layers.size(); ++i) {
                 const auto& layer = slab.layers[i];
                 const auto row = static_cast<int>(i);
-                table->setItem(row, 0, readonly_item(q(layer.id)));
-                table->item(row, 0)->setToolTip("Layer ID; order runs from the lower surface to the upper surface.");
+                table->setItem(row, 0, readonly_item(QString("Layer %1").arg(row + 1)));
+                table->item(row, 0)->setToolTip(q(layer.id));
                 auto field = input(table, "horizontalProfileLayerThickness", layer.thickness, original,
                     {"/layers/" + std::to_string(i) + "/thickness_m"}, unit);
-                field.field->setAccessibleName(QString("Thickness of layer %1").arg(q(layer.id)));
+                field.field->setAccessibleName(QString("Thickness of layer %1").arg(row + 1));
                 table->setCellWidget(row, 1, field.field);
                 layers.push_back(std::move(field));
                 table->setItem(row, 2, readonly_item(material_name(source, layer)));
@@ -328,15 +306,23 @@ public:
             if (layers_edited) intent.layer_thicknesses.emplace();
             for (std::size_t i = 0; i < layers.size(); ++i) {
                 if (!layers_edited) { total += slab.layers[i].thickness; continue; }
-                // Every submitted row comes from the actual displayed inventory.
+                if (layers[i].field->text() == layers[i].initial_text) {
+                    total += slab.layers[i].thickness;
+                    intent.layer_thicknesses->push_back({slab.layers[i].id, Quantity{}, true});
+                    continue;
+                }
                 const auto value = read(layers[i], unit);
                 total += value.metres;
-                if (layers_edited) intent.layer_thicknesses->push_back({slab.layers[i].id, value});
+                intent.layer_thicknesses->push_back({slab.layers[i].id, value, false});
             }
             if (!layers.empty()) {
                 require(std::isfinite(total), "The layer thickness sum is outside the supported range");
                 // Read-only display only; this number never feeds authored input.
-                sum->setText(QString("Layer sum: %1 m").arg(QString::number(total, 'g', 17)));
+                if (unit == Unit::foot) {
+                    const auto inches = total / 0.0254;
+                    require(std::isfinite(inches), "The layer sum is outside the supported range");
+                    sum->setText(QString("Layer sum: %1 in").arg(QString::number(inches, 'g', 6)));
+                } else sum->setText(QString("Layer sum: %1 m").arg(QString::number(total, 'g', 8)));
             }
             Entity candidate = original;
             const bool has_input = intent.thickness || intent.elevation || intent.layer_thicknesses;
