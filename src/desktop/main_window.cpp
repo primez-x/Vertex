@@ -29849,6 +29849,54 @@ public:
                 const auto candidate = Document::preview_command(source, command); validate_document_assembly_instances(candidate.entities());
                 applyAuthoredCommand(command); m_selected_id.clear(); m_selected_ids.clear(); clearError(); refresh(); return true;
             }
+            if (m_selected_ids.size() == 1) {
+                const auto selected = source.entities().find(m_selected_ids.front().toStdString());
+                if (selected != source.entities().end() && selected->second.type == "wall" &&
+                    !annotationActionTarget(source, m_selected_ids.front(), false)) {
+                    if (m_selected_ids.front() != m_selected_id)
+                        throw std::invalid_argument("The selected wall identity changed. Select one physical wall again.");
+                    const auto authority = captureSourceEditAuthority(source);
+                    const bool site = siteCanvas(m_architecturalCanvas);
+                    const auto site_generation = m_site_publication_generation;
+                    const auto require_current = [&] {
+                        if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
+                            m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                            throw std::invalid_argument("The wall deletion, project, selection or workspace changed. Select the wall again.");
+                        if (site) {
+                            requireSitePublicationCurrent();
+                            if (m_site_publication_generation != site_generation)
+                                throw std::invalid_argument("The displayed Site Plan changed during wall deletion. Select the wall again.");
+                        }
+                    };
+                    require_current();
+                    // Retain the existing raw/typed selection identity checks,
+                    // including collisions with annotation children. The core
+                    // deletion builder owns the exact attached-object cleanup.
+                    const auto selection_graph = clipboardSelectionGraph(source, true);
+                    if (std::none_of(selection_graph.begin(), selection_graph.end(), [&](const auto& entity) {
+                            return entity.id == selected->first && entity.type == "wall";
+                        }))
+                        throw std::invalid_argument("Select one unambiguous physical wall to delete.");
+                    const Command command = prepare_physical_wall_deletion(source, selected->first);
+                    const auto candidate = preview_physical_wall_room_review_geometry(source, command);
+                    const auto groups = affectedPhysicalWallRoomGroups(source, candidate.entities(), selected->first, true);
+                    if (!groups.empty()) {
+                        const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
+                            selected->first, authority, owner, require_current);
+                        if (!reviewed) { clearError(); refreshInspector(); return false; }
+                        require_current();
+                        applyDocumentCommand(*reviewed);
+                    } else {
+                        require_current();
+                        applyDocumentCommand(command);
+                    }
+                    m_selected_id.clear();
+                    m_selected_ids.clear();
+                    clearError();
+                    refresh();
+                    return true;
+                }
+            }
             const auto entities = clipboardSelectionGraph(source, true);
             if (entities.empty()) {
                 throw std::invalid_argument(
@@ -53662,7 +53710,8 @@ public:
     };
 
     static std::vector<PhysicalWallRoomReviewGroup> affectedPhysicalWallRoomGroups(const DocumentSnapshot& source,
-        const std::map<std::string, Entity, std::less<>>& candidate, const std::string& selected_wall_id) {
+        const std::map<std::string, Entity, std::less<>>& candidate, const std::string& selected_wall_id,
+        bool allow_removal = false) {
         // This is a consequence preflight, including when supplied a display
         // preview map. Complete command admission still owns commit authority.
         std::set<std::string> changed_owners;
@@ -53672,6 +53721,10 @@ public:
         for (const auto& [id, entity] : source.entities()) {
             if (entity.type != "wall") continue;
             const auto proposed = candidate.find(id);
+            if (proposed == candidate.end() && allow_removal) {
+                changed_owners.insert(id);
+                continue;
+            }
             if (proposed == candidate.end() || proposed->second.type != "wall")
                 throw std::invalid_argument("The wall proposal changed a retained physical source identity.");
             if (entity == proposed->second && entity.properties.dump()==proposed->second.properties.dump() &&
@@ -53705,6 +53758,10 @@ public:
             group->room_ids.push_back(id);
             group->source_owner_ids.insert(lineage.source_owner_ids.begin(), lineage.source_owner_ids.end());
         }
+        // Only the exact source-validated deletion caller grants removal.
+        // Its original room contexts and planes remain reviewable even when
+        // none of their physical source walls survives as a discovery seed.
+        if (allow_removal) return groups;
         const auto candidate_organization = organize_project(candidate);
         for (auto& group : groups) {
             const auto valid_seed = [&](const std::string& id) {
@@ -53765,11 +53822,22 @@ public:
         // Delegate direct-command eligibility to the same core admission used
         // by the room dialog. Never rebuild the already accepted wall intent.
         const auto derived = preview_physical_wall_room_review_geometry(source, geometry_command);
-        if (entity_map_digest(derived.entities()) != entity_map_digest(candidate.entities()) || derived.assets() != candidate.assets())
+        const bool deletion = is_physical_wall_room_deletion_review_command(geometry_command);
+        if ((deletion && fullSnapshotDigest(derived) != fullSnapshotDigest(candidate)) ||
+            entity_map_digest(derived.entities()) != entity_map_digest(candidate.entities()) || derived.assets() != candidate.assets())
             throw std::invalid_argument("The room review geometry differs from the admitted wall proposal.");
-        const auto groups = affectedPhysicalWallRoomGroups(source, derived.entities(), selected_wall_id);
+        const auto groups = affectedPhysicalWallRoomGroups(source, derived.entities(), selected_wall_id, deletion);
         if (groups.size() > 32)
             throw std::invalid_argument("The wall proposal exceeds the supported batch of 32 room review contexts and planes.");
+        if (deletion && groups.empty())
+            throw std::invalid_argument("The wall deletion has no affected retained room context to review.");
+        const auto intent_matches = [&](const PhysicalWallRoomReviewIntent& intent,
+                                         const PhysicalWallRoomReviewGroup& group) {
+            return intent.context_plane_selection == deletion &&
+                intent.selected_wall_id == (deletion ? std::string{} : group.selected_wall_id) &&
+                (!deletion || (intent.context == group.context &&
+                    intent.effective_elevation_m == group.effective_elevation_m));
+        };
         const auto configure_dialog = [&](PhysicalWallRoomReviewDialog& dialog,
                                            const PhysicalWallRoomReviewGroup* group, std::size_t index) {
             styleDialog(dialog);
@@ -53800,17 +53868,22 @@ public:
             // An explicit curve review can still inspect fresh spaces when no
             // retained room is affected. Its seed remains the original wall.
             const auto& seed = groups.empty() ? selected_wall_id : groups.front().selected_wall_id;
-            PhysicalWallRoomReviewDialog dialog(source, seed, authority.context.metric_units,
-                current_source, parent, geometry_command);
-            configure_dialog(dialog, groups.empty() ? nullptr : &groups.front(), 0);
-            if (dialog.exec() != QDialog::Accepted) return std::nullopt;
-            if (!dialog.acceptedCommand() || fullSnapshotDigest(current_source()) != authority.source_digest)
+            auto dialog = deletion
+                ? std::make_unique<PhysicalWallRoomReviewDialog>(source, groups.front().context,
+                    groups.front().effective_elevation_m, authority.context.metric_units, current_source, parent, geometry_command)
+                : std::make_unique<PhysicalWallRoomReviewDialog>(source, seed, authority.context.metric_units,
+                    current_source, parent, geometry_command);
+            configure_dialog(*dialog, groups.empty() ? nullptr : &groups.front(), 0);
+            if (dialog->exec() != QDialog::Accepted) return std::nullopt;
+            if (!dialog->acceptedCommand() || fullSnapshotDigest(current_source()) != authority.source_digest)
                 throw std::invalid_argument("The complete wall and room review source changed. Reopen the editor.");
-            if (decode_physical_wall_room_review_intent(dialog.acceptedCommand()->room_review_intent).selected_wall_id != seed)
+            const auto intent = decode_physical_wall_room_review_intent(dialog->acceptedCommand()->room_review_intent);
+            if ((!groups.empty() && !intent_matches(intent, groups.front())) ||
+                (groups.empty() && (intent.context_plane_selection || intent.selected_wall_id != seed)))
                 throw std::invalid_argument("The room review changed its captured physical wall source.");
-            (void)Document::preview_command(source, *dialog.acceptedCommand());
+            (void)Document::preview_command(source, *dialog->acceptedCommand());
             (void)current_source();
-            return *dialog.acceptedCommand();
+            return *dialog->acceptedCommand();
         }
         auto stage = derived;
         std::vector<ApplyBoundaryConstraintChanges> room_commands;
@@ -53823,16 +53896,21 @@ public:
                 (void)current_source();
                 return captured_stage;
             };
-            PhysicalWallRoomReviewDialog dialog(captured_stage, group.selected_wall_id,
-                authority.context.metric_units, current_stage, parent);
-            configure_dialog(dialog, &group, index);
-            if (dialog.exec() != QDialog::Accepted) return std::nullopt;
+            auto dialog = deletion
+                ? std::make_unique<PhysicalWallRoomReviewDialog>(captured_stage, group.context, group.effective_elevation_m,
+                    authority.context.metric_units, current_stage, parent)
+                : std::make_unique<PhysicalWallRoomReviewDialog>(captured_stage, group.selected_wall_id,
+                    authority.context.metric_units, current_stage, parent);
+            if (deletion && index == 0)
+                dialog->setDeletionConsequences(source, std::get<ApplyEntityChanges>(geometry_command));
+            configure_dialog(*dialog, &group, index);
+            if (dialog->exec() != QDialog::Accepted) return std::nullopt;
             (void)current_source();
-            if (!dialog.acceptedCommand())
+            if (!dialog->acceptedCommand())
                 throw std::invalid_argument("The staged room review has no accepted command.");
-            const auto room_command = *dialog.acceptedCommand();
-            if (command_to_json(Command{room_command}).at("version") != 18 ||
-                decode_physical_wall_room_review_intent(room_command.room_review_intent).selected_wall_id != group.selected_wall_id)
+            const auto room_command = *dialog->acceptedCommand();
+            if (command_to_json(Command{room_command}).at("version") != (deletion ? 29 : 18) ||
+                !intent_matches(decode_physical_wall_room_review_intent(room_command.room_review_intent), group))
                 throw std::invalid_argument("The staged room review changed its captured source or room-only command.");
             stage = Document::preview_command(captured_stage, Command{room_command});
             room_commands.push_back(room_command);

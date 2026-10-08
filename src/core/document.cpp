@@ -2214,6 +2214,14 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
         (ordinary && (ordinary->expected_revision!=command.expected_revision || ordinary->message!=command.message)))
         throw std::invalid_argument("Wall room review must retain the original geometry command identity");
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (is_physical_wall_room_deletion_review_command(decoded)) {
+        for (const auto& encoded:room_review_intents(command))
+            if (!decode_physical_wall_room_review_intent(encoded).context_plane_selection)
+                throw std::invalid_argument("Wall deletion requires explicit context and plane room review");
+        if (command_to_json(decoded)!=proof)
+            throw std::invalid_argument("Room review wall deletion proof must be canonical");
+        return decoded;
+    }
     if (is_physical_wall_room_profile_review_command(decoded)) {
         if (command_to_json(decoded)!=proof)
             throw std::invalid_argument("Room review physical-wall profile proof must be canonical");
@@ -2252,6 +2260,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
 
 static int room_review_geometry_dialect(const Command& geometry) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (is_physical_wall_room_deletion_review_command(geometry)) return 30;
     if (is_physical_wall_room_rigid_review_command(geometry)) return 28;
 #endif
     const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&geometry);
@@ -3997,11 +4006,14 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 }
                 if (is_physical_wall_room_profile_review_command(geometry))
                     validate_physical_wall_room_profile_review_source(source,reviewed_source,geometry);
+                const bool deletion=is_physical_wall_room_deletion_review_command(geometry);
+                if (deletion) validate_physical_wall_room_deletion_review_source(source,reviewed_source,geometry);
                 (void)validate_state(reviewed_source,source_assets);
                 std::set<std::string> changed_walls,reviewed_rooms;
                 for (const auto& [id,entity] : source) {
                     if (entity.type!="wall") continue;
                     const auto proposed=reviewed_source.find(id);
+                    if (deletion && proposed==reviewed_source.end()) { changed_walls.insert(id);continue; }
                     if (proposed==reviewed_source.end() || proposed->second.type!="wall")
                         throw std::invalid_argument("Wall room review cannot remove or replace a physical source wall");
                     if (!exact_entity_payload(entity,proposed->second)) changed_walls.insert(id);
@@ -5512,7 +5524,10 @@ nlohmann::json command_to_json(const Command& command) {
                     validate_room_review_mode(typed,false);
                     const bool geometry=has_room_review_geometry_completion(typed);
                     const bool batch=has_room_review_batch_completion(typed);
-                    const int geometry_version=geometry ? room_review_geometry_dialect(room_review_geometry_command(typed)) : 18;
+                    const bool context_review=typed.room_review_intent.is_object() &&
+                        typed.room_review_intent.value("version",0)==2;
+                    const int geometry_version=geometry ? room_review_geometry_dialect(room_review_geometry_command(typed))
+                        : context_review ? 29 : 18;
                     const int version=batch ? 27 : geometry_version;
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     for (const auto& intent : room_review_intents(typed))
@@ -6021,8 +6036,8 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28) {
-                const bool geometry=value.at("version")!=18;
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30) {
+                const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)
                     command_exact_fields(value,{"version","kind","expected_revision","message","room_review_completion","room_review_intent",
@@ -6045,6 +6060,12 @@ Command command_from_json(const nlohmann::json& value,
                 result.message=ordinary.message;
                 result.room_review_completion=true;
                 result.room_review_intent=value.at("room_review_intent");
+                if (!geometry) {
+                    const bool context_review=result.room_review_intent.is_object() &&
+                        result.room_review_intent.value("version",0)==2;
+                    if (context_review!=(value.at("version")==29))
+                        throw std::invalid_argument("Room-only review dialect does not match its selection basis");
+                }
                 if (batch) {
                     if (!value.at("room_review_batch_completion").is_boolean() ||
                         !value.at("room_review_batch_completion").get<bool>() ||

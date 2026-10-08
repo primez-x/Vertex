@@ -87,7 +87,10 @@ public:
     std::string original_digest;
     std::string source_digest;
     bool metric;
+    std::optional<DrawingContext> selected_context;
+    std::optional<double> selected_elevation;
     QComboBox* walls{};PlanCanvas* canvas{};QLabel* status{};QPushButton* apply{};
+    QTabWidget* tabs{};QCheckBox* deletion_acknowledgement{};
     QTableWidget* retained_table{};QTableWidget* fresh_table{};QTableWidget* reference_table{};QTableWidget* mapping_table{};QTableWidget* graph_table{};
     std::optional<PhysicalWallRoomCorrespondenceReport> report;
     std::map<std::string,QComboBox*,std::less<>> retained;
@@ -103,23 +106,29 @@ public:
     bool invalidated{};
 
     Impl(PhysicalWallRoomReviewDialog* owner,DocumentSnapshot captured,std::string wall_id,bool metric_units,
-        std::function<DocumentSnapshot()> current,std::optional<Command> geometry):dialog(owner),original_source(std::move(captured)),
+        std::function<DocumentSnapshot()> current,std::optional<Command> geometry,
+        std::optional<DrawingContext> context=std::nullopt,std::optional<double> elevation=std::nullopt):dialog(owner),original_source(std::move(captured)),
         source(geometry?preview_physical_wall_room_review_geometry(original_source,*geometry):original_source),predecessor(std::move(geometry)),
         current_source(std::move(current)),original_digest(document_snapshot_digest(original_source)),
-        source_digest(document_snapshot_digest(source)),metric(metric_units) {
+        source_digest(document_snapshot_digest(source)),metric(metric_units),selected_context(std::move(context)),selected_elevation(elevation) {
         dialog->setObjectName(QStringLiteral("physicalRoomReviewDialog"));dialog->setWindowTitle(QStringLiteral("Review rooms from walls"));dialog->resize(1100,900);
         auto* layout=new QVBoxLayout(dialog);
-        auto* help=new QLabel(QStringLiteral("Choose what happens to every previous room and current space. "
-            "Names and classifications stay with retained identities. Choose new facts for new rooms. Pick an interior point for each assigned space."),dialog);
+        auto help_text=QStringLiteral("Choose what happens to every previous room and current space. "
+            "Names and classifications stay with retained identities. Choose new facts for new rooms. Pick an interior point for each assigned space.");
+        if (selected_context) help_text+=QStringLiteral(" Retiring a room also removes its known phase and view memberships.");
+        auto* help=new QLabel(help_text,dialog);
         help->setWordWrap(true);layout->addWidget(help);
         walls=choice(dialog,"physicalRoomReviewSource");walls->clear();
-        const auto organization=organize_project(source);const auto selected_context=organization.drawing_context(wall_id);
-        for (const auto& [id,e]:source.entities()) if (e.type=="wall" && organization.drawing_context(id)==selected_context)
-            walls->addItem(text(e.properties.value("name",id)),text(id));
-        walls->setCurrentIndex(walls->findData(text(wall_id)));layout->addWidget(walls);
+        if (!selected_context) {
+            const auto organization=organize_project(source);const auto wall_context=organization.drawing_context(wall_id);
+            for (const auto& [id,e]:source.entities()) if (e.type=="wall" && organization.drawing_context(id)==wall_context)
+                walls->addItem(text(e.properties.value("name",id)),text(id));
+            walls->setCurrentIndex(walls->findData(text(wall_id)));
+        }
+        layout->addWidget(walls);walls->setVisible(!selected_context.has_value());
         canvas=new PlanCanvas(dialog);canvas->setObjectName(QStringLiteral("physicalRoomReviewCanvas"));canvas->setMinimumHeight(270);
         canvas->setGridEnabled(false);canvas->setSnapEnabled(false);canvas->setOverviewMapEnabled(false);canvas->setSelectionTransformEnabled(false,false);layout->addWidget(canvas,1);
-        auto* tabs=new QTabWidget(dialog);tabs->setObjectName(QStringLiteral("physicalRoomReviewTabs"));
+        tabs=new QTabWidget(dialog);tabs->setObjectName(QStringLiteral("physicalRoomReviewTabs"));
         auto* rooms=new QWidget(tabs);auto* room_layout=new QVBoxLayout(rooms);
         retained_table=table(rooms,"physicalRoomReviewRetained",{"Previous room / classification","Relationship","Decision","Chosen current space"});
         fresh_table=table(rooms,"physicalRoomReviewFresh",{"Current space","Assign","New name","New classification","Interior point","Context"});
@@ -136,16 +145,48 @@ public:
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalRoomReviewStatus"));status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
         apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));
-        apply->setText(predecessor?(curve_proposal(predecessor)?
-            QStringLiteral("Apply curve and reviewed rooms"):QStringLiteral("Apply wall edit and reviewed rooms")):
-            QStringLiteral("Apply reviewed rooms"));layout->addWidget(buttons);
+        apply->setText(!predecessor?QStringLiteral("Apply reviewed rooms"):
+            selected_context?QStringLiteral("Apply wall deletion and reviewed rooms"):
+            curve_proposal(predecessor)?QStringLiteral("Apply curve and reviewed rooms"):
+            QStringLiteral("Apply wall edit and reviewed rooms"));layout->addWidget(buttons);
         QObject::connect(apply,&QPushButton::clicked,dialog,[this]{dialog->accept();});
         QObject::connect(buttons,&QDialogButtonBox::rejected,dialog,[this]{dialog->reject();});
         QObject::connect(walls,&QComboBox::currentIndexChanged,dialog,[this]{reset();});
         canvas->setPointPlacementRequested([this](Vec2 point){pick(point);});
         auto* timer=new QTimer(dialog);timer->setInterval(100);
         QObject::connect(timer,&QTimer::timeout,dialog,[this]{if (dialog->isVisible() && !is_current()) fail(QStringLiteral("The project changed. Cancel and review the current source."));});timer->start();
+        if (predecessor && is_physical_wall_room_deletion_review_command(*predecessor))
+            set_deletion_consequences(original_source,std::get<ApplyEntityChanges>(*predecessor));
         reset();
+    }
+    void set_deletion_consequences(const DocumentSnapshot& original,const ApplyEntityChanges& deletion) {
+        if (deletion_acknowledgement) throw std::invalid_argument("Wall deletion consequences are already captured.");
+        if (!is_physical_wall_room_deletion_review_command(Command{deletion}))
+            throw std::invalid_argument("The wall deletion consequence list has no original removal command.");
+        auto* page=new QWidget(tabs);auto* layout=new QVBoxLayout(page);
+        auto* help=new QLabel(QStringLiteral("The wall and attached objects below will be removed together. "
+            "Choose what happens to the remaining rooms on the Rooms tab."),page);
+        help->setWordWrap(true);layout->addWidget(help);
+        auto* removals=table(page,"physicalRoomReviewWallRemovals",{"Object","Removal"});
+        for (const auto& change:deletion.entity_changes) {
+            if (change.kind!=EntityChangeKind::erase) continue;
+            const auto found=original.entities().find(change.entity_id);
+            if (found==original.entities().end()) throw std::invalid_argument("An original wall-linked removal is missing.");
+            const auto& entity=found->second;
+            const auto category=entity.type=="wall"?QStringLiteral("Wall"):
+                entity.type=="door"?QStringLiteral("Door"):entity.type=="window"?QStringLiteral("Window"):
+                entity.type=="constraint"?QStringLiteral("Attached constraint"):QStringLiteral("Saved dimension");
+            const auto name=text(entity.properties.value("name",std::string{}));
+            const auto row=removals->rowCount();removals->insertRow(row);
+            removals->setItem(row,0,new QTableWidgetItem(name.isEmpty()?category:name));
+            removals->setItem(row,1,new QTableWidgetItem(category));
+        }
+        layout->addWidget(removals);
+        deletion_acknowledgement=new QCheckBox(QStringLiteral("Remove these wall objects and attached references"),page);
+        deletion_acknowledgement->setObjectName(QStringLiteral("physicalRoomReviewConfirmWallRemoval"));
+        layout->addWidget(deletion_acknowledgement);tabs->addTab(page,QStringLiteral("Wall deletion"));
+        QObject::connect(deletion_acknowledgement,&QCheckBox::toggled,dialog,[this]{update();});
+        candidate.reset();candidate_snapshot.reset();accepted.reset();apply->setEnabled(false);
     }
     bool is_current() const {
         try { return !invalidated && current_source && original_source.is_editable() && document_snapshot_digest(current_source())==original_digest; }
@@ -173,8 +214,12 @@ public:
         candidate.reset();candidate_snapshot.reset();accepted.reset();
         for (auto* t:{retained_table,fresh_table,reference_table,mapping_table,graph_table}) t->setRowCount(0);
         try {
-            require_current();if (walls->currentIndex()<0) throw std::invalid_argument("Choose a current physical source wall.");
-            report=physical_wall_room_correspondence(source,value(walls));
+            require_current();
+            if (selected_context) report=physical_wall_room_correspondence(source,*selected_context,*selected_elevation);
+            else {
+                if (walls->currentIndex()<0) throw std::invalid_argument("Choose a current physical source wall.");
+                report=physical_wall_room_correspondence(source,value(walls));
+            }
             for (const auto& old:report->retained) {
                 const auto row=retained_table->rowCount();retained_table->insertRow(row);
                 auto* label=new QTableWidgetItem(text(old.room.properties.value("name",old.room.id))+QStringLiteral(" · ")+text(old.room.properties.value("classification",std::string{})));
@@ -333,6 +378,7 @@ public:
     PhysicalWallRoomReviewIntent intent() {
         require_current();if (!report) throw std::invalid_argument("Current room detection is unavailable.");
         PhysicalWallRoomReviewIntent result;result.selected_wall_id=report->selected_wall_id;result.source_snapshot_digest=source_digest;
+        result.context_plane_selection=report->context_plane_selection;
         result.source_entities_digest=entity_map_digest(source.entities());result.context=report->context;result.effective_elevation_m=report->effective_elevation_m;
         result.source_authoring_digest=document_authoring_source_digest_v2(source);result.source_saved_revision=source.saved_revision_optional();
         const auto assigned=assignments();std::set<std::string> retiring;
@@ -403,6 +449,8 @@ public:
             f.pick->setEnabled(!action.empty() && action!="unclassified");f.pick->setText(f.point?QStringLiteral("Interior chosen · pick again"):QStringLiteral("Pick inside"));
         }
         try {
+            if (deletion_acknowledgement && !deletion_acknowledgement->isChecked())
+                throw std::invalid_argument("Review the Wall deletion tab and confirm its listed removals.");
             const auto decisions=intent();
             ApplyBoundaryConstraintChanges command;
             auto exact=[&]() {
@@ -439,10 +487,7 @@ public:
                 reference_table->item(static_cast<int>(i),2)->setText(description);
             }
             require_current();candidate=std::move(command);candidate_snapshot=std::move(exact);error.clear();
-            status->setText(predecessor?(curve_proposal(predecessor)?
-                QStringLiteral("The proposed curve and all room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."):
-                QStringLiteral("The proposed wall edit and all room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state.")):
-                QStringLiteral("All room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."));apply->setEnabled(true);
+            status->clear();apply->setEnabled(true);
         } catch (const std::exception& e) {fail(QString::fromUtf8(e.what()));}
         scene();
     }
@@ -493,9 +538,16 @@ public:
 PhysicalWallRoomReviewDialog::PhysicalWallRoomReviewDialog(DocumentSnapshot source,std::string selected_wall_id,bool metric_units,
     std::function<DocumentSnapshot()> current_source,QWidget* parent,std::optional<Command> predecessor):QDialog(parent),
     m_impl(std::make_unique<Impl>(this,std::move(source),std::move(selected_wall_id),metric_units,std::move(current_source),std::move(predecessor))) {}
+PhysicalWallRoomReviewDialog::PhysicalWallRoomReviewDialog(DocumentSnapshot source,DrawingContext context,double effective_elevation_m,
+    bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent,std::optional<Command> predecessor):QDialog(parent),
+    m_impl(std::make_unique<Impl>(this,std::move(source),std::string{},metric_units,std::move(current_source),std::move(predecessor),
+        std::move(context),effective_elevation_m)) {}
 PhysicalWallRoomReviewDialog::~PhysicalWallRoomReviewDialog()=default;
 const std::optional<ApplyBoundaryConstraintChanges>& PhysicalWallRoomReviewDialog::acceptedCommand() const {return m_impl->accepted;}
 QString PhysicalWallRoomReviewDialog::lastError() const {return m_impl->error;}
+void PhysicalWallRoomReviewDialog::setDeletionConsequences(const DocumentSnapshot& original,const ApplyEntityChanges& deletion) {
+    m_impl->set_deletion_consequences(original,deletion);
+}
 void PhysicalWallRoomReviewDialog::accept() {if (m_impl->submit()) QDialog::accept();}
 void PhysicalWallRoomReviewDialog::reject() {m_impl->accepted.reset();m_impl->candidate.reset();m_impl->candidate_snapshot.reset();QDialog::reject();}
 } // namespace sketch::desktop

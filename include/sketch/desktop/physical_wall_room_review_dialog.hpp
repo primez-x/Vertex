@@ -16,9 +16,15 @@ public:
     PhysicalWallRoomReviewDialog(DocumentSnapshot source,std::string selected_wall_id,
         bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent=nullptr,
         std::optional<Command> predecessor=std::nullopt);
+    PhysicalWallRoomReviewDialog(DocumentSnapshot source,DrawingContext context,double effective_elevation_m,
+        bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent=nullptr,
+        std::optional<Command> predecessor=std::nullopt);
     ~PhysicalWallRoomReviewDialog() override;
     [[nodiscard]] const std::optional<ApplyBoundaryConstraintChanges>& acceptedCommand() const;
     [[nodiscard]] QString lastError() const;
+    // Display and acknowledge original wall-linked removals even when this
+    // dialog reviews a later detached stage in a multi-context batch.
+    void setDeletionConsequences(const DocumentSnapshot& original,const ApplyEntityChanges& deletion);
     void accept() override;
     void reject() override;
 private:

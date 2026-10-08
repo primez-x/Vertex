@@ -140,6 +140,17 @@ mirror, selection, viewport and replacement-proposal fences. Acceptance applies
 only the reviewed composite once. This route excludes Site, mixed selections,
 copies, mirrors and scaling; those room consequences remain separate work.
 
+Single-wall deletion uses context/elevation discovery so room review remains
+available after removing a source wall, including when no walls remain. The
+canonical child removes the wall and supported hosted openings, dimensions and
+constraints; the review lists these original removals. Each original room and
+fresh space receives an explicit disposition. Retiring a room removes its known
+phase, saved-view and presentation memberships while unknown references still
+refuse. One accepted event owns wall deletion and all room decisions. Exterior
+appraisal observations remain historical and withhold quantities until their
+physical source is repaired. Envelope 29/30, or batch 27 with context-based
+intents, requires native 81/extraction 79.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

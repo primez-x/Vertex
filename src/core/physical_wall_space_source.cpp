@@ -47,16 +47,23 @@ Wall read_wall(const Entity& entity) {
     if (!read_document_wall(entity,{},wall,error)) reject("wall "+entity.id+": "+error);
     validate_wall_semantics(wall); return wall;
 }
-}
-
-PhysicalWallSpaces detect_physical_wall_spaces(
+PhysicalWallSpaces discover_spaces(
     const std::map<std::string,Entity,std::less<>>& entities,
-    std::string_view selected_wall_id) {
+    std::string_view selected_wall_id, const DrawingContext* supplied_context,
+    double effective_elevation_m) {
     try {
         const auto selected=entities.find(selected_wall_id);
-        if (selected==entities.end() || selected->second.type!="wall") reject("selected source is not a wall");
+        if (!supplied_context && (selected==entities.end() || selected->second.type!="wall"))
+            reject("selected source is not a wall");
         const auto organization=organize_project(entities);
-        const auto context=organization.drawing_context(selected->first);
+        const auto context=organization.drawing_context(supplied_context ? supplied_context->layer_id : selected->first);
+        if (supplied_context) {
+            const auto layer=entities.find(supplied_context->layer_id);
+            if (!supplied_context->complete() || layer==entities.end() || layer->second.type!="layer" ||
+                !context || *context!=*supplied_context)
+                reject("supplied drawing context must resolve to its exact layer hierarchy");
+            if (!std::isfinite(effective_elevation_m)) reject("effective elevation must be finite");
+        }
         if (!context || !context->complete()) reject("selected wall needs a complete drawing context");
         std::set<std::string,std::less<>> context_owners;
         for (const auto& [id,entity]:entities) {
@@ -95,18 +102,18 @@ PhysicalWallSpaces detect_physical_wall_spaces(
                 snapshot_budget(record); phase_models.push_back(std::move(record));
             }
         }
-        if (inactive.contains(selected->first)) reject("selected wall is inactive in the semantic phase");
+        if (!supplied_context && inactive.contains(selected->first)) reject("selected wall is inactive in the semantic phase");
         std::vector<std::string> candidate_ids;
         for (const auto& id:context_owners) if (!inactive.contains(id)) candidate_ids.push_back(id);
         const auto placements=resolve_vertical_placements(entities,candidate_ids);
-        const auto selected_wall=read_wall(placements.at(selected->first));
+        const auto plane=supplied_context ? effective_elevation_m : read_wall(placements.at(selected->first)).elevation;
         std::map<std::string,Wall,std::less<>> walls;
         std::vector<MeasurementGraphSource> sources;
         Json physical_sources=Json::array();
-        double minimum_plane=selected_wall.elevation,maximum_plane=selected_wall.elevation;
+        double minimum_plane=plane,maximum_plane=plane;
         for (const auto& id:candidate_ids) {
             auto wall=read_wall(placements.at(id));
-            if (std::abs(wall.elevation-selected_wall.elevation)>tolerance) continue;
+            if (std::abs(wall.elevation-plane)>tolerance) continue;
             minimum_plane=std::min(minimum_plane,wall.elevation); maximum_plane=std::max(maximum_plane,wall.elevation);
             if (maximum_plane-minimum_plane>tolerance) reject("wall effective planes form an ambiguous tolerance chain");
             sources.push_back({id,"baseline",wall.baseline});
@@ -121,14 +128,16 @@ PhysicalWallSpaces detect_physical_wall_spaces(
                 {"vertical_placement",entities.at(id).properties.value("vertical_placement",Json(nullptr))}};
             snapshot_budget(snapshot); physical_sources.push_back(std::move(snapshot));
             wall.openings.clear();
-            wall.elevation=selected_wall.elevation;
+            wall.elevation=plane;
             if (point_key(wall.baseline.end)<point_key(wall.baseline.start)) {
                 std::swap(wall.baseline.start,wall.baseline.end); wall.baseline.sweep_radians=-wall.baseline.sweep_radians;
             }
             walls.emplace(id,std::move(wall));
         }
+        PhysicalWallSpaces result; result.context=*context;
+        if (sources.empty()) return result;
         auto geometry=derive_physical_clear_geometry(sources,walls);
-        PhysicalWallSpaces result; result.context=*context; result.graph=std::move(geometry.graph);
+        result.graph=std::move(geometry.graph);
         if (result.graph.faces.empty()) return result;
         Json context_json{{"property_id",context->property_id},{"building_id",context->building_id},
             {"floor_id",context->floor_id},{"layer_id",context->layer_id},{"level_id",context->level_id}};
@@ -162,5 +171,18 @@ PhysicalWallSpaces detect_physical_wall_spaces(
     } catch (const Json::exception& error) {
         reject(std::string("malformed wall/context/phase source: ")+error.what());
     }
+}
+} // namespace
+
+PhysicalWallSpaces detect_physical_wall_spaces(
+    const std::map<std::string,Entity,std::less<>>& entities,
+    std::string_view selected_wall_id) {
+    return discover_spaces(entities,selected_wall_id,nullptr,0.0);
+}
+
+PhysicalWallSpaces detect_physical_wall_spaces(
+    const std::map<std::string,Entity,std::less<>>& entities,
+    const DrawingContext& context, double effective_elevation_m) {
+    return discover_spaces(entities,{},&context,effective_elevation_m);
 }
 } // namespace sketch

@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v80
+# Vertex project formats v1 through v81
+
+## Wall deletion and context-based room review (v81)
+
+Native format 81 and JSON/assets extraction version 79 retain version-two room
+review intents. Their existing exact fieldset now has an empty selected-wall
+identity and an explicit drawing context/elevation plane. Discovery uses actual
+active walls in that plane; an empty wall set produces an empty result without
+a fabricated source. Room-only envelope 29, single deletion envelope 30, and
+batch envelope 27 with version-two intents require this reader floor throughout
+retained history. Earlier intent/envelope meanings remain unchanged.
+
+A deletion child is the exact canonical ordinary command for one original wall,
+its supported hosted openings, saved dimensions and attached constraints, plus
+known phase/view/presentation membership cleanup. Source admission reconstructs
+that command independently and rejects unrelated changes. Room owners and their
+facts remain original until explicit dispositions are replayed. Every affected
+retained room must be covered, including across contexts and physical planes.
+The actual original source and all staged entity-map/history/save fences remain
+bound to one final event.
+
+Assigned fresh spaces require a live admitted wall that independently reproduces
+the exact reviewed source lineage. Retained identities keep their own metadata;
+new identities require explicit name/classification and an interior witness.
+Explicit retirement also removes known phase memberships, saved-view object
+references, associated view overlays/appearance and presentation overrides.
+Opaque metadata and unrelated registrations remain intact; unknown incoming
+references continue to refuse. Exterior appraisal observations retain their
+historical evidence and withhold quantities when their physical source is lost.
+
+This is a source contract. Compilation, runtime interactions and persistence
+round trips have not been qualified for this batch.
 
 ## Reviewed rigid wall and room changes (v80)
 

@@ -617,23 +617,18 @@ PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
     catch (const Standard_Failure& e) { invalid(std::string("retained room planar validation failed: ")+e.what()); }
 }
 
-PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const DocumentSnapshot& source,
-    std::string_view selected_wall_id) {
-    auto detection=detect_physical_wall_spaces(source,selected_wall_id);
+namespace {
+PhysicalWallRoomCorrespondenceReport correspondence_report(const DocumentSnapshot& source,
+    PhysicalWallSpaces detection,std::string_view selected_wall_id,double elevation,Vec2 origin) {
     if (detection.spaces.size()>maximum_rooms) invalid("correspondence exceeds the fresh-component budget");
     CorrespondenceBudget budget; budget.charge(cache_charge(detection));
     PhysicalWallRoomCorrespondenceReport report;
     report.document_id=source.document_id(); report.revision=source.revision();
     report.source_snapshot_digest=document_snapshot_digest(source);
     report.selected_wall_id=selected_wall_id; report.context=detection.context;
+    report.context_plane_selection=selected_wall_id.empty();
     const auto organization=organize_project(source);
-    const auto selected=resolve_vertical_placement(source,source.entities().at(std::string(selected_wall_id)));
-    Wall wall; std::string error;
-    if (!read_document_wall(selected,{},wall,error)) invalid(error);
-    report.effective_elevation_m=wall.elevation;
-    // An actual source point merely supplies a local coordinate origin; it has
-    // no role in room identity, region admission or candidate selection.
-    const auto origin=wall.baseline.start;
+    report.effective_elevation_m=elevation;
     std::vector<CorrespondenceLineage> fresh_lineage;
     std::vector<CorrespondenceRegion> fresh_regions;
     for (std::size_t i=0;i<detection.spaces.size();++i) {
@@ -644,7 +639,13 @@ PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const Doc
         fresh.source_lineage=std::move(space.source_lineage); fresh.area_square_metres=space.area_square_metres;
         CorrespondenceLineage lineage; CorrespondenceRegion region;
         try {
-            lineage=correspondence_lineage(fresh.source_lineage,selected_wall_id,report.context,budget);
+            // A context review uses an actual admitted source from the fresh
+            // lineage for validation. A deleted selection is never inserted
+            // into that evidence or used to manufacture a detector input.
+            const auto fresh_source=selected_wall_id.empty()
+                ? fresh.source_lineage.at("physical_sources").at(0).at("owner_id").get<std::string>()
+                : std::string(selected_wall_id);
+            lineage=correspondence_lineage(fresh.source_lineage,fresh_source,report.context,budget);
             region=correspondence_region(fresh.boundary,fresh.holes,origin);
             if (std::abs(region.area-fresh.area_square_metres)>correspondence_tolerance(region.area))
                 invalid("fresh detection area disagrees with its analytical comparison region");
@@ -657,7 +658,8 @@ PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const Doc
     }
     std::vector<CorrespondenceLineage> old_lineage;
     std::vector<CorrespondenceRegion> old_regions;
-    std::set<std::string> current_owners{std::string(selected_wall_id)};
+    std::set<std::string> current_owners;
+    if (!selected_wall_id.empty()) current_owners.insert(std::string(selected_wall_id));
     for (const auto& lineage:fresh_lineage) current_owners.insert(lineage.owners.begin(),lineage.owners.end());
     DetectionCache active_cache(source);
     for (const auto& [id,entity]:source.entities()) {
@@ -740,6 +742,29 @@ PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const Doc
     }
     classify_correspondence(report);
     return report;
+}
+} // namespace
+
+PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const DocumentSnapshot& source,
+    std::string_view selected_wall_id) {
+    auto detection=detect_physical_wall_spaces(source,selected_wall_id);
+    const auto selected=resolve_vertical_placement(source,source.entities().at(std::string(selected_wall_id)));
+    Wall wall;std::string error;
+    if (!read_document_wall(selected,{},wall,error)) invalid(error);
+    // The source point supplies only the numerical comparison origin; it has
+    // no role in room identity or candidate assignment.
+    return correspondence_report(source,std::move(detection),selected_wall_id,wall.elevation,wall.baseline.start);
+}
+
+PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const DocumentSnapshot& source,
+    const DrawingContext& context,double effective_elevation_m) {
+    auto detection=detect_physical_wall_spaces(source,context,effective_elevation_m);
+    // Use a real detected boundary point when available. The empty result
+    // needs no physical seed; zero is only a coordinate origin for comparing
+    // retained regions and never supplies geometry or ownership evidence.
+    const auto origin=!detection.spaces.empty() && !detection.spaces.front().boundary.empty()
+        ? detection.spaces.front().boundary.front().start : Vec2{};
+    return correspondence_report(source,std::move(detection),{},effective_elevation_m,origin);
 }
 bool physical_wall_room_correspondence_is_current(const PhysicalWallRoomCorrespondenceReport& report,
     const DocumentSnapshot& source) {

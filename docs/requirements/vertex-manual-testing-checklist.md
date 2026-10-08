@@ -515,6 +515,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U072 — Delete a selected object**
   - Steps: Select one symbol and one label among other items and press Delete. Repeat with a wall and its hosted opening selected alongside those annotations.
+  - Room-layout check: Define and name two rooms separated by a wall. Select only that wall and press Delete. Check the Wall deletion list for its doors, windows, dimensions and constraints. Compare the remaining space; explicitly retain one room identity or create a named room, and retire the other as appropriate. Cancel first and confirm nothing changed. Repeat and apply, then Undo once and Redo. Check room names, classifications, dimensions, active design phase and saved views; save and reopen. Repeat by deleting an exterior wall so no closed room remains and retire its room. Its former appraisal observation must show unavailable quantities until its exterior source is repaired, without losing its declared facts. If an unknown dependent reference prevents deletion, the complete original project must remain intact.
   - Expected: Only the intended object disappears; dependent objects are handled clearly.
   - Also check: Unselected annotations remain; deleting the wall removes its hosted opening. One Undo restores the entire selection, and Redo removes it again.
   - Result: Not tested

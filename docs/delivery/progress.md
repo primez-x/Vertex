@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 wall deletion with context and room consequences
+
+Context/plane discovery and analytical room correspondence now use the actual
+active walls in a resolved layer hierarchy, including an empty result when no
+wall remains. Version-two room intents have no fabricated selected wall;
+assigned spaces require a live source that independently reproduces their exact
+lineage. Original room facts, explicit dispositions, witness/reference decisions
+and identity/source fences remain authoritative.
+
+A canonical one-wall deletion child now reconstructs hosted opening, saved
+dimension/constraint and known phase/view/presentation consequences from the
+original source. Context-based retirement cleans known memberships while
+preserving opaque metadata and rejecting unknown incoming references. The
+review shows original wall-linked removals and requires acknowledgement. The
+Delete route uses one complete accepted command; it publishes no intermediate
+wall or room state. Native 81/extraction 79 protects room-only 29, deletion 30
+and context-based batches throughout retained history.
+
+Group deletion, Cut and design-phase demolition are not covered by this slice.
+Exterior appraisal observations retain historical evidence and withhold values
+when physical sources are lost. Independent source review found a surviving
+opaque-metadata reference gap. The deletion now scans the complete removed-ID
+set after known cleanup and refuses unresolved references; only unchanged,
+typed and validated historical receipt containers are exempt. The focused
+source recheck approved the correction. Compilation, interaction, cancellation,
+persistence and Undo remain unverified.
+No builds, tests, probes, launches, packages or installations ran. The installed
+candidate is unchanged.
+
 ### October 8 single-wall numerical transforms and canvas rotation review
 
 The actual boundary and architectural transform dialogs now retain an admitted
@@ -2467,7 +2496,7 @@ passes. No installed ACL, profile or firewall was changed.
    loss is permitted. Wall profiles/sloped tops/layers, ordinary length/endpoint editing,
    explicit connected curve construction and their atomic room reviews, including
    multi-context/plane completion, ordinary single-wall drag and the singleton
-   numerical/canvas rotation integration, are
+   numerical/canvas rotation integration and context-based single-wall deletion, are
    recorded above; do not restart them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent

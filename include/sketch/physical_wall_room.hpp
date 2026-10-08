@@ -79,6 +79,9 @@ struct PhysicalWallRoomCorrespondenceReport {
     Revision revision{};
     std::string source_snapshot_digest;
     std::string selected_wall_id;
+    // Context/plane discovery has no selected physical owner. It can describe
+    // the real empty result after deletion without inventing a source wall.
+    bool context_plane_selection{};
     DrawingContext context;
     double effective_elevation_m{};
     std::vector<RetainedPhysicalWallRoomCorrespondence> retained;
@@ -96,6 +99,8 @@ struct PhysicalWallRoomCorrespondenceReport {
 // describe review candidates, never permission for automatic reassignment.
 [[nodiscard]] PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(
     const DocumentSnapshot& source,std::string_view selected_wall_id);
+[[nodiscard]] PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(
+    const DocumentSnapshot& source,const DrawingContext& context,double effective_elevation_m);
 [[nodiscard]] bool physical_wall_room_correspondence_is_current(
     const PhysicalWallRoomCorrespondenceReport& report,const DocumentSnapshot& source);
 // Captured-snapshot preparation. Indices belong only to freshly detected

@@ -45,6 +45,9 @@ struct PhysicalWallRoomReviewIntent {
     std::vector<std::string> removed_reference_ids;
     std::vector<std::string> kept_reference_ids;
     std::vector<PhysicalWallRoomRelationshipRemoval> relationship_removals;
+    // Version two discovers this exact context/plane without a selected wall.
+    // Its selected_wall_id must be empty; version one remains seed-based.
+    bool context_plane_selection{};
 };
 struct ReplayedPhysicalWallRoomReview {
     std::map<std::string,Entity,std::less<>> entities;
@@ -82,6 +85,16 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // This source-independent predicate checks the bounded canonical child shape;
 // Document preview still independently admits all geometry and consequences.
 [[nodiscard]] bool is_physical_wall_room_rigid_review_command(const Command& command);
+// One existing wall and its supported hosted openings, saved dimensions and
+// attached constraints are removed together. Known phase/view/presentation
+// memberships are reconstructed from the exact original source; room owners
+// remain unchanged until explicit context/plane review.
+[[nodiscard]] ApplyEntityChanges prepare_physical_wall_deletion(
+    const DocumentSnapshot& source,std::string_view wall_id);
+[[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);
+void validate_physical_wall_room_deletion_review_source(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,const Command& command);
 // Source-dependent profile admission preserves exact identity, extensions and
 // every nonprofile property, including opaque geometry and drawing context.
 // The declared profile includes height, thickness, layers and sloped top fields.
@@ -99,7 +112,8 @@ void validate_physical_wall_room_profile_review_source(
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_after_geometry(
     const DocumentSnapshot& source,const Command& geometry_command,
     const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent);
-// Each plain envelope-eighteen command belongs to the preceding detached
+// Each plain envelope-eighteen/version-one or envelope-twenty-nine/version-two
+// command belongs to the preceding detached
 // snapshot, starting with the geometry preview. Two to thirty-two disjoint
 // context/plane reviews become one original-source-bound atomic command.
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_batch_after_geometry(

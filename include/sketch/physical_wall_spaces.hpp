@@ -47,4 +47,16 @@ struct PhysicalWallSpaces {
     const std::map<std::string, Entity, std::less<>>& entities,
     std::string_view selected_wall_id);
 
+// Analytical discovery without a selected wall, including after its deletion.
+// The complete context must resolve exactly to an actual layer hierarchy (also
+// its level_id); the effective elevation must be finite. Only actual active
+// walls on that plane participate, with the same admission/lineage/budgets as
+// selected-wall discovery. An empty set returns that context and empty geometry.
+[[nodiscard]] PhysicalWallSpaces detect_physical_wall_spaces(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const DrawingContext& context, double effective_elevation_m);
+[[nodiscard]] PhysicalWallSpaces detect_physical_wall_spaces(
+    const DocumentSnapshot& document, const DrawingContext& context,
+    double effective_elevation_m);
+
 } // namespace sketch
