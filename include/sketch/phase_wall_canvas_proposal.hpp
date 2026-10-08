@@ -56,4 +56,15 @@ struct PhaseWallCanvasProposal {
     const std::vector<HostedOpeningProfileEditIntent>& profiles,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
 
+// Discover both actual original and target hosts before ordinary rehosting or
+// preview. Either host can qualify the saved-active baseline replacement.
+// Cross-registry, unqualified mixed batches and unsupported baseline ownership
+// refuse explicitly. Every authority field binds the complete actual source.
+// The returned physical map is provisional: complete mandatory room and copied
+// relationship review before preparing or publishing its command.
+[[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_rehost_proposal(
+    const DocumentSnapshot& source,
+    const std::vector<HostedOpeningRehostIntent>& rehosts,
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
+
 } // namespace sketch

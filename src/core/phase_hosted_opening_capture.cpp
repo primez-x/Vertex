@@ -272,6 +272,37 @@ void seed_source_admission(const Entity& original, HostedOpeningProfileEditInten
 }
 } // namespace
 
+Quantity capture_hosted_opening_dimension_quantity(const Entity& original, std::string_view scalar_field) {
+    const Dimension* selected_dimension = nullptr;
+    for (const auto& dimension : dimensions) {
+        if (scalar_field == dimension.canonical || scalar_field == dimension.alias) {
+            selected_dimension = &dimension;
+            break;
+        }
+    }
+    if (!selected_dimension) invalid("Opening capture dimension field is unsupported");
+
+    const auto metres = scalar(original, *selected_dimension);
+    const auto source_entries = entries(original);
+    const auto canonical = receipt(source_entries, "/" + std::string(selected_dimension->canonical));
+    const auto alias = receipt(source_entries, "/" + std::string(selected_dimension->alias));
+    std::optional<Quantity> canonical_quantity;
+    std::optional<Quantity> alias_quantity;
+    if (canonical) canonical_quantity = admitted_quantity(*canonical, metres);
+    if (alias) alias_quantity = admitted_quantity(*alias, metres);
+
+    Quantity quantity = canonical_quantity ? *canonical_quantity :
+        alias_quantity ? *alias_quantity : numeric_quantity(metres);
+    HostedOpeningProfileEditIntent hint;
+    hint.opening_id = original.id;
+    std::string diagnostic;
+    if (!read_document_wall_id(original, hint.wall_id, diagnostic))
+        invalid("Opening capture original host is missing or invalid");
+    hint.*(selected_dimension->intent) = quantity;
+    (void)replay_hosted_opening_profile_entity(original, hint);
+    return quantity;
+}
+
 std::optional<HostedOpeningProfileEditIntent> capture_hosted_opening_profile_edit(
     const Entity& original, const Entity& candidate,
     std::optional<HostedOpeningProfileEditIntent> authored) {

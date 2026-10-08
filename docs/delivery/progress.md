@@ -14,6 +14,36 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 opening rehosting
+
+The floating opening properties panel adds a host-wall selector with named
+active walls, lengths and drawing layers on the same resolved floor and base
+elevation. Moving a door/window retains its dimensions, family, assembly, swing,
+layer and opaque data. Its unchanged station comes from actual retained quantity
+authority or an exact bounded scalar conversion, never rounded form text.
+
+Typed replay admits source/final cuts, assemblies and joins. Raw property edits
+are independently captured as host/station-only operations before original
+transaction or preview. Rehosting involving a shared baseline source or target
+host derives separate proposed identities and both host roots under the actual
+saved alternative. The complete closure, room correspondence and copied
+relationship decisions use existing combined review. Original baseline owners,
+other alternatives and unrelated registries stay intact; safe proposed/nonshared
+owners retain their actual identities. Native 91/extraction 89 retain record four
+through direct and wrapped history. All earlier wire records remain exact.
+
+Source/selection/workspace/recovery fences guard the floating controls and the
+combined modal review. Cross-floor/base-plane moves, foreign registry ownership,
+unqualified mixed batches and unsupported replacement dependencies refuse.
+Independent source review found a foreign-registry path in ordinary rehosting.
+Preflight, public replay and host choices now reject distinct known ownership
+across the opening and both hosts, including when no shared copy is needed.
+Review approved the correction; root reviewed the integrated routing, codecs,
+no-op/receipt handling and format linkage. Compilation, interactions, history/reopen
+and exports remain unverified. No builds, tests, probes, scripts, native jobs,
+launches, packages or installations run. Opening-family conversion, compound
+multi-registry edits and broader shared object/profile changes remain gaps.
+
 ### October 8 opening placement and active demolition
 
 The floating properties panel adds opening position along its wall and sill

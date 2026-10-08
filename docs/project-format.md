@@ -1,4 +1,41 @@
-# Vertex project formats v1 through v90
+# Vertex project formats v1 through v91
+
+## Proposed door and window rehosting (v91)
+
+Native format 91 and JSON/assets extraction version 89 add wall replacement
+record four inside source-bound phase intent two/envelope 34. Records one
+through three keep their exact keys and replay. Record four adds only nonempty
+`opening_rehosts` to the seven common fields. Each strict version-one rehost
+names the original `opening_id`, `original_wall_id`, `target_wall_id` and exact
+`offset` quantity. Geometry, relationship and other profile operations cannot
+borrow this authority.
+
+Preflight and replay independently derive the union of actual shared baseline
+source and target host seeds in one saved active alternative. Each rehost must
+qualify through its own source or target host; unrelated seed plans and foreign
+registered owners refuse. All three identities map independently through the
+derived complete fresh closure. Retained baseline openings require separate
+copies; safe proposed and nonshared owners retain their actual identities.
+The common source-bound room and copied relationship review remains mandatory.
+Original baseline records and other alternatives remain exact.
+
+Detached replay admits both original and final active host graphs, their sibling
+cuts, manufactured assemblies and joins, including copied walls outside the
+edited roster. Opening family, dimensions, assembly, operation, drawing layer
+and opaque data remain unchanged. Only host, station and its receipt can change.
+The opening and both hosts need the same resolved property/building/floor/level
+and effective base elevation. Implicit context drift, cross-floor moves and
+unsupported ownership refuse. Real rehosting retains the authored station
+receipt even at an equal numeric value; same-host/same-station is an exact no-op.
+
+Desktop raw capture restores only the original host for independent existing
+profile admission, then allows station-only changes. Qualified copies are
+discovered before an original transaction or Document preview. Unchanged station
+uses retained exact quantity authority or a bounded exact numeric fallback,
+never the rounded form text. Floating host-wall choices and modal room review
+bind actual source, selection, saved/recovery state and workspace. Cancel or
+stale capture publishes nothing. Reader floors cover retained direct/wrapped
+records after Undo. This source has not been compiled or qualified in the app.
 
 ## Saved-active opening demolition (v90)
 

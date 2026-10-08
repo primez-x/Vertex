@@ -332,7 +332,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!intent.is_object() || intent.value("version",0)!=2 || replacement==intent.end() ||
                     !replacement->is_object()) return 0;
                 const auto version=replacement->value("version",0);
-                return version==3 ? 89U : version==2 ? 88U : 0U;
+                return version==4 ? 91U : version==3 ? 89U : version==2 ? 88U : 0U;
             };
             const auto profile_proof=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->std::uint32_t {
                 if (depth>2 || !proof.is_object() || proof.value("kind",std::string{})!="apply_boundary_constraint_changes") return 0;
@@ -2107,6 +2107,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 91 &&
          sqlite3_column_int(user_version.get(), 0) != 90 &&
          sqlite3_column_int(user_version.get(), 0) != 89 &&
          sqlite3_column_int(user_version.get(), 0) != 88 &&
@@ -2652,6 +2653,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=91)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 91 for proposed door and window rehosting");
         if (required_format>=90)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 90 for saved-active opening demolition");
         if (required_format>=89)

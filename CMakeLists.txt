@@ -817,7 +817,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp
     src/core/phase_wall_profile_edit.cpp src/core/phase_wall_canvas_proposal.cpp
     src/core/phase_hosted_opening_edit.cpp src/core/phase_hosted_opening_capture.cpp
-    src/core/phase_opening_demolition.cpp)
+    src/core/phase_hosted_opening_rehost.cpp src/core/phase_opening_demolition.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
   # Proposed profile replay must use the same hosted-assembly and fused-join
   # admission as native architectural authoring, rather than accept solids
