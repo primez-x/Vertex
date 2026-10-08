@@ -4,6 +4,7 @@
 #include "sketch/phase_roof_opening_edit.hpp"
 #include "sketch/phase_roof_pose_edit.hpp"
 #include "sketch/phase_roof_profile_edit.hpp"
+#include "sketch/phase_roof_resize.hpp"
 #include "sketch/phase_roof_transform.hpp"
 
 namespace sketch {
@@ -18,6 +19,7 @@ struct RoofEditIntent {
     std::optional<RoofPoseEditIntent> pose;
     std::optional<RoofFormEditIntent> form;
     std::optional<RoofRigidTransformIntent> transform;
+    std::optional<RoofPlanResizeIntent> resize;
 };
 
 // Strict version one: version, roof_id, profile, openings, pose. At least one
@@ -26,6 +28,8 @@ struct RoofEditIntent {
 // with profile null. Historical same-form edits retain the exact v1 wire.
 // Rigid movement uses strict version three with form and transform fields;
 // transform is exclusive and reads the actual mathematical operation.
+// Plan resize uses strict version four with an additional resize field;
+// resize is exclusive and derives native footprint dimensions from source.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 

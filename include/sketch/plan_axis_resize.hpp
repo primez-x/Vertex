@@ -17,6 +17,30 @@ namespace sketch {
 // landings and railing end posts; does not include unrelated display symbols.
 [[nodiscard]] Bounds2 plan_axis_resize_bounds(const Entity& entity);
 
+// Stage an actual sloped-panel, gable or hip roof's native plan footprint
+// resize without Document/transaction admission. Retains source receipts and
+// opaque metadata for the caller's mathematical derivation archive; creates
+// no quantity receipts. Uses the supplied factors/frame and opposite-edge
+// anchor, retaining Z, rise, overhang, thickness, context and material. Source
+// and result native geometry are admitted; exact unit factors return source.
+// Sloped panels retain the source run's continuous footprint branch; a fold
+// ambiguity or an unreachable width on that branch refuses without a jump.
+[[nodiscard]] Entity stage_roof_plan_axis_resize_entity(
+    const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
+    double frame_rotation_radians);
+
+struct RoofPlanCornerResizeParameters {
+    double scale_x{1.0}, scale_y{1.0};
+    Vec2 anchor;
+    double frame_rotation_radians{};
+};
+
+// Derive the actual gesture against the original native footprint. This
+// carries no candidate, document or transaction authority. The opposite
+// corner stays anchored; exact return to the captured grip yields unit factors.
+[[nodiscard]] RoofPlanCornerResizeParameters roof_plan_corner_resize_parameters(
+    const Entity& actual_source, std::size_t corner_index, Vec2 proposed_position);
+
 // Resize the generated full plan footprint by the requested factors, about a
 // fixed world-space footprint edge/corner anchor in the supplied rotated XY
 // frame. Z, height, rise, level connections and material

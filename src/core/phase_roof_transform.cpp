@@ -1,4 +1,5 @@
 #include "sketch/phase_roof_transform.hpp"
+#include "roof_derivation_cache.hpp"
 
 #include "sketch/architecture.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -397,7 +398,9 @@ void validate_roof_rigid_transform_derivations(const Entity& source) {
     const auto& operations = extension->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit)
         invalid("Roof rigid transform derivation operation budget exceeded");
-    for (const auto& record : operations) admit_record(record);
+    validate_roof_derivation_cached("roof-rigid-transform-v1", extension->dump(), [&] {
+        for (const auto& record : operations) admit_record(record);
+    });
 }
 nlohmann::json roof_rigid_transform_opaque_remainder(const Entity& source) {
     validate_roof_rigid_transform_derivations(source);

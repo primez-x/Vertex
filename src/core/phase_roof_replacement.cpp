@@ -98,6 +98,8 @@ Entity opaque_remainder(Entity entity) {
             entity.extensions[std::string(roof_rigid_transform_derivations_key)] =
                 roof_rigid_transform_opaque_remainder(entity);
         }
+        if (entity.extensions.contains(roof_plan_resize_derivations_key))
+            entity.extensions[std::string(roof_plan_resize_derivations_key)] = roof_plan_resize_opaque_remainder(entity);
         if (p.contains("roof_openings")) for (auto& opening : p.at("roof_openings")) opening.erase("id");
         if (entity.extensions.contains("roof_opening_input")) {
             auto& receipt = entity.extensions.at("roof_opening_input");

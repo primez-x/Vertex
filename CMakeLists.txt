@@ -242,13 +242,16 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_compile_definitions(sketch_dxf_project_exchange PUBLIC SKETCH_DXF_NATIVE_GEOMETRY=1)
   target_link_libraries(sketch_dxf_project_exchange PUBLIC sketch_hosted_opening_plan)
 endif()
-if(SKETCH_BUILD_ARCHITECTURE)
+if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   add_library(sketch_hosted_opening_resize src/architecture/hosted_opening_resize.cpp)
   target_include_directories(sketch_hosted_opening_resize PUBLIC include)
   target_link_libraries(sketch_hosted_opening_resize PUBLIC sketch_architectural_document_adapter sketch_architecture sketch_project_organization sketch_hosted_opening_geometry)
-  add_library(sketch_plan_axis_resize src/architecture/plan_axis_resize.cpp)
-  target_include_directories(sketch_plan_axis_resize PUBLIC include)
-  target_link_libraries(sketch_plan_axis_resize PUBLIC sketch_document sketch_building_entities sketch_architecture sketch_project_organization sketch_architectural_document_adapter)
+  # Geometry staging and its persisted derivation replay belong to the same
+  # authoritative target. Keep the public component name as an API facade.
+  add_library(sketch_plan_axis_resize INTERFACE)
+  target_include_directories(sketch_plan_axis_resize INTERFACE include)
+  target_link_libraries(sketch_plan_axis_resize INTERFACE sketch_document sketch_building_entities
+    sketch_architecture sketch_project_organization sketch_architectural_document_adapter)
   if(BUILD_TESTING)
     add_executable(hosted_opening_resize_tests tests/hosted_opening_resize_tests.cpp)
     target_link_libraries(hosted_opening_resize_tests PRIVATE sketch_hosted_opening_resize sketch_storage)
@@ -823,7 +826,9 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_hosted_opening_edit.cpp src/core/phase_hosted_opening_capture.cpp
     src/core/phase_hosted_opening_rehost.cpp src/core/phase_hosted_opening_family_edit.cpp
     src/core/phase_opening_demolition.cpp src/core/phase_roof_profile_edit.cpp src/core/phase_roof_opening_edit.cpp
-    src/core/phase_roof_pose_edit.cpp src/core/phase_roof_form_edit.cpp src/core/phase_roof_transform.cpp src/core/phase_roof_edit.cpp
+    src/core/phase_roof_pose_edit.cpp src/core/phase_roof_form_edit.cpp src/core/phase_roof_transform.cpp
+    src/core/phase_roof_resize.cpp src/core/phase_roof_edit.cpp src/core/roof_derivation_cache.cpp
+    src/architecture/plan_axis_resize.cpp
     src/core/roof_clone.cpp
     src/core/phase_roof_demolition.cpp src/core/roof_removal.cpp
     src/core/phase_roof_replacement.cpp)
@@ -831,7 +836,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # Proposed profile replay must use the same hosted-assembly and fused-join
   # admission as native architectural authoring, rather than accept solids
   # that the architectural constructors would subsequently reject.
-  target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision sketch_architecture sketch_roof_entity_codec)
+  target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision sketch_architecture sketch_roof_entity_codec
+    sketch_building_entities sketch_architectural_document_adapter)
   add_library(sketch_constraint_authoring INTERFACE)
   target_link_libraries(sketch_constraint_authoring INTERFACE sketch_document sketch_constraints sketch_precision sketch_project_organization)
   if(BUILD_TESTING)

@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 98 requires native reader 100 for mathematical roof plan
+resizing. It retains actual axis factors, fixed world anchor/frame, independently
+derived historical roof frames and verbatim retired dimension/opening receipts.
+Baseline replacement carries exclusive combined roof edit four inside roof
+replacement record three. The floor covers archives and nested/composed proofs
+throughout retained history, including Undo. Historical combined edits one,
+two and three and their earlier floors remain unchanged.
+
 Exchange version 97 requires native reader 99 for mathematical roof movement,
 rotation and reflection. It retains exact operation inputs, independently
 derived historical frames and verbatim retired coordinate/opening receipts.

@@ -1,4 +1,63 @@
-# Vertex project formats v1 through v99
+# Vertex project formats v1 through v100
+
+## Source-derived roof footprint resizing (v100)
+
+Native format 100 and JSON/assets extraction version 98 retain mathematical
+roof plan resizing. Its strict version-one operation has exactly `version`,
+`roof_id`, `scale_x`, `scale_y`, `anchor_m` and `frame_rotation_radians`.
+Factors are positive finite scalars; the anchor is actual world XY metres.
+It contains neither a detached candidate nor an invented entered dimension.
+
+Side and corner grips derive the requested native footprint from actual source
+bounds, including overhang and normal-thickness projection. The opposite
+footprint edge/corner stays anchored. Roof form, Z, rise, normal thickness,
+overhang, orientation, material, context, schema and opening identity/order
+remain exact. Opening rectangles follow their actual resized core dimensions.
+Pitch changes only when its controlling run/span changes. Unedited numeric
+representations and opaque child/owner data remain intact.
+
+A sloped panel's projected run is `run + thickness * rise / hypot(run, rise)`.
+Low-rise thick panels can have more than one admissible run for the same
+footprint. The bounded solve stays on the monotone branch containing the actual
+source run; it does not jump to another pitch. A source at an unresolved fold
+or a target outside that branch refuses with an explanation. Generated final
+footprint dimensions must match the requested scale within native tolerance
+and coordinate roundoff. Crossing an opposite grip edge also refuses.
+
+Changed understood `quantity_entries` and `roof_opening_input` receipts move
+verbatim into `roof_plan_resize_derivations`, preserving opaque siblings.
+The strict archive envelope has exactly `version` and `operations`; each
+operation has exactly `operation`, `source`, `result` and `receipts`. Historical
+physical frames contain closed canonical roof fields and opening rectangles.
+Every result is independently derived from its actual historical source and
+operation through the same native geometry stage. Archived inputs bind their
+original scalars. Unsupported affected receipts refuse; historical identities
+remain provenance through independent and proposed copies. Known rigid
+movement history remains exact. Positive future archive versions are retained
+read-only. The floor follows every retained revision and nested/composed proof,
+including after Undo.
+
+Baseline resizing uses combined roof edit version four inside replacement
+record three: exactly `version`, `roof_id`, `profile`, `openings`, `pose`,
+`form`, `transform` and `resize`. Only `resize` is nonnull. Historical combined
+dialects one, two and three retain their exact wires and replay behavior.
+Resize cohorts enforce unique active owners, actual level-resolved source/final
+roofs and joins, and aggregate target/archive budgets. Other simultaneous
+owner edits are admitted as one complete final cohort. Ordinary resizing uses
+the same typed mathematical replay rather than deleting historical inputs.
+
+Unchanged historical archives can reuse successful validation by exact dialect
+and exact serialized bytes in a bounded synchronized in-process memo. Failed,
+changed, empty or oversized archives never acquire cached approval. Current
+source/result geometry and all live ownership/context checks still run. This
+is a source optimization; runtime responsiveness has not been measured.
+Native geometry staging and persisted replay share one authoritative target.
+
+Canvas preview projects actual proposed owners and preserves the captured saved
+view and post-commit selection mapping. The installed candidate remains
+unchanged. Compilation, grip interaction, Undo/Redo and storage round trips
+remain unverified. Uniform three-dimensional scale, mixed baseline/non-roof
+authoring and unsupported live references remain separate implementation work.
 
 ## Source-derived roof movement and independent copies (v99)
 

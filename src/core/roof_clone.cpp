@@ -7,6 +7,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_transform.hpp"
+#include "sketch/phase_roof_resize.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
@@ -108,6 +109,9 @@ Entity opaque_remainder(Entity entity) {
         if (entity.extensions.contains(std::string(roof_rigid_transform_derivations_key)))
             entity.extensions.at(std::string(roof_rigid_transform_derivations_key)) =
                 roof_rigid_transform_opaque_remainder(entity);
+        if (entity.extensions.contains(std::string(roof_plan_resize_derivations_key)))
+            entity.extensions.at(std::string(roof_plan_resize_derivations_key)) =
+                roof_plan_resize_opaque_remainder(entity);
         if (p.contains("roof_openings")) for (auto& cut : p.at("roof_openings")) cut.erase("id");
         if (entity.extensions.contains("roof_opening_input")) {
             auto& receipt = entity.extensions.at("roof_opening_input");
@@ -261,6 +265,15 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                 } catch (const std::exception&) {
                     // An unrelated unsupported archive remains opaque. A
                     // selected archive has already failed source admission.
+                }
+            }
+            if (entity.type == "roof" && extensions.contains(std::string(roof_plan_resize_derivations_key))) {
+                try {
+                    extensions.at(std::string(roof_plan_resize_derivations_key)) =
+                        roof_plan_resize_opaque_remainder(entity);
+                } catch (const std::exception&) {
+                    // Unsupported unrelated history remains opaque. Qualified
+                    // historical frames never declare current cut identities.
                 }
             }
             child_declarations(extensions, declarations);

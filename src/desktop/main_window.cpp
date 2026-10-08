@@ -23704,7 +23704,9 @@ public:
             if (fields.size()!=3 || fields[0]!=QStringLiteral("roof") || fields[1]!=QStringLiteral("corner") ||
                 !valid || corner>=4 || QString::number(corner)!=fields[2])
                 throw std::invalid_argument("Choose a roof plan corner grip.");
-            return roof_plan_corner_resize_command(source,wall.id,static_cast<std::size_t>(corner),position,source.revision());
+            const auto resize = roof_plan_corner_resize_parameters(wall, static_cast<std::size_t>(corner), position);
+            return sourceDerivedRoofResizeCommand(source, {{wall.id, resize.scale_x, resize.scale_y,
+                resize.anchor, resize.frame_rotation_radians}}, "Resize roof footprint");
         }
         if (wall.type == "slab" || wall.type == "room") {
             const auto fields = endpoint.split(QLatin1Char(':'));
@@ -24028,6 +24030,15 @@ public:
                     if (owner.type == "room" || owner.type == "roof")
                         validate_architectural_geometry_changes(source, candidate);
                     else validate_architectural_geometry_changes(source, candidate, {edit.boundary_id});
+                    if (owner.type == "roof") {
+                        if (auto projected = computeAlternativeRoofGeometryProjection(source, candidate,
+                                *vertex_command, retained, eligible, labels, metric_units, appraisal_area_ids,
+                                label_footprints, component_bounds, view_context, label_font, site_input)) {
+                            if (admitted_command) *admitted_command = *vertex_command;
+                            detached_projection = std::move(projected);
+                            return std::nullopt;
+                        }
+                    }
                     return candidate;
                 }
                 if (measured) {
@@ -26059,18 +26070,22 @@ public:
                     } else if (axis_scales && axis_command) {
                         Command command=axis_scales->first==1.0 && axis_scales->second==1.0
                             ? Command{ApplyEntityChanges{source->revision(),{}, {},"Resize plan dimensions"}}
-                            : augmentAuthoredCommand(plan_axis_resize_command(*source,id.toStdString(),
-                                axis_scales->first,axis_scales->second,position,axis_angle),*source);
+                            : physicalPlanAxisResizeCommand(*source,id.toStdString(),
+                                axis_scales->first,axis_scales->second,position,axis_angle);
                         if (!cancellation.is_cancelled()) {
                             if (!prepared_move) throw std::invalid_argument("The physical resize has no prepared publication.");
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
-                            *result=computeConstraintGeometryProjection(*source,candidate,*retained,
+                            *result=computeAlternativeRoofGeometryProjection(*source,candidate,command,*retained,
+                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
+                                view_context,label_font,site_input.get());
+                            if (!*result) *result=computeConstraintGeometryProjection(*source,candidate,*retained,
                                 *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,
                                 view_context,label_font,site_input.get());
                             if (*result && !cancellation.is_cancelled()) {
                                 retainNoOpMovePresentations(**result,*source,candidate,*retained,*labels,{id});
-                                refreshAxisResizeFrame((**result).entities,candidate,id,
-                                    view_context ? &view_context->frame : nullptr);
+                                if (roofReplacementTargetID(command, id.toStdString()) == id.toStdString())
+                                    refreshAxisResizeFrame((**result).entities,candidate,id,
+                                        view_context ? &view_context->frame : nullptr);
                                 *axis_command=std::move(command);
                             } else result->reset();
                         }
@@ -28605,9 +28620,9 @@ public:
             const auto& entity = source.entities().at(wanted);
             if (const auto frame = m_entity_transform_frame)
                 anchor = unproject_plan_point(anchor, *frame);
-            const auto command = plan_axis_resize_command(source, wanted, scale_x, scale_y,
-                                                          anchor, plan_axis_resize_frame(entity));
-            applyDocumentCommand(command);
+            const auto command = physicalPlanAxisResizeCommand(source, wanted, scale_x, scale_y,
+                anchor, plan_axis_resize_frame(entity));
+            if (!applyDocumentCommand(command)) return false;
             clearError();
             refresh();
             return true;
@@ -41701,23 +41716,9 @@ private:
         return creation;
     }
 
-    static Command sourceDerivedRoofTransformCommand(const DocumentSnapshot& source,
-        const std::vector<RoofRigidTransformIntent>& operations, const std::string& message) {
-        // Explicit mathematical intent is captured before any generic preview
-        // can attempt to mutate a shared baseline. Never infer an operation
-        // from a detached, arbitrarily changed roof descriptor.
-        const auto physical = replay_roof_rigid_transform_entities(source.entities(), operations);
-        std::vector<RoofEditIntent> edits;
-        for (const auto& operation : operations) {
-            const auto& before = source.entities().at(operation.roof_id);
-            const auto& after = physical.at(operation.roof_id);
-            if (const auto captured = capture_roof_rigid_transform(before, after, operation.transform)) {
-                RoofEditIntent edit;
-                edit.roof_id = operation.roof_id;
-                edit.transform = *captured;
-                edits.push_back(std::move(edit));
-            }
-        }
+    static Command sourceDerivedRoofMathEditCommand(const DocumentSnapshot& source,
+        const std::map<std::string, Entity, std::less<>>& physical,
+        std::vector<RoofEditIntent> edits, const std::string& message) {
         if (edits.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
         const auto request = phase_roof_edit_replacement_request(source.entities(), edits);
         if (!request) {
@@ -41763,6 +41764,50 @@ private:
         command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
         (void)Document::preview_command(source, Command{command});
         return command;
+    }
+
+    static Command sourceDerivedRoofTransformCommand(const DocumentSnapshot& source,
+        const std::vector<RoofRigidTransformIntent>& operations, const std::string& message) {
+        // Explicit mathematical intent is captured before any generic preview
+        // can attempt to mutate a shared baseline. Never infer an operation
+        // from a detached, arbitrarily changed roof descriptor.
+        const auto physical = replay_roof_rigid_transform_entities(source.entities(), operations);
+        std::vector<RoofEditIntent> edits;
+        for (const auto& operation : operations) {
+            if (const auto captured = capture_roof_rigid_transform(source.entities().at(operation.roof_id),
+                    physical.at(operation.roof_id), operation.transform)) {
+                RoofEditIntent edit;
+                edit.roof_id = operation.roof_id;
+                edit.transform = *captured;
+                edits.push_back(std::move(edit));
+            }
+        }
+        return sourceDerivedRoofMathEditCommand(source, physical, std::move(edits), message);
+    }
+
+    static Command sourceDerivedRoofResizeCommand(const DocumentSnapshot& source,
+        const std::vector<RoofPlanResizeIntent>& operations, const std::string& message) {
+        const auto physical = replay_roof_plan_resize_entities(source.entities(), operations);
+        std::vector<RoofEditIntent> edits;
+        for (const auto& operation : operations) {
+            if (const auto captured = capture_roof_plan_resize(source.entities().at(operation.roof_id),
+                    physical.at(operation.roof_id), operation)) {
+                RoofEditIntent edit;
+                edit.roof_id = operation.roof_id;
+                edit.resize = *captured;
+                edits.push_back(std::move(edit));
+            }
+        }
+        return sourceDerivedRoofMathEditCommand(source, physical, std::move(edits), message);
+    }
+
+    static Command physicalPlanAxisResizeCommand(const DocumentSnapshot& source, const std::string& id,
+        double scale_x, double scale_y, Vec2 anchor, double frame_rotation_radians) {
+        if (source.entities().at(id).type == "roof")
+            return sourceDerivedRoofResizeCommand(source,
+                {{id, scale_x, scale_y, anchor, frame_rotation_radians}}, "Resize roof plan dimensions");
+        return augmentAuthoredCommand(plan_axis_resize_command(source, id, scale_x, scale_y,
+            anchor, frame_rotation_radians), source);
     }
 
     static std::string roofReplacementTargetID(const Command& command, const std::string& original) {

@@ -4,6 +4,7 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/phase_roof_resize.hpp"
 
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
@@ -30,6 +31,7 @@ struct Resize {
     double y;
     Vec2 anchor;
     double angle;
+    bool retain_distinct_factors = false;
 
     Vec2 point(Vec2 p) const {
         if (x == 1 && y == 1) return p;
@@ -58,7 +60,7 @@ struct Resize {
         return result;
     }
     std::pair<double,double> local_factors(double natural_angle) const {
-        if (equal_factors(x,y)) return {x,x};
+        if (x == y || (!retain_distinct_factors && equal_factors(x,y))) return {x,x};
         const double c = std::cos(natural_angle-angle);
         const double s = std::sin(natural_angle-angle);
         if (std::abs(s) <= angular_tolerance) return {x,y};
@@ -149,6 +151,75 @@ double building_frame(const BuildingObject& object) {
             return std::atan2(value.end.y-value.start.y,value.end.x-value.start.x);
         else return value.orientation_radians;
     },object);
+}
+
+double solve_sloped_roof_run(const SlopedRoofPanel& source, double target) {
+    if (source.rise == 0) return target;
+    const auto projection = [&](double run) {
+        return run + source.thickness * (source.rise/std::hypot(run,source.rise));
+    };
+    if (target == projection(source.run)) return source.run;
+
+    // f(r)=r+t*h/hypot(r,h), so f'(r)=1-g(r), where g has its sole
+    // maximum at h/sqrt(2). If t/h > 3*sqrt(3)/2, f has two folds and
+    // up to three roots. Keep the monotone branch containing the admitted
+    // source run; jumping across a fold would change pitch discontinuously.
+    const auto derivative_term = [&](double run) {
+        const double hyp = std::hypot(run,source.rise);
+        return (source.thickness/hyp)*(source.rise/hyp)*(run/hyp);
+    };
+    double low=default_geometry_tolerance_metres, high=target;
+    bool increasing=true;
+    const double peak=source.rise/std::sqrt(2.0);
+    if (derivative_term(peak) > 1) {
+        const auto fold = [&](double a, double b, bool term_increases) {
+            for (int i=0; i<128; ++i) {
+                const double mid=a+(b-a)*.5;
+                if (mid == a || mid == b) break;
+                if ((derivative_term(mid) < 1) == term_increases) a=mid;
+                else b=mid;
+            }
+            return std::pair{a,b};
+        };
+        const auto maximum=fold(0,peak,true);
+        // g(r) < t*h/r^2, hence this upper bracket has g(r) < 1/4.
+        const auto minimum=fold(peak,2*std::sqrt(source.thickness)*std::sqrt(source.rise),false);
+        const double source_term=derivative_term(source.run);
+        if (source.run <= maximum.first && source_term < 1) high=std::min(high,maximum.first);
+        else if (source.run >= maximum.second && source.run <= minimum.first && source_term > 1) {
+            low=std::max(low,maximum.second);
+            high=std::min(high,minimum.first);
+            increasing=false;
+        } else if (source.run >= minimum.second && source_term < 1) low=std::max(low,minimum.second);
+        else throw std::invalid_argument(
+            "Roof panel source run is at or numerically indistinguishable from a footprint fold; the resize has ambiguous continuous branches");
+    }
+    if (low > high)
+        throw std::invalid_argument("Requested roof footprint is outside the source panel's continuous run branch");
+    const double low_projection=projection(low), high_projection=projection(high);
+    const double minimum=std::min(low_projection,high_projection);
+    const double maximum=std::max(low_projection,high_projection);
+    const double roundoff=64*std::numeric_limits<double>::epsilon()*
+        std::max({1.0,target,maximum});
+    if ((target < minimum && minimum-target > roundoff) ||
+        (target > maximum && target-maximum > roundoff))
+        throw std::invalid_argument(
+            "Requested roof footprint cannot be reached on the source panel's continuous run branch with retained rise and thickness");
+    for (int i=0; i<128; ++i) {
+        const double mid=low+(high-low)*.5;
+        if (mid == low || mid == high) break;
+        if ((projection(mid) < target) == increasing) low=mid;
+        else high=mid;
+    }
+    // Choose the closest representable run on this branch. The lower native
+    // dimension boundary is open; it must never become an admitted zero grip.
+    const double run=low > default_geometry_tolerance_metres &&
+        std::abs(projection(low)-target) < std::abs(projection(high)-target) ? low : high;
+    if (!std::isfinite(run) || run <= default_geometry_tolerance_metres)
+        throw std::invalid_argument("Requested roof run is below the native positive-dimension tolerance");
+    if (std::abs(projection(run)-target) > default_geometry_tolerance_metres+roundoff)
+        throw std::invalid_argument("Roof panel footprint cannot be resolved to native geometry tolerance");
+    return run;
 }
 
 void resize_stair(StairFlight& stair, const Resize& resize, double along, double across) {
@@ -260,26 +331,17 @@ Entity resize_building(const Entity& original, const Resize& resize) {
                     // the run footprint. Pitch changes with run while rise is
                     // retained, so solve that exact physical projection.
                     const double target = positive_core(full_x*along-2*value.overhang);
-                    if (value.rise == 0) value.run = target;
-                    else {
-                        if (target <= value.thickness)
-                            throw std::invalid_argument("Requested roof run is smaller than its retained normal-thickness projection");
-                        double low=0, high=target;
-                        for (int i=0; i<80; ++i) {
-                            const double mid=(low+high)*.5;
-                            const double projection=mid+value.thickness*value.rise/std::hypot(mid,value.rise);
-                            if (projection < target) low=mid; else high=mid;
-                        }
-                        value.run = positive_core((low+high)*.5);
-                    }
+                    value.run = solve_sloped_roof_run(value,target);
                 }
                 along_core_factor = value.run/old_run;
-                value.pitch_radians = std::atan2(value.rise,value.run);
+                if (value.run != old_run)
+                    value.pitch_radians = std::atan2(value.rise,value.run);
             } else {
                 const double old_length = value.length;
                 value.length = along == 1 ? old_length : positive_core(full_x*along-2*value.overhang);
                 along_core_factor = value.length/old_length;
-                value.pitch_radians = std::atan2(value.rise,value.span*.5);
+                if (value.span != old_span)
+                    value.pitch_radians = std::atan2(value.rise,value.span*.5);
             }
             for (auto& opening : value.openings) {
                 opening.x *= along_core_factor; opening.y *= value.span/old_span;
@@ -289,6 +351,28 @@ Entity resize_building(const Entity& original, const Resize& resize) {
     },object);
     const auto canonical = encode_building_entity(object,original.extensions);
     Entity result = original;
+    if (original.type == "roof") {
+        // The native codec establishes resized geometry, not authority over
+        // source receipts, schema/roster identity or opaque authoring data.
+        for (const auto* key : {"run_m","length_m","span_m","pitch_rad"})
+            if (canonical.properties.contains(key) &&
+                result.properties.at(key) != canonical.properties.at(key))
+                result.properties.at(key) = canonical.properties.at(key);
+        for (std::size_t coordinate=0; coordinate<2; ++coordinate)
+            if (result.properties.at("base_position_m").at(coordinate) !=
+                canonical.properties.at("base_position_m").at(coordinate))
+                result.properties.at("base_position_m").at(coordinate) =
+                    canonical.properties.at("base_position_m").at(coordinate);
+        if (canonical.properties.contains("roof_openings")) {
+            auto& openings = result.properties.at("roof_openings");
+            const auto& resized = canonical.properties.at("roof_openings");
+            for (std::size_t i=0; i<resized.size(); ++i)
+                for (const auto* key : {"x_m","y_m","width_m","depth_m"})
+                    if (openings.at(i).at(key) != resized.at(i).at(key))
+                        openings.at(i).at(key) = resized.at(i).at(key);
+        }
+        return result;
+    }
     for (const auto& [key,value] : canonical.properties.items()) {
         if (key=="flights") {
             // Patch only owned dimensions. Stable child identities, counts,
@@ -342,8 +426,10 @@ void compensate_physical_footprint_anchor(const Entity& original, Entity& result
     const double dx=shift(along,local_anchor.x,before.minimum.x,before.maximum.x,after.minimum.x,after.maximum.x);
     const double dy=shift(across,local_anchor.y,before.minimum.y,before.maximum.y,after.minimum.y,after.maximum.y);
     auto& base=result.properties.at("base_position_m");
-    base[0] = base[0].get<double>()+c*dx-s*dy;
-    base[1] = base[1].get<double>()+s*dx+c*dy;
+    const double x=base[0].get<double>()+c*dx-s*dy;
+    const double y=base[1].get<double>()+s*dx+c*dy;
+    if (original.type != "roof" || base[0] != x) base[0] = x;
+    if (original.type != "roof" || base[1] != y) base[1] = y;
 }
 
 TopoDS_Shape entity_shape(const Entity& entity) {
@@ -475,6 +561,46 @@ Bounds2 plan_axis_resize_bounds(const Entity& entity) {
     return {{xmin,ymin},{xmax,ymax}};
 }
 
+Entity stage_roof_plan_axis_resize_entity(
+    const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
+    double frame_rotation_radians) {
+    if (!std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x <= 0 || scale_y <= 0 ||
+        !std::isfinite(anchor.x) || !std::isfinite(anchor.y) || !std::isfinite(frame_rotation_radians))
+        throw std::invalid_argument("Plan resize factors must be positive and all frame coordinates finite");
+    const auto& properties = actual_source.properties;
+    if (actual_source.type != "roof" || !properties.is_object() ||
+        !properties.contains("form") || !properties.at("form").is_string() ||
+        (properties.at("form") != "sloped_roof_panel" &&
+         properties.at("form") != "gable_roof" && properties.at("form") != "hip_roof"))
+        throw std::invalid_argument("Plan roof resize requires a supported parametric roof");
+    if (scale_x == 1 && scale_y == 1) {
+        (void)decode_building_entity(actual_source);
+        return actual_source;
+    }
+    const Resize resize{scale_x,scale_y,anchor,frame_rotation_radians,true};
+    auto result = resize_building(actual_source,resize);
+    compensate_physical_footprint_anchor(actual_source,result,resize);
+    const auto before=plan_axis_resize_bounds(actual_source);
+    const auto after=plan_axis_resize_bounds(result);
+    const auto [along,across]=resize.local_factors(plan_axis_resize_frame(actual_source));
+    const auto check_extent = [](double old_min, double old_max, double new_min,
+                                 double new_max, double factor) {
+        const double expected=(old_max-old_min)*factor;
+        const double actual=new_max-new_min;
+        const double roundoff=64*std::numeric_limits<double>::epsilon()*
+            std::max({1.0,std::abs(old_min),std::abs(old_max),std::abs(new_min),
+                      std::abs(new_max),std::abs(expected)});
+        if (!std::isfinite(expected) || !std::isfinite(actual) || actual <= 0 ||
+            std::abs(actual-expected) > default_geometry_tolerance_metres+roundoff)
+            throw std::invalid_argument("Generated roof footprint does not meet the requested plan resize within native tolerance");
+    };
+    // Native bounds include the retained normal-thickness projection and
+    // overhang. Admit the final translated solid, not just the scalar inverse.
+    check_extent(before.minimum.x,before.maximum.x,after.minimum.x,after.maximum.x,along);
+    check_extent(before.minimum.y,before.maximum.y,after.minimum.y,after.maximum.y,across);
+    return result;
+}
+
 ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, const std::string& entity_id,
     double scale_x, double scale_y, Vec2 anchor, double frame_rotation_radians) {
     if (!source.is_editable()) throw DocumentError(DocumentErrorCode::read_only,source.read_only_reason());
@@ -551,10 +677,15 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
         for (auto& hole : slab.holes) hole = resize.boundary(hole);
         (void)make_slab(slab);
         update_footprint(result,slab.boundary,slab.holes);
+    } else if (original.type == "roof") {
+        result = replay_roof_plan_resize_entity(original,
+            {entity_id, scale_x, scale_y, anchor, frame_rotation_radians});
     } else result = resize_building(original,resize);
-    compensate_physical_footprint_anchor(original,result,resize);
-    result.properties.erase("transform");
-    invalidate_changed_quantity_entries(original,result);
+    if (original.type != "roof") {
+        compensate_physical_footprint_anchor(original,result,resize);
+        result.properties.erase("transform");
+        invalidate_changed_quantity_entries(original,result);
+    }
     if (result != original) command.entity_changes.push_back(EntityChange::upsert(std::move(result)));
     if (!command.entity_changes.empty()) {
         const auto preview = Document::preview_command(source,command);
@@ -575,17 +706,8 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
     return command;
 }
 
-ApplyEntityChanges roof_plan_corner_resize_command(
-    const DocumentSnapshot& source, const std::string& entity_id,
-    std::size_t corner_index, Vec2 proposed_position, Revision expected_revision) {
-    if (source.revision() != expected_revision)
-        throw DocumentError(DocumentErrorCode::stale_revision,"Roof corner resize source revision is stale");
-    if (!source.is_editable())
-        throw DocumentError(DocumentErrorCode::read_only,source.read_only_reason());
-    const auto found = source.entities().find(entity_id);
-    if (found == source.entities().end())
-        throw DocumentError(DocumentErrorCode::dangling_reference,"Roof corner resize target is missing");
-    const Entity& original = found->second;
+RoofPlanCornerResizeParameters roof_plan_corner_resize_parameters(
+    const Entity& original, std::size_t corner_index, Vec2 proposed_position) {
     const auto& properties = original.properties;
     if (original.type != "roof" || !properties.is_object() ||
         !properties.contains("form") || !properties.at("form").is_string() ||
@@ -622,7 +744,7 @@ ApplyEntityChanges roof_plan_corner_resize_command(
     // Avoid a rotate/unrotate roundoff resize and any codec normalization or
     // receipt invalidation when the caller returns the exact original grip.
     if (proposed_position.x == original_corner.x && proposed_position.y == original_corner.y)
-        return ApplyEntityChanges{expected_revision,{}, {},"Resize plan dimensions"};
+        return {1.0, 1.0, anchor, angle};
 
     // Project relative to the fixed world anchor to avoid subtracting two
     // independently projected large coordinates. Signed extents reject a grip
@@ -634,6 +756,23 @@ ApplyEntityChanges roof_plan_corner_resize_command(
         throw std::invalid_argument("Roof corner resize factors overflow");
     if (scale_x <= 0 || scale_y <= 0)
         throw std::invalid_argument("Roof corner cannot cross either opposite footprint edge");
-    return plan_axis_resize_command(source,entity_id,scale_x,scale_y,anchor,angle);
+    return {scale_x, scale_y, anchor, angle};
+}
+
+ApplyEntityChanges roof_plan_corner_resize_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    std::size_t corner_index, Vec2 proposed_position, Revision expected_revision) {
+    if (source.revision() != expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision,"Roof corner resize source revision is stale");
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only,source.read_only_reason());
+    const auto found = source.entities().find(entity_id);
+    if (found == source.entities().end())
+        throw DocumentError(DocumentErrorCode::dangling_reference,"Roof corner resize target is missing");
+    const auto resize = roof_plan_corner_resize_parameters(found->second, corner_index, proposed_position);
+    if (resize.scale_x == 1.0 && resize.scale_y == 1.0)
+        return {expected_revision, {}, {}, "Resize plan dimensions"};
+    return plan_axis_resize_command(source, entity_id, resize.scale_x, resize.scale_y,
+        resize.anchor, resize.frame_rotation_radians);
 }
 } // namespace sketch

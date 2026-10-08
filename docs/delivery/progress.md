@@ -14,6 +14,54 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 mathematical roof side and corner resizing implementation
+
+Side/corner roof grips now derive actual axis factors and a fixed opposite
+edge/corner from the original native footprint. The shared geometry stage
+solves core dimensions while retaining rise, normal thickness and overhang,
+then checks the generated result against the requested footprint. The
+sloped-panel solve now handles nonmonotonic low-rise/thick projections on the
+source's continuous branch, with explicit fold/unreachable-target refusal.
+Unedited numeric representations, schema-two empty opening rosters and opaque
+opening/owner metadata remain exact. Dependent pitch follows its actual
+controlling dimension.
+
+Typed mathematical replay archives changed entered dimensions and opening
+inputs verbatim before removing their active scalar bindings. No computed
+coordinate becomes an entered measurement. Strict historical source/result
+frames independently reproduce the operation. Original rigid-transform archives
+remain exact. Full-map source/final admission covers actual levels and joins.
+Combined resize replay enforces the same active-cohort and aggregate archive
+bounds without admitting a partially changed intermediate cohort. Earlier
+combined dialects retain their historical behavior.
+
+The ordinary API, canvas side grips and roof corner grips use the same typed
+math. Active-alternative edits create distinct proposed cohorts, while preview
+and prepared publication retain saved-view ownership and selection redirects.
+Qualified historical frames do not redeclare live opening IDs when a resized
+roof is copied. Native 100/extraction 98 retain resize archives and combined
+edit four throughout history. Geometry staging and persisted replay now share
+the authoritative Document target with the existing component API retained.
+
+A bounded exact-byte memo avoids repeating native derivation of unchanged
+historical records across preview/document/render admission. Only successful
+historical validation is cached; changed/failed archives and current live
+source/result geometry still undergo their checks. Actual speed remains
+unmeasured.
+
+Independent bounded source review approved the integrated resize batch after
+correcting historical opening declaration scanning, generic metadata/input
+loss, weaker combined cohort admission, target ownership/usage requirements
+and the low-rise projection solve. Exact-byte memo review found no source
+authority or failure-caching gap. This supplies source review only.
+
+This remains source implementation only. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations run, and the installed
+candidate remains unchanged. Compilation, interaction, Undo/Redo and storage
+round trips remain unverified. Uniform 3D scaling, mixed baseline/non-roof
+authoring, unsupported affected references and other family lifecycle work
+remain open. No production acceptance or completion estimate is claimed.
+
 ### October 8 mathematical roof movement and independent copy implementation
 
 Roof plan movement, rotation, reflection and numerical rigid transforms now

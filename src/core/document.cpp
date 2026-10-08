@@ -46,6 +46,7 @@
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_roof_transform.hpp"
+#include "sketch/phase_roof_resize.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -480,20 +481,25 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid wall join entity: ") + error.what());
         }
     }
-    if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations")) {
+    for (const auto* key : {"roof_rigid_transform_derivations", "roof_plan_resize_derivations"})
+    if (entity.type == "roof" && entity.extensions.contains(key)) {
         try {
-            const auto& archive = entity.extensions.at("roof_rigid_transform_derivations");
+            const auto& archive = entity.extensions.at(key);
             if (!archive.is_object() || !archive.contains("version") ||
                 !archive.at("version").is_number_integer() ||
                 (archive.at("version").is_number_unsigned() ? archive.at("version").get<std::uint64_t>() == 0 :
                     archive.at("version").get<std::int64_t>() <= 0))
-                throw std::invalid_argument("Roof movement derivation requires a positive version");
+                throw std::invalid_argument("Roof mathematical derivation requires a positive version");
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-            if (archive.at("version") == 1) validate_roof_rigid_transform_derivations(entity);
+            if (archive.at("version") == 1) {
+                if (std::string_view(key) == roof_rigid_transform_derivations_key)
+                    validate_roof_rigid_transform_derivations(entity);
+                else validate_roof_plan_resize_derivations(entity);
+            }
 #endif
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
-                std::string("invalid roof movement derivation: ") + error.what());
+                std::string("invalid roof mathematical derivation: ") + error.what());
         }
     }
     if (entity.type == "roof_join") {
@@ -1430,11 +1436,12 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             entity.extensions.at("wall_merge_archive").at("version")!=1)
             unsupported_boundary="Unsupported wall merge archive: "+id;
     for (const auto& [id, entity] : entities)
-        if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations")) {
+        for (const auto* key : {"roof_rigid_transform_derivations", "roof_plan_resize_derivations"})
+        if (entity.type == "roof" && entity.extensions.contains(key)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-            if (entity.extensions.at("roof_rigid_transform_derivations").at("version") != 1)
+            if (entity.extensions.at(key).at("version") != 1)
 #endif
-                unsupported_boundary = "Unsupported roof movement derivation: " + id;
+                unsupported_boundary = std::string("Unsupported roof mathematical derivation ") + key + ": " + id;
         }
     for (const auto& [id, entity] : entities) {
         if (entity.type != "measurement_boundary" || !entity.extensions.contains("survey_source")) continue;
