@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 spatial hosted-component copying source integration
+
+Horizontal copying now discovers actual attached assembly catalogs and
+qualified catalog/instance identities, allocates history-reserved destinations
+and derives a raw private catalog containing only the selected hosts' instances.
+Original catalogs, unrelated components, definitions, materials and entered
+quantities remain exact. Unsupported affected references still refuse.
+
+Embedded placement now has explicit Z in assembly schema five, native 110/
+extraction 108. Native previews, profile expansion and schedules consume it.
+Typed placement composition follows actual profile/legacy-host behavior;
+the copy controller applies XYZ/yaw/mirror/uniform transforms and admits the
+actual copied candidate before atomic publication. Independent source review
+approved this slice after correcting reflected transform order, alias lifetime
+reservation and retention of the existing XYZ placement envelope.
+Shared-baseline hosted replacement is being implemented next; plan-only
+nonunit scaling and native bound-dimension copying remain representation gaps.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. The installed candidate remains unchanged; compilation,
+interaction and storage round trips remain unverified. No production
+acceptance, completion percentage or ETA is claimed.
+
 ### October 8 horizontal 3D model transformation source integration
 
 The controller now routes slab/floor/ceiling/foundation XYZ movement and

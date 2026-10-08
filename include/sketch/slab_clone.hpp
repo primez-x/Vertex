@@ -5,12 +5,16 @@
 #include <cstddef>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sketch {
 
 using SlabCloneEntities = std::map<std::string, Entity, std::less<>>;
 using SlabCloneIdentityMap = std::map<std::string, std::string, std::less<>>;
+// Embedded instance identities are local to their actual source catalog.
+using SlabCloneHostedInstanceKey = std::pair<std::string, std::string>;
+using SlabCloneHostedInstanceIdentityMap = std::map<SlabCloneHostedInstanceKey, std::string>;
 
 struct SlabCloneDiagnostic {
     std::string entity_id;
@@ -21,7 +25,7 @@ struct SlabCloneDiagnostic {
 
 struct SlabClonePlan {
     std::vector<std::string> selected_slab_ids;
-    // Actual active slab owners, including floor, ceiling and foundation kinds.
+    // Actual active slab owners and affected assembly catalogs, exactly once.
     std::vector<std::string> required_entity_ids;
     // Actual source layers and copied bound view overlays, exactly once.
     std::vector<std::string> required_child_ids;
@@ -30,6 +34,8 @@ struct SlabClonePlan {
     std::size_t copied_view_overlay_count{};
     std::size_t copied_annotation_override_count{};
     std::vector<SlabCloneDiagnostic> diagnostics;
+    // (actual catalog ID, actual instance ID), independent of child namespaces.
+    std::vector<SlabCloneHostedInstanceKey> required_hosted_instance_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const SlabClonePlan&) const = default;
 };
@@ -38,6 +44,7 @@ struct SlabCloneResult {
     SlabCloneEntities entities;
     SlabCloneIdentityMap original_to_clone;
     std::vector<std::string> fresh_identity_ids;
+    SlabCloneHostedInstanceIdentityMap original_to_hosted_instance_clone;
 };
 
 // Discover a bounded, unique explicit selection from the actual saved active
@@ -51,10 +58,17 @@ struct SlabCloneResult {
 // additive copies retaining their unknown fields. Scalar/profile/geometry and
 // opaque receipts remain exact. Validated geometry operation slab IDs and
 // retired receipt layer IDs are historical provenance and never remapped.
+// Each affected catalog gains a raw copy retaining only selected slab-hosted
+// instances. Definitions/materials keep catalog-local identities and exact raw
+// payloads; only catalog, copied instance and actual host IDs change. Placement
+// numbers and representation remain exact. The qualified instance map is
+// required whenever discovery found hosted instances; all fresh names are
+// returned together for enclosing history reservation.
 // This performs no transform or phase enrollment. Enclosing Document creation
 // reserves identities throughout history and enrolls the new owners.
 [[nodiscard]] SlabCloneResult replay_slab_clone(
     const SlabCloneEntities& source, const SlabClonePlan& plan,
-    const SlabCloneIdentityMap& identities);
+    const SlabCloneIdentityMap& identities,
+    const SlabCloneHostedInstanceIdentityMap& hosted_instance_identities = {});
 
 } // namespace sketch

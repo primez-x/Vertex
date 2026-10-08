@@ -840,7 +840,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # admission as native architectural authoring, rather than accept solids
   # that the architectural constructors would subsequently reject.
   target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision sketch_architecture sketch_roof_entity_codec
-    sketch_building_entities sketch_architectural_document_adapter)
+    sketch_building_entities sketch_architectural_document_adapter sketch_assembly_geometry)
   add_library(sketch_constraint_authoring INTERFACE)
   target_link_libraries(sketch_constraint_authoring INTERFACE sketch_document sketch_constraints sketch_precision sketch_project_organization)
   if(BUILD_TESTING)

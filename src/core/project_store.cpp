@@ -103,7 +103,8 @@ bool has_architectural_appraisal_v57_semantics(const Entity& entity) {
     if (entity.type == "assembly_model") {
         const auto model = entity.properties.find("model");
         if (model != entity.properties.end() && model->is_object() &&
-            model->value("schema", nlohmann::json()) == "sketch.assemblies.v4") return true;
+            (model->value("schema", nlohmann::json()) == "sketch.assemblies.v4" ||
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v5")) return true;
     }
     if (entity.type == "roof_join" &&
         (entity.properties.value("version", nlohmann::json()) == 2 ||
@@ -582,6 +583,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
+            if (entity.type == "assembly_model" && entity.properties.is_object()) {
+                const auto model = entity.properties.find("model");
+                if (model != entity.properties.end() && model->is_object() &&
+                    model->value("schema", nlohmann::json()) == "sketch.assemblies.v5")
+                    required = std::max(required, 110U);
+            }
             if (required<101 && (scientific_receipt(entity.properties) || scientific_receipt(entity.extensions))) required=101;
             if (entity.type == "slab" && entity.extensions.contains("slab_layer_stack_retirement"))
                 required = std::max(required, 103U);
@@ -2237,6 +2244,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 110 &&
          sqlite3_column_int(user_version.get(), 0) != 109 &&
          sqlite3_column_int(user_version.get(), 0) != 108 &&
          sqlite3_column_int(user_version.get(), 0) != 107 &&
@@ -2801,6 +2809,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=110)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 110 for spatial hosted assembly placements");
         if (required_format>=109)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 109 for source-derived horizontal assembly model transforms");
         if (required_format>=108)

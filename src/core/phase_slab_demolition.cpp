@@ -164,7 +164,8 @@ void admit_supported_dependencies(const Entities& source, const Ids& targets) {
         // records and arbitrary opaque values are retained without interpretation.
         if (!schema || !schema->is_string() ||
             (*schema != "sketch.assemblies.v1" && *schema != "sketch.assemblies.v2" &&
-             *schema != "sketch.assemblies.v3" && *schema != "sketch.assemblies.v4") ||
+             *schema != "sketch.assemblies.v3" && *schema != "sketch.assemblies.v4" &&
+             *schema != "sketch.assemblies.v5") ||
             !instances || !instances->is_array()) continue;
         const bool affected = std::any_of(instances->begin(), instances->end(), [&](const Json& instance) {
             const auto placement = field(instance, "placement");

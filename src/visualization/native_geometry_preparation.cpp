@@ -883,7 +883,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         if (!std::isfinite(placement.scale) || placement.scale <= 0.0 ||
             !std::isfinite(placement.rotation_radians) ||
             !std::isfinite(placement.translation_m.x) ||
-            !std::isfinite(placement.translation_m.y)) {
+            !std::isfinite(placement.translation_m.y) ||
+            !std::isfinite(placement.translation_z_m)) {
             throw std::invalid_argument("assembly placement transform is invalid");
         }
         auto local = source;
@@ -911,7 +912,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         }
         gp_Trsf translate;
         translate.SetTranslation(gp_Vec(placement.translation_m.x,
-                                         placement.translation_m.y, 0.0));
+                                         placement.translation_m.y, placement.translation_z_m));
         BRepBuilderAPI_Transform translated(rotated.Shape(), translate, true);
         if (!translated.IsDone() || translated.Shape().IsNull()) {
             throw std::invalid_argument("assembly translation transform failed");
@@ -964,6 +965,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     {"host", placement.host_entity_id},
                     {"translation", {placement.translation_m.x, placement.translation_m.y}},
                     {"rotation", placement.rotation_radians}, {"scale", placement.scale}};
+                if (placement.translation_z_m != 0)
+                    placement_content.at("translation").push_back(placement.translation_z_m);
                 if (placement.mirrored_y) placement_content["mirrored_y"] = true;
                 content.append(placement_content.dump());
                 content.push_back('\0');

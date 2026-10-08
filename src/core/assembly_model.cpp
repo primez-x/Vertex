@@ -41,7 +41,8 @@ void quantities(const std::map<std::string, AssemblyQuantityProperty>& values) {
 void placement(const std::optional<AssemblyPlacement>& value) {
     if (!value) return;
     identifier(value->host_entity_id);
-    require(std::isfinite(value->translation_m.x) && std::isfinite(value->translation_m.y),
+    require(std::isfinite(value->translation_m.x) && std::isfinite(value->translation_m.y) &&
+            std::isfinite(value->translation_z_m),
             "assembly placement translation must be finite");
     require(std::isfinite(value->rotation_radians),
             "assembly placement rotation must be finite");
@@ -247,6 +248,38 @@ AssemblyTransform compose_assembly_transform(const AssemblyTransform& parent,con
         parent.scale*local.scale,parent.mirrored_y!=local.mirrored_y};
     transform(result);return result;
 }
+AssemblyPlacement transform_assembly_placement(const AssemblyPlacement& source,
+    const AssemblyTransform& world_transform,bool host_geometry_transformed) {
+    placement(source);transform(world_transform);
+    if(world_transform==AssemblyTransform{})return source;
+    const AssemblyTransform local{{source.translation_m.x,source.translation_m.y,source.translation_z_m},
+        source.rotation_radians,source.scale,source.mirrored_y};
+    AssemblyTransform result;
+    if(!host_geometry_transformed)result=compose_assembly_transform(world_transform,local);
+    else {
+        if(local==AssemblyTransform{})return source;
+        // G^-1 has yaw -epsilon_G*yaw_G, the same reflection parity, and
+        // scale 1/scale_G. Reduce G*A*G^-1 directly: the scale is exactly A's
+        // scale, parity is A's, and yaw is epsilon_G*yaw_A + (1-epsilon_A)*yaw_G.
+        // This avoids reciprocal overflow and cancellation of unchanged yaw.
+        result.rotation_radians=world_transform.mirrored_y ? -local.rotation_radians:local.rotation_radians;
+        if(local.mirrored_y)result.rotation_radians=std::fma(2.0,world_transform.rotation_radians,result.rotation_radians);
+        result.scale=local.scale;result.mirrored_y=local.mirrored_y;
+        auto linear_world=world_transform;linear_world.translation_m={};
+        const auto translated=transform_assembly_point(local.translation_m,linear_world);
+        const auto offset=transform_assembly_point({world_transform.translation_m.x,world_transform.translation_m.y,0},result);
+        result.translation_m={translated.x+(world_transform.translation_m.x-offset.x),
+            translated.y+(world_transform.translation_m.y-offset.y),
+            std::fma(1-local.scale,world_transform.translation_m.z,translated.z)};
+        transform(result);
+    }
+    if(result==local)return source;
+    AssemblyPlacement placed=source;
+    placed.translation_m={result.translation_m.x,result.translation_m.y};
+    placed.translation_z_m=result.translation_m.z;
+    placed.rotation_radians=result.rotation_radians;placed.scale=result.scale;placed.mirrored_y=result.mirrored_y;
+    placement(placed);return placed;
+}
 nlohmann::json encode_assembly_transform(const AssemblyTransform& value) {
     transform(value);
     nlohmann::json result{{"translation_m",{value.translation_m.x,value.translation_m.y,value.translation_m.z}},
@@ -420,7 +453,7 @@ AssemblyExpansion AssemblyModel::expand(const AssemblyInstance& instance,Assembl
     std::map<std::vector<std::string>,const AssemblyPathOverride*> changes;
     for(const auto& change:instance.nested_overrides)changes.emplace(change.part_path,&change);
     AssemblyTransform root=instance.root_transform.value_or(AssemblyTransform{});
-    if(instance.placement)root={{instance.placement->translation_m.x,instance.placement->translation_m.y,0},
+    if(instance.placement)root={{instance.placement->translation_m.x,instance.placement->translation_m.y,instance.placement->translation_z_m},
         instance.placement->rotation_radians,instance.placement->scale,instance.placement->mirrored_y};
     std::function<void(const AssemblyType&,std::vector<std::string>,AssemblyTransform,const AssemblyPart*)> visit;
     visit=[&](const AssemblyType& type,std::vector<std::string> path,AssemblyTransform world,const AssemblyPart* part) {
@@ -517,10 +550,16 @@ nlohmann::json AssemblyModel::to_json() const {
     nlohmann::json result{{"schema", "sketch.assemblies.v1"}, {"materials", nlohmann::json::array()},
         {"types", nlohmann::json::array()}, {"instances", nlohmann::json::array()}};
     bool has_placement = false;
+    bool placement_xyz = false;
     bool nested = false;
     for(const auto& type:types_)nested=nested || !type.profiles.empty() || !type.parts.empty();
     for(const auto& instance:instances_)nested=nested || instance.root_transform.has_value() || !instance.nested_overrides.empty();
-    for (const auto& instance : instances_) has_placement = has_placement || instance.placement.has_value();
+    for (const auto& instance : instances_) {
+        has_placement = has_placement || instance.placement.has_value();
+        placement_xyz = placement_xyz || (instance.placement && instance.placement->translation_z_m!=0);
+    }
+    // V5 shares V4's complete nested envelope even for a legacy-only catalog.
+    nested = nested || placement_xyz;
     if (has_placement) result["schema"] = "sketch.assemblies.v3";
     for (const auto& material : materials_) {
         nlohmann::json value{{"id", material.id}, {"name", material.name}};
@@ -531,6 +570,7 @@ nlohmann::json AssemblyModel::to_json() const {
         result["materials"].push_back(std::move(value));
     }
     if(nested)result["schema"]="sketch.assemblies.v4";
+    if(placement_xyz)result["schema"]="sketch.assemblies.v5";
     for (const auto& type : types_) {
         nlohmann::json value{{"id",type.id},{"name",type.name},{"properties",type.properties},
             {"materials",type.materials},{"quantities",encode_quantities(type.quantities)}};
@@ -562,6 +602,7 @@ nlohmann::json AssemblyModel::to_json() const {
                 {"rotation_radians", instance.placement->rotation_radians},
                 {"scale", instance.placement->scale}};
             if(instance.placement->mirrored_y)value["placement"]["mirrored_y"]=true;
+            if(placement_xyz)value["placement"]["translation_m"].push_back(instance.placement->translation_z_m);
         }
         if(nested) {
             value["root_transform"]=instance.root_transform ? encode_assembly_transform(*instance.root_transform):nlohmann::json(nullptr);
@@ -575,7 +616,8 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
     try {
         fields(value, {"schema", "materials", "types", "instances"});
         const auto schema = value.at("schema").get<std::string>();
-        const bool nested = schema == "sketch.assemblies.v4";
+        const bool placement_xyz = schema == "sketch.assemblies.v5";
+        const bool nested = schema == "sketch.assemblies.v4" || placement_xyz;
         const bool appearance = schema == "sketch.assemblies.v2" || schema == "sketch.assemblies.v3" || nested;
         const bool placements = schema == "sketch.assemblies.v3" || nested;
         require(appearance || schema == "sketch.assemblies.v1", "unsupported assembly schema");
@@ -639,9 +681,10 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
                 } else fields(encoded, {"host_entity_id", "translation_m", "rotation_radians", "scale"});
                 require(encoded.at("host_entity_id").is_string() &&
                         encoded.at("translation_m").is_array() &&
-                        encoded.at("translation_m").size() == 2 &&
+                        encoded.at("translation_m").size() == (placement_xyz ? 3u:2u) &&
                         encoded.at("translation_m")[0].is_number() &&
                         encoded.at("translation_m")[1].is_number() &&
+                        (!placement_xyz || encoded.at("translation_m")[2].is_number()) &&
                         encoded.at("rotation_radians").is_number() &&
                         encoded.at("scale").is_number(), "invalid assembly placement");
                 decoded_placement = AssemblyPlacement{
@@ -650,7 +693,8 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
                      encoded.at("translation_m")[1].get<double>()},
                     encoded.at("rotation_radians").get<double>(),
                     encoded.at("scale").get<double>(),
-                    encoded.contains("mirrored_y") && encoded.at("mirrored_y").get<bool>()};
+                    encoded.contains("mirrored_y") && encoded.at("mirrored_y").get<bool>(),
+                    placement_xyz ? encoded.at("translation_m")[2].get<double>():0.0};
             }
             AssemblyInstance instance{item.at("id").get<std::string>(), item.at("type_id").get<std::string>(),
                 item.at("property_overrides").get<Strings>(), item.at("material_overrides").get<Strings>(),
@@ -665,5 +709,58 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid assembly JSON: ") + error.what());
     }
+}
+nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_model,
+    const std::map<std::string,AssemblyTransform,std::less<>>& instance_transforms) {
+    const auto source=AssemblyModel::from_json(actual_model);
+    std::map<std::string,AssemblyPlacement,std::less<>> changed;
+    AssemblyExpansionBudget source_budget;
+    bool needs_xyz=false;
+    for(const auto& [id,world_transform]:instance_transforms) {
+        const auto& instance=find(source.instances(),id);
+        require(instance.placement.has_value(),"assembly transformation requires an actual hosted instance");
+        const auto expansion=source.expand(instance,source_budget);
+        const auto placed=transform_assembly_placement(*instance.placement,world_transform,expansion.profiles.empty());
+        if(placed!=*instance.placement) {
+            needs_xyz=needs_xyz || placed.translation_z_m!=0;
+            changed.emplace(id,placed);
+        }
+    }
+    if(changed.empty())return actual_model;
+    auto result=actual_model;
+    const auto schema=actual_model.at("schema").get<std::string>();
+    const bool upgrade_xyz=needs_xyz && schema!="sketch.assemblies.v5";
+    if(upgrade_xyz) {
+        result["schema"]="sketch.assemblies.v5";
+        if(schema=="sketch.assemblies.v3") {
+            for(auto& type:result.at("types")) {
+                type["profiles"]=nlohmann::json::array();type["parts"]=nlohmann::json::array();
+            }
+            for(auto& instance:result.at("instances")) {
+                instance["root_transform"]=nullptr;instance["nested_overrides"]=nlohmann::json::array();
+            }
+        }
+        for(auto& instance:result.at("instances"))if(instance.contains("placement"))
+            instance.at("placement").at("translation_m").push_back(0.0);
+    }
+    for(auto& encoded:result.at("instances")) {
+        const auto id=encoded.at("id").get<std::string>();
+        const auto update=changed.find(id);
+        if(update==changed.end())continue;
+        const auto& before=*find(source.instances(),id).placement;
+        const auto& after=update->second;
+        auto& placed=encoded.at("placement");
+        auto& p=placed.at("translation_m");
+        if(before.translation_m.x!=after.translation_m.x)p[0]=after.translation_m.x;
+        if(before.translation_m.y!=after.translation_m.y)p[1]=after.translation_m.y;
+        if(before.translation_z_m!=after.translation_z_m)p[2]=after.translation_z_m;
+        if(before.rotation_radians!=after.rotation_radians)placed["rotation_radians"]=after.rotation_radians;
+        if(before.scale!=after.scale)placed["scale"]=after.scale;
+        if(before.mirrored_y!=after.mirrored_y)placed["mirrored_y"]=after.mirrored_y;
+    }
+    // The strict codec validates every final instance with one document budget,
+    // including aggregate quantities, geometry and transformed profile bounds.
+    (void)AssemblyModel::from_json(result);
+    return result;
 }
 } // namespace sketch

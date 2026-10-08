@@ -1,6 +1,8 @@
 #include "sketch/slab_clone.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -17,6 +19,16 @@
 #include <set>
 #include <stdexcept>
 #include <utility>
+
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <Standard_Failure.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 namespace sketch {
 namespace {
@@ -70,6 +82,15 @@ Strings occupied_strings(const SlabCloneEntities& source) {
             reject("source must contain actual identified entity envelopes: " + id);
         result.text(id); result.text(entity.type);
         result.read(entity.properties); result.read(entity.extensions);
+        if (entity.type == "assembly_model") {
+            const auto model = field(entity.properties, "model");
+            const auto instances = model ? field(*model, "instances") : nullptr;
+            if (instances && instances->is_array()) for (const auto& instance : *instances) {
+                const auto local_id = field(instance, "id");
+                if (local_id && local_id->is_string())
+                    result.text(id + ":instance:" + local_id->get_ref<const std::string&>());
+            }
+        }
     }
     return result;
 }
@@ -177,6 +198,12 @@ Entity opaque_remainder(Entity entity) {
             for (auto& row : entity.extensions.at(archive_key).at("operations")) row.at("operation").erase("slab_id");
         }
         if (p.contains("layers")) for (auto& layer : p.at("layers")) layer.erase("id");
+    } else if (entity.type == "assembly_model") {
+        // Closed typed admission does not grant authority over opaque envelope
+        // siblings, property strings, or definition/override values.
+        (void)AssemblyModel::from_json(p.at("model"));
+        for (auto& row : p.at("model").at("instances"))
+            if (row.contains("placement")) row.at("placement").erase("host_entity_id");
     } else if (entity.type == "model_phases") {
         // The phase model is a closed codec. Envelope siblings remain opaque.
         (void)ModelPhases::from_json(p.at("model")); p.erase("model");
@@ -206,24 +233,124 @@ void child_declarations(const Json& value, std::map<std::string, std::size_t, st
         child_declarations(child, counts);
     }
 }
-void diagnose_hosted_assemblies(SlabClonePlan& plan, const SlabCloneEntities& source, const Ids& owners) {
+void admit_catalog_opaque_instance_references(const Entity& entity,
+    const std::vector<SlabCloneHostedInstanceKey>& selected) {
+    Ids affected;
+    for (const auto& key : selected) if (key.first == entity.id) affected.insert(key.second);
+    if (affected.empty()) return;
+    affected.insert(entity.id);
+    auto scratch = opaque_remainder(entity);
+    auto& model = scratch.properties.at("model");
+    // These identities belong to definition/material/part/profile namespaces
+    // within the copied catalog; equal spellings are legal and retained. All
+    // opaque property strings, names and envelope fields remain in the scan.
+    for (auto& material : model.at("materials")) material.erase("id");
+    const auto clear_overrides = [](Json& row) { row.erase("material_overrides"); };
+    for (auto& type : model.at("types")) {
+        type.erase("id"); type.erase("materials");
+        if (type.contains("profiles")) for (auto& profile : type.at("profiles")) {
+            profile.erase("id"); profile.erase("material_slot");
+        }
+        if (type.contains("parts")) for (auto& part : type.at("parts")) {
+            part.erase("id"); part.erase("type_id"); clear_overrides(part);
+        }
+    }
+    for (auto& instance : model.at("instances")) {
+        if (affected.contains(instance.at("id").get<std::string>())) instance.erase("id");
+        instance.erase("type_id"); clear_overrides(instance);
+        if (instance.contains("nested_overrides")) for (auto& change : instance.at("nested_overrides")) {
+            change.erase("part_path"); clear_overrides(change);
+        }
+    }
+    if (touches(scratch.properties, affected) || touches(scratch.extensions, affected))
+        reject("affected catalog has an opaque catalog/instance reference without a qualified copy codec: " + entity.id);
+}
+// Admission follows the native renderer's existing profile/legacy split. The
+// source placement is validated as authored, never converted to another pose.
+void admit_hosted_instance(const AssemblyModel& model, const AssemblyInstance& instance,
+    const SlabCloneEntities& source, AssemblyExpansionBudget& budget) try {
+    if (!instance.placement) reject("hosted assembly requires an actual placement");
+    const auto& placement = *instance.placement;
+    if (!std::isfinite(placement.translation_z_m)) reject("hosted assembly Z placement must be finite");
+    const auto host = source.find(placement.host_entity_id);
+    if (host == source.end() || host->second.type != "slab") reject("hosted assembly requires an actual native slab");
+    const auto expansion = model.expand(instance, budget);
+    if (!expansion.profiles.empty()) {
+        (void)make_assembly_geometry(expansion);
+        return;
+    }
+    auto shape = make_slab(actual_slab(resolve_vertical_placement(source, host->second)));
+    const auto apply = [&](const gp_Trsf& transform) {
+        BRepBuilderAPI_Transform changed(shape, transform, true);
+        if (!changed.IsDone() || changed.Shape().IsNull()) reject("hosted assembly native placement failed");
+        shape = changed.Shape();
+    };
+    if (placement.mirrored_y) {
+        gp_Trsf mirror;
+        mirror.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0)));
+        apply(mirror);
+    }
+    gp_Trsf scale; scale.SetScale(gp_Pnt(0.0, 0.0, 0.0), placement.scale); apply(scale);
+    gp_Trsf rotate;
+    rotate.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), placement.rotation_radians);
+    apply(rotate);
+    gp_Trsf translate;
+    translate.SetTranslation(gp_Vec(placement.translation_m.x, placement.translation_m.y, placement.translation_z_m)); apply(translate);
+    const auto volume = solid_volume(shape);
+    if (!BRepCheck_Analyzer(shape).IsValid() || !std::isfinite(volume) || volume <= 0.0)
+        reject("hosted assembly placement produces an invalid native solid");
+} catch (const Standard_Failure& error) {
+    reject(std::string("hosted assembly native admission failed: ") + error.what());
+}
+Ids discover_hosted_assemblies(SlabClonePlan& plan, const SlabCloneEntities& source, const Ids& owners,
+    const Ids& inactive) {
+    Ids catalogs;
+    AssemblyExpansionBudget budget;
+    std::size_t inventory = 0;
     for (const auto& [id, entity] : source) {
         if (entity.type != "assembly_model") continue;
         const auto model = field(entity.properties, "model");
-        const auto schema = model ? field(*model, "schema") : nullptr;
         const auto instances = model ? field(*model, "instances") : nullptr;
-        if (!schema || !schema->is_string() ||
-            (*schema != "sketch.assemblies.v1" && *schema != "sketch.assemblies.v2" &&
-             *schema != "sketch.assemblies.v3" && *schema != "sketch.assemblies.v4") ||
-            !instances || !instances->is_array()) continue;
+        if (!instances || !instances->is_array()) continue;
+        bool affected = false;
         for (const auto& instance : *instances) {
             const auto placement = field(instance, "placement");
             const auto host = placement ? field(*placement, "host_entity_id") : nullptr;
             if (host && host->is_string() && owners.contains(host->get_ref<const std::string&>()))
-                diagnostic(plan, id, "slab-hosted assembly on " + host->get<std::string>() +
-                    " requires a qualified additive instance-copy codec; original remains preserved");
+                affected = true;
+        }
+        if (!affected) continue;
+        if (inactive.contains(id)) reject("affected hosted assembly catalog is inactive: " + id);
+        // Preflight aggregate collections before invoking the closed codec.
+        for (const auto* key : {"materials", "types", "instances"}) {
+            const auto rows = field(*model, key);
+            if (!rows || !rows->is_array() || rows->size() > maximum_entities - inventory)
+                reject("affected assembly catalog inventory budget exceeded: " + id);
+            inventory += rows->size();
+        }
+        for (const auto& [key, type] : std::vector<std::pair<const char*, const char*>>{
+            {"property_id", "property"}, {"building_id", "building"}, {"floor_id", "floor"},
+            {"layer_id", "layer"}, {"wall_id", "wall"}}) {
+            if (!entity.properties.contains(key)) continue;
+            const auto target_id = entity.properties.at(key).get<std::string>(); identity(target_id);
+            const auto target = source.find(target_id);
+            if (target == source.end() || target->second.type != type)
+                reject("affected catalog has unresolved actual context: " + id);
+        }
+        const auto parsed = AssemblyModel::from_json(*model);
+        catalogs.insert(id);
+        for (const auto& instance : parsed.instances()) {
+            if (!instance.placement || !owners.contains(instance.placement->host_entity_id)) continue;
+            // Local source identities follow AssemblyModel's rules, which allow
+            // arbitrary authored strings. Fresh identities follow document rules.
+            plan.required_hosted_instance_ids.emplace_back(id, instance.id);
+            if (owners.size() + catalogs.size() + plan.required_hosted_instance_ids.size() > maximum_identities)
+                reject("hosted clone identity budget exceeded");
+            admit_hosted_instance(parsed, instance, source, budget);
         }
     }
+    std::sort(plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
+    return catalogs;
 }
 SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::string>& selected) {
     SlabClonePlan plan;
@@ -255,7 +382,8 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
             }
         }
         admit_slabs(source, owners);
-        diagnose_hosted_assemblies(plan, source, owners);
+        const auto catalogs = discover_hosted_assemblies(plan, source, owners, scope.inactive_owner_ids);
+        for (const auto& id : catalogs) admit_catalog_opaque_instance_references(source.at(id), plan.required_hosted_instance_ids);
         std::map<std::string, std::size_t, std::less<>> declarations;
         // Historical slab_id/layer_id slots do not declare current children.
         // Any opaque id field still participates in conservative alias checks.
@@ -276,7 +404,8 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
                             identity(row.id);
                             if (!children.insert(row.id).second) reject("copied overlay aliases another copied child: " + row.id);
                             ++plan.copied_view_overlay_count;
-                            if (owners.size() + children.size() > maximum_identities) reject("clone entity/child identity budget exceeded");
+                            if (owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_identities)
+                                reject("clone entity/child/hosted identity budget exceeded");
                         }
                     }
                 } else if (entity.type == kAnnotationEntityType) {
@@ -326,7 +455,11 @@ SlabClonePlan derive(const SlabCloneEntities& source, const std::vector<std::str
             }
         }
         plan.required_entity_ids.assign(owners.begin(), owners.end());
+        plan.required_entity_ids.insert(plan.required_entity_ids.end(), catalogs.begin(), catalogs.end());
+        std::sort(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         plan.required_child_ids.assign(children.begin(), children.end());
+        if (plan.required_entity_ids.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_identities)
+            reject("clone entity/child/hosted identity budget exceeded");
     } catch (const std::exception& error) { diagnostic(plan, {}, error.what()); }
     std::sort(plan.diagnostics.begin(), plan.diagnostics.end(), [](const auto& a, const auto& b) {
         return std::pair{a.entity_id, a.reason} < std::pair{b.entity_id, b.reason};
@@ -383,7 +516,7 @@ SlabClonePlan inspect_slab_clone_plan(const SlabCloneEntities& source, const std
     return derive(source, selected_slab_ids);
 }
 SlabCloneResult replay_slab_clone(const SlabCloneEntities& source, const SlabClonePlan& plan,
-    const SlabCloneIdentityMap& identities) {
+    const SlabCloneIdentityMap& identities, const SlabCloneHostedInstanceIdentityMap& hosted_instance_identities) {
     try {
         const auto derived = derive(source, plan.selected_slab_ids);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
@@ -393,27 +526,74 @@ SlabCloneResult replay_slab_clone(const SlabCloneEntities& source, const SlabClo
         if (identities.size() != expected.size()) reject("requires exact complete entity/child mapping");
         if (plan.required_entity_ids.size() > maximum_entities - source.size()) reject("final entity budget exceeded");
         const auto occupied = occupied_strings(source);
+        const auto original_presentations = embedded_assembly_presentation_ids(source);
         Ids fresh;
         for (const auto& [old_id, new_id] : identities) {
             identity(old_id); identity(new_id);
             if (!expected.contains(old_id)) reject("mapping contains an unrequested source identity: " + old_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh identity collision: " + new_id);
         }
-        SlabCloneResult result{source, identities, {}};
+        const std::set<SlabCloneHostedInstanceKey> expected_instances(
+            plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
+        if (hosted_instance_identities.size() != expected_instances.size()) reject("requires exact qualified hosted instance mapping");
+        for (const auto& [key, new_id] : hosted_instance_identities) {
+            if (!expected_instances.contains(key)) reject("mapping contains an unrequested qualified hosted instance");
+            identity(new_id);
+            if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh hosted identity collision: " + new_id);
+        }
+        SlabCloneResult result{source, identities, {}, hosted_instance_identities};
+        const Ids owners(plan.selected_slab_ids.begin(), plan.selected_slab_ids.end());
         for (const auto& id : plan.required_entity_ids) {
             auto copy = source.at(id); copy.id = identities.at(id);
-            if (copy.type != "slab") reject("unsupported copy owner reached replay");
-            if (copy.properties.contains("layers")) for (auto& layer : copy.properties.at("layers"))
-                layer.at("id") = identities.at(layer.at("id").get<std::string>());
+            if (copy.type == "slab") {
+                if (copy.properties.contains("layers")) for (auto& layer : copy.properties.at("layers"))
+                    layer.at("id") = identities.at(layer.at("id").get<std::string>());
+            } else if (copy.type == "assembly_model") {
+                // Keep the raw model, schema, numeric representation, definitions
+                // and envelope. Closed typed parsing is admission only.
+                const auto retained = copy.properties.at("model").at("instances");
+                auto& rows = copy.properties.at("model").at("instances"); rows = Json::array();
+                for (auto row : retained) {
+                    if (!row.contains("placement")) continue;
+                    const auto host = row.at("placement").at("host_entity_id").get<std::string>();
+                    if (!owners.contains(host)) continue;
+                    const SlabCloneHostedInstanceKey key{id, row.at("id").get<std::string>()};
+                    row.at("id") = hosted_instance_identities.at(key);
+                    row.at("placement").at("host_entity_id") = identities.at(host);
+                    rows.push_back(std::move(row));
+                }
+                (void)AssemblyModel::from_json(copy.properties.at("model"));
+            } else reject("unsupported copy owner reached replay");
             const auto copy_id = copy.id;
             if (!result.entities.emplace(copy_id, std::move(copy)).second) reject("copy insertion collided");
         }
-        const Ids owners(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         complete_presentation(result.entities, source, owners, identities);
+        const auto candidate_presentations = embedded_assembly_presentation_ids(result.entities);
+        for (const auto& [key, alias] : original_presentations) {
+            const auto found = candidate_presentations.find(key);
+            if (found == candidate_presentations.end() || found->second != alias)
+                reject("copy would change an original component's presentation identity");
+        }
         (void)occupied_strings(result.entities);
         Ids copies;
         for (const auto& id : owners) copies.insert(identities.at(id));
         admit_slabs(result.entities, copies);
+        // Rebuild the candidate roster from actual copied host slots and native
+        // admission, independently of the supplied qualified mapping.
+        SlabClonePlan copied_plan;
+        const auto copied_catalogs = discover_hosted_assemblies(copied_plan, result.entities, copies, {});
+        std::set<SlabCloneHostedInstanceKey> expected_copies;
+        Ids expected_catalogs;
+        for (const auto& [key, new_id] : hosted_instance_identities) {
+            const auto catalog_id = identities.at(key.first);
+            expected_catalogs.insert(catalog_id); expected_copies.emplace(catalog_id, new_id);
+        }
+        const std::set<SlabCloneHostedInstanceKey> actual_copies(copied_plan.required_hosted_instance_ids.begin(),
+            copied_plan.required_hosted_instance_ids.end());
+        if (copied_catalogs != expected_catalogs || actual_copies != expected_copies)
+            reject("copied hosted roster differs from actual qualified source replay");
+        for (const auto& id : plan.required_entity_ids) if (result.entities.at(id) != source.at(id))
+            reject("replay changed an original slab or assembly catalog");
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());
         return result;
     } catch (const Json::exception& error) { reject(std::string("malformed source-derived replay: ") + error.what()); }

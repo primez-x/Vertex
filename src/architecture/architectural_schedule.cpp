@@ -592,6 +592,7 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 data("scale",placement.scale);
                 data("translation_x_m",ScheduleQuantity{placement.translation_m.x,ScheduleUnit::metre});
                 data("translation_y_m",ScheduleQuantity{placement.translation_m.y,ScheduleUnit::metre});
+                data("translation_z_m",ScheduleQuantity{placement.translation_z_m,ScheduleUnit::metre});
             } else if (instance.root_transform) {
                 const auto& transform = *instance.root_transform;
                 data("rotation_radians",transform.rotation_radians);

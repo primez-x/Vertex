@@ -3,6 +3,7 @@
 #include "sketch/geometry.hpp"
 
 #include <nlohmann/json.hpp>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -87,14 +88,25 @@ struct AssemblyPlacement {
     double rotation_radians{};
     double scale{1.0};
     bool mirrored_y{false};
+    // Appended for existing aggregate callers; legacy placements default to Z=0.
+    double translation_z_m{};
     bool operator==(const AssemblyPlacement& other) const noexcept {
         return host_entity_id == other.host_entity_id &&
                translation_m.x == other.translation_m.x &&
                translation_m.y == other.translation_m.y &&
                rotation_radians == other.rotation_radians &&
-               scale == other.scale && mirrored_y == other.mirrored_y;
+               scale == other.scale && mirrored_y == other.mirrored_y &&
+               translation_z_m == other.translation_z_m;
     }
 };
+// Retains the source host identity. If its geometry also follows G, conjugate
+// the placement as G*A*G^-1; otherwise compose G*A (type-owned profiles).
+[[nodiscard]] AssemblyPlacement transform_assembly_placement(const AssemblyPlacement& source,
+    const AssemblyTransform& world_transform, bool host_geometry_transformed);
+// Patch actual hosted catalog instances without reconstructing saved definitions,
+// overrides or unchanged numeric representations. Unknown/unhosted IDs fail.
+[[nodiscard]] nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_model,
+    const std::map<std::string, AssemblyTransform, std::less<>>& instance_transforms);
 struct AssemblyInstance {
     std::string id;
     std::string type_id;
@@ -108,7 +120,7 @@ struct AssemblyInstance {
     bool operator==(const AssemblyInstance&) const = default;
 };
 // Strict independent-instance codec (sketch.assembly-instance.v1). Legacy
-// embedded catalog instances retain the V1-V3 representation internally.
+// embedded catalog instances use the separate V1-V5 catalog representation.
 [[nodiscard]] nlohmann::json encode_assembly_instance(const AssemblyInstance& instance);
 [[nodiscard]] AssemblyInstance decode_assembly_instance(const nlohmann::json& value);
 [[nodiscard]] nlohmann::json encode_assembly_transform(const AssemblyTransform& transform);

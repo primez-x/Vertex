@@ -1,4 +1,41 @@
-# Vertex project formats v1 through v109
+# Vertex project formats v1 through v110
+
+## Spatial hosted assembly placements (v110)
+
+Native format 110 and JSON/assets extraction version 108 retain
+`sketch.assemblies.v5`. It uses the version-four nested type and instance
+envelopes, with exactly three XYZ coordinates in each host placement's
+`translation_m`. Version-one through version-four codecs retain their exact
+two-coordinate placement rules and implicit zero Z. Canonical encoding selects
+version five when a hosted placement has nonzero Z; actual raw version-five
+payloads remain version five during typed editing even if Z becomes zero.
+
+The native host preview, profile expansion and schedules use the same explicit
+Z placement. Mathematical placement editing preserves the host identity and
+declared quantities. For legacy repeated-host solids it derives `G A G^-1`,
+so applying the new placement to the transformed host yields the transformed
+original assembly. Authored profile instances instead receive `G A`; bounded
+actual expansion independently determines the applicable branch. Exact no-ops
+preserve raw payloads. A needed version-three upgrade adds only empty nested
+type/instance envelopes, while existing definitions, materials, overrides and
+untouched numeric representations remain exact.
+
+Independent horizontal cloning discovers actual hosted catalogs and qualified
+`(catalog_id, instance_id)` identities. Fresh owner/catalog/layer/overlay and
+qualified instance mappings are complete and independently rediscovered. Each
+copied catalog contains only instances hosted on the selected source slabs;
+the original catalog and unrelated instances remain exact. Catalog-local
+definition/material identities remain local and retain their raw values.
+Unknown affected references refuse rather than acquiring rewrite authority.
+The desktop allocator reserves all destinations throughout revisions and
+assets, including qualified instance names. XYZ/yaw/reflection/uniform model
+copy transforms use the typed placement producer and native candidate admission
+before one source-bound creation command. Version-five catalogs in retained
+history raise the reader floor even after Undo.
+
+This is source implementation. Compilation, interaction and storage round trips
+remain unqualified. Shared-baseline hosted replacement is a separate typed
+authoring extension being integrated after independent copying.
 
 ## Horizontal assembly model transforms (v109)
 

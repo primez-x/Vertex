@@ -16318,7 +16318,25 @@ public:
                 ? Entity{catalog_id, "assembly_model", {{"model", AssemblyModel::create({}, {}, {}).to_json()}}}
                 : found->second;
             if (entity.type != "assembly_model") throw std::invalid_argument("The assembly catalog is unavailable.");
-            entity.properties["model"] = model.to_json();
+            auto updated_model = model.to_json();
+            if (entity.properties.contains("model") && entity.properties.at("model").is_object() &&
+                entity.properties.at("model").value("schema", json{}) == "sketch.assemblies.v5" &&
+                updated_model.at("schema") != "sketch.assemblies.v5") {
+                // Clearing the last nonzero Z does not discard the saved XYZ
+                // dialect or its nested envelope during an ordinary edit.
+                updated_model.at("schema") = "sketch.assemblies.v5";
+                for (auto& type : updated_model.at("types")) {
+                    if (!type.contains("profiles")) type["profiles"] = json::array();
+                    if (!type.contains("parts")) type["parts"] = json::array();
+                }
+                for (auto& instance : updated_model.at("instances")) {
+                    if (!instance.contains("root_transform")) instance["root_transform"] = nullptr;
+                    if (!instance.contains("nested_overrides")) instance["nested_overrides"] = json::array();
+                    if (instance.contains("placement")) instance.at("placement").at("translation_m").push_back(0.0);
+                }
+                (void)AssemblyModel::from_json(updated_model);
+            }
+            entity.properties["model"] = std::move(updated_model);
             if (found != source.entities().end() && entity == found->second) { clearError(); return true; }
             const ApplyEntityChanges command{
                 source.revision(), {EntityChange::upsert(std::move(entity))}, {},
@@ -17573,6 +17591,9 @@ public:
             placement_x->setObjectName(QStringLiteral("assemblyPlacementX"));
             auto* placement_y = new QLineEdit(override_page);
             placement_y->setObjectName(QStringLiteral("assemblyPlacementY"));
+            auto* placement_z = new QLineEdit(override_page);
+            placement_z->setObjectName(QStringLiteral("assemblyPlacementZ"));
+            placement_z->setText(QStringLiteral("0"));
             auto* placement_rotation = new QLineEdit(override_page);
             placement_rotation->setObjectName(QStringLiteral("assemblyPlacementRotation"));
             placement_rotation->setPlaceholderText(QStringLiteral("Radians"));
@@ -17582,6 +17603,7 @@ public:
             placement_form->addRow(QStringLiteral("Host geometry"), placement_host);
             placement_form->addRow(QStringLiteral("Translate X (m)"), placement_x);
             placement_form->addRow(QStringLiteral("Translate Y (m)"), placement_y);
+            placement_form->addRow(QStringLiteral("Translate Z (m)"), placement_z);
             placement_form->addRow(QStringLiteral("Rotation (rad)"), placement_rotation);
             placement_form->addRow(QStringLiteral("Scale"), placement_scale);
             override_layout->addWidget(new QLabel(QStringLiteral("Placement preview"), override_page));
@@ -17714,6 +17736,7 @@ public:
                 placement_host->clear();
                 placement_x->clear();
                 placement_y->clear();
+                placement_z->setText(QStringLiteral("0"));
                 placement_rotation->clear();
                 placement_scale->setText(QStringLiteral("1"));
                 if (!record) return;
@@ -17751,6 +17774,7 @@ public:
                     placement_host->setText(QString::fromStdString(found->placement->host_entity_id));
                     placement_x->setText(QString::number(found->placement->translation_m.x, 'g', 12));
                     placement_y->setText(QString::number(found->placement->translation_m.y, 'g', 12));
+                    placement_z->setText(QString::number(found->placement->translation_z_m, 'g', 12));
                     placement_rotation->setText(QString::number(found->placement->rotation_radians, 'g', 12));
                     placement_scale->setText(QString::number(found->placement->scale, 'g', 12));
                 }
@@ -18249,23 +18273,28 @@ public:
                     if (id.empty()) throw std::invalid_argument("Choose a placed instance first.");
                     const auto host = placement_host->text().trimmed().toStdString();
                     if (host.empty()) throw std::invalid_argument("Enter a host geometry ID.");
-                    const auto read_finite = [](QLineEdit* field, const char* label) {
+                    const auto instance = std::find_if(current->model.instances().begin(),
+                        current->model.instances().end(), [&](const auto& candidate) { return candidate.id == id; });
+                    if (instance == current->model.instances().end())
+                        throw std::invalid_argument("The selected component no longer exists.");
+                    auto replacement = *instance;
+                    const auto previous = replacement.placement.value_or(AssemblyPlacement{});
+                    const auto read_finite = [](QLineEdit* field, const char* label, double original) {
+                        if (field->text().trimmed() == QString::number(original, 'g', 12)) return original;
                         bool ok = false;
                         const auto value = field->text().trimmed().toDouble(&ok);
                         if (!ok || !std::isfinite(value))
                             throw std::invalid_argument(std::string("Enter a finite ") + label + ".");
                         return value;
                     };
-                    const auto x = read_finite(placement_x, "X translation");
-                    const auto y = read_finite(placement_y, "Y translation");
-                    const auto rotation = read_finite(placement_rotation, "rotation");
-                    const auto scale = read_finite(placement_scale, "scale");
+                    const auto x = read_finite(placement_x, "X translation", previous.translation_m.x);
+                    const auto y = read_finite(placement_y, "Y translation", previous.translation_m.y);
+                    const auto z = read_finite(placement_z, "Z translation", previous.translation_z_m);
+                    const auto rotation = read_finite(placement_rotation, "rotation", previous.rotation_radians);
+                    const auto scale = read_finite(placement_scale, "scale", previous.scale);
                     if (!(scale > 0.0)) throw std::invalid_argument("Placement scale must be positive.");
-                    auto replacement = *std::find_if(current->model.instances().begin(),
-                                                     current->model.instances().end(),
-                        [&](const auto& candidate) { return candidate.id == id; });
                     const auto mirrored_y = replacement.placement && replacement.placement->mirrored_y;
-                    replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale, mirrored_y};
+                    replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale, mirrored_y, z};
                     const auto updated = current->model.with_instance(std::move(replacement));
                     if (apply_model(updated, QStringLiteral("Save assembly placement"))) {
                         populate();
@@ -24413,7 +24442,7 @@ public:
         if (source.IsNull()) throw std::invalid_argument("assembly host solid is empty");
         if (!std::isfinite(placement.scale) || placement.scale<=0.0 ||
             !std::isfinite(placement.rotation_radians) || !std::isfinite(placement.translation_m.x) ||
-            !std::isfinite(placement.translation_m.y))
+            !std::isfinite(placement.translation_m.y) || !std::isfinite(placement.translation_z_m))
             throw std::invalid_argument("assembly placement transform is invalid");
         // This is the catalog's existing legacy copy transform. Physical
         // owner gestures remain rigid and never resize the owner's height.
@@ -24435,7 +24464,7 @@ public:
         BRepBuilderAPI_Transform rotated(scaled.Shape(),rotate,true);
         if (!rotated.IsDone() || rotated.Shape().IsNull()) throw std::invalid_argument("assembly rotation transform failed");
         gp_Trsf translate;
-        translate.SetTranslation(gp_Vec(placement.translation_m.x,placement.translation_m.y,0.0));
+        translate.SetTranslation(gp_Vec(placement.translation_m.x,placement.translation_m.y,placement.translation_z_m));
         BRepBuilderAPI_Transform translated(rotated.Shape(),translate,true);
         if (!translated.IsDone() || translated.Shape().IsNull()) throw std::invalid_argument("assembly translation transform failed");
         return translated.Shape();
@@ -42181,6 +42210,16 @@ private:
             for (const auto& [id, entity] : revision.entities) {
                 reserve_text(id); reserve_text(entity.type);
                 reserve(entity.properties); reserve(entity.extensions);
+                if (entity.type == "assembly_model" && entity.properties.is_object()) {
+                    const auto model = entity.properties.find("model");
+                    if (model != entity.properties.end() && model->is_object()) {
+                        const auto instances = model->find("instances");
+                        if (instances != model->end() && instances->is_array()) for (const auto& instance : *instances) {
+                            if (instance.is_object() && instance.contains("id") && instance.at("id").is_string())
+                                reserve_text(id + ":instance:" + instance.at("id").get_ref<const std::string&>());
+                        }
+                    }
+                }
             }
             for (const auto& [id, asset] : revision.assets) { (void)asset; reserve_text(id); }
             if (revision.boundary_constraint_changes)
@@ -42238,20 +42277,75 @@ private:
                 while (!occupied.insert(copied).second) copied = new_id("assembly-copy");
                 identities.emplace(original, std::move(copied));
             }
-        const auto copied = replay_slab_clone(source.entities(), plan, identities);
+        SlabCloneHostedInstanceIdentityMap hosted_identities;
+        for (const auto& original : plan.required_hosted_instance_ids) {
+            auto copied = new_id("assembly-instance-copy");
+            while (!occupied.insert(copied).second) copied = new_id("assembly-instance-copy");
+            hosted_identities.emplace(original, std::move(copied));
+        }
+        const auto copied = replay_slab_clone(source.entities(), plan, identities, hosted_identities);
         std::vector<SlabGeometryEditIntent> movement;
         std::set<std::string, std::less<>> moved;
+        std::map<std::string, AssemblyTransform, std::less<>> host_transforms;
         for (const auto& operation : operations) {
             if (!std::binary_search(plan.selected_slab_ids.begin(), plan.selected_slab_ids.end(), operation.entity_id) ||
                 !moved.insert(operation.entity_id).second)
                 throw std::invalid_argument("A horizontal copy requires one operation for each selected assembly.");
             movement.push_back(slabTransformGeometryIntent(identities.at(operation.entity_id), operation.transform));
+            const auto& transform = operation.transform;
+            AssemblyTransform world;
+            world.rotation_radians = std::remainder(
+                (transform.flip_horizontal != transform.flip_vertical ? -transform.rotation_z_radians : transform.rotation_z_radians) +
+                (transform.flip_horizontal ? std::numbers::pi : 0.0), 2.0 * std::numbers::pi);
+            world.scale = transform.scale;
+            world.mirrored_y = transform.flip_horizontal != transform.flip_vertical;
+            const auto linear_pivot = transform_assembly_point(
+                {transform.pivot.x, transform.pivot.y, transform.pivot.z}, world);
+            world.translation_m = {
+                (transform.pivot.x - linear_pivot.x) + transform.offset.x,
+                (transform.pivot.y - linear_pivot.y) + transform.offset.y,
+                (transform.pivot.z - linear_pivot.z) + transform.offset.z};
+            host_transforms.emplace(operation.entity_id, world);
         }
         if (moved.size() != plan.selected_slab_ids.size())
             throw std::invalid_argument("The horizontal copy is missing a selected assembly's transform.");
         // Replay directly against the complete real copy map. A fabricated
         // snapshot cannot lend source/history authority to a transformed copy.
-        const auto candidate = replay_slab_geometry_entities(copied.entities, movement);
+        auto candidate = replay_slab_geometry_entities(copied.entities, movement);
+        std::map<std::string, std::map<std::string, AssemblyTransform, std::less<>>, std::less<>> catalog_transforms;
+        for (const auto& original : plan.required_hosted_instance_ids) {
+            const auto& instances = source.entities().at(original.first).properties.at("model").at("instances");
+            const auto instance = std::find_if(instances.begin(), instances.end(), [&](const auto& row) {
+                return row.at("id") == original.second;
+            });
+            if (instance == instances.end() || !instance->contains("placement"))
+                throw std::invalid_argument("A copied hosted component no longer has its actual source placement.");
+            const auto host_id = instance->at("placement").at("host_entity_id").get<std::string>();
+            catalog_transforms[identities.at(original.first)].emplace(hosted_identities.at(original), host_transforms.at(host_id));
+        }
+        for (const auto& [catalog_id, transforms] : catalog_transforms) {
+            auto& model = candidate.at(catalog_id).properties.at("model");
+            model = transform_hosted_assembly_model(model, transforms);
+        }
+        const auto presentations = embedded_assembly_presentation_ids(candidate);
+        for (const auto& [original, copied_instance] : hosted_identities) {
+            const auto alias = presentations.at({identities.at(original.first), copied_instance});
+            if (occupied.contains(alias))
+                throw std::invalid_argument("A copied component's presentation identity is already reserved in source or history.");
+        }
+        if (!hosted_identities.empty()) {
+            std::vector<std::string> copied_owners;
+            for (const auto& id : plan.selected_slab_ids) copied_owners.push_back(identities.at(id));
+            const auto admission = inspect_slab_clone_plan(candidate, copied_owners);
+            if (!admission.ready()) {
+                std::string reasons;
+                for (const auto& diagnostic : admission.diagnostics) if (diagnostic.blocking) {
+                    if (!reasons.empty()) reasons += '\n';
+                    reasons += diagnostic.entity_id + ": " + diagnostic.reason;
+                }
+                throw std::invalid_argument(reasons);
+            }
+        }
         ApplyEntityChanges creation{source.revision(), {}, {}, message};
         for (const auto& [id, entity] : candidate) {
             const auto before = source.entities().find(id);
