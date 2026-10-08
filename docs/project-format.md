@@ -1,4 +1,38 @@
-# Vertex project formats v1 through v94
+# Vertex project formats v1 through v95
+
+## Baseline-preserving roof-opening edits (v95)
+
+Native format 95 and JSON/assets extraction version 93 retain roof-opening
+add, edit and remove operations inside the exclusive phase intent four roof
+replacement. The floor follows every retained direct or composed proof,
+including commands later undone. Earlier profile-only replacement records keep
+their version-one meaning and floor.
+
+Roof replacement record two has exactly `version`, `registry_id`,
+`alternative_id`, `seed_roof_ids`, `identities`, `roof_profiles` and
+`roof_opening_edits`. The profile array is empty in this dialect. Each opening
+intent has exactly `version`, `roof_id`, `upserts` and `removed_opening_ids`.
+An upsert has exactly `opening_id`, `x`, `y`, `width` and `depth`; null retains
+an existing scalar. A new child requires all four inputs. Each nonnull input
+contains exactly a strict quantity receipt and its actual `default_unit`.
+Coordinates can be signed or zero; width and depth are positive.
+
+Replay owns the declared roster changes only. It preserves the roof's pose,
+profile, pitch, context, materials and retained child metadata. Known indexed
+quantity receipts follow their original child identities when indices shift;
+future or opaque affected bindings refuse. Changed receipt cores preserve
+opaque siblings. Equivalent input retains the original receipt and numeric
+representation. Capture requires exact entered receipts and complete equality
+with independently replayed source data; numeric-only candidates are refused.
+
+The complete source-derived joined roof cohort receives distinct proposed
+owners. Existing children follow their declared fresh mapping; newly authored
+opening identities remain explicit and disjoint from that mapping. Current and
+retained source data, declared earlier intents, entity types and envelope keys
+reserve these names after Undo. Original roofs, joins and other alternatives
+remain exact. Source, edited and copied roofs and joins pass resolved native
+admission before publication. Mixed profile/opening and form/pose edits still
+require a further typed contract and cannot mutate the shared baseline.
 
 ## Baseline-preserving proposed roof profiles (v94)
 

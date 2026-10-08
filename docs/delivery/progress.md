@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 baseline-preserving roof-opening implementation
+
+Typed source now supports roof-opening additions, exact coordinate/size edits
+and removals in an active design alternative. The dialog derives these inputs
+from the actual original child roster and table values; new default rows receive
+exact explicit-metre receipts. Source-equivalent input keeps the original
+entity and adds no edit. Stable child identities carry known indexed receipts
+across removal/index changes, with opaque metadata retained or affected future
+bindings explicitly refused.
+
+Roof replacement record two copies the complete source-derived roof/join cohort
+and retained children/overlays while keeping original baseline owners exact.
+New opening IDs are explicit, disjoint from copied IDs and reserved against
+current/retained metadata and earlier intents after Undo. Native 95/extraction
+93 retain this authority through direct and composed phase history. Profile-only
+record one and historical ordinary replay retain their earlier meanings.
+
+Root integrated the dialog, controller, current baseline protection, identity
+lifetime and format linkage. Independent source review found the visible
+Openings editor still used the old numeric producer, final-child removal was
+re-canonicalized to schema one, and exact re-entry could add history. The visible
+control now submits direct typed replay; commit preserves that complete
+candidate and exits before constructing a command for source-equivalent input.
+The reviewer approved these corrections. The source remains uncompiled and
+unexercised; no build, test, probe, script, native job,
+launch, package or installation runs. The installed candidate is unchanged.
+Atomic mixed roof profile/opening edits, roof pose/form and clone/delete
+alternatives, unsupported affected references and other non-wall families remain
+implementation gaps. Source work on typed roof pose and atomic combined edits
+continues separately.
+
 ### October 8 baseline-preserving roof profile implementation
 
 The source now routes same-form baseline roof dimension edits in the active
@@ -40,8 +71,8 @@ rejections, preserve opening metadata, require exact changed seed targets and
 include preserved roofs in Site Plan selection admission. The reviewer approved
 the corrected source. No compilation or runtime acceptance is claimed. No builds, tests, probes, scripts, native
 jobs, launches, packages or installations run. The installed candidate remains
-unchanged. Typed roof opening add/edit/remove helpers are written and their
-phase/controller integration is the next source task; form/pose and
+unchanged. The subsequent roof-opening record above supplies roster
+phase/controller integration; form/pose and
 clone/delete alternatives, unsupported affected legacy references and other
 non-wall families remain visible implementation gaps.
 

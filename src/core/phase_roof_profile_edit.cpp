@@ -382,14 +382,12 @@ std::map<std::string, Entity, std::less<>> replay_roof_profile_entities(
     return result;
 }
 
-std::optional<RoofProfileEditIntent> capture_roof_profile_edit(const Entity& original, const Entity& candidate) {
+Entity normalize_equivalent_roof_inputs(const Entity& original,const Entity& candidate) {
     validate_roof_profile_source_entity(original);
-    if (exact(original, candidate)) return std::nullopt;
+    if (exact(original, candidate)) return original;
     validate_roof_profile_source_entity(candidate);
     if (original.properties.at("form") != candidate.properties.at("form"))
         invalid("Roof profile capture cannot change roof form");
-    RoofProfileEditIntent intent;
-    intent.roof_id = original.id;
     auto normalized = candidate;
     const auto retain_equal_number=[](Json& value,const Json& before) {
         if (value.is_number() && before.is_number() && number(value)==number(before)) value=before;
@@ -419,9 +417,20 @@ std::optional<RoofProfileEditIntent> capture_roof_profile_edit(const Entity& ori
             // No receipt, pitch, roster, pose or extension is normalized away.
             normalized.properties[name] = original.properties.at(name);
             normalize_unchanged_receipt(normalized,original,"/"+std::string(name),after);
-            continue;
         }
-        intent.*(dimension.intent) = captured_quantity(original, candidate, "/" + std::string(name), after);
+    }
+    return normalized;
+}
+
+std::optional<RoofProfileEditIntent> capture_roof_profile_edit(const Entity& original, const Entity& candidate) {
+    const auto normalized=normalize_equivalent_roof_inputs(original,candidate);
+    if (exact(normalized,original)) return std::nullopt;
+    RoofProfileEditIntent intent;
+    intent.roof_id=original.id;
+    for (const auto& dimension:dimensions) {
+        const auto name=canonical(original,dimension);
+        const double before=number(original.properties.at(name)),after=number(candidate.properties.at(name));
+        if (before!=after) intent.*(dimension.intent)=captured_quantity(original,candidate,"/"+std::string(name),after);
     }
     const auto expected = any(intent) ? replay_roof_profile_entity(original, intent) : original;
     if (!exact(normalized, expected)) invalid("Roof profile candidate differs from independent typed replay");

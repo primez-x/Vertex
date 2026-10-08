@@ -1,0 +1,539 @@
+#include "sketch/phase_roof_opening_edit.hpp"
+
+#include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
+#include "sketch/phase_roof_profile_edit.hpp"
+#include "sketch/project_organization.hpp"
+#include "sketch/roof_entity_codec.hpp"
+
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cmath>
+#include <initializer_list>
+#include <set>
+#include <stdexcept>
+#include <string_view>
+#include <system_error>
+#include <utility>
+
+namespace sketch {
+namespace {
+using Json = nlohmann::json;
+using Entities = std::map<std::string, Entity, std::less<>>;
+using Ids = std::set<std::string, std::less<>>;
+constexpr std::size_t opening_limit = 256;
+constexpr std::size_t collection_limit = 4096;
+constexpr std::size_t expression_limit = 4096;
+constexpr std::size_t proof_limit = 1024 * 1024;
+
+[[noreturn]] void invalid(const char* reason) { throw std::invalid_argument(reason); }
+void keys(const Json& value, std::initializer_list<const char*> expected) {
+    if (!value.is_object() || value.size() != expected.size()) invalid("Roof opening edit fields are invalid");
+    for (const auto* key : expected)
+        if (!value.contains(key)) invalid("Roof opening edit field is missing");
+}
+const Json* field(const Json& value, const std::string& key) {
+    const auto found = value.find(key);
+    return found == value.end() ? nullptr : &*found;
+}
+std::string identity(const Json& value) {
+    if (!value.is_string()) invalid("Roof opening identity must be a string");
+    const auto& result = value.get_ref<const std::string&>();
+    if (result.empty() || result.size() > 128 ||
+        !std::all_of(result.begin(), result.end(), [](unsigned char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':';
+        })) invalid("Roof opening identity is invalid");
+    return result;
+}
+bool version_one(const Json& value) {
+    return (value.is_number_integer() || value.is_number_unsigned()) && value == 1;
+}
+bool exact(const Json& left, const Json& right) { return left == right && left.dump() == right.dump(); }
+bool exact(const Entity& left, const Entity& right) {
+    return left == right && exact(left.properties, right.properties) && exact(left.extensions, right.extensions);
+}
+double number(const Json& value) {
+    if (!value.is_number() || !std::isfinite(value.get<double>())) invalid("Roof opening scalar must be finite");
+    return value.get<double>();
+}
+const char* unit_name(Unit value) {
+    switch (value) {
+    case Unit::metre: return "m";
+    case Unit::millimetre: return "mm";
+    case Unit::centimetre: return "cm";
+    case Unit::foot: return "ft";
+    case Unit::inch: return "in";
+    }
+    invalid("Roof opening quantity unit is unsupported");
+}
+Unit unit(const Json& value) {
+    if (!value.is_string()) invalid("Roof opening quantity unit must be a string");
+    const auto& text = value.get_ref<const std::string&>();
+    if (text == "m") return Unit::metre;
+    if (text == "mm") return Unit::millimetre;
+    if (text == "cm") return Unit::centimetre;
+    if (text == "ft") return Unit::foot;
+    if (text == "in") return Unit::inch;
+    invalid("Roof opening quantity unit is unsupported");
+}
+void receipt_budget(const Json& value) {
+    const auto expression = field(value, "original_expression");
+    if (!expression || !expression->is_string() ||
+        expression->get_ref<const std::string&>().size() > expression_limit || value.dump().size() > proof_limit)
+        invalid("Roof opening quantity receipt budget exceeded");
+}
+Quantity quantity(const Json& value, bool positive, bool strict = true) {
+    if (strict) {
+        keys(value, {"version", "original_expression", "entered_unit", "exact_metres"});
+        keys(value.at("exact_metres"), {"numerator", "denominator"});
+    }
+    receipt_budget(value);
+    const auto result = decode_constraint_quantity_receipt(value);
+    if (!std::isfinite(result.metres) || (positive && result.metres <= 0))
+        invalid("Roof opening dimension is outside its admitted range");
+    return result;
+}
+Json quantity(const Quantity& value, bool positive) {
+    Json result{{"version", 1}, {"original_expression", value.original_expression},
+        {"entered_unit", unit_name(value.entered_unit)}, {"exact_metres", {
+            {"numerator", value.exact_metres.numerator}, {"denominator", value.exact_metres.denominator}}}};
+    const auto parsed = quantity(result, positive);
+    if (parsed.metres != value.metres || parsed.exact_metres != value.exact_metres ||
+        parsed.original_expression != value.original_expression || parsed.entered_unit != value.entered_unit)
+        invalid("Roof opening quantity is internally inconsistent");
+    return result;
+}
+RoofOpeningQuantityInput input(const Json& value, bool positive) {
+    keys(value, {"quantity", "default_unit"});
+    RoofOpeningQuantityInput result{quantity(value.at("quantity"), positive), unit(value.at("default_unit"))};
+    const auto parsed = parse_quantity(result.quantity.original_expression, result.default_unit);
+    if (parsed.metres != result.quantity.metres || parsed.exact_metres != result.quantity.exact_metres ||
+        parsed.entered_unit != result.quantity.entered_unit)
+        invalid("Roof opening default unit does not reproduce its exact quantity");
+    return result;
+}
+Json input(const RoofOpeningQuantityInput& value, bool positive) {
+    Json result{{"quantity", quantity(value.quantity, positive)}, {"default_unit", unit_name(value.default_unit)}};
+    (void)input(result, positive);
+    return result;
+}
+struct Dimension {
+    const char* wire;
+    const char* scalar;
+    bool positive;
+    std::optional<RoofOpeningQuantityInput> RoofOpeningUpsertIntent::* member;
+};
+constexpr std::array dimensions{
+    Dimension{"x", "x_m", false, &RoofOpeningUpsertIntent::x},
+    Dimension{"y", "y_m", false, &RoofOpeningUpsertIntent::y},
+    Dimension{"width", "width_m", true, &RoofOpeningUpsertIntent::width},
+    Dimension{"depth", "depth_m", true, &RoofOpeningUpsertIntent::depth}};
+bool any(const RoofOpeningUpsertIntent& value) {
+    return std::any_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
+}
+bool all(const RoofOpeningUpsertIntent& value) {
+    return std::all_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
+}
+Json roster(const Entity& entity) {
+    const auto rows = field(entity.properties, "roof_openings");
+    return rows ? *rows : Json::array();
+}
+using RowPositions = std::map<std::string, std::size_t, std::less<>>;
+RowPositions positions(const Json& rows) {
+    if (!rows.is_array() || rows.size() > opening_limit) invalid("Roof opening roster budget exceeded");
+    RowPositions result;
+    for (std::size_t i = 0; i < rows.size(); ++i)
+        if (!result.emplace(identity(rows.at(i).at("id")), i).second)
+            invalid("Roof opening source has duplicate child identities");
+    return result;
+}
+
+// Conservative read-only reservation includes opaque keys and values. Nothing
+// outside schema-owned receipts is rewritten by this inspection.
+struct Strings {
+    Ids values;
+    std::size_t nodes{}, bytes{};
+    void read(const Json& value, std::size_t depth = 0) {
+        if (depth > 64 || ++nodes > 4 * 1024 * 1024) invalid("Roof opening source JSON budget exceeded");
+        const auto add = [&](const std::string& text) {
+            if (text.size() > 64 * 1024 * 1024 - bytes) invalid("Roof opening source string budget exceeded");
+            bytes += text.size(); values.insert(text);
+        };
+        if (value.is_string()) add(value.get_ref<const std::string&>());
+        else if (value.is_array()) for (const auto& child : value) read(child, depth + 1);
+        else if (value.is_object()) for (const auto& [key, child] : value.items()) { add(key); read(child, depth + 1); }
+    }
+    void read(const Entity& entity) {
+        values.insert(entity.id); values.insert(entity.type);
+        for (const auto* key : {"id", "type", "properties", "required", "extensions"}) values.insert(key);
+        read(entity.properties); read(entity.extensions);
+    }
+};
+bool known_receipt(const Json& value) {
+    if (!value.is_object()) invalid("Roof opening indexed receipt must be an object");
+    const auto version = field(value, "version");
+    if (!version || (!version->is_number_integer() && !version->is_number_unsigned()) ||
+        (version->is_number_integer() && !version->is_number_unsigned() && version->get<std::int64_t>() < 0))
+        invalid("Roof opening indexed receipt version is invalid");
+    return version_one(*version);
+}
+bool known_raw(const Json& value) {
+    if (!value.is_object()) return false;
+    const auto version = field(value, "version");
+    return !version || version_one(*version);
+}
+bool known_extension(const Json& value) {
+    const auto version = field(value, "version");
+    return value.is_object() && version && version_one(*version);
+}
+RoofOpeningQuantityInput raw_input(const Json& value, double metres, bool positive) {
+    receipt_budget(value);
+    if (!known_raw(value)) invalid("Roof opening cannot author a future child receipt");
+    const auto declared_unit = field(value, "default_unit"), rational = field(value, "exact_metres");
+    if (!declared_unit || !rational) invalid("Roof opening child receipt fields are missing");
+    const auto default_unit = unit(*declared_unit);
+    const auto parsed = parse_quantity(value.at("original_expression").get_ref<const std::string&>(), default_unit);
+    const Json encoded{{"version", 1}, {"original_expression", parsed.original_expression},
+        {"entered_unit", unit_name(parsed.entered_unit)}, {"exact_metres", *rational}};
+    const auto admitted = quantity(encoded, positive, false);
+    if (admitted.metres != metres) invalid("Roof opening child receipt is stale");
+    return {admitted, default_unit};
+}
+void admit(const Entity& entity) {
+    validate_roof_profile_source_entity(entity);
+    const auto rows = roster(entity);
+    const auto children = positions(rows);
+    const auto extension = field(entity.extensions, "roof_opening_input");
+    if (!extension || !known_extension(*extension)) return;
+    const auto entries = field(*extension, "entries");
+    if (!entries || !entries->is_object() || entries->size() > collection_limit)
+        invalid("Roof opening input entries must be a bounded object");
+    for (const auto& [id, receipts] : entries->items()) {
+        if (!receipts.is_object()) {
+            if (children.contains(id)) invalid("Roof opening child receipts must be an object");
+            continue;
+        }
+        if (!known_raw(receipts)) continue; // A future child envelope is wholly opaque.
+        for (const auto& d : dimensions) {
+            const auto raw = field(receipts, d.scalar);
+            if (!raw) continue;
+            if (!known_raw(*raw)) continue;
+            const auto child = children.find(id);
+            if (child == children.end()) invalid("Roof opening child receipt is dangling");
+            (void)raw_input(*raw, number(rows.at(child->second).at(d.scalar)), d.positive);
+        }
+    }
+}
+const Json* child_receipts(const Entity& entity, const std::string& id) {
+    const auto extension = field(entity.extensions, "roof_opening_input");
+    if (!extension || !known_extension(*extension)) return nullptr;
+    const auto entries = field(*extension, "entries");
+    const auto result = entries ? field(*entries, id) : nullptr;
+    return result && known_raw(*result) ? result : nullptr;
+}
+void write_child_receipt(Entity& entity, const std::string& id, const Dimension& dimension,
+    const RoofOpeningQuantityInput& value) {
+    auto extension = entity.extensions.find("roof_opening_input");
+    if (extension == entity.extensions.end()) {
+        entity.extensions["roof_opening_input"] = {{"version", 1}, {"entries", Json::object()}};
+        extension = entity.extensions.find("roof_opening_input");
+    }
+    if (!known_extension(*extension)) invalid("Roof opening edit cannot affect an opaque input envelope");
+    auto& entries = extension->at("entries");
+    auto child = entries.find(id);
+    if (child == entries.end()) { entries[id] = Json::object(); child = entries.find(id); }
+    if (!known_raw(*child)) invalid("Roof opening edit cannot replace opaque child receipt data");
+    auto receipt = child->find(dimension.scalar);
+    if (receipt == child->end()) { (*child)[dimension.scalar] = Json::object(); receipt = child->find(dimension.scalar); }
+    else if (!known_raw(*receipt)) invalid("Roof opening edit cannot replace an opaque future child receipt");
+    (*receipt)["original_expression"] = value.quantity.original_expression;
+    (*receipt)["default_unit"] = unit_name(value.default_unit);
+    if (!receipt->contains("exact_metres")) (*receipt)["exact_metres"] = Json::object();
+    if (!receipt->at("exact_metres").is_object()) invalid("Roof opening receipt rational must be an object");
+    (*receipt)["exact_metres"]["numerator"] = value.quantity.exact_metres.numerator;
+    (*receipt)["exact_metres"]["denominator"] = value.quantity.exact_metres.denominator;
+}
+void remove_child_receipt(Entity& entity, const std::string& id) {
+    const auto extension = entity.extensions.find("roof_opening_input");
+    if (extension == entity.extensions.end()) return;
+    if (!known_extension(*extension)) invalid("Roof opening removal cannot affect an opaque input envelope");
+    auto& entries = extension->at("entries");
+    if (const auto child = entries.find(id); child != entries.end()) {
+        if (!known_raw(*child)) invalid("Roof opening removal cannot erase opaque child receipt data");
+        for (const auto& d : dimensions)
+            if (const auto receipt = field(*child, d.scalar); receipt && !known_raw(*receipt))
+                invalid("Roof opening removal cannot erase a future child receipt");
+        entries.erase(id);
+    }
+}
+void normalize_unchanged_child_receipt(Entity& candidate, const Entity& source,
+    const std::string& id, const Dimension& dimension, double metres) {
+    const auto before = child_receipts(source, id), after = child_receipts(candidate, id);
+    const auto old_receipt = before ? field(*before, dimension.scalar) : nullptr;
+    const auto new_receipt = after ? field(*after, dimension.scalar) : nullptr;
+    if (!new_receipt || (old_receipt && exact(*old_receipt, *new_receipt))) return;
+    const auto entered = raw_input(*new_receipt, metres, dimension.positive);
+    auto permitted = source;
+    write_child_receipt(permitted, id, dimension, entered);
+    if (!exact(*new_receipt, *field(*child_receipts(permitted, id), dimension.scalar)))
+        invalid("Equivalent roof opening input cannot change opaque quantity metadata");
+    auto& extension = candidate.extensions.at("roof_opening_input");
+    auto& entries = extension.at("entries");
+    auto& child = entries.at(id);
+    if (old_receipt) child[dimension.scalar] = *old_receipt;
+    else child.erase(dimension.scalar);
+    if (child.empty() && !before) entries.erase(id);
+    if (entries.empty() && !source.extensions.contains("roof_opening_input"))
+        candidate.extensions.erase("roof_opening_input");
+}
+const RoofOpeningQuantityInput* authored_input(const RoofOpeningEditIntent& intent,
+    const std::string& id, const Dimension& d) {
+    for (const auto& upsert : intent.upserts)
+        if (upsert.opening_id == id) {
+            const auto& value = upsert.*(d.member);
+            return value ? &*value : nullptr;
+        }
+    return nullptr;
+}
+void merge_quantity_core(Json& raw, const RoofOpeningQuantityInput& value, bool positive) {
+    const auto encoded = quantity(value.quantity, positive);
+    for (const auto* key : {"version", "original_expression", "entered_unit"}) raw[key] = encoded.at(key);
+    for (const auto* key : {"numerator", "denominator"}) raw["exact_metres"][key] = encoded.at("exact_metres").at(key);
+}
+// Indexed authority follows a source child identity, never its incidental new
+// index. Opaque row pointers cannot move or silently acquire a new binding.
+void indexed_receipts(const Entity& source, Entity& result, const RoofOpeningEditIntent& intent,
+    const Json& before, const Json& after) {
+    const auto values = field(source.properties, "quantity_entries");
+    if (!values) return;
+    if (!values->is_object() || values->size() > collection_limit) invalid("Roof opening quantity_entries budget exceeded");
+    const auto remaining = positions(after);
+    auto rebuilt = Json::object();
+    constexpr std::string_view prefix = "/roof_openings/";
+    for (const auto& [pointer, receipt] : values->items()) {
+        const std::string_view path(pointer);
+        if (!path.starts_with(prefix)) { rebuilt[pointer] = receipt; continue; }
+        const auto tail = path.substr(prefix.size());
+        const auto slash = tail.find('/');
+        const auto token = tail.substr(0, slash);
+        std::size_t index = 0;
+        const auto parsed = std::from_chars(token.data(), token.data() + token.size(), index);
+        if (token.empty() || (token.size() > 1 && token.front() == '0') ||
+            parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() || index >= before.size()) {
+            if (!exact(before, after)) invalid("Roof opening edit cannot rebind an opaque indexed pointer");
+            rebuilt[pointer] = receipt; continue;
+        }
+        const auto id = before.at(index).at("id").get<std::string>();
+        const auto retained = remaining.find(id);
+        const auto suffix = slash == std::string_view::npos ? std::string_view{} : tail.substr(slash + 1);
+        const auto dimension = std::find_if(dimensions.begin(), dimensions.end(), [&](const auto& d) { return suffix == d.scalar; });
+        if (dimension == dimensions.end()) {
+            if (retained == remaining.end() || retained->second != index || !exact(before.at(index), after.at(retained->second)))
+                invalid("Roof opening edit cannot affect an opaque indexed row pointer");
+            rebuilt[pointer] = receipt; continue;
+        }
+        const bool understood = known_receipt(receipt);
+        const bool scalar_changed = retained != remaining.end() &&
+            number(before.at(index).at(dimension->scalar)) != number(after.at(retained->second).at(dimension->scalar));
+        if (!understood) {
+            if (retained == remaining.end() || retained->second != index || scalar_changed)
+                invalid("Roof opening edit cannot affect a future indexed receipt");
+            rebuilt[pointer] = receipt; continue;
+        }
+        if (retained == remaining.end()) continue; // Only declared removals can reach this branch.
+        auto raw = receipt;
+        if (scalar_changed) {
+            const auto value = authored_input(intent, id, *dimension);
+            if (!value) invalid("Roof opening changed scalar lacks exact authored input");
+            merge_quantity_core(raw, *value, dimension->positive);
+        }
+        const auto destination = std::string(prefix) + std::to_string(retained->second) + "/" + dimension->scalar;
+        if (rebuilt.contains(destination)) invalid("Roof opening indexed receipt remap collision");
+        rebuilt[destination] = std::move(raw);
+    }
+    result.properties["quantity_entries"] = std::move(rebuilt);
+}
+RoofOpeningQuantityInput captured_input(const Entity& candidate, const std::string& id,
+    const Dimension& d, double metres) {
+    const auto receipts = child_receipts(candidate, id);
+    if (const auto raw = receipts ? field(*receipts, d.scalar) : nullptr)
+        return raw_input(*raw, metres, d.positive);
+    invalid("A changed or new roof opening dimension requires its exact entered input receipt");
+}
+} // namespace
+
+nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& intent) {
+    (void)identity(intent.roof_id);
+    if (intent.upserts.size() > opening_limit || intent.removed_opening_ids.size() > opening_limit ||
+        (intent.upserts.empty() && intent.removed_opening_ids.empty())) invalid("Roof opening edit roster budget is invalid");
+    Json result{{"version", 1}, {"roof_id", intent.roof_id}, {"upserts", Json::array()}, {"removed_opening_ids", Json::array()}};
+    Ids children;
+    for (const auto& upsert : intent.upserts) {
+        (void)identity(upsert.opening_id);
+        if (!children.insert(upsert.opening_id).second || !any(upsert)) invalid("Roof opening edit has a duplicate or empty upsert");
+        Json entry{{"opening_id", upsert.opening_id}};
+        for (const auto& d : dimensions) {
+            const auto& value = upsert.*(d.member);
+            entry[d.wire] = value ? input(*value, d.positive) : Json(nullptr);
+        }
+        result["upserts"].push_back(std::move(entry));
+    }
+    for (const auto& id : intent.removed_opening_ids) {
+        (void)identity(id);
+        if (!children.insert(id).second) invalid("Roof opening edit has duplicate or conflicting child operations");
+        result["removed_opening_ids"].push_back(id);
+    }
+    if (result.dump().size() > proof_limit) invalid("Roof opening edit proof byte budget exceeded");
+    return result;
+}
+RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& value) {
+    if (value.dump().size() > proof_limit) invalid("Roof opening edit proof byte budget exceeded");
+    keys(value, {"version", "roof_id", "upserts", "removed_opening_ids"});
+    if (!version_one(value.at("version"))) invalid("Roof opening edit version is unsupported");
+    const auto& upserts = value.at("upserts");
+    const auto& removed = value.at("removed_opening_ids");
+    if (!upserts.is_array() || !removed.is_array() || upserts.size() > opening_limit || removed.size() > opening_limit)
+        invalid("Roof opening edit arrays exceed the roster budget");
+    RoofOpeningEditIntent result;
+    result.roof_id = identity(value.at("roof_id"));
+    for (const auto& entry : upserts) {
+        keys(entry, {"opening_id", "x", "y", "width", "depth"});
+        RoofOpeningUpsertIntent upsert;
+        upsert.opening_id = identity(entry.at("opening_id"));
+        for (const auto& d : dimensions)
+            if (!entry.at(d.wire).is_null()) upsert.*(d.member) = input(entry.at(d.wire), d.positive);
+        result.upserts.push_back(std::move(upsert));
+    }
+    for (const auto& id : removed) result.removed_opening_ids.push_back(identity(id));
+    (void)encode_roof_opening_edit_intent(result);
+    return result;
+}
+Entity replay_roof_opening_entity(const Entity& source, const RoofOpeningEditIntent& intent) {
+    (void)encode_roof_opening_edit_intent(intent);
+    if (source.id != intent.roof_id) invalid("Roof opening edit target differs from actual source identity");
+    admit(source);
+    const auto before = roster(source);
+    const auto children = positions(before);
+    Ids removed(intent.removed_opening_ids.begin(), intent.removed_opening_ids.end());
+    for (const auto& id : removed)
+        if (!children.contains(id)) invalid("Roof opening removal requires an actual existing child");
+    Strings occupied; occupied.read(source);
+    auto result = source;
+    auto after = Json::array();
+    for (const auto& row : before)
+        if (!removed.contains(row.at("id").get<std::string>())) after.push_back(row);
+    auto final_positions = positions(after);
+    bool changed = !removed.empty();
+    for (const auto& upsert : intent.upserts) {
+        const auto existing = final_positions.find(upsert.opening_id);
+        if (existing == final_positions.end()) {
+            if (!all(upsert)) invalid("A new roof opening requires all four exact dimensions");
+            if (occupied.values.contains(upsert.opening_id)) invalid("A new roof opening aliases retained source identity data");
+            if (after.size() >= opening_limit) invalid("Roof opening result exceeds the roster budget");
+            after.push_back({{"id", upsert.opening_id}});
+            final_positions.emplace(upsert.opening_id, after.size() - 1);
+            occupied.values.insert(upsert.opening_id);
+        }
+        auto& row = after.at(final_positions.at(upsert.opening_id));
+        const bool fresh = !children.contains(upsert.opening_id);
+        for (const auto& d : dimensions) {
+            const auto& value = upsert.*(d.member);
+            if (!value || (!fresh && number(row.at(d.scalar)) == value->quantity.metres)) continue;
+            row[d.scalar] = value->quantity.metres;
+            write_child_receipt(result, upsert.opening_id, d, *value);
+            changed = true;
+        }
+    }
+    if (!changed) return source;
+    for (const auto& id : removed) remove_child_receipt(result, id);
+    // Schema two remains two even for the last removal. Schema one is upgraded
+    // only when an actual new child was authored, never for a scalar no-op.
+    result.properties["version"] = 2;
+    result.properties["roof_openings"] = after;
+    indexed_receipts(source, result, intent, before, after);
+    admit(result);
+    return result;
+}
+std::vector<std::string> new_roof_opening_identity_ids(const Entities& source,
+    const std::vector<RoofOpeningEditIntent>& intents) {
+    if (intents.size() > collection_limit) invalid("Roof opening target budget exceeded");
+    if (intents.empty()) return {};
+    Strings occupied;
+    for (const auto& [id, entity] : source) { occupied.values.insert(id); occupied.read(entity); }
+    Ids targets, fresh;
+    std::size_t proof_bytes = 0;
+    for (const auto& intent : intents) {
+        const auto bytes = encode_roof_opening_edit_intent(intent).dump().size();
+        if (bytes > proof_limit - proof_bytes) invalid("Roof opening batch proof byte budget exceeded");
+        proof_bytes += bytes;
+        if (!targets.insert(intent.roof_id).second) invalid("Roof opening batch contains duplicate targets");
+        const auto found = source.find(intent.roof_id);
+        if (found == source.end() || found->first != found->second.id) invalid("Roof opening target is missing or inconsistent");
+        admit(found->second);
+        const auto children = positions(roster(found->second));
+        for (const auto& id : intent.removed_opening_ids)
+            if (!children.contains(id)) invalid("Roof opening removal requires an actual existing child");
+        for (const auto& upsert : intent.upserts) {
+            if (children.contains(upsert.opening_id)) continue;
+            if (!all(upsert)) invalid("A new roof opening requires all four exact dimensions");
+            if (occupied.values.contains(upsert.opening_id) || !fresh.insert(upsert.opening_id).second)
+                invalid("A new roof opening aliases current or authored identity data");
+            if (fresh.size() > collection_limit) invalid("Roof opening fresh identity budget exceeded");
+        }
+    }
+    return {fresh.begin(), fresh.end()};
+}
+Entities replay_roof_opening_entities(const Entities& source, const std::vector<RoofOpeningEditIntent>& intents) {
+    if (intents.empty()) return source;
+    (void)new_roof_opening_identity_ids(source, intents);
+    const auto scope = constraint_phase_scope(source);
+    auto result = source;
+    for (const auto& intent : intents) {
+        if (scope.inactive_owner_ids.contains(intent.roof_id)) invalid("Roof opening target is inactive in the saved design");
+        const auto& original = source.at(intent.roof_id);
+        (void)make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, original)));
+        result.at(intent.roof_id) = replay_roof_opening_entity(original, intent);
+    }
+    for (const auto& intent : intents)
+        (void)make_roof_shape(decode_roof_entity(resolve_vertical_placement(result, result.at(intent.roof_id))));
+    return result;
+}
+std::optional<RoofOpeningEditIntent> capture_roof_opening_edit(const Entity& original, const Entity& candidate) {
+    admit(original);
+    if (exact(original, candidate)) return std::nullopt;
+    admit(candidate);
+    const auto before = roster(original), after = roster(candidate);
+    const auto old_positions = positions(before), new_positions = positions(after);
+    RoofOpeningEditIntent intent;
+    intent.roof_id = original.id;
+    auto normalized = normalize_equivalent_roof_inputs(original,candidate);
+    for (const auto& row : before) {
+        const auto id = row.at("id").get<std::string>();
+        if (!new_positions.contains(id)) intent.removed_opening_ids.push_back(id);
+    }
+    for (std::size_t i = 0; i < after.size(); ++i) {
+        const auto& row = after.at(i);
+        const auto id = row.at("id").get<std::string>();
+        const auto old = old_positions.find(id);
+        RoofOpeningUpsertIntent upsert;
+        upsert.opening_id = id;
+        for (const auto& d : dimensions) {
+            const double metres = number(row.at(d.scalar));
+            if (old != old_positions.end() && number(before.at(old->second).at(d.scalar)) == metres) {
+                normalized.properties["roof_openings"][i][d.scalar] = before.at(old->second).at(d.scalar);
+                normalize_unchanged_child_receipt(normalized, original, id, d, metres);
+                continue;
+            }
+            upsert.*(d.member) = captured_input(candidate, id, d, metres);
+        }
+        if (any(upsert)) intent.upserts.push_back(std::move(upsert));
+    }
+    const auto expected = intent.upserts.empty() && intent.removed_opening_ids.empty()
+        ? original : replay_roof_opening_entity(original, intent);
+    if (!exact(normalized, expected)) invalid("Roof opening candidate differs from independent typed replay");
+    if (exact(expected, original)) return std::nullopt;
+    return intent;
+}
+} // namespace sketch

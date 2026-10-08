@@ -2,6 +2,7 @@
 
 #include "sketch/quantity.hpp"
 #include "sketch/building_plan_projection.hpp"
+#include "sketch/phase_roof_opening_edit.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -50,6 +51,9 @@ using json = nlohmann::json;
 constexpr double geometry_tolerance = 1e-7;
 constexpr std::size_t maximum_risers = 10'000;
 constexpr std::array<const char*, 4> roof_opening_keys{"x_m", "y_m", "width_m", "depth_m"};
+constexpr std::array<std::optional<RoofOpeningQuantityInput> RoofOpeningUpsertIntent::*, 4>
+    roof_opening_inputs{&RoofOpeningUpsertIntent::x, &RoofOpeningUpsertIntent::y,
+                        &RoofOpeningUpsertIntent::width, &RoofOpeningUpsertIntent::depth};
 
 struct FormInfo {
     std::string_view type;
@@ -249,6 +253,31 @@ json quantity_receipt_json(const Quantity& quantity) {
                                    {"denominator", quantity.exact_metres.denominator}}}};
 }
 
+Quantity exact_roof_opening_default(double metres, Unit default_unit) {
+    if (std::isfinite(metres)) {
+        std::array<char, 768> buffer{};
+        for (int precision = 0; precision <= 18; ++precision) {
+            const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
+                                                 metres, std::chars_format::fixed, precision);
+            if (converted.ec != std::errc{}) continue;
+            try {
+                auto quantity = parse_quantity(std::string(buffer.data(), converted.ptr) + " m", default_unit);
+                if (quantity.metres == metres) return quantity;
+            } catch (const std::exception&) {
+                // Try the next bounded fixed decimal; never accept rounded geometry.
+            }
+        }
+    }
+    throw std::invalid_argument("The new roof opening dimension has no supported exact input.");
+}
+
+bool known_roof_opening_receipt(const json& value) {
+    if (!value.is_object()) return false;
+    const auto version = value.find("version");
+    return version == value.end() ||
+        (version->is_number_integer() && *version == 1);
+}
+
 std::optional<QuantityReceipt> decode_quantity_receipt(const json& value) {
     if (!value.is_object()) {
         return std::nullopt;
@@ -357,7 +386,14 @@ public:
                 if (found == entities.end()) throw std::invalid_argument("The selected stair host is unavailable.");
                 (void)make_building_shape(*object, entities);
             }
-            if (original_entity.has_value()) {
+            const bool opening_only_roof = roof_geometry_unchanged(*object);
+            if (opening_only_roof) {
+                // Start from the actual source, including its numeric wire forms
+                // and opaque metadata. The table's typed inputs own only the roster.
+                candidate_entity = *original_entity;
+                if (!roof_opening_intent.upserts.empty() || !roof_opening_intent.removed_opening_ids.empty())
+                    candidate_entity = replay_roof_opening_entity(*original_entity, roof_opening_intent);
+            } else if (original_entity.has_value()) {
                 const auto canonical = encode_building_entity(*object,
                                                               original_entity->extensions);
                 auto merged = *original_entity;
@@ -412,7 +448,7 @@ public:
                 apply_quantity_entries(candidate_entity->properties,
                                        candidate_entity->properties);
             }
-            if (candidate_entity->type == "roof" && roof_openings_changed) {
+            if (!opening_only_roof && candidate_entity->type == "roof" && roof_openings_changed) {
                 auto envelope = json::object();
                 if (original_entity && original_entity->extensions.contains("roof_opening_input")) {
                     envelope = original_entity->extensions.at("roof_opening_input");
@@ -1527,49 +1563,103 @@ private:
         }, *original_object);
     }
 
+    bool roof_geometry_unchanged(const BuildingObject& candidate) const {
+        if (!original_entity || original_entity->type != "roof") return false;
+        return std::visit([this](const auto& roof) {
+            using Roof = std::decay_t<decltype(roof)>;
+            if constexpr (std::is_same_v<Roof, SlopedRoofPanel> || std::is_same_v<Roof, GableRoof> ||
+                          std::is_same_v<Roof, HipRoof>) {
+                const auto* source = original_as<Roof>();
+                if (!source || roof.id != source->id ||
+                    roof.base_position.x != source->base_position.x ||
+                    roof.base_position.y != source->base_position.y ||
+                    roof.base_position.z != source->base_position.z ||
+                    roof.orientation_radians != source->orientation_radians ||
+                    roof.span != source->span || roof.rise != source->rise ||
+                    roof.pitch_radians != source->pitch_radians ||
+                    roof.overhang != source->overhang || roof.thickness != source->thickness) return false;
+                if constexpr (std::is_same_v<Roof, SlopedRoofPanel>) return roof.run == source->run;
+                else return roof.length == source->length;
+            } else {
+                return false;
+            }
+        }, candidate);
+    }
+
     std::optional<std::vector<RoofOpening>> read_roof_openings() {
         std::vector<RoofOpening> openings;
         auto entries = json::array();
         auto receipts = original_roof_opening_receipts;
+        roof_opening_intent = {};
+        if (original_entity) roof_opening_intent.roof_id = original_entity->id;
+        // Bind each row to the actual original child identity, independently of
+        // display roles and receipt JSON. An untouched new row still needs inputs.
+        std::map<std::string, const json*, std::less<>> original_rows;
+        if (original_entity && original_entity->properties.contains("roof_openings")) {
+            for (const auto& source : original_entity->properties.at("roof_openings"))
+                original_rows.emplace(source.at("id").get<std::string>(), &source);
+        }
+        const auto default_unit = metric ? Unit::metre : Unit::foot;
         for (int row = 0; row < roof_openings_table->rowCount(); ++row) {
             const auto id = roof_openings_table->item(row, 0)->data(Qt::UserRole).toString().toStdString();
+            const auto original = original_rows.find(id);
+            const bool fresh = original == original_rows.end();
+            RoofOpeningUpsertIntent upsert;
+            upsert.opening_id = id;
             std::array<double, 4> values{};
             json entry{{"id", id}};
             for (int column = 0; column < 4; ++column) {
                 const auto* item = roof_openings_table->item(row, column);
                 const auto text = item->text().trimmed();
-                if (text == item->data(Qt::UserRole + 1).toString()) {
-                    values[column] = item->data(Qt::UserRole + 2).toDouble();
-                } else {
-                    try {
-                        const auto quantity = parse_quantity(text.toStdString(), metric ? Unit::metre : Unit::foot);
-                        values[column] = quantity.metres;
-                        if (!receipts[id].is_object()) receipts[id] = json::object();
-                        auto updated = json{{"original_expression", quantity.original_expression},
+                try {
+                    std::optional<Quantity> quantity;
+                    if (text == item->data(Qt::UserRole + 1).toString()) {
+                        values[column] = item->data(Qt::UserRole + 2).toDouble();
+                        if (fresh) quantity = exact_roof_opening_default(values[column], default_unit);
+                    } else {
+                        quantity = parse_quantity(text.toStdString(), default_unit);
+                        values[column] = quantity->metres;
+                    }
+                    const bool changed = fresh ||
+                        values[column] != original->second->at(roof_opening_keys[column]).get<double>();
+                    if (changed) {
+                        if (!quantity) throw std::invalid_argument("The edited roof opening lacks its exact input.");
+                        upsert.*roof_opening_inputs[column] = RoofOpeningQuantityInput{*quantity, default_unit};
+                        if (receipts.contains(id) && !known_roof_opening_receipt(receipts.at(id)))
+                            throw std::invalid_argument("The roof opening has an unsupported child receipt version.");
+                        if (!receipts.contains(id)) receipts[id] = json::object();
+                        auto updated = json{{"original_expression", quantity->original_expression},
                              {"default_unit", metric ? "m" : "ft"},
-                             {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
-                                               {"denominator", quantity.exact_metres.denominator}}}};
+                             {"exact_metres", {{"numerator", quantity->exact_metres.numerator},
+                                               {"denominator", quantity->exact_metres.denominator}}}};
+                        if (receipts[id].contains(roof_opening_keys[column]) &&
+                            !known_roof_opening_receipt(receipts[id].at(roof_opening_keys[column])))
+                            throw std::invalid_argument("The roof opening dimension has an unsupported receipt version.");
                         auto& receipt = receipts[id][roof_opening_keys[column]];
                         if (receipt.is_object()) {
                             auto exact = receipt.value("exact_metres", json::object());
-                            if (!exact.is_object()) exact = json::object();
+                            if (!exact.is_object())
+                                throw std::invalid_argument("The roof opening receipt rational must be an object.");
                             exact.update(updated.at("exact_metres"));
                             receipt.update(updated);
                             receipt["exact_metres"] = std::move(exact);
                         } else {
                             receipt = std::move(updated);
                         }
-                    } catch (const std::exception& caught) {
-                        roof_openings_table->setCurrentCell(row, column);
-                        roof_openings_table->setFocus();
-                        fail(QStringLiteral("Opening %1, %2: %3").arg(row + 1)
-                            .arg(roof_openings_table->horizontalHeaderItem(column)->text())
-                            .arg(QString::fromUtf8(caught.what())));
-                        return std::nullopt;
                     }
+                } catch (const std::exception& caught) {
+                    roof_openings_table->setCurrentCell(row, column);
+                    roof_openings_table->setFocus();
+                    fail(QStringLiteral("Opening %1, %2: %3").arg(row + 1)
+                        .arg(roof_openings_table->horizontalHeaderItem(column)->text())
+                        .arg(QString::fromUtf8(caught.what())));
+                    return std::nullopt;
                 }
                 entry[roof_opening_keys[column]] = values[column];
             }
+            if (std::any_of(roof_opening_inputs.begin(), roof_opening_inputs.end(),
+                            [&](const auto member) { return (upsert.*member).has_value(); }))
+                roof_opening_intent.upserts.push_back(std::move(upsert));
             openings.push_back({id, values[0], values[1], values[2], values[3]});
             entries.push_back(std::move(entry));
         }
@@ -1579,6 +1669,9 @@ private:
                 json understood{{"id", source.at("id")}};
                 for (const auto* key : roof_opening_keys) understood[key] = source.at(key);
                 original_entries.push_back(std::move(understood));
+                const auto id = source.at("id").get<std::string>();
+                if (std::none_of(openings.begin(), openings.end(), [&](const auto& opening) { return opening.id == id; }))
+                    roof_opening_intent.removed_opening_ids.push_back(id);
             }
         }
         for (auto receipt = receipts.begin(); receipt != receipts.end();) {
@@ -1588,7 +1681,14 @@ private:
             const bool original_child = std::any_of(original_entries.begin(), original_entries.end(), [&](const auto& opening) {
                 return opening.at("id") == receipt.key();
             });
-            if (!retained && original_child) receipt = receipts.erase(receipt); else ++receipt;
+            if (!retained && original_child) {
+                if (!known_roof_opening_receipt(*receipt))
+                    throw std::invalid_argument("Roof opening removal cannot erase an unsupported child receipt.");
+                for (const auto* key : roof_opening_keys)
+                    if (receipt->contains(key) && !known_roof_opening_receipt(receipt->at(key)))
+                        throw std::invalid_argument("Roof opening removal cannot erase an unsupported dimension receipt.");
+                receipt = receipts.erase(receipt);
+            } else ++receipt;
         }
         roof_openings_changed = entries != original_entries || receipts != original_roof_opening_receipts;
         roof_opening_receipts = std::move(receipts);
@@ -2614,6 +2714,7 @@ private:
     QString error;
     json original_roof_opening_receipts = json::object();
     json roof_opening_receipts = json::object();
+    RoofOpeningEditIntent roof_opening_intent;
 
     QComboBox* type_combo{};
     QComboBox* form_combo{};

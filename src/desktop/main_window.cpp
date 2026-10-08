@@ -22616,47 +22616,74 @@ public:
                 const auto original = selectedEntity();
                 if (!original || original->id != candidate.id || original->type != candidate.type)
                     throw std::runtime_error("Select the original object before applying this edit.");
-                const auto entries = merged_quantity_entries(&*original, candidate, canonical.properties);
-                // Geometry editors must preserve metadata they do not understand.
-                auto edited = std::move(candidate);
-                candidate = *original;
-                for (const auto& [key, value] : canonical.properties.items()) {
-                    candidate.properties[key] = merge_canonical_metadata(
-                        original->properties.contains(key) ? original->properties.at(key) : json{},
-                        edited.properties.contains(key) ? edited.properties.at(key) : json{}, value);
-                }
-                if (candidate.type == "stair") {
-                    for (const auto* key : {"top_landing", "level_connection", "flights", "landings"})
-                        if (!canonical.properties.contains(key)) candidate.properties.erase(key);
-                    if (canonical.properties.contains("flights")) {
-                        const auto& flights=canonical.properties.at("flights");
-                        for (std::size_t row=0;row<flights.size();++row)
-                            for (const auto* dimension : {"going_m","width_m"})
-                                if (!flights.at(row).contains(dimension))
-                                    candidate.properties.at("flights").at(row).erase(dimension);
+                bool typed_roof_roster=false;
+                if (candidate.type=="roof" && original->properties.at("form")==candidate.properties.at("form")) {
+                    const auto length_key=original->properties.at("form")=="sloped_roof_panel" ? "run_m" : "length_m";
+                    bool unchanged_geometry=original->properties.at("orientation_rad").get<double>()==
+                        candidate.properties.at("orientation_rad").get<double>();
+                    for (const auto* field:{length_key,"span_m","rise_m","pitch_rad","overhang_m","thickness_m"})
+                        unchanged_geometry=unchanged_geometry && original->properties.at(field).get<double>()==candidate.properties.at(field).get<double>();
+                    for (std::size_t coordinate=0;coordinate<3;++coordinate)
+                        unchanged_geometry=unchanged_geometry && original->properties.at("base_position_m").at(coordinate).get<double>()==
+                            candidate.properties.at("base_position_m").at(coordinate).get<double>();
+                    if (unchanged_geometry) {
+                        // Keep the independently replayed roster, empty schema-two
+                        // wire and stable-child receipts intact through commit.
+                        const auto intent=capture_roof_opening_edit(*original,candidate);
+                        candidate=intent ? replay_roof_opening_entity(*original,*intent) : *original;
+                        typed_roof_roster=true;
                     }
                 }
-                if (candidate.type == "railing") {
-                    if (!canonical.properties.contains("host")) candidate.properties.erase("host");
-                    if (hosted_stair_railing(candidate)) for (const auto* key :
-                        {"base_position_m", "orientation_rad", "orientation_radians", "length_m", "vertical_placement"})
-                        candidate.properties.erase(key);
-                }
-                if (candidate.type == "roof") {
-                    if (!canonical.properties.contains("roof_openings")) {
-                        const bool retained_empty_roster = original->properties.value("version",0)==2 &&
-                            original->properties.value("form",std::string{})==canonical.properties.value("form",std::string{}) &&
-                            original->properties.contains("roof_openings") && original->properties.at("roof_openings").is_array() &&
-                            original->properties.at("roof_openings").empty();
-                        if (retained_empty_roster) {
-                            candidate.properties["version"]=2;
-                            candidate.properties["roof_openings"]=original->properties.at("roof_openings");
-                        } else candidate.properties.erase("roof_openings");
+                if (!typed_roof_roster) {
+                    const auto entries = merged_quantity_entries(&*original, candidate, canonical.properties);
+                    // Geometry editors must preserve metadata they do not understand.
+                    auto edited = std::move(candidate);
+                    candidate = *original;
+                    for (const auto& [key, value] : canonical.properties.items()) {
+                        candidate.properties[key] = merge_canonical_metadata(
+                            original->properties.contains(key) ? original->properties.at(key) : json{},
+                            edited.properties.contains(key) ? edited.properties.at(key) : json{}, value);
                     }
-                    if (canonical.extensions.contains("roof_opening_input"))
-                        candidate.extensions["roof_opening_input"] = canonical.extensions.at("roof_opening_input");
+                    if (candidate.type == "stair") {
+                        for (const auto* key : {"top_landing", "level_connection", "flights", "landings"})
+                            if (!canonical.properties.contains(key)) candidate.properties.erase(key);
+                        if (canonical.properties.contains("flights")) {
+                            const auto& flights=canonical.properties.at("flights");
+                            for (std::size_t row=0;row<flights.size();++row)
+                                for (const auto* dimension : {"going_m","width_m"})
+                                    if (!flights.at(row).contains(dimension))
+                                        candidate.properties.at("flights").at(row).erase(dimension);
+                        }
+                    }
+                    if (candidate.type == "railing") {
+                        if (!canonical.properties.contains("host")) candidate.properties.erase("host");
+                        if (hosted_stair_railing(candidate)) for (const auto* key :
+                            {"base_position_m", "orientation_rad", "orientation_radians", "length_m", "vertical_placement"})
+                            candidate.properties.erase(key);
+                    }
+                    if (candidate.type == "roof") {
+                        if (!canonical.properties.contains("roof_openings")) {
+                            const bool retained_empty_roster = original->properties.value("version",0)==2 &&
+                                original->properties.value("form",std::string{})==canonical.properties.value("form",std::string{}) &&
+                                original->properties.contains("roof_openings") && original->properties.at("roof_openings").is_array() &&
+                                original->properties.at("roof_openings").empty();
+                            if (retained_empty_roster) {
+                                candidate.properties["version"]=2;
+                                candidate.properties["roof_openings"]=original->properties.at("roof_openings");
+                            } else candidate.properties.erase("roof_openings");
+                        }
+                        if (canonical.extensions.contains("roof_opening_input"))
+                            candidate.extensions["roof_opening_input"] = canonical.extensions.at("roof_opening_input");
+                    }
+                    if (entries) candidate.properties["quantity_entries"] = *entries;
                 }
-                if (entries) candidate.properties["quantity_entries"] = *entries;
+                if (candidate.type=="roof" && candidate==*original &&
+                    candidate.properties.dump()==original->properties.dump() && candidate.extensions.dump()==original->extensions.dump()) {
+                    if (!changes.empty()) throw std::invalid_argument("Edit related objects separately from an unchanged roof.");
+                    clearError();
+                    refresh();
+                    return id_from(original->id);
+                }
             } else {
                 if (snapshot.entities().contains(candidate.id))
                     throw std::runtime_error("An object with this identity already exists.");
@@ -29796,50 +29823,50 @@ public:
         QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
             try {
                 if (!modalContextUnchanged(context)) throw std::invalid_argument("Roof editing context changed. Reopen the openings editor.");
-                auto candidate = *original;
-                auto entries = json::array();
-                auto receipts = original_receipts;
+                RoofOpeningEditIntent intent;
+                intent.roof_id=original->id;
+                const auto before=original->properties.value("roof_openings",json::array());
+                std::map<std::string,const json*,std::less<>> original_rows;
+                for (const auto& row:before) original_rows.emplace(row.at("id").get<std::string>(),&row);
+                const std::array members{&RoofOpeningUpsertIntent::x,&RoofOpeningUpsertIntent::y,
+                    &RoofOpeningUpsertIntent::width,&RoofOpeningUpsertIntent::depth};
+                const auto default_unit=context.metric_units ? Unit::metre : Unit::foot;
+                std::set<std::string,std::less<>> retained;
                 for (int row = 0; row < table->rowCount(); ++row) {
                     const auto id = table->item(row, 0)->data(Qt::UserRole).toString().toStdString();
-                    json entry{{"id", id}};
+                    if (!retained.insert(id).second) throw std::invalid_argument("Roof opening identities must be unique.");
+                    const auto existing=original_rows.find(id);
+                    const bool fresh=existing==original_rows.end();
+                    RoofOpeningUpsertIntent upsert;
+                    upsert.opening_id=id;
                     for (int column = 0; column < 4; ++column) {
                         const auto* item = table->item(row, column);
                         const auto text = item->text().trimmed();
-                        if (text == item->data(Qt::UserRole + 1).toString()) {
-                            entry[keys[column]] = item->data(Qt::UserRole + 2).toDouble();
-                        } else {
-                            const auto quantity = [&] {
-                                try { return parse_quantity(text.toStdString(), context.metric_units ? Unit::metre : Unit::foot); }
-                                catch (const std::exception& failure) {
-                                    table->setCurrentCell(row, column);
-                                    table->setFocus();
-                                    throw std::invalid_argument(QStringLiteral("Opening %1, %2: %3")
-                                        .arg(row + 1).arg(table->horizontalHeaderItem(column)->text())
-                                        .arg(QString::fromUtf8(failure.what())).toStdString());
-                                }
-                            }();
-                            entry[keys[column]] = quantity.metres;
-                            if (!receipts[id].is_object()) receipts[id] = json::object();
-                            receipts[id][keys[column]] = {{"original_expression", quantity.original_expression},
-                                {"default_unit", context.metric_units ? "m" : "ft"},
-                                {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
-                                                  {"denominator", quantity.exact_metres.denominator}}}};
-                        }
+                        const bool untouched=text==item->data(Qt::UserRole+1).toString();
+                        if (!fresh && untouched) continue;
+                        const auto quantity = [&] {
+                            try {
+                                auto entered=parse_quantity(text.toStdString(),default_unit);
+                                if (fresh && untouched && entered.metres!=item->data(Qt::UserRole+2).toDouble())
+                                    throw std::invalid_argument("The new opening default does not reproduce its exact dimension.");
+                                return entered;
+                            } catch (const std::exception& failure) {
+                                table->setCurrentCell(row,column);
+                                table->setFocus();
+                                throw std::invalid_argument(QStringLiteral("Opening %1, %2: %3")
+                                    .arg(row+1).arg(table->horizontalHeaderItem(column)->text())
+                                    .arg(QString::fromUtf8(failure.what())).toStdString());
+                            }
+                        }();
+                        if (fresh || quantity.metres!=existing->second->at(keys[column]).get<double>())
+                            upsert.*members[column]=RoofOpeningQuantityInput{quantity,default_unit};
                     }
-                    entries.push_back(std::move(entry));
+                    if (std::any_of(members.begin(),members.end(),[&](const auto member) { return (upsert.*member).has_value(); }))
+                        intent.upserts.push_back(std::move(upsert));
                 }
-                if (entries == original->properties.value("roof_openings", json::array()) && receipts == original_receipts) {
-                    dialog.accept(); return;
-                }
-                for (auto receipt = receipts.begin(); receipt != receipts.end();) {
-                    const bool retained = std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
-                        return entry.at("id") == receipt.key();
-                    });
-                    if (!retained) receipt = receipts.erase(receipt); else ++receipt;
-                }
-                if (entries.empty()) { candidate.properties.erase("roof_openings"); candidate.properties["version"] = 1; }
-                else { candidate.properties["roof_openings"] = entries; candidate.properties["version"] = 2; }
-                candidate.extensions["roof_opening_input"] = {{"version", 1}, {"entries", receipts}};
+                for (const auto& [id,row]:original_rows) { (void)row;if (!retained.contains(id)) intent.removed_opening_ids.push_back(id); }
+                if (intent.upserts.empty() && intent.removed_opening_ids.empty()) { clearError();dialog.accept();return; }
+                const auto candidate=replay_roof_opening_entity(*original,intent);
                 if (commitBuildingObject(candidate, context.revision, true).isEmpty())
                     throw std::invalid_argument(m_last_error.toStdString());
                 dialog.accept();
@@ -41244,6 +41271,7 @@ private:
         if (raw->expected_revision!=source.revision() || !raw->asset_changes.empty() || raw->entity_changes.size()>2048)
             throw std::invalid_argument("Proposed roof edits require the unchanged source and a bounded roof-only edit.");
         std::vector<RoofProfileEditIntent> profiles;
+        std::vector<RoofOpeningEditIntent> opening_edits;
         std::set<std::string,std::less<>> targets;
         for (const auto& change:raw->entity_changes) {
             if (!changed(change)) {
@@ -41254,11 +41282,36 @@ private:
             const auto original=change.kind==EntityChangeKind::upsert ? source.entities().find(change.entity.id) : source.entities().end();
             if (original==source.entities().end() || original->second.type!="roof" || !targets.insert(original->first).second)
                 throw std::invalid_argument("This alternative edit requires existing roof profiles; change joins or remove roofs separately.");
-            if (const auto captured=capture_roof_profile_edit(original->second,change.entity)) profiles.push_back(*captured);
+            const auto before_roster=original->second.properties.value("roof_openings",json::array());
+            const auto after_roster=change.entity.properties.value("roof_openings",json::array());
+            bool roster_changed=before_roster.size()!=after_roster.size();
+            for (std::size_t index=0;!roster_changed && index<before_roster.size();++index) {
+                const auto& before=before_roster.at(index);
+                const auto& after=after_roster.at(index);
+                roster_changed=before.at("id")!=after.at("id");
+                for (const auto* field:{"x_m","y_m","width_m","depth_m"})
+                    roster_changed=roster_changed || before.at(field).get<double>()!=after.at(field).get<double>();
+            }
+            const auto before_input=original->second.extensions.find("roof_opening_input");
+            const auto after_input=change.entity.extensions.find("roof_opening_input");
+            const bool input_changed=(before_input==original->second.extensions.end())!=(after_input==change.entity.extensions.end()) ||
+                (before_input!=original->second.extensions.end() && after_input!=change.entity.extensions.end() &&
+                    before_input->dump()!=after_input->dump());
+            if (roster_changed || input_changed) {
+                const auto length_key=original->second.properties.at("form")=="sloped_roof_panel" ? "run_m" : "length_m";
+                for (const auto* field:{length_key,"span_m","rise_m","overhang_m","thickness_m"})
+                    if (original->second.properties.at(field).get<double>()!=change.entity.properties.at(field).get<double>())
+                        throw std::invalid_argument("Change roof profiles and roof openings in separate edits.");
+                if (const auto captured=capture_roof_opening_edit(original->second,change.entity)) opening_edits.push_back(*captured);
+            } else if (const auto captured=capture_roof_profile_edit(original->second,change.entity)) profiles.push_back(*captured);
         }
-        if (profiles.empty()) return Command{ApplyEntityChanges{source.revision(),{}, {},raw->message}};
+        if (profiles.empty() && opening_edits.empty()) return Command{ApplyEntityChanges{source.revision(),{}, {},raw->message}};
+        if (!profiles.empty() && !opening_edits.empty())
+            throw std::invalid_argument("Change roof profiles and roof openings in separate edits.");
         std::sort(profiles.begin(),profiles.end(),[](const auto& a,const auto& b) { return a.roof_id<b.roof_id; });
-        const auto request=phase_roof_profile_replacement_request(source.entities(),profiles);
+        std::sort(opening_edits.begin(),opening_edits.end(),[](const auto& a,const auto& b) { return a.roof_id<b.roof_id; });
+        const auto request=opening_edits.empty() ? phase_roof_profile_replacement_request(source.entities(),profiles) :
+            phase_roof_opening_replacement_request(source.entities(),opening_edits);
         if (!request) throw std::invalid_argument("The roof's active baseline membership changed before replacement.");
         const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
             request->registry_id,request->alternative_id);
@@ -41273,6 +41326,7 @@ private:
         replacement.alternative_id=request->alternative_id;
         replacement.seed_roof_ids=request->seed_roof_ids;
         replacement.roof_profiles=std::move(profiles);
+        replacement.roof_opening_edits=std::move(opening_edits);
         // Current and retained entity names are reserved before allocation;
         // replay and Document also check owned children, opaque retained names
         // and every declared replacement identity, including after Undo.

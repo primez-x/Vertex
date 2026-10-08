@@ -25,6 +25,11 @@ struct RoofProfileEditIntent {
 // Geometry is admitted through the shared native roof builders, never persisted.
 void validate_roof_profile_source_entity(const Entity& source);
 
+// Candidate normalization only: equal known numeric representations and
+// equivalent profile input retain the exact source. Actual changed fields and
+// all opaque data remain untouched; callers still require full typed replay.
+[[nodiscard]] Entity normalize_equivalent_roof_inputs(const Entity& source,const Entity& candidate);
+
 // Same-form scalar edit; pitch is derived from resulting rise/run or half-span.
 // Pose/context/material/opening roster and opaque owner data remain exact.
 // Equal dimensions return the exact source without synthesizing pitch/receipts.

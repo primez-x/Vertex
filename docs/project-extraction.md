@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 93 retains baseline-preserving roof-opening additions,
+dimension edits and removals and requires native reader 95. Roof replacement
+record two retains exact quantities and their actual parsing default units,
+complete roof/join/retained-child mappings, explicit newly authored child IDs
+and additive presentation references. The floor follows nested and composed
+phase intent four proofs throughout retained history, including Undo. Earlier
+profile-only records preserve exchange version 92 and native reader 94.
+
 Exchange version 92 retains baseline-preserving proposed roof profiles and
 requires native reader 94. It preserves exclusive phase intent version four,
 exact profile quantities, complete source-derived roof/join replacements,

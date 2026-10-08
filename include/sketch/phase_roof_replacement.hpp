@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/phase_roof_profile_edit.hpp"
+#include "sketch/phase_roof_opening_edit.hpp"
 
 #include <map>
 #include <optional>
@@ -35,6 +36,7 @@ struct PhaseRoofReplacementPlan {
 struct PhaseRoofReplacementResult {
     PhaseRoofReplacementEntities entities;
     PhaseRoofReplacementIdentityMap original_to_proposed;
+    // Includes every mapped identity and each explicitly authored new opening.
     std::vector<std::string> fresh_identity_ids;
 };
 
@@ -45,10 +47,12 @@ struct PhaseRoofReplacementResult {
 // Reinspects the full retained map, independently replays typed edits on source
 // owners, then derives copies. Only registry and qualified presentation owners
 // change in place. The enclosing Document reserves identities across history.
+// Profile and opening edits are separate slices; mixing them is unsupported.
 [[nodiscard]] PhaseRoofReplacementResult replay_phase_roof_replacement(
     const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementPlan& plan,
     const PhaseRoofReplacementIdentityMap& identities,
-    const std::vector<RoofProfileEditIntent>& roof_profiles);
+    const std::vector<RoofProfileEditIntent>& roof_profiles,
+    const std::vector<RoofOpeningEditIntent>& roof_opening_edits = {});
 
 struct PhaseRoofReplacementAuthoring {
     std::string registry_id;
@@ -56,8 +60,11 @@ struct PhaseRoofReplacementAuthoring {
     std::vector<std::string> seed_roof_ids;
     PhaseRoofReplacementIdentityMap identities;
     std::vector<RoofProfileEditIntent> roof_profiles;
+    std::vector<RoofOpeningEditIntent> roof_opening_edits{};
 };
 
+// Version 1 retains exactly its six profile fields. Version 2 adds only
+// roof_opening_edits and requires nonempty opening edits with empty profiles.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(
@@ -77,5 +84,10 @@ struct PhaseRoofProfileReplacementRequest {
 // refuses mixed baseline/ordinary, foreign, inactive or dangling targets.
 [[nodiscard]] std::optional<PhaseRoofProfileReplacementRequest> phase_roof_profile_replacement_request(
     const PhaseRoofReplacementEntities& source, const std::vector<RoofProfileEditIntent>& roof_profiles);
+
+// Opening edits use the same actual membership rules. Mixed changed/unchanged
+// targets cannot add replacement authority; new children keep explicit fresh IDs.
+[[nodiscard]] std::optional<PhaseRoofProfileReplacementRequest> phase_roof_opening_replacement_request(
+    const PhaseRoofReplacementEntities& source, const std::vector<RoofOpeningEditIntent>& roof_opening_edits);
 
 } // namespace sketch
