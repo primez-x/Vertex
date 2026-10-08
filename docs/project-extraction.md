@@ -1,5 +1,17 @@
 # Portable project extraction
 
+Exchange version 99 requires native reader 101 for source-derived proposed
+horizontal assembly profiles. It retains the exclusive phase-envelope five,
+replacement one and exact entered profile one, including explicit owner/layer/
+bound-overlay identity mappings. Source baseline and other alternatives remain
+exact; saved presentation additions use qualified slots. The reader floor covers
+wrapped proofs throughout retained history, including Undo. Earlier floors
+remain unchanged.
+
+The same floor retains scientific-decimal entered quantity expressions and
+their exact rational values in ordinary entities and retained command proofs.
+Unrelated historical opaque metadata keeps the existing storage limits.
+
 Exchange version 98 requires native reader 100 for mathematical roof plan
 resizing. It retains actual axis factors, fixed world anchor/frame, independently
 derived historical roof frames and verbatim retired dimension/opening receipts.

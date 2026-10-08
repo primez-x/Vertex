@@ -24,6 +24,9 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect four only: source-derived roof replacement. No ordinary entity
     // payload, wall edit or relationship authority accompanies this operation.
     nlohmann::json roof_replacement=nullptr;
+    // Dialect five: source-derived horizontal assembly replacement. The
+    // baseline and its actual entered dimensions remain retained verbatim.
+    nlohmann::json slab_replacement=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

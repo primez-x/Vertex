@@ -1,4 +1,53 @@
-# Vertex project formats v1 through v100
+# Vertex project formats v1 through v101
+
+## Source-derived proposed horizontal assemblies (v101)
+
+Native format 101 and JSON/assets extraction version 99 retain source-derived
+slab, floor, ceiling and foundation profile replacements. Version five of the
+source-bound phase envelope adds only `slab_replacement`, exclusively with the
+ordinary semantic edit inventory empty. Earlier envelope dialects and their
+required readers remain unchanged.
+
+Its strict replacement record has exactly `version`, `registry_id`,
+`alternative_id`, `seed_slab_ids`, `identities` and `slab_profiles`. Seeds must
+be changed, active baseline owners in the actual saved alternative. Replay
+derives the new native owners from the original map; callers cannot supply
+geometry payloads. Distinct slab, ordered assembly-layer and bound-overlay
+identities are explicitly mapped and reserved across retained history, including
+Undo. Originals and other alternatives stay exact. Qualified saved-view object
+lists, appearance rows, bound overlays and annotation overrides gain additive
+copies; unsupported affected references produce blocking diagnostics.
+
+The strict version-one profile record has exactly `version`, `slab_id`,
+`thickness`, `elevation` and `layer_thicknesses`, with explicit null inputs.
+Thickness and every layer thickness are positive actual entered quantities;
+base elevation permits signed and zero quantities. Complete ordered existing
+layer inputs retain their identities, materials and order. Layer sums must fit
+the explicit or retained slab thickness; no distribution or total is inferred.
+Scalar aliases must agree. Unedited numeric representations, footprint/holes,
+kind, context and opaque metadata remain exact. Understood changed quantity
+receipts retain opaque siblings; unsupported affected receipt versions refuse.
+Source, final geometry, levels and actual material catalogs undergo admission.
+
+Ordinary and already-proposed profile edits retain their owner identity. A
+source-equivalent edit returns no change before allocation. The desktop supplies
+the actual parsed thickness/elevation inputs, and redirects selection only after
+successful publication. A compact properties dialog exposes ordinary dimension
+fields and an ordered layer table; the separate stack editor remains reachable
+for inventory and material changes. Untouched native values remain untouched,
+including values outside the editable exact-rational range.
+
+Reader 101 also supports exact scientific-decimal quantities. The parser
+normalizes the lexical coefficient, decimal point and exponent before bounded
+rational construction, cancelling denominator factors without converting the
+entered number through binary floating point. It retains the original expression.
+Scientific receipts in entities and wrapped command proofs raise the reader
+floor throughout retained history, including Undo. This scan uses the existing
+JSON value budget without imposing a new nesting limit on ordinary opaque
+metadata. Earlier receipts retain their original reader floors.
+
+This documents source contracts; compilation, interaction, history and file
+round trips have not run for this source batch.
 
 ## Source-derived roof footprint resizing (v100)
 

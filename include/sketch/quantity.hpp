@@ -30,7 +30,7 @@ struct Quantity {
     std::string original_expression;
 };
 
-// Parses exact decimal and fractional input. Supported suffixes are m, mm, cm,
+// Parses exact decimal, scientific-decimal and fractional input. Supported suffixes are m, mm, cm,
 // ft, in, apostrophe, and quote. A missing suffix uses default_unit. A leading
 // sign applies to an entire feet-plus-inches expression.
 [[nodiscard]] Quantity parse_quantity(

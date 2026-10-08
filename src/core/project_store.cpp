@@ -257,6 +257,35 @@ bool has_architectural_reflection_v68_semantics(const Entity& entity) {
 std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                                                bool reading_legacy_lineage = false) {
     std::uint32_t required = 1;
+    const auto scientific_receipt=[](const nlohmann::json& root) {
+        std::uint64_t nodes{};
+        std::vector<const nlohmann::json*> pending{&root};
+        while (!pending.empty()) {
+            const auto& value=*pending.back();
+            pending.pop_back();
+            if (++nodes>ProjectStore::maximum_json_values)
+                storage_error(StorageErrorCode::resource_limit,"Quantity reader-floor scan exceeds its JSON budget");
+            if (value.is_object()) {
+                const auto expression=value.find("original_expression");
+                if (value.value("version",nlohmann::json())==1 && expression!=value.end() && expression->is_string() &&
+                    value.contains("entered_unit") && value.at("entered_unit").is_string() &&
+                    value.contains("exact_metres") && value.at("exact_metres").is_object() &&
+                    value.at("exact_metres").contains("numerator") && value.at("exact_metres").contains("denominator")) {
+                    const auto& text=expression->get_ref<const std::string&>();
+                    for (std::size_t index=1;index+1<text.size();++index) {
+                        if (text[index]!='e' && text[index]!='E') continue;
+                        if ((text[index-1]<'0' || text[index-1]>'9') && text[index-1]!='.') continue;
+                        auto next=index+1;
+                        if (text[next]=='+' || text[next]=='-') ++next;
+                        if (next<text.size() && text[next]>='0' && text[next]<='9') return true;
+                    }
+                }
+            }
+            if (value.is_array() || value.is_object())
+                for (const auto& child:value) pending.push_back(&child);
+        }
+        return false;
+    };
     const auto typed_authoring=[](const nlohmann::json& value) {
         return value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
             value.at("version")==4 && value.contains("replay_version") && value.at("replay_version").is_number_integer() &&
@@ -295,6 +324,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         return false;
     };
     for (const auto& revision : snapshot.history()) {
+        if (required<101 && revision.boundary_geometry_edit &&
+            scientific_receipt(encode_boundary_geometry_edit(*revision.boundary_geometry_edit))) required=101;
+        if (required<101 && revision.boundary_constraint_changes &&
+            scientific_receipt(command_to_json(Command{*revision.boundary_constraint_changes}))) required=101;
         if (revision.boundary_geometry_edit && typed_edit(*revision.boundary_geometry_edit)) required=std::max(required,31U);
         if (revision.boundary_geometry_edit && revision.boundary_geometry_edit->wall_source_translation)
             required = std::max(required, 53U);
@@ -354,6 +387,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 replacement_proof(replacement_proof,command.room_review_geometry_proof,0))
                 required=std::max(required,87U);
             const auto profile_intent=[](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==5) return 101U;
                 if (intent.is_object() && intent.value("version",0)==4) {
                     const auto replacement=intent.find("roof_replacement");
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==4) return 97U;
@@ -522,6 +556,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
+            if (required<101 && (scientific_receipt(entity.properties) || scientific_receipt(entity.extensions))) required=101;
             if (entity.type == "roof" && entity.extensions.contains("roof_rigid_transform_derivations"))
                 required = std::max(required, 99U);
             if (entity.type == "roof" && entity.extensions.contains("roof_plan_resize_derivations"))
@@ -2168,6 +2203,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 101 &&
          sqlite3_column_int(user_version.get(), 0) != 100 &&
          sqlite3_column_int(user_version.get(), 0) != 99 &&
          sqlite3_column_int(user_version.get(), 0) != 98 &&
@@ -2723,6 +2759,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=101)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 101 for source-derived proposed horizontal assemblies or exact scientific quantities");
         if (required_format>=100)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 100 for source-derived roof plan resizing");
         if (required_format>=99)

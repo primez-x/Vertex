@@ -14,6 +14,51 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 source-derived horizontal profile implementation
+
+Slab, floor, ceiling and foundation thickness/elevation controls now supply
+actual parsed quantities to dedicated profile replay. Signed/zero elevation,
+existing scalar aliases and complete ordered layer-thickness inputs retain
+their source meaning. Native source/result and level placement admission check
+the actual map. Known changed receipts retain opaque siblings; unsupported
+affected inputs refuse without data loss. Equal dimensions retain the exact
+source.
+
+Active-alternative baseline profile edits derive distinct proposed slab,
+layer and bound-overlay identities. Original owners and other alternatives
+remain exact; qualified saved-view and annotation rows gain additive copies.
+Native/context/material admission and conservative affected-reference checks
+precede publication. Source-bound phase envelope five and native 101/extraction
+99 retain these operations across history; declared names stay reserved after
+Undo. Properties publication follows the admitted proposed selection.
+
+A compact properties dialog now exposes thickness, base elevation and the
+ordered layer table. Actual entered dimensions feed typed publication; untouched
+native values remain untouched even outside the editable exact-rational range.
+The separate inventory/material editor remains reachable. The public layer API
+preserves submitted numeric tokens, including scientific-decimal expressions,
+instead of inventing inputs from a floating-point serialization. Exact parsing
+normalizes lexical coefficient and exponent before constructing bounded
+rationals. Scientific receipts also require reader 101 throughout retained
+history. Reader-floor scanning retains ordinary metadata's existing limits.
+
+Detached slab/room vertex staging is reusable without a Document mutation.
+It changes only actual adjacent endpoint coordinates, preserves unedited numeric
+representations and opaque data, and admits the actual source/result volumes.
+Conflicting scalar or room-boundary aliases refuse. The existing ordinary
+command keeps captured revision and resolved full-document admission.
+
+Independent bounded source review approved this integrated slice after fixing
+layer input capture, dialog handling of untouched unrepresentable values,
+scientific coefficient cancellation and ordinary metadata reader-floor scanning.
+This is source review only. No builds, tests, probes, scripts, native jobs,
+launches, packages or installations ran; the installed candidate stays unchanged.
+Compilation, interaction, Undo/Redo and save/reopen remain unverified.
+Footprint/transform/clone/removal alternatives and changing layer inventories/
+materials remain active implementation gaps. Baseline slab demolition is the
+next source integration. No production acceptance or completion estimate is
+claimed.
+
 ### October 8 mathematical roof side and corner resizing implementation
 
 Side/corner roof grips now derive actual axis factors and a fixed opposite

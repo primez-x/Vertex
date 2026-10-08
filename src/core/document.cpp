@@ -47,6 +47,7 @@
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_roof_transform.hpp"
 #include "sketch/phase_roof_resize.hpp"
+#include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -2524,7 +2525,8 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
     return std::none_of(proofs.begin(),proofs.end(),[](const auto& intent) {
         return (intent.contains("wall_replacement") && !intent.at("wall_replacement").is_null()) ||
             (intent.contains("opening_demolition") && !intent.at("opening_demolition").is_null()) ||
-            (intent.contains("roof_replacement") && !intent.at("roof_replacement").is_null());
+            (intent.contains("roof_replacement") && !intent.at("roof_replacement").is_null()) ||
+            (intent.contains("slab_replacement") && !intent.at("slab_replacement").is_null());
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2544,6 +2546,12 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
                 decode_phase_roof_replacement_authoring(intent.roof_replacement));
             if (entity_map_digest(replay) != entity_map_digest(candidate))
                 throw std::invalid_argument("Roof replacement cannot change retained owners or borrow other edit authority");
+        }
+        if (!intent.slab_replacement.is_null()) {
+            const auto replay = replay_phase_slab_replacement_authoring(source,
+                decode_phase_slab_replacement_authoring(intent.slab_replacement));
+            if (entity_map_digest(replay) != entity_map_digest(candidate))
+                throw std::invalid_argument("Slab replacement cannot change retained owners or borrow other edit authority");
         }
     }
 #endif
@@ -2667,8 +2675,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records,
     const ApplyBoundaryConstraintChanges& command) {
     std::set<std::string,std::less<>> fresh;
-    std::set<std::string,std::less<>> roof_fresh;
-    bool complete_roof_envelope_reservation=false;
+    std::set<std::string,std::less<>> nested_fresh;
+    bool complete_envelope_reservation=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -2677,21 +2685,28 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
-            complete_roof_envelope_reservation=complete_roof_envelope_reservation ||
+            complete_envelope_reservation=complete_envelope_reservation ||
                 !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty() || replacement.demolition;
             for (const auto& [original,id]:replacement.identities) {
-                (void)original;fresh.insert(id);roof_fresh.insert(id);
+                (void)original;fresh.insert(id);nested_fresh.insert(id);
             }
             for (const auto& [original, ids] : replacement.demolition_additional_identities) {
                 (void)original;
-                for (const auto& id : ids) { fresh.insert(id); roof_fresh.insert(id); }
+                for (const auto& id : ids) { fresh.insert(id); nested_fresh.insert(id); }
             }
             const auto opening_edits=replacement.roof_edits.empty() ? replacement.roof_opening_edits :
                 roof_edit_opening_intents(replacement.roof_edits);
             for (const auto& id:new_roof_opening_identity_ids(source,opening_edits)) {
                 if (!fresh.insert(id).second)
                     throw std::invalid_argument("A new roof opening overlaps another fresh replacement identity: "+id);
-                roof_fresh.insert(id);
+                nested_fresh.insert(id);
+            }
+        }
+        if (!intent.slab_replacement.is_null()) {
+            const auto replacement=decode_phase_slab_replacement_authoring(intent.slab_replacement);
+            complete_envelope_reservation=true;
+            for (const auto& [original,id]:replacement.identities) {
+                (void)original;fresh.insert(id);nested_fresh.insert(id);
             }
         }
         if (intent.wall_replacement.is_null()) continue;
@@ -2725,10 +2740,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
     if (fresh.empty()) return;
     if (fresh.size()>4096) throw std::invalid_argument("Active design fresh identity budget exceeded");
-    if (complete_roof_envelope_reservation)
+    if (complete_envelope_reservation)
         for (const auto* key:{"id","type","properties","required","extensions"})
-            if (roof_fresh.contains(key))
-                throw std::invalid_argument("Proposed roof identity aliases an entity envelope field: "+std::string(key));
+            if (nested_fresh.contains(key))
+                throw std::invalid_argument("Proposed identity aliases an entity envelope field: "+std::string(key));
     for (std::size_t index=0;index<preceding_records;++index) {
         const auto& record=history.at(index);
         // A deliberately omitted fresh relationship copy is still a declared
@@ -2744,6 +2759,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 };
                 if (!intent.wall_replacement.is_null())
                     require_unused(decode_phase_wall_replacement_authoring(intent.wall_replacement).identities);
+                if (!intent.slab_replacement.is_null())
+                    require_unused(decode_phase_slab_replacement_authoring(intent.slab_replacement).identities);
                 if (!intent.roof_replacement.is_null()) {
                     const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
                     require_unused(roof.identities);
@@ -2761,22 +2778,22 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
-            if (!roof_fresh.empty()) {
-                if (complete_roof_envelope_reservation && roof_fresh.contains(entity.type))
-                    throw std::invalid_argument("Proposed roof identity aliases a retained entity type: "+entity.type);
-                // Roof openings and view overlays own identities below the
-                // entity level. Retained metadata can reserve future children
-                // too. Undo does not make any of those names available again.
+            if (!nested_fresh.empty()) {
+                if (complete_envelope_reservation && nested_fresh.contains(entity.type))
+                    throw std::invalid_argument("Proposed identity aliases a retained entity type: "+entity.type);
+                // Openings, assembly layers and view overlays own identities
+                // below the entity level. Retained metadata reserves names
+                // too; Undo does not make any of them available again.
                 std::size_t nodes=0,bytes=0;
                 const auto reserve=[&](const auto& self,const nlohmann::json& value,unsigned depth)->void {
                     if (depth>64 || ++nodes>4*1024*1024)
-                        throw std::invalid_argument("Retained roof identity nesting/node budget exceeded");
+                        throw std::invalid_argument("Retained identity nesting/node budget exceeded");
                     const auto text=[&](const std::string& name) {
                         if (name.size()>64*1024*1024-bytes)
-                            throw std::invalid_argument("Retained roof identity string budget exceeded");
+                            throw std::invalid_argument("Retained identity string budget exceeded");
                         bytes+=name.size();
-                        if (roof_fresh.contains(name))
-                            throw std::invalid_argument("Proposed roof identity was already retained in history: "+name);
+                        if (nested_fresh.contains(name))
+                            throw std::invalid_argument("Proposed identity was already retained in history: "+name);
                     };
                     if (value.is_string()) text(value.template get_ref<const std::string&>());
                     else if (value.is_array()) for (const auto& child:value) self(self,child,depth+1);

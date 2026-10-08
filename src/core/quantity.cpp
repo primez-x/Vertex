@@ -150,6 +150,91 @@ ExactRational parse_fraction(std::string_view text) {
 }
 
 ExactRational parse_decimal(std::string_view text) {
+    const auto exponent = text.find_first_of("eE");
+    if (exponent != std::string_view::npos) {
+        if (text.find_first_of("eE", exponent + 1) != std::string_view::npos)
+            throw std::invalid_argument("decimal contains more than one exponent");
+        auto power_text = text.substr(exponent + 1);
+        bool negative_power = false;
+        if (!power_text.empty() && (power_text.front() == '+' || power_text.front() == '-')) {
+            negative_power = power_text.front() == '-';
+            power_text.remove_prefix(1);
+        }
+        const auto power = parse_digits(power_text);
+        if (power > 4096) throw std::invalid_argument("decimal exponent exceeds the supported range");
+        const auto mantissa = text.substr(0, exponent);
+        std::string coefficient;
+        coefficient.reserve(mantissa.size());
+        bool decimal_seen = false;
+        std::size_t fractional_digits = 0;
+        for (const auto character : mantissa) {
+            if (character == '.') {
+                if (decimal_seen) throw std::invalid_argument("decimal contains more than one point");
+                decimal_seen = true;
+            } else {
+                if (character < '0' || character > '9')
+                    throw std::invalid_argument("number contains an invalid character");
+                coefficient.push_back(character);
+                if (decimal_seen) ++fractional_digits;
+            }
+        }
+        if (coefficient.empty()) throw std::invalid_argument("decimal requires digits");
+        const auto first = coefficient.find_first_not_of('0');
+        if (first == std::string::npos) return {0, 1};
+        coefficient.erase(0, first);
+        std::size_t trailing_zeros = 0;
+        while (coefficient.back() == '0') {
+            coefficient.pop_back();
+            ++trailing_zeros;
+        }
+        // Apply the decimal point and exponent to the lexical coefficient first.
+        // An oversized mantissa may reduce to a small, exactly representable value.
+        if (fractional_digits > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) ||
+            trailing_zeros > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
+            throw std::overflow_error("decimal scale overflow");
+        auto scale = checked_add(static_cast<std::int64_t>(trailing_zeros),
+                                 -static_cast<std::int64_t>(fractional_digits));
+        scale = checked_add(scale, negative_power ? -power : power);
+        if (scale >= 0) {
+            auto numerator = parse_digits(coefficient);
+            for (std::int64_t index = 0; index < scale; ++index)
+                numerator = checked_multiply(numerator, 10);
+            return {numerator, 1};
+        }
+        if (scale == std::numeric_limits<std::int64_t>::min())
+            throw std::overflow_error("decimal scale overflow");
+        auto twos = -scale;
+        auto fives = -scale;
+        // With trailing zeroes removed, the coefficient cannot cancel both 2
+        // and 5. Bound the uncancellable denominator before doing long division.
+        const auto final_digit = coefficient.back() - '0';
+        if ((final_digit % 5 != 0 && fives > 27) ||
+            (final_digit % 2 != 0 && twos > 62))
+            throw std::overflow_error("rational denominator overflow");
+        const auto divide_coefficient = [&](int divisor) {
+            int remainder = 0;
+            for (auto& character : coefficient) {
+                const auto digit = remainder * 10 + character - '0';
+                character = static_cast<char>('0' + digit / divisor);
+                remainder = digit % divisor;
+            }
+            const auto nonzero = coefficient.find_first_not_of('0');
+            if (nonzero != 0) coefficient.erase(0, nonzero);
+        };
+        while (twos > 0 && (coefficient.back() - '0') % 2 == 0) {
+            divide_coefficient(2);
+            --twos;
+        }
+        while (fives > 0 && (coefficient.back() - '0') % 5 == 0) {
+            divide_coefficient(5);
+            --fives;
+        }
+        const auto numerator = parse_digits(coefficient);
+        std::int64_t denominator = 1;
+        while (twos-- > 0) denominator = checked_multiply(denominator, 2);
+        while (fives-- > 0) denominator = checked_multiply(denominator, 5);
+        return {numerator, denominator};
+    }
     const auto decimal = text.find('.');
     if (decimal == std::string_view::npos) {
         return {parse_digits(text), 1};

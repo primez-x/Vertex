@@ -16,6 +16,12 @@ struct FootprintVertexEdit {
     std::optional<std::size_t> hole_index;
 };
 
+// Stage the actual source payload without document or revision authority.
+// Admits analytical geometry and detached native volume when present; an
+// exact no-op returns the source unchanged, including numeric representations.
+[[nodiscard]] Entity stage_architectural_footprint_vertex_entity(
+    const Entity& actual_source, const FootprintVertexEdit& edit);
+
 // Edit only an independent slab or room's captured closed footprint ring.
 // Retains signed sweeps, ring order, source field/point representations and
 // all unrelated payload. Missing volume measurements remain absent. Returns
