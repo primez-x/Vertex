@@ -157,6 +157,22 @@ presentation. A later mouse release cannot commit a cancelled move.
 
 ## Acceptance sequences
 
+Generated room/area text uses a transient owner/role/type selection, independent
+of geometry identity. A click selects the combined, name or calculation label;
+Ctrl-click toggles a collection of generated labels. An object pick switches
+back to geometry selection. Selected labels move from their actual painted
+anchors through one displayed displacement, then one source-qualified placement
+command converts each captured frame. Selecting a label exposes no geometry
+grips and cannot authorize deleting its boundary. An outside click deselects
+without dropping a node. Double-click and the label context menu open placement
+properties; Automatic position retains appearance and rotation while restoring
+layout. These selections and previews remain excluded from output.
+
+Connected walls and measured owners can move with independent architectural
+objects in one history event. The qualified solve and ordinary object edits
+each replay the same captured source. Equal dependency consequences coalesce;
+contradictory payloads leave the entire group unchanged.
+
 Hosted doors, windows and bare openings on straight or circular walls have two jamb
 handles in a horizontal plan, including a shifted, rotated or reflected named
 plan. Both jambs must be visible inside the crop and the entire opening must

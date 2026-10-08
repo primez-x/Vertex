@@ -270,13 +270,29 @@ PresentationSelection retained_entity_presentation_selection(
     return selected;
 }
 
-PresentationSelection retained_label_presentation_selection(
+using LabelPresentationKey = QPair<QPair<QString, QString>, QString>;
+using LabelPresentationSelection = QHash<LabelPresentationKey, bool>;
+
+CanvasLabelPresentationIdentity label_identity(const CanvasLabel& label) {
+    return {label.id, label.callout_role, label.selection_type};
+}
+
+LabelPresentationKey label_presentation_key(const CanvasLabel& label) {
+    return {{label.id, label.callout_role}, label.selection_type};
+}
+
+bool generated_area_callout(const CanvasLabel& label) {
+    return label.avoid_components &&
+        (label.callout_role.isEmpty() || label.callout_role == QStringLiteral("area_name") ||
+         label.callout_role == QStringLiteral("area_calculation"));
+}
+
+LabelPresentationSelection retained_label_presentation_selection(
     const std::vector<CanvasLabel>& labels) {
-    PresentationSelection selected;
+    LabelPresentationSelection selected;
     selected.reserve(static_cast<qsizetype>(labels.size()));
     for (const auto& label : labels) {
-        // Label presentation identity is exactly owner ID plus callout role.
-        const QPair<QString, QString> key{label.id, label.callout_role};
+        const auto key = label_presentation_key(label);
         if (!selected.contains(key)) selected.insert(key, label.selected);
     }
     return selected;
@@ -960,11 +976,43 @@ void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
         entity.selected = entity_ids.contains(entity.id);
     }
     for (auto& label : m_labels)
-        label.selected = !label.plan_only && entity_ids.contains(label.id);
+        label.selected = generated_area_callout(label)
+            ? std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
+                        label_identity(label)) != m_selected_generated_labels.end()
+            : !label.plan_only && entity_ids.contains(label.id);
     for (auto& reference : m_references) reference.selected = entity_ids.contains(reference.id);
     invalidateRetainedPresentation();
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
+}
+
+void PlanCanvas::setSelectedGeneratedLabelPresentations(
+    std::vector<CanvasLabelPresentationIdentity> identities) {
+    std::vector<CanvasLabelPresentationIdentity> available;
+    for (const auto& identity : identities) {
+        const auto count = std::count_if(m_labels.begin(), m_labels.end(), [&](const CanvasLabel& label) {
+            return label_identity(label) == identity;
+        });
+        const auto label = std::find_if(m_labels.begin(), m_labels.end(), [&](const CanvasLabel& label) {
+            return label_identity(label) == identity && generated_area_callout(label) && drawable_label(label);
+        });
+        if (count == 1 && label != m_labels.end() &&
+            std::find(available.begin(), available.end(), identity) == available.end())
+            available.push_back(identity);
+    }
+    if (m_selected_generated_labels == available) return;
+    resetGesture();
+    m_selected_generated_labels = std::move(available);
+    for (auto& label : m_labels) if (generated_area_callout(label))
+        label.selected = std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
+                                   label_identity(label)) != m_selected_generated_labels.end();
+    invalidateRetainedPresentation();
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    update();
+}
+
+std::vector<CanvasLabelPresentationIdentity> PlanCanvas::selectedGeneratedLabelPresentations() const {
+    return m_selected_generated_labels;
 }
 
 void PlanCanvas::setSelectionCaption(QString caption) {
@@ -1004,7 +1052,19 @@ void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     resetTouchInput();
     // Derived plan labels share their owner's ID for output filtering; they
     // are not independent annotations with their own transform controls.
-    for (auto& label : labels) if (label.plan_only) label.selected = false;
+    std::erase_if(m_selected_generated_labels, [&](const CanvasLabelPresentationIdentity& identity) {
+        return std::count_if(labels.begin(), labels.end(), [&](const CanvasLabel& label) {
+            return label_identity(label) == identity;
+        }) != 1 || std::none_of(labels.begin(), labels.end(), [&](const CanvasLabel& label) {
+            return label_identity(label) == identity && generated_area_callout(label) && drawable_label(label);
+        });
+    });
+    for (auto& label : labels) {
+        if (generated_area_callout(label))
+            label.selected = std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
+                                       label_identity(label)) != m_selected_generated_labels.end();
+        else if (label.plan_only) label.selected = false;
+    }
     m_labels = std::move(labels);
     invalidateRetainedPresentation();
     ++m_sketch_content_revision;
@@ -2349,6 +2409,12 @@ void PlanCanvas::setLabelDoubleClicked(std::function<bool(CanvasLabelPresentatio
     m_label_double_clicked = std::move(callback);
 }
 
+void PlanCanvas::setGeneratedLabelSelectionClicked(
+    std::function<void(CanvasLabelPresentationIdentity, bool)> callback) {
+    resetGesture();
+    m_generated_label_selection_clicked = std::move(callback);
+}
+
 void PlanCanvas::setGeneratedLabelMoveStarted(
     std::function<bool(CanvasLabelPresentationIdentity)> callback) {
     if (m_generated_label_move_identity) resetGesture();
@@ -2563,7 +2629,7 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     }
     const auto retained_labels=retained_label_presentation_selection(m_labels);
     for (auto& proposed:m_move_labels_preview) {
-        const auto selected=retained_labels.constFind({proposed.id,proposed.callout_role});
+        const auto selected=retained_labels.constFind(label_presentation_key(proposed));
         proposed.selected=selected!=retained_labels.cend() && selected.value();
     }
     QSet<QString> admitted_ids;
@@ -3153,6 +3219,12 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         return;
     }
     const bool control = modifiers.testFlag(Qt::ControlModifier);
+    if (selectionInteractionEnabled() && !m_wall_preview && m_boundary_preview.empty() &&
+        m_area_class_caption.isEmpty()) {
+        const auto identity = labelPresentationAt(position);
+        const auto label = identity ? labelPresentation(*identity) : std::nullopt;
+        if (label && generated_area_callout(*label)) m_pressed_generated_label = identity;
+    }
     if (control) {
         m_left_gesture = LeftGesture::marquee;
         m_selection_start = position;
@@ -3180,12 +3252,9 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
     if (selectionInteractionEnabled() && !m_wall_preview && m_boundary_preview.empty() &&
         m_area_class_caption.isEmpty()) {
-        const auto identity = labelPresentationAt(position);
+        const auto identity = m_pressed_generated_label;
         const auto label = identity ? labelPresentation(*identity) : std::nullopt;
-        if (label && label->avoid_components &&
-            (label->callout_role.isEmpty() || label->callout_role == QStringLiteral("area_name") ||
-             label->callout_role == QStringLiteral("area_calculation")) &&
-            selectedIds().contains(label->id)) {
+        if (label && (label->selected || selectedIds().contains(label->id))) {
             // Capture the actual painted anchor, including automatic placement.
             // It owns this press ahead of body/frame controls and never falls
             // back to moving the boundary if the host refuses admission.
@@ -3198,6 +3267,13 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                     labels[i].selection_type != identity->selection_type) continue;
                 m_left_gesture = LeftGesture::generated_label_move;
                 m_generated_label_move_identity = *identity;
+                for (const auto& selected_label : labels) {
+                    const auto selected_identity = label_identity(selected_label);
+                    if (selected_identity == *identity ||
+                        std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
+                                  selected_identity) != m_selected_generated_labels.end())
+                        m_generated_label_move_anchors.emplace_back(selected_identity, selected_label.position);
+                }
                 m_generated_label_move_index = i;
                 m_generated_label_move_anchor = label->position;
                 m_generated_label_move_press_pointer = toModel(position, rect());
@@ -3206,6 +3282,14 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 m_label_placement_cache[0].hit_index = {};
                 return;
             }
+        }
+        if (m_pressed_generated_label) {
+            // A generated label owns the pick ahead of its owner/frame. An
+            // unselected label can still pan when dragged, then select on click.
+            m_left_gesture = LeftGesture::canvas_pan;
+            m_pan_start = position;
+            m_pan_view_start = m_view_center;
+            return;
         }
     }
     if (selectionInteractionEnabled()) {
@@ -3298,6 +3382,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     // A selected annotation can paint away from its same-ID guide geometry.
     // Its painted hit still owns movement of the retained selection.
     const bool selected_hit = !m_pressed_entity.isEmpty() && retained_selection.contains(m_pressed_entity);
+    m_clear_selection_on_click = !m_selected_generated_labels.empty() && !selected_hit &&
+        (retained_selection.isEmpty() || !frame || !frame->contains(position));
     if (selectionInteractionEnabled() && !retained_selection.isEmpty() &&
         (selected_hit || (frame && frame->contains(position)))) {
         m_left_gesture = LeftGesture::object_move;
@@ -3386,10 +3472,26 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             if (!m_generated_label_move_preview || proposed.x != m_generated_label_move_preview->x ||
                 proposed.y != m_generated_label_move_preview->y) {
                 m_generated_label_move_preview = proposed;
-                // All other painted labels and their collision placement remain
-                // exactly as captured. Only this indexed anchor changes.
-                m_label_placement_cache[0].labels[m_generated_label_move_index].position = proposed;
+                // Every explicitly selected role keeps its press-time painted
+                // anchor and shares the primary role's displayed displacement.
+                const auto displacement = proposed - m_generated_label_move_anchor;
+                for (const auto& [selected_identity, anchor] : m_generated_label_move_anchors) {
+                    auto found = std::find_if(m_label_placement_cache[0].labels.begin(),
+                        m_label_placement_cache[0].labels.end(), [&](const CanvasLabel& label) {
+                            return label_identity(label) == selected_identity;
+                        });
+                    if (found == m_label_placement_cache[0].labels.end()) { resetGesture(); return; }
+                    const auto target = anchor + displacement;
+                    if (!std::isfinite(target.x) || !std::isfinite(target.y)) { resetGesture(); return; }
+                    found->position = target;
+                }
                 m_label_placement_cache[0].hit_index = {};
+                if (selectedIds().isEmpty()) {
+                    // Role-only selection follows its painted anchors. Keep a
+                    // parent body's warmed frame fixed during its label move.
+                    m_selection_bounds_cache = {};
+                    m_selection_frame_cache = {};
+                }
                 const auto callback = m_generated_label_moved;
                 const auto identity = *m_generated_label_move_identity;
                 const auto serial = m_generated_label_move_serial;
@@ -3565,7 +3667,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto target = clicked ? contextTarget(position) : QString{};
         resetGesture();
         updateCursor(position);
-        if (clicked && m_right_clicked) m_right_clicked(inputPoint(position), target);
+        // Context picking uses the painted pointer position. Measurement snaps
+        // must not move a narrow off-grid label hit to a neighboring object.
+        if (clicked && m_right_clicked) m_right_clicked(toModel(position,rect()), target);
         return;
     }
     if (button == Qt::MiddleButton && m_panning) {
@@ -3586,6 +3690,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             const auto identity = m_generated_label_move_identity;
             const auto proposed = m_generated_label_move_preview;
             const auto callback = m_generated_label_moved;
+            const auto selection_clicked = m_generated_label_selection_clicked;
+            const bool clicked = !m_left_dragging && identity &&
+                labelPresentationAt(position) == identity && labelPresentation(*identity).has_value();
             const bool finish = m_generated_label_move_admitted && identity && proposed && callback;
             if (finish) m_generated_label_move_admitted = false;
             // Retire preview and pointer authority before a command refresh.
@@ -3597,6 +3704,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                     const auto canceled = guard ? m_generated_label_move_canceled : std::function<void()>{};
                     if (canceled) { try { canceled(); } catch (...) {} }
                 }
+            } else if (clicked && selection_clicked) {
+                selection_clicked(*identity, false);
             }
             return;
         }
@@ -3633,6 +3742,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto move_ids = m_move_ids;
         const auto pressed_entity = m_pressed_entity;
         const auto pressed_occupied = m_pressed_occupied;
+        const auto pressed_generated_label = m_pressed_generated_label;
+        const bool generated_label_click_current = pressed_generated_label &&
+            labelPresentationAt(position) == pressed_generated_label &&
+            labelPresentation(*pressed_generated_label).has_value();
+        const auto clear_selection_on_click = m_clear_selection_on_click;
         const auto overlap_selection = m_overlap_selection;
         const bool overlap_view_current = m_overlap_view_scale==m_scale && m_overlap_view_size==size() &&
             m_overlap_view_dpr==devicePixelRatioF() &&
@@ -3705,6 +3819,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 const auto ids = rectangleHits(QRectF(*selection_start, position).normalized(),
                                                position.x() < selection_start->x());
                 if (m_entities_selected) m_entities_selected(ids, true);
+            } else if (pressed_generated_label) {
+                if (generated_label_click_current && m_generated_label_selection_clicked)
+                    m_generated_label_selection_clicked(*pressed_generated_label, true);
             } else if (m_entity_selection_clicked) {
                 m_entity_selection_clicked(hitTest(position), true);
             }
@@ -3713,6 +3830,12 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 QStringList overlapping;
                 if (overlap_view_current) (void)hitTest(position,true,&overlapping);
                 (void)m_overlap_selection_requested(false,std::move(overlapping));
+            } else if (pressed_generated_label) {
+                if (generated_label_click_current && m_generated_label_selection_clicked)
+                    m_generated_label_selection_clicked(*pressed_generated_label, false);
+            } else if (selectionInteractionEnabled() && clear_selection_on_click) {
+                if (m_entity_selection_clicked) m_entity_selection_clicked({}, false);
+                else if (m_entity_clicked) m_entity_clicked({});
             } else if (selectionInteractionEnabled() && !pressed_entity.isEmpty()) {
                 if (m_entity_selection_clicked)
                     m_entity_selection_clicked(pressed_entity, false);
@@ -3723,7 +3846,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 // drawing space. Keep tracing in active drafts unchanged.
                 if (m_entity_selection_clicked) m_entity_selection_clicked({}, false);
                 else if (m_entity_clicked) m_entity_clicked({});
-            } else if (selectionInteractionEnabled() && !selectedIds().isEmpty()) {
+            } else if (selectionInteractionEnabled() &&
+                       (!selectedIds().isEmpty() || !m_selected_generated_labels.empty())) {
                 // An empty click outside the retained selection is an explicit
                 // deselect. Do not also interpret it as the first drawing node;
                 // the next empty click begins authoring once selection is clear.
@@ -3786,6 +3910,7 @@ void PlanCanvas::resetGesture() {
     m_generated_label_move_admitted = false;
     m_generated_label_move_refused = false;
     m_generated_label_move_identity.reset();
+    m_generated_label_move_anchors.clear();
     m_generated_label_move_preview.reset();
     ++m_generated_label_move_serial;
     if (generated_label_capture) {
@@ -3810,6 +3935,8 @@ void PlanCanvas::resetGesture() {
     m_left_dragging = false;
     m_pressed_entity.clear();
     m_pressed_occupied = false;
+    m_pressed_generated_label.reset();
+    m_clear_selection_on_click = false;
     m_overlap_selection = false;
     m_move_ids.clear();
     m_move_preview_delta.reset();
@@ -4062,6 +4189,8 @@ std::optional<QRectF> PlanCanvas::computeSelectionBounds(const QRectF& viewport)
     }
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!label.selected || !drawable_label(label)) continue;
+        // The body frame never grows to encompass independent role picks.
+        if (generated_area_callout(label) && !selectedIds().isEmpty()) continue;
         const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
         include(label_transform(label, toScreen(label.position, viewport)).mapRect(layout.bounds));
     }
@@ -4213,7 +4342,8 @@ std::optional<CanvasSelectionFrame> PlanCanvas::computeSelectionAxes() const {
             reference.image.width()*unit, reference.image.height()*unit};
     }
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
-        if (!label.selected || !drawable_label(label) || !std::isfinite(label.rotation_radians)) continue;
+        if (!label.selected || generated_area_callout(label) || !drawable_label(label) ||
+            !std::isfinite(label.rotation_radians)) continue;
         const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
         return label_selection_frame(label, layout.bounds, m_scale);
     }
@@ -4246,18 +4376,17 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     // A preview result must never become the settled-input fast path on release.
     cache.retained_key.clear();
     auto retained_labels = floor_ghost ? m_floor_ghost_labels : m_labels;
-    using LabelPresentationKey = QPair<QString, QString>;
     QHash<LabelPresentationKey, const CanvasLabel*> preview_labels;
     if (interactive && (m_transform_preview_valid || m_move_preview_valid ||
                         m_boundary_vertex_preview_valid || m_opening_width_preview_valid)) {
         QSet<LabelPresentationKey> retained_presentations;
         retained_presentations.reserve(retained_labels.size());
         for (const auto& label : retained_labels)
-            retained_presentations.insert({label.id, label.callout_role});
+            retained_presentations.insert(label_presentation_key(label));
         const auto append_preview_labels = [&](const std::vector<CanvasLabel>& preview, bool valid) {
             if (!valid) return;
             for (const auto& proposed : preview) {
-                const LabelPresentationKey presentation{proposed.id, proposed.callout_role};
+                const auto presentation = label_presentation_key(proposed);
                 if (retained_presentations.contains(presentation)) continue;
                 retained_presentations.insert(presentation);
                 retained_labels.push_back(proposed);
@@ -4273,7 +4402,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         const auto index_preview_labels = [&](const std::vector<CanvasLabel>& preview, bool valid) {
             if (!valid) return;
             for (const auto& proposed : preview) {
-                const LabelPresentationKey presentation{proposed.id, proposed.callout_role};
+                const auto presentation = label_presentation_key(proposed);
                 if (!preview_labels.contains(presentation))
                     preview_labels.insert(presentation, &proposed);
             }
@@ -4295,8 +4424,13 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     for (const auto& retained : retained_labels) {
         auto label = retained;
         if (interactive) {
-            const auto preview_label = preview_labels.constFind({retained.id, retained.callout_role});
+            const auto preview_label = preview_labels.constFind(label_presentation_key(retained));
             if (preview_label != preview_labels.cend()) label = **preview_label;
+            // A preview's producer cannot transfer selection between roles or
+            // presentation types sharing the same semantic owner.
+            if (generated_area_callout(label))
+                label.selected = std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
+                                           label_identity(label)) != m_selected_generated_labels.end();
             if (retained.selected && m_transform_frame_start && !m_transform_preview_exact &&
                 m_move_ids.contains(retained.id) &&
                 (m_left_gesture == LeftGesture::selection_resize ||
@@ -4954,7 +5088,7 @@ bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
         return std::isfinite(point.x) && std::isfinite(point.y);
     };
     for (auto& label : labels) {
-        const auto original = retained_labels.constFind({label.id, label.callout_role});
+        const auto original = retained_labels.constFind(label_presentation_key(label));
         if (original == retained_labels.cend()) {
             // New derived callouts must belong to this admitted projection,
             // including linked-view dimensions whose line and label share ID.
@@ -5262,7 +5396,7 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
         if (original != retained_entities.cend()) entity.selected = original.value();
     }
     for (auto& label : labels) {
-        const auto original = retained_labels.constFind({label.id, label.callout_role});
+        const auto original = retained_labels.constFind(label_presentation_key(label));
         if (original == retained_labels.cend()) {
             // A repaired area may acquire its first qualified quantity. Only
             // Derived area labels belong to retained visible owners. A bound
@@ -5730,7 +5864,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                   reference.image.width()*unit, reference.image.height()*unit},reference.id);
         }
         for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
-            if (!label.selected || !drawable_label(label) || label.selection_type==QStringLiteral("dimension")) continue;
+            if (!label.selected || generated_area_callout(label) || !drawable_label(label) ||
+                label.selection_type==QStringLiteral("dimension")) continue;
             const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
             draw(label_selection_frame(label, layout.bounds, m_scale),label.id,true);
         }
@@ -7452,6 +7587,7 @@ void PlanCanvas::ensureRetainedSelection() const {
         add(entity.id);
     }
     for (const auto& label : m_labels) if (label.selected) {
+        if (generated_area_callout(label)) continue;
         m_has_selected_label = true;
         add(label.id);
     }
@@ -7498,6 +7634,10 @@ QString PlanCanvas::contextTarget(QPointF point) const {
     // The same visible frame owns movement and contextual selection actions.
     // A retained selection takes precedence over unrelated geometry under it.
     if (selectionInteractionEnabled()) {
+        if (const auto identity = labelPresentationAt(point)) {
+            if (std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(), *identity) !=
+                m_selected_generated_labels.end()) return identity->id;
+        }
         const auto ids = selectedIds();
         const auto frame = selectionFrame(QRectF(rect()));
         if (!ids.isEmpty() && frame && frame->contains(point) && matchesSelectionFilter(ids.back()))
@@ -7531,6 +7671,13 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
+        if (const auto identity = labelPresentationAt(point)) {
+            if (std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(), *identity) !=
+                m_selected_generated_labels.end()) {
+                setCursor(Qt::SizeAllCursor);
+                return;
+            }
+        }
         if (const auto jamb = openingWidthHandleAt(point, QRectF(rect()))) {
             setCursor(jamb_resize_cursor(jamb->source, jamb->keep_start_jamb));
             return;
@@ -7688,7 +7835,7 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
     if (!m_transform_labels_preview.empty()) {
         const auto retained_selection=retained_label_presentation_selection(m_labels);
         for (auto& proposed : m_transform_labels_preview) {
-            const auto selected=retained_selection.constFind({proposed.id,proposed.callout_role});
+            const auto selected=retained_selection.constFind(label_presentation_key(proposed));
             proposed.selected=selected!=retained_selection.cend() && selected.value();
         }
     }

@@ -1671,6 +1671,105 @@ static bool has_supplemental_source_completion(const ApplyBoundaryConstraintChan
         !command.supplemental_asset_changes.empty();
 }
 
+static bool has_selection_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.selection_completion || !command.selection_entity_changes.empty();
+}
+
+static ApplyBoundaryConstraintChanges without_selection_completion(ApplyBoundaryConstraintChanges command) {
+    command.selection_completion = false;
+    command.selection_entity_changes.clear();
+    return command;
+}
+
+static bool exact_entity_payload(const Entity& left, const Entity& right);
+
+// Shared with ordinary ApplyEntityChanges admission. Composition does not lend
+// typed geometry authority to raw payloads in this lane.
+static std::map<std::string, Entity, std::less<>> ordinary_entity_changes(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<EntityChange>& changes) {
+    auto result = source;
+    std::unordered_set<std::string> touched;
+    for (const auto& change : changes) {
+        if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
+            document_error(DocumentErrorCode::invalid_entity, "Invalid entity change kind");
+        const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+        if (!touched.insert(id).second)
+            document_error(DocumentErrorCode::duplicate_change, "entity is changed more than once in one command: " + id);
+        if (change.kind == EntityChangeKind::upsert) {
+            validate_entity(change.entity);
+            result.insert_or_assign(id, change.entity);
+        } else {
+            if (!is_valid_identifier(id)) document_error(DocumentErrorCode::invalid_entity, "deleted entity id is invalid");
+            result.erase(id);
+        }
+    }
+    return result;
+}
+
+static bool supported_selection_entity(const Entity& entity) {
+    const auto& p = entity.properties;
+    const auto canonical = [&](int version, std::string_view form) {
+        return p.contains("version") && p.at("version").is_number_integer() && p.at("version") == version &&
+            p.contains("form") && p.at("form") == form;
+    };
+    if (entity.type == "column") return canonical(1,"rectangular_column") || canonical(1,"circular_column");
+    if (entity.type == "beam") return canonical(1,"straight_beam");
+    if (entity.type == "roof") return canonical(1,"sloped_roof_panel") || canonical(2,"sloped_roof_panel") ||
+        canonical(1,"gable_roof") || canonical(2,"gable_roof") || canonical(1,"hip_roof") || canonical(2,"hip_roof");
+    if (entity.type == "stair") return canonical(1,"straight_stair_flight") ||
+        canonical(2,"multi_flight_stair") || canonical(3,"multi_flight_stair") || canonical(4,"multi_flight_stair");
+    if (entity.type == "railing") return canonical(1,"straight_railing") ||
+        canonical(2,"stair_flight_railing") || canonical(3,"stair_landing_railing");
+    if (entity.type == "dimension") return decode_boundary_dimension_entity(entity).supported();
+    if (entity.type == kAnnotationEntityType) { validate_annotation_entity(entity); return true; }
+    if (entity.type == "assembly_instance") { (void)decode_document_assembly_instance(entity); return true; }
+    if (entity.type == "assembly_model") { (void)AssemblyModel::from_json(p.at("model")); return true; }
+    if (entity.type == "terrain_surface") { (void)TerrainSurface::from_json(p.at("model")); return true; }
+    if (entity.type == "reference_asset") {
+        const auto& position = p.at("position_m");
+        return position.is_array() && position.size() == 2 && position[0].is_number() && position[1].is_number() &&
+            std::isfinite(position[0].get<double>()) && std::isfinite(position[1].get<double>());
+    }
+    if (entity.type == "slab") return p.contains("boundary");
+    if (entity.type == "room") return !is_physical_wall_room(entity) && (p.contains("boundary") || p.contains("segments"));
+    if (entity.type == "opening") return p.contains("wall_id");
+    if (entity.type == "roof_join") { (void)parse_roof_join(p, entity.id); return true; }
+    return false;
+}
+
+static void validate_selection_changes(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const ApplyBoundaryConstraintChanges& command) {
+    if (!command.selection_completion || command.selection_entity_changes.size() > 1000)
+        throw std::invalid_argument("Selection completion requires its marker and bounded ordinary lane");
+    std::unordered_set<std::string> touched;
+    for (const auto& change : command.selection_entity_changes) {
+        if (change.kind != EntityChangeKind::upsert || !touched.insert(change.entity.id).second)
+            throw std::invalid_argument("Selection completion requires unique existing-object upserts");
+        const auto found = source.find(change.entity.id);
+        if (found == source.end() || found->second.type != change.entity.type || found->second.required != change.entity.required ||
+            !supported_selection_entity(found->second) || !supported_selection_entity(change.entity))
+            throw std::invalid_argument("Selection completion requires existing same-type supported nonwall objects: " + change.entity.id);
+        if (change.entity.type == "assembly_model") {
+            auto retained = change.entity;
+            const auto& before = found->second.properties.at("model").at("instances");
+            auto& after = retained.properties.at("model").at("instances");
+            if (before.size() != after.size()) throw std::invalid_argument("Selection cannot add or remove embedded assembly instances");
+            for (std::size_t index = 0; index < before.size(); ++index) {
+                if (before[index].at("id") != after[index].at("id") ||
+                    before[index].contains("placement") != after[index].contains("placement") ||
+                    (before[index].contains("placement") && before[index].at("placement") != after[index].at("placement")))
+                    throw std::invalid_argument("Selection must retain embedded assembly identities and host bindings");
+                if (before[index].contains("root_transform")) after[index]["root_transform"] = before[index].at("root_transform");
+                else after[index].erase("root_transform");
+            }
+            if (!exact_entity_payload(found->second, retained))
+                throw std::invalid_argument("Selection catalog completion may change only existing instance root transforms");
+        }
+    }
+}
+
 static bool has_disto_measurement_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.disto_measurement_completion || command.disto_measurement.has_value();
 }
@@ -2231,6 +2330,9 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    // Both original-source lanes and their union are validated during complete
+    // reconstruction; applying a child's partial authority to the union is unsafe.
+    if (has_selection_completion(command)) return;
     try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation, error.what()); }
     if (has_disto_measurement_completion(command)) {
@@ -3383,13 +3485,46 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
 std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entities(
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Asset, std::less<>>& source_assets,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_selection_completion(command)) {
+        try {
+            (void)command_to_json(Command{command});
+            validate_selection_changes(source, command);
+            const auto geometry = without_selection_completion(command);
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, geometry, retained_replay);
+            const auto geometry_assets = boundary_constraint_assets(source_assets, geometry);
+            (void)validate_state(result, geometry_assets);
+            validate_completed_constraint_change(source, result, geometry, retained_replay);
+            validate_physical_room_source_transition(source, result, nullptr, &geometry);
+            const auto ordinary = ordinary_entity_changes(source, command.selection_entity_changes);
+            (void)validate_state(ordinary, source_assets);
+            validate_constraint_change(source, ordinary);
+            validate_boundary_change(history, source, ordinary);
+            validate_physical_room_source_transition(source, ordinary);
+            for (const auto& change : command.selection_entity_changes) {
+                const auto& original = source.at(change.entity.id);
+                const auto& admitted = ordinary.at(change.entity.id);
+                if (exact_entity_payload(original, admitted)) continue;
+                const auto current = result.find(change.entity.id);
+                if (current == result.end()) throw std::invalid_argument("Selection completion lost a dependency identity");
+                if (!exact_entity_payload(current->second, original) && !exact_entity_payload(current->second, admitted))
+                    throw std::invalid_argument("Selection lanes require conflicting final dependency payloads: " + change.entity.id);
+                current->second = admitted;
+            }
+            (void)validate_state(result, geometry_assets);
+            (void)validate_constraint_integrity(result);
+            validate_physical_room_source_transition(source, result, nullptr, &geometry);
+            return result;
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    }
     try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_wall_dimension_completion(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     if (has_disto_measurement_completion(command)) {
         try {
             (void)command_to_json(Command{command});
-            auto result = completed_boundary_constraint_entities(history, source, without_disto_measurement(command), retained_replay);
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay);
             attach_disto_measurement(source, result, *command.disto_measurement);
             return result;
         } catch (const DocumentError&) { throw; }
@@ -4148,6 +4283,30 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_selection_completion(typed)) {
+                try {
+                    if (!typed.selection_completion || typed.selection_entity_changes.size() > 1000)
+                        throw std::invalid_argument("Selection completion requires its marker and bounded ordinary lane");
+                    std::unordered_set<std::string> targets;
+                    for (const auto& change : typed.selection_entity_changes)
+                        if (change.kind != EntityChangeKind::upsert || !targets.insert(change.entity.id).second ||
+                            !supported_selection_entity(change.entity))
+                            throw std::invalid_argument("Selection completion requires unique supported nonwall upserts");
+                    const auto proof = command_to_json(Command{without_selection_completion(typed)});
+                    const auto version = proof.at("version").get<int>();
+                    if (version < 1 || version > 21)
+                        throw std::invalid_argument("Selection completion requires one preceding typed proof");
+                    auto encoded = nlohmann::json{{"version",22},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"selection_completion",true},{"proof",proof},
+                        {"selection_entity_changes",command_to_json(ApplyEntityChanges{
+                            typed.expected_revision,typed.selection_entity_changes,{},typed.message}).at("entity_changes")}};
+                    if (encoded.dump().size() > 1024 * 1024)
+                        throw std::invalid_argument("Selection completion exceeds the persisted proof budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (typed.wall_dimension_completion) {
                 try {
                     validate_wall_dimension_completion(typed);
@@ -4476,7 +4635,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -4549,6 +4708,33 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 22) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","selection_completion","proof","selection_entity_changes"},
+                    DocumentErrorCode::invalid_entity,"serialized selection completion");
+                if (value.dump().size() > 1024 * 1024 || !value.at("selection_completion").is_boolean() ||
+                    !value.at("selection_completion").get<bool>() || !value.at("selection_entity_changes").is_array() ||
+                    value.at("selection_entity_changes").size() > 1000)
+                    throw std::invalid_argument("Selection completion mode or proof budget is invalid");
+                const auto& proof = value.at("proof");
+                if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
+                    proof.at("version").get<std::int64_t>() < 1 || proof.at("version").get<std::int64_t>() > 21 ||
+                    !proof.contains("kind") || proof.at("kind") != kind)
+                    throw std::invalid_argument("Selection completion requires one preceding unnested typed proof");
+                const auto decoded = command_from_json(proof, asset_resolver);
+                const auto* original = std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+                if (!original || has_selection_completion(*original) ||
+                    original->expected_revision != command_revision(value.at("expected_revision"),"Selection completion revision") ||
+                    !value.at("message").is_string() || value.at("message") != proof.at("message"))
+                    throw std::invalid_argument("Selection completion must retain its original command identity");
+                auto result = *original;
+                result.selection_completion = true;
+                result.selection_entity_changes = std::get<ApplyEntityChanges>(command_from_json(nlohmann::json{
+                    {"version",1},{"kind","apply_entity_changes"},{"expected_revision",result.expected_revision},
+                    {"message",result.message},{"entity_changes",value.at("selection_entity_changes")},
+                    {"asset_changes",nlohmann::json::array()}})).entity_changes;
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 21) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","wall_dimension_completion","proof"},
                     DocumentErrorCode::invalid_entity,"serialized rigid wall callout completion");
@@ -5292,6 +5478,41 @@ Command complete_disto_measurement_command(
     return result;
 }
 
+Command complete_selection_command(const DocumentSnapshot& source, const Command& geometry_command,
+    const std::vector<EntityChange>& ordinary_changes, std::string message) {
+    const auto* original = std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
+    if (!original) document_error(DocumentErrorCode::invalid_entity, "Selection completion requires a typed geometry command");
+    validate_expected_revision(source.revision(), original->expected_revision);
+    if (has_selection_completion(*original) && !original->selection_completion)
+        document_error(DocumentErrorCode::invalid_entity, "Selection completion cannot repair a missing retained marker");
+    if (ordinary_changes.size() > 1000)
+        document_error(DocumentErrorCode::invalid_entity, "Selection completion exceeds its input target budget");
+    auto completed = *original;
+    if (!message.empty()) completed.message = std::move(message);
+    completed.selection_completion = true;
+    // Extensions retain one lane. A repeated exact consequence is harmless;
+    // a second different payload for an existing target cannot overwrite it.
+    std::unordered_set<std::string> submitted;
+    for (const auto& change : ordinary_changes) {
+        if (change.kind != EntityChangeKind::upsert)
+            document_error(DocumentErrorCode::invalid_entity, "Selection completion cannot delete objects");
+        if (!submitted.insert(change.entity.id).second)
+            document_error(DocumentErrorCode::duplicate_change, "Selection completion repeats an ordinary target: " + change.entity.id);
+        const auto found = std::find_if(completed.selection_entity_changes.begin(), completed.selection_entity_changes.end(),
+            [&](const auto& retained) { return retained.entity.id == change.entity.id; });
+        if (found == completed.selection_entity_changes.end()) completed.selection_entity_changes.push_back(change);
+        else if (found->kind != change.kind || !exact_entity_payload(found->entity,change.entity))
+            document_error(DocumentErrorCode::duplicate_change, "Selection completion has conflicting ordinary payloads: " + change.entity.id);
+        if (completed.selection_entity_changes.size() > 1000)
+            document_error(DocumentErrorCode::invalid_entity, "Selection completion exceeds its target budget");
+    }
+    try { validate_selection_changes(source.entities(), completed); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    const Command result{std::move(completed)};
+    (void)Document::preview_command(source, result);
+    return result;
+}
+
 Revision Document::apply(const Command& command) {
     if (!editable_) {
         document_error(DocumentErrorCode::read_only, read_only_reason_);
@@ -5314,25 +5535,7 @@ Revision Document::apply(const Command& command) {
             if constexpr (std::is_same_v<CommandType, ApplyEntityChanges>) {
                 next.action = command_message(typed_command);
                 validate_action(next.action);
-                std::unordered_set<std::string> touched_entities;
-                for (const auto& change : typed_command.entity_changes) {
-                    const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id
-                                                                            : change.entity_id;
-                    if (!touched_entities.insert(id).second) {
-                        document_error(DocumentErrorCode::duplicate_change,
-                                       "entity is changed more than once in one command: " + id);
-                    }
-                    if (change.kind == EntityChangeKind::upsert) {
-                        validate_entity(change.entity);
-                        next.entities.insert_or_assign(change.entity.id, change.entity);
-                    } else {
-                        if (!is_valid_identifier(change.entity_id)) {
-                            document_error(DocumentErrorCode::invalid_entity,
-                                           "deleted entity id is invalid");
-                        }
-                        next.entities.erase(change.entity_id);
-                    }
-                }
+                next.entities = ordinary_entity_changes(current.entities, typed_command.entity_changes);
                 std::unordered_set<std::string> touched_assets;
                 for (const auto& change : typed_command.asset_changes) {
                     const auto& id = change.kind == AssetChangeKind::upsert ? change.asset.id
@@ -5400,7 +5603,7 @@ Revision Document::apply(const Command& command) {
                 }
 #endif
                 next.boundary_constraint_changes = typed_command;
-                next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, typed_command);
+                next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets, typed_command);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
                 next_unsupported_constraints = validate_state(next.entities, next.assets);
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
@@ -5680,7 +5883,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || record.boundary_constraint_changes->wall_merge || has_exterior_source_completion(*record.boundary_constraint_changes) ||
             has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes) ||
             has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes) ||
-            has_disto_measurement_completion(*record.boundary_constraint_changes)))
+            has_disto_measurement_completion(*record.boundary_constraint_changes) || has_selection_completion(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
@@ -5862,7 +6065,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                         validate_room_review_lifetime(proof.room_review_intent,snapshot.history(),index);
                     }
 #endif
-                    expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, proof, true);
+                    expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets, proof, true);
                     expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
                         wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) :

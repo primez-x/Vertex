@@ -172,7 +172,7 @@ public:
     // deleted, undone or abandoned annotation records retain that placement.
     // Per-target joint presentation movement requires v70, including an
     // undone or abandoned command whose explicit target list is empty.
-    static constexpr std::uint32_t format_version = 70;
+    static constexpr std::uint32_t format_version = 71;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

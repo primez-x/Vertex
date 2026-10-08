@@ -410,6 +410,7 @@ drawing; switching modes does not change existing geometry.
   - Site check: Repeat with joined walls, their selected doors/windows and a measured room in a shifted or rotated building's Site presentation. The group must follow the pointer once and commit the displayed geometry in one Undo step. Return to the starting position or cancel before release; neither action adds a move to history. Repeat after opening a recovery copy.
   - Multiple buildings: Place a slab, column and furniture in two buildings with different Site rotations. Ctrl-select them in Site Plan and drag the group. Each should travel the same distance and direction on screen while retaining its own floor/layer. Repeat with text, a calibrated image and an embedded library assembly; include a stair and its selected railing. Cancel once, return one drag to its start, then Undo/Redo and save/reopen an applied move. A conflicting measured-wall group must leave every selected item unchanged.
   - Saved dimensions: Add saved measurements to a wall or area in a building rotated 90 degrees in Site Plan. Leave the dimensions unselected and move the owner to the right. Its measurement witnesses and text should stay aligned with that owner, including a dimension hidden during the move and shown afterward. Repeat with a selected dimension and after save/reopen.
+  - Connected architecture: Select a measured area with a partially connected wall and an independent roof, stair, railing or column. Move the group once. The constraint solve and physical objects must match the final preview and share one Undo/Redo step. Repeat with a saved object dimension and a placed library assembly. A contradictory dependency must leave the complete selection unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -2840,14 +2841,14 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U445 - Move the name without moving the calculated value**
-  - Steps: Separate an area's callouts. Select the area and drag its painted Name, then its Calculation to different positions. Drag inside the selected boundary away from the labels to move the area. Cancel a label drag with Escape and with navigation. Return a further drag exactly to its starting position. Choose Name and use **Place label**, then choose Calculation and place it elsewhere. Double-click each painted label and change its X/Y position and rotation, then Apply. Cancel a further change. Undo and Redo each move. Repeat on a combined area label and in a saved plan and Site plan. In a furnished area with automatic label placement, drag the displaced label back to the area's default label anchor; it should remain there. Restore any edited coordinate to its original displayed value, change only rotation and Apply.
+  - Steps: Separate an area's callouts. Click its painted Name without selecting the boundary, then drag the text. Repeat with Calculation. Ctrl-click both labels and drag them together; repeat across two areas in differently rotated Site buildings. Right-click a label for Properties and Automatic position. Double-click each label and edit its X/Y and rotation. Click outside once to deselect; the next empty click should start drawing. Select the boundary itself and drag away from the labels to move the area. Cancel a label drag with Escape and navigation. Return a drag to its starting position. Undo/Redo each applied move, then save/reopen. Repeat with a combined label and a rotated saved plan. Drag an automatically displaced label back to its area's default anchor; it should remain there. Restore an edited coordinate to its original displayed value, change only rotation and Apply.
   - Expected: Each move affects only the chosen callout. Undo and Redo restore that callout's own position without moving the area or its other callout.
   - Result: Not tested
   - Notes: ______________________________
 
 - [ ] **U446 - Give the name and value different appearances**
   - Steps: Choose Name, change its text size, color, alignment and rotation, and apply. Choose Calculation and give it different settings. Save and reopen.
-  - Expected: Each callout retains its own settings. Left and right alignment anchor the appropriate text edge; clicking the painted text still selects its area.
+  - Expected: Each callout retains its own settings. Left and right alignment anchor the appropriate text edge; clicking the painted text selects that label without selecting its area's boundary.
   - Result: Not tested
   - Notes: ______________________________
 

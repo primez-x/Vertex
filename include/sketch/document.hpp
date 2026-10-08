@@ -352,6 +352,12 @@ struct ApplyBoundaryConstraintChanges {
     // Envelope twenty-one wraps the existing rigid wall/stroke proof and
     // reconstructs wall callouts without changing placement provenance.
     bool wall_dimension_completion{};
+    // Envelope twenty-two composes the unchanged typed geometry proof with
+    // bounded ordinary existing-object upserts. Both lanes replay the original
+    // source; equal dependency consequences coalesce, conflicting ones refuse.
+    std::vector<EntityChange> selection_entity_changes;
+    // Retain the envelope even when the ordinary lane is empty.
+    bool selection_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
@@ -570,5 +576,12 @@ private:
     const DocumentSnapshot& source, const Command& geometry_command,
     std::string_view owner_id, const DistoMeasurementRecord& record,
     bool replace_existing = false);
+
+// Complete one typed selection edit through ordinary source admission, retaining
+// its original geometry proof and one history event. Existing wrappers extend
+// the same ordinary lane; this never nests completion envelopes.
+[[nodiscard]] Command complete_selection_command(
+    const DocumentSnapshot& source, const Command& geometry_command,
+    const std::vector<EntityChange>& ordinary_changes, std::string message = {});
 
 }  // namespace sketch

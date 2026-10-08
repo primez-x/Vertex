@@ -1,4 +1,28 @@
-# Vertex project formats v1 through v70
+# Vertex project formats v1 through v71
+
+## Atomic geometric and architectural selection edits (v71)
+
+Native format 71 and JSON/assets extraction version 69 retain command envelope
+22. It contains `version`, `kind`, `expected_revision`, `message`,
+`selection_completion`, `proof` and `selection_entity_changes`. The marker must
+be true, even for an empty ordinary lane. The geometry proof is one unchanged
+boundary-constraint command in dialect 1 through 21, with the same revision
+and message. Completion envelopes cannot nest.
+
+At most 1,000 unique existing same-type supported nonwall object upserts are
+admitted through the ordinary lane. Creation, deletion, asset edits, measured
+owners, walls and constraint changes are excluded. Embedded catalogs retain
+their definitions, instance identities and host bindings; only existing root
+transforms can change. Both lanes replay against the original source. Exact
+equal consequences merge once, conflicting payloads refuse, and the union must
+pass document, identity, room-source and constraint admission. The original
+typed geometry proof retains its authority; ordinary objects gain none of it.
+
+The reader floor covers every retained revision, including undone edits. A
+wrapped geometry proof can retain compact asset references from an earlier
+dialect; decoding waits until that revision's assets have been validated and
+loaded. Older histories keep their earlier format floor until this command is
+retained. Existing geometry command dialects remain unchanged.
 
 ## Per-target connected presentation movement (v70)
 

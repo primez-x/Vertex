@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 mixed connected selection edits and direct label selection
+
+Connected geometric moves can now retain independent architectural object edits
+in one command. The original geometry proof and existing-object edits replay
+the same source separately, then merge only matching dependency consequences.
+Walls, measured owners and constraints cannot borrow ordinary payload authority.
+The complete candidate retains one history event. Native format 71 and extraction
+version 69 preserve this command, including undone history and compact assets
+inside its geometry proof. Source review corrected a declaration-order issue,
+exact payload comparisons and deferred loading of nested asset references.
+
+Generated room/area names and values now have separate transient selection
+identities. Clicking one selects its role without selecting the room boundary;
+Ctrl-click toggles among these labels. Selected labels share a painted drag
+preview and one placement command, with each Site target converted through its
+own captured frame. Outside clicks deselect before drawing. Double-click and
+right-click open label properties; Automatic position removes only authored
+position offsets. Geometry selections and generated-label selections remain
+separate, so a label cannot accidentally authorize boundary deletion or grips.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction, appearance, latency and persistence round trips remain unverified.
+The installed candidate is unchanged; manual checklist results remain Not tested.
+
 ### October 8 per-object Site selection transforms and movement
 
 Numerical Transform and Copy now capture a separate admitted Site placement

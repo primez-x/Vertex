@@ -420,8 +420,11 @@ public:
     void setCanvasBackground(QColor background);
     void setSelectedId(const QString& entity_id);
     void setSelectedIds(const QStringList& entity_ids);
-    // Includes selected labels/references as well as geometry. The cached
-    // list is valid until the next scene or selection update.
+    // Transient generated callout roles are independent of their owner bodies.
+    void setSelectedGeneratedLabelPresentations(std::vector<CanvasLabelPresentationIdentity> identities);
+    [[nodiscard]] std::vector<CanvasLabelPresentationIdentity> selectedGeneratedLabelPresentations() const;
+    // Includes ordinary labels/references and geometry; independently selected
+    // generated roles never contribute owner IDs. Valid until a scene/selection update.
     [[nodiscard]] const QStringList& selectedIds() const;
     [[nodiscard]] std::vector<CanvasEntityPresentationIdentity> selectedEntityPresentations() const;
     [[nodiscard]] std::vector<CanvasLabelPresentationIdentity> selectedLabelPresentations() const;
@@ -549,7 +552,8 @@ public:
     void setEntityDoubleClicked(std::function<void(QString)> callback);
     // Returning true consumes the contextual request; false uses the body editor.
     void setLabelDoubleClicked(std::function<bool(CanvasLabelPresentationIdentity)> callback);
-    // Generated room/area callouts retain their canonical parent selection.
+    void setGeneratedLabelSelectionClicked(std::function<void(CanvasLabelPresentationIdentity, bool additive)> callback);
+    // Generated room/area callouts retain their exact presentation selection.
     // Admission occurs after drag slop; coordinates are the painted label's
     // absolute anchor in the currently presented model/scene XY.
     void setGeneratedLabelMoveStarted(std::function<bool(CanvasLabelPresentationIdentity)> callback);
@@ -558,6 +562,9 @@ public:
     // Retires an admitted capture once on cancellation or callback failure.
     void setGeneratedLabelMoveCanceled(std::function<void()> callback);
     [[nodiscard]] std::optional<CanvasLabelPresentationIdentity> labelPresentationAt(QPointF point) const;
+    [[nodiscard]] std::optional<CanvasLabelPresentationIdentity> labelPresentationAtModelPoint(Vec2 point) const {
+        return labelPresentationAt(toScreen(point,QRectF(rect())));
+    }
     [[nodiscard]] std::optional<CanvasLabel> labelPresentation(const CanvasLabelPresentationIdentity& identity) const;
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
     // Alt-click supplies distinct overlapping targets, with the ordinary pick
@@ -1066,7 +1073,9 @@ private:
     };
     // Keep interactive picking warm while a separate output device is used.
     mutable std::array<LabelPlacementCache, 4> m_label_placement_cache;
+    std::vector<CanvasLabelPresentationIdentity> m_selected_generated_labels;
     std::optional<CanvasLabelPresentationIdentity> m_generated_label_move_identity;
+    std::vector<std::pair<CanvasLabelPresentationIdentity, Vec2>> m_generated_label_move_anchors;
     std::size_t m_generated_label_move_index{};
     Vec2 m_generated_label_move_anchor{};
     Vec2 m_generated_label_move_press_pointer{};
@@ -1118,6 +1127,8 @@ private:
     bool m_left_dragging{false};
     QString m_pressed_entity;
     bool m_pressed_occupied{false};
+    std::optional<CanvasLabelPresentationIdentity> m_pressed_generated_label;
+    bool m_clear_selection_on_click{false};
     bool m_overlap_selection{false};
     double m_overlap_view_scale{};
     QSize m_overlap_view_size;
@@ -1239,6 +1250,7 @@ private:
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString)> m_entity_double_clicked;
     std::function<bool(CanvasLabelPresentationIdentity)> m_label_double_clicked;
+    std::function<void(CanvasLabelPresentationIdentity, bool)> m_generated_label_selection_clicked;
     std::function<bool(CanvasLabelPresentationIdentity)> m_generated_label_move_started;
     std::function<void(CanvasLabelPresentationIdentity, Vec2, bool)> m_generated_label_moved;
     std::function<void()> m_generated_label_move_canceled;
