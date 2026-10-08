@@ -6257,6 +6257,147 @@ public:
         }
     }
 
+    bool showAreaCalloutPlacementEditor(PlanCanvas* canvas,const CanvasLabelPresentationIdentity& identity) {
+        const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        if (canvas!=active || hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+            return false;
+        try {
+            const auto hit=canvas->labelPresentation(identity);
+            if (!hit || !hit->avoid_components) return false;
+            if (!identity.callout_role.isEmpty() && !area_callout_role(identity.callout_role.toStdString())) return false;
+            const auto published=captureCanvasGeometrySource(canvas,std::nullopt,false);
+            const auto owner_entity=published->entities().find(identity.id.toStdString());
+            if (owner_entity==published->entities().end() ||
+                (!is_closed_boundary_entity(owner_entity->second.type) && owner_entity->second.type!="room")) return false;
+            if ((m_selected_ids.size()!=1 || m_selected_id!=identity.id) && !selectEntity(identity.id,false)) return true;
+            const auto source=*captureCanvasGeometrySource(canvas,std::nullopt,false);
+            const auto context=captureModalContext();
+            const auto authority=captureSourceEditAuthority(source);
+            const auto displayed=canvas->labelPresentation(identity);
+            if (!displayed) throw std::invalid_argument("The displayed label changed. Double-click it again.");
+            const auto role=identity.callout_role.isEmpty() ? std::string{"area"} : identity.callout_role.toStdString();
+            const auto& entity=source.entities().at(identity.id.toStdString());
+            const auto anchor=area_label_anchor(read_boundary(entity.properties));
+            std::optional<PresentationOverride> presentation;
+            for (const auto& [id,annotation] : source.entities()) {
+                (void)id;
+                if (annotation.type!=kAnnotationEntityType) continue;
+                for (const auto& value : decode_annotation_entity(annotation).overrides) {
+                    if (value.target_id!=entity.id || value.target_kind!=role) continue;
+                    if (presentation) throw std::invalid_argument("The label has conflicting presentation records.");
+                    presentation=value;
+                }
+            }
+            const Vec2 default_offset{0.0,role=="area_name" ? .18 : role=="area_calculation" ? -.18 : 0.0};
+            const auto offset=presentation ? presentation->plan_label_offset.value_or(default_offset) : default_offset;
+            const auto rotation=presentation ? presentation->plan_label_rotation_radians.value_or(0.0) : 0.0;
+            const auto frame=siteCanvas(canvas) ? std::optional<BuildingViewFrame>{} : canvasTransformPlanFrame(source);
+            const auto site_frame=siteCanvas(canvas) ? std::optional{m_site_plan_frames.auxiliary.at(identity.id)} : std::nullopt;
+            auto position=displayed->position;
+            if (site_frame) position=site_source_plan_point(position,*site_frame);
+            else if (frame) position=unproject_plan_point(position,*frame);
+            const auto label_font=canvas->font();
+            const auto label_dpi_x=canvas->logicalDpiX(),label_dpi_y=canvas->logicalDpiY();
+            const auto site_generation=m_site_publication_generation;
+            const auto current=[&] {
+                if (!modalContextUnchanged(context) || !sourceEditAuthorityUnchanged(authority)) return false;
+                if (canvas->font()!=label_font || canvas->logicalDpiX()!=label_dpi_x || canvas->logicalDpiY()!=label_dpi_y ||
+                    !canvas->labelPresentation(identity)) {
+                    setError(QStringLiteral("The displayed label changed. Reopen its properties."));return false;
+                }
+                if (site_frame) {
+                    try {
+                        requireSitePublicationCurrent();
+                        if (site_generation!=m_site_publication_generation)
+                            throw std::invalid_argument("The Site Plan changed. Reopen label properties.");
+                    } catch (const std::exception& error) {setError(QString::fromUtf8(error.what()));return false;}
+                }
+                return true;
+            };
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("areaCalloutPlacementDialog"));
+            dialog.setWindowTitle(role=="area_name" ? QStringLiteral("Room name") :
+                role=="area_calculation" ? QStringLiteral("Area calculation") : QStringLiteral("Area label"));
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* name=new QLabel(displayed->text,&dialog);
+            name->setTextFormat(Qt::PlainText);name->setWordWrap(true);
+            name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            layout->addWidget(name);
+            auto* form=new QFormLayout;
+            const auto display_coordinate=[&](double value) {
+                return QString::number(context.metric_units ? value : value/.3048,'g',12);
+            };
+            auto* x=new QLineEdit(display_coordinate(position.x),&dialog);
+            auto* y=new QLineEdit(display_coordinate(position.y),&dialog);
+            auto* angle=new QLineEdit(QString::number(rotation*180.0/std::numbers::pi,'g',12),&dialog);
+            x->setObjectName(QStringLiteral("calloutPositionX"));
+            y->setObjectName(QStringLiteral("calloutPositionY"));
+            angle->setObjectName(QStringLiteral("calloutAngle"));
+            form->addRow(context.metric_units ? QStringLiteral("X (m)") : QStringLiteral("X (ft)"),x);
+            form->addRow(context.metric_units ? QStringLiteral("Y (m)") : QStringLiteral("Y (ft)"),y);
+            form->addRow(QStringLiteral("Rotation (°)"),angle);
+            layout->addLayout(form);
+            auto* status=new QLabel(&dialog);status->setWordWrap(true);status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,&dialog);
+            layout->addWidget(buttons);
+            x->setEnabled(source.is_editable());y->setEnabled(source.is_editable());angle->setEnabled(source.is_editable());
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(source.is_editable());
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                try {
+                    if (!current()) throw std::invalid_argument(lastError().toStdString());
+                    const auto coordinate=[&](const QLineEdit* field,double retained) {
+                        if (!field->isModified()) return retained;
+                        const auto unit=context.metric_units ? Unit::metre : Unit::foot;
+                        const auto parsed=parse_quantity(field->text().trimmed().toStdString(),unit).metres;
+                        const auto shown=parse_quantity(display_coordinate(retained).toStdString(),unit).metres;
+                        // Restoring the displayed value must not turn automatic
+                        // collision placement into an authored fixed anchor.
+                        return parsed==shown || std::abs(parsed-retained)<=1e-12*std::max(1.0,std::abs(retained))
+                            ? retained : parsed;
+                    };
+                    const Vec2 requested_position{coordinate(x,position.x),coordinate(y,position.y)};
+                    const bool moved=requested_position.x!=position.x || requested_position.y!=position.y;
+                    // Rotation-only editing retains automatic placement. A
+                    // changed coordinate deliberately pins the painted anchor.
+                    const Vec2 desired=moved ? requested_position :
+                        Vec2{anchor.x+offset.x,anchor.y+offset.y};
+                    double desired_rotation=rotation;
+                    if (angle->isModified()) {
+                        bool valid=false;const auto degrees=angle->text().trimmed().toDouble(&valid);
+                        if (!valid || !std::isfinite(degrees) || std::abs(degrees)>360000.0)
+                            throw std::invalid_argument("Rotation must be a finite value between -360000 and 360000 degrees.");
+                        desired_rotation=std::remainder(degrees,360.0)*std::numbers::pi/180.0;
+                    }
+                    if (!moved && std::abs(std::remainder(desired_rotation-rotation,2.0*std::numbers::pi))<=1e-12) {
+                        clearError();dialog.accept();return;
+                    }
+                    const std::array<AreaCalloutPlacement,1> placement{{{entity.id,role,desired,desired_rotation}}};
+                    auto command=area_callout_placement_command(source,placement,new_id("annotations"),source.revision());
+                    if (!current()) throw std::invalid_argument(lastError().toStdString());
+                    if (!command.entity_changes.empty()) {
+                        applyAuthoredCommand(command);
+                        refresh();
+                    }
+                    clearError();dialog.accept();
+                } catch (const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+            });
+            dialog.resize(280,dialog.sizeHint().height());
+            auto popup=QCursor::pos()+QPoint(14,14);
+            const auto bounds=owner->frameGeometry();
+            popup.setX(std::clamp(popup.x(),bounds.left(),std::max(bounds.left(),bounds.right()-dialog.width())));
+            popup.setY(std::clamp(popup.y(),bounds.top(),std::max(bounds.top(),bounds.bottom()-dialog.height())));
+            dialog.move(popup);
+            dialog.exec();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Label properties: %1").arg(QString::fromUtf8(error.what())));
+            return true;
+        }
+    }
+
     QString selectedAreaCalloutRole(const DocumentSnapshot& source) const {
         const auto selected=selectedEntity();
         if (!selected || !m_area_callout_role_combo) return {};
@@ -42266,6 +42407,9 @@ private:
             }
             m_overlap_selection_source.reset();m_overlap_selection_authority.reset();m_overlap_selection_canvas.clear();
             return false;
+        });
+        canvas->setLabelDoubleClicked([this,canvas](CanvasLabelPresentationIdentity identity) {
+            return showAreaCalloutPlacementEditor(canvas,identity);
         });
         canvas->setEntityDoubleClicked([this,canvas](QString id) {
             try {

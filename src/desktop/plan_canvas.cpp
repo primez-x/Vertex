@@ -2341,6 +2341,10 @@ void PlanCanvas::setEntityDoubleClicked(std::function<void(QString)> callback) {
     m_entity_double_clicked = std::move(callback);
 }
 
+void PlanCanvas::setLabelDoubleClicked(std::function<bool(CanvasLabelPresentationIdentity)> callback) {
+    m_label_double_clicked = std::move(callback);
+}
+
 void PlanCanvas::setEntitySelectionClicked(std::function<void(QString, bool)> callback) {
     m_entity_selection_clicked = std::move(callback);
 }
@@ -3758,12 +3762,83 @@ void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
     // opens contextual properties for the stable hit target. Active authoring
     // consumes the second press so a double-click cannot add a duplicate point
     // or replay Ctrl-selection.
-    if (event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier &&
-        selectionInteractionEnabled() && m_entity_double_clicked && admitInteraction()) {
+    if (event->button() == Qt::LeftButton && !m_point_placement_requested && event->modifiers() == Qt::NoModifier &&
+        selectionInteractionEnabled() && (m_label_double_clicked || m_entity_double_clicked) &&
+        admitInteraction()) {
+        if (m_label_double_clicked) {
+            if (const auto label = labelPresentationAt(event->position())) {
+                // Retire captured pointer state before a contextual modal can
+                // process its release or replace the document presentation.
+                resetGesture();
+                const auto callback = m_label_double_clicked;
+                if (callback(*label)) {
+                    event->accept();
+                    return;
+                }
+            }
+        }
         const auto target = hitTest(event->position());
-        if (!target.isEmpty()) m_entity_double_clicked(target);
+        if (!target.isEmpty() && m_entity_double_clicked) m_entity_double_clicked(target);
     }
     event->accept();
+}
+
+std::optional<CanvasLabelPresentationIdentity> PlanCanvas::labelPresentationAt(QPointF point) const {
+    if (!(m_scale > 0.0) || !std::isfinite(m_scale) ||
+        !std::isfinite(point.x()) || !std::isfinite(point.y())) return std::nullopt;
+    const auto& labels = positionedLabels(font(), this, m_scale, logicalDpiY(), false);
+    const auto& layouts = m_label_placement_cache[0].paint_layouts;
+    const bool cached_layouts = layouts.size() == labels.size();
+    const QRectF viewport(rect());
+    const auto dpr = devicePixelRatioF();
+    const bool cull_screen = finite_rect(viewport) && std::isfinite(dpr) && dpr > 0.0;
+    const double cull_padding = cull_screen ? 3.0 * std::max(1.0, 1.0 / dpr) : 0.0;
+    // Reverse paint order resolves overlaps to the visible topmost label.
+    for (std::size_t i = labels.size(); i > 0; --i) {
+        const auto& label = labels[i - 1];
+        if (!drawable_label(label) || !matchesSelectionFilter(label.id)) continue;
+        const auto bounds = cached_layouts ? layouts[i - 1].bounds
+            : label_layout(label, font(), this, m_scale, logicalDpiY()).bounds;
+        if (!finite_rect(bounds)) continue;
+        const auto center = toScreen(label.position, viewport);
+        const auto transform = label_transform(label, center);
+        // Match ordinary widget painting's DPR-aware offscreen culling.
+        if (cull_screen && cached_layouts && bounds.width() >= 2.0 && bounds.height() >= 2.0 &&
+            finite_rect(layouts[i - 1].ink_bounds) && std::isfinite(center.x()) &&
+            std::isfinite(center.y()) && std::isfinite(label.rotation_radians * 180.0 / pi)) {
+            auto ink = transform.mapRect(layouts[i - 1].ink_bounds);
+            bool safe = finite_rect(ink);
+            if (label.leader_start) {
+                const auto start = toScreen(*label.leader_start, viewport);
+                safe = safe && std::isfinite(start.x()) && std::isfinite(start.y());
+                if (safe) ink = QRectF(
+                    QPointF(std::min(ink.left(), start.x()), std::min(ink.top(), start.y())),
+                    QPointF(std::max(ink.right(), start.x()), std::max(ink.bottom(), start.y())));
+            }
+            const auto padded = ink.adjusted(-cull_padding, -cull_padding, cull_padding, cull_padding);
+            if (safe && finite_rect(padded) &&
+                (padded.right() < viewport.left() || padded.left() > viewport.right() ||
+                 padded.bottom() < viewport.top() || padded.top() > viewport.bottom())) continue;
+        }
+        const auto local = transform.inverted().map(point);
+        // Use the padded paint rectangle only, without geometry pick tolerance.
+        if (bounds.contains(local))
+            return CanvasLabelPresentationIdentity{label.id, label.callout_role, label.selection_type};
+    }
+    return std::nullopt;
+}
+
+std::optional<CanvasLabel> PlanCanvas::labelPresentation(
+    const CanvasLabelPresentationIdentity& identity) const {
+    std::optional<CanvasLabel> result;
+    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
+        if (label.id != identity.id || label.callout_role != identity.callout_role ||
+            label.selection_type != identity.selection_type) continue;
+        // Duplicate presentations cannot safely identify a single authored edit.
+        if (result || !drawable_label(label)) return std::nullopt;
+        result = label;
+    }
+    return result;
 }
 
 std::optional<QRectF> PlanCanvas::selectionBounds() const {

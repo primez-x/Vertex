@@ -14,6 +14,22 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 direct area-label properties
+
+Double-clicking a painted room/area label now routes its exact name,
+calculation or combined role to a compact X/Y/rotation editor beside the
+pointer. Coordinates resolve through the admitted ordinary, named or Site
+publication into the source model. The command changes only callout placement;
+text and quantities remain derived. Restoring unchanged coordinate text does
+not pin an automatic label, and rotation alone retains automatic placement.
+Active placement, stale publications and read-only Apply remain blocked.
+
+Independent source review accepted corrections to publication admission,
+identity edits, placement-mode protection and exception handling. No builds,
+tests, probes, launches, packages or installations ran; compilation and user
+interaction remain unverified. Single-click generated-label selection/drag
+and Site body/profile collision editing remain required work.
+
 ### October 7 live area-callout placement through transforms
 
 Shared rigid geometry transforms and independent copies now retain authored

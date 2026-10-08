@@ -543,6 +543,10 @@ public:
     // already applied ordinary selection; this callback requests the object's
     // contextual editor without replaying a second selection/authoring press.
     void setEntityDoubleClicked(std::function<void(QString)> callback);
+    // Returning true consumes the contextual request; false uses the body editor.
+    void setLabelDoubleClicked(std::function<bool(CanvasLabelPresentationIdentity)> callback);
+    [[nodiscard]] std::optional<CanvasLabelPresentationIdentity> labelPresentationAt(QPointF point) const;
+    [[nodiscard]] std::optional<CanvasLabel> labelPresentation(const CanvasLabelPresentationIdentity& identity) const;
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
     // Alt-click supplies distinct overlapping targets, with the ordinary pick
     // first. Starting captures source authority; completion resolves the pick.
@@ -1214,6 +1218,7 @@ private:
     std::function<void(Vec2)> m_point_placement_requested;
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString)> m_entity_double_clicked;
+    std::function<bool(CanvasLabelPresentationIdentity)> m_label_double_clicked;
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<bool(bool, QStringList)> m_overlap_selection_requested;
     std::function<void(QStringList, bool)> m_entities_selected;

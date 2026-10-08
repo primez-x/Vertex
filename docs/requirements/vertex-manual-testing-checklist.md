@@ -2837,7 +2837,7 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U445 - Move the name without moving the calculated value**
-  - Steps: Separate an area's callouts. Choose Name and use **Place label** to move it. Choose Calculation and place it elsewhere. Undo and Redo each move.
+  - Steps: Separate an area's callouts. Choose Name and use **Place label** to move it. Choose Calculation and place it elsewhere. Double-click each painted label and change its X/Y position and rotation, then Apply. Cancel a further change. Undo and Redo each move. Repeat on a combined area label and in a saved plan and Site plan. In a furnished area with automatic label placement, restore any edited coordinate to its original displayed value, change only rotation and Apply.
   - Expected: Each move affects only the chosen callout. Undo and Redo restore that callout's own position without moving the area or its other callout.
   - Result: Not tested
   - Notes: ______________________________
