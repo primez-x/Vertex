@@ -99,8 +99,8 @@ public:
     bool invalidated{};
 
     Impl(PhysicalWallRoomReviewDialog* owner,DocumentSnapshot captured,std::string wall_id,bool metric_units,
-        std::function<DocumentSnapshot()> current,std::optional<Command> curve):dialog(owner),original_source(std::move(captured)),
-        source(curve?preview_physical_wall_room_review_curve(original_source,*curve):original_source),predecessor(std::move(curve)),
+        std::function<DocumentSnapshot()> current,std::optional<Command> geometry):dialog(owner),original_source(std::move(captured)),
+        source(geometry?preview_physical_wall_room_review_geometry(original_source,*geometry):original_source),predecessor(std::move(geometry)),
         current_source(std::move(current)),original_digest(document_snapshot_digest(original_source)),
         source_digest(document_snapshot_digest(source)),metric(metric_units) {
         dialog->setObjectName(QStringLiteral("physicalRoomReviewDialog"));dialog->setWindowTitle(QStringLiteral("Review rooms from walls"));dialog->resize(1100,900);
@@ -132,7 +132,9 @@ public:
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalRoomReviewStatus"));status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
         apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));
-        apply->setText(predecessor?QStringLiteral("Apply curve and reviewed rooms"):QStringLiteral("Apply reviewed rooms"));layout->addWidget(buttons);
+        apply->setText(predecessor?(std::get<ApplyBoundaryConstraintChanges>(*predecessor).curve_construction_completion?
+            QStringLiteral("Apply curve and reviewed rooms"):QStringLiteral("Apply wall edit and reviewed rooms")):
+            QStringLiteral("Apply reviewed rooms"));layout->addWidget(buttons);
         QObject::connect(apply,&QPushButton::clicked,dialog,[this]{dialog->accept();});
         QObject::connect(buttons,&QDialogButtonBox::rejected,dialog,[this]{dialog->reject();});
         QObject::connect(walls,&QComboBox::currentIndexChanged,dialog,[this]{reset();});
@@ -401,7 +403,7 @@ public:
             ApplyBoundaryConstraintChanges command;
             auto exact=[&]() {
                 if (predecessor) {
-                    auto prepared=prepare_physical_wall_room_review_after_curve(original_source,*predecessor,*report,decisions);
+                    auto prepared=prepare_physical_wall_room_review_after_geometry(original_source,*predecessor,*report,decisions);
                     command=std::move(prepared.command);return std::move(prepared.snapshot);
                 }
                 const auto prepared=prepare_physical_wall_room_review(source,*report,decisions);
@@ -433,8 +435,9 @@ public:
                 reference_table->item(static_cast<int>(i),2)->setText(description);
             }
             require_current();candidate=std::move(command);candidate_snapshot=std::move(exact);error.clear();
-            status->setText(predecessor?
+            status->setText(predecessor?(std::get<ApplyBoundaryConstraintChanges>(*predecessor).curve_construction_completion?
                 QStringLiteral("The proposed curve and all room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."):
+                QStringLiteral("The proposed wall edit and all room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state.")):
                 QStringLiteral("All room and reference decisions are validated. Apply commits them together; Undo restores the entire previous state."));apply->setEnabled(true);
         } catch (const std::exception& e) {fail(QString::fromUtf8(e.what()));}
         scene();

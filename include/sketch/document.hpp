@@ -396,9 +396,11 @@ struct ApplyBoundaryConstraintChanges {
     // Envelope twenty-three retains explicit curved-wall construction proofs
     // alongside their connected endpoint and source redraw consequences.
     bool curve_construction_completion{};
-    // A reviewed room consequence follows one detached curve construction.
+    // A reviewed room consequence follows one detached physical-wall edit.
+    // Envelope twenty-four retains explicit curves; twenty-five retains
+    // ordinary wall endpoint/length edits and their existing source redraws.
     // Full snapshot authority binds the original source; room entity lineage
-    // binds the independently replayed curve candidate, with one final event.
+    // binds the independently replayed wall candidate, with one final event.
     bool room_review_geometry_completion{};
     nlohmann::json room_review_geometry_proof=nullptr;
 };

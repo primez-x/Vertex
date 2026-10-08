@@ -55,10 +55,11 @@ struct ReplayedPhysicalWallRoomReview {
 struct PreparedPhysicalWallRoomReview : ReplayedPhysicalWallRoomReview {
     nlohmann::json intent;
 };
-struct PreparedPhysicalWallRoomReviewAfterCurve {
+struct PreparedPhysicalWallRoomReviewAfterGeometry {
     ApplyBoundaryConstraintChanges command;
     DocumentSnapshot snapshot;
 };
+using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAfterGeometry;
 [[nodiscard]] nlohmann::json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent& intent);
 [[nodiscard]] PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const nlohmann::json& value);
 // Detached preparation binds the complete captured state, including history,
@@ -66,15 +67,24 @@ struct PreparedPhysicalWallRoomReviewAfterCurve {
 [[nodiscard]] PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomCorrespondenceReport& report,
     const PhysicalWallRoomReviewIntent& intent);
-// A direct curve-construction command is ordinarily admitted on a detached
-// copy. Its retained rooms remain available for explicit correspondence review.
+// A direct ordinary wall-edit or curve-construction command is admitted on a
+// detached copy. Retained rooms remain available for correspondence review.
+// Only unwrapped ordinary wall-bearing v2/v3/v4/v5/v6/v7/v11 and direct
+// curve v23 proofs qualify; ordinary connected/source consequences retain
+// their existing child command authority.
+[[nodiscard]] DocumentSnapshot preview_physical_wall_room_review_geometry(
+    const DocumentSnapshot& source,const Command& geometry_command);
+// The report and intent belong to the detached geometry snapshot above. The
+// returned single command is independently previewed against the original
+// source; neither preparation publishes the intermediate geometry state.
+// Full-snapshot/history/save hashes bind the original source, while the room
+// entity-map hash retains the derived geometry that was actually reviewed.
+[[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_after_geometry(
+    const DocumentSnapshot& source,const Command& geometry_command,
+    const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent);
+// Narrow compatibility helpers retain the direct curve-construction contract.
 [[nodiscard]] DocumentSnapshot preview_physical_wall_room_review_curve(
     const DocumentSnapshot& source,const Command& curve_command);
-// The report and intent belong to the detached curve snapshot above. The
-// returned single command is independently previewed against the original
-// source; neither preparation publishes the intermediate curve state. Retained
-// full-snapshot/history/save hashes bind the original source, while the room
-// entity-map hash retains the derived geometry that was actually reviewed.
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterCurve prepare_physical_wall_room_review_after_curve(
     const DocumentSnapshot& source,const Command& curve_command,
     const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent);

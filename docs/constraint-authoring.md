@@ -93,6 +93,16 @@ reference and relationship decisions on that result. Neither preparation
 commits an intermediate state. Envelope 24, native format 76 and extraction
 version 74 protect the composed event; one Undo restores curve and rooms.
 
+The same detached review also accepts ordinary physical-wall endpoint and
+length edits with their admitted connected/source consequences. Envelope 25,
+native format 77 and extraction version 75 retain those completions separately
+from explicit curve reconstruction. The ordinary child keeps its existing
+admission and source-bound-room guard; the review cannot add raw geometry or
+asset authority. Wall editing routes use the verified original proposal before
+any commit and require room review for affected retained consumers. Cancellation
+leaves the original wall and rooms unchanged. The current review covers one
+resolved drawing context and plane; affected consumers outside it refuse.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

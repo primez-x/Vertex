@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v76
+# Vertex project formats v1 through v77
+
+## Reviewed ordinary physical-wall and room changes (v77)
+
+Native format 77 and JSON/assets extraction version 75 retain
+boundary-constraint envelope 25. Its fields and original/derived source fences
+follow envelope 24 below, but its direct geometry proof contains ordinary
+physical-wall endpoint or length edits. The admitted child dialects are
+2/3/4/5/6/7/11 with nonempty wall proofs of versions 1/2/3. Connected boundary,
+measured-source and source-owned annotation consequences keep their existing
+child authority. Specialized geometric intents, recursive wrappers and asset
+change/reference lanes cannot enter this completion.
+
+Admission independently reconstructs the child's ordinary consequences and
+checks source-bound room outlines before granting explicit reviewed room
+authority. The child assets and physical-wall identity inventory remain
+unchanged: this completion cannot add, remove or replace source walls.
+Changed-wall coverage compares exact wall payloads, including thickness,
+height, layers and retained source evidence, rather than only baselines. It
+then rederives the room
+decisions on that exact map and checks all affected retained-room coverage and
+final identity lifetimes. No intermediate wall event is published. One Undo
+restores the wall, related geometry and reviewed rooms together.
+
+Envelope 24 continues to require a direct curve proof 23. A 24/25 discriminator
+that disagrees with its child refuses instead of borrowing the other dialect.
+The new native reader floor applies throughout retained history, including
+undone and abandoned ordinary-wall reviews.
 
 ## Reviewed curve and physical-room changes (v76)
 

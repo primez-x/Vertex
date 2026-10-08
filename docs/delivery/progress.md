@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 reviewed ordinary wall length and endpoint edits
+
+Detached room review now accepts ordinary physical-wall endpoint and length
+proofs with their existing connected boundary, measured-source and callout
+consequences. Command envelope 25 independently replays that ordinary child,
+checks its source-bound room transition and unchanged assets, then rederives
+the explicit room decisions. Envelope 24 retains its curve-only meaning.
+Native format 77/extraction 75 retain the ordinary completion in all history.
+
+Typed wall-length editing and canvas wall-endpoint release route affected
+retained rooms to this review before publishing a change. The accepted source
+command and detached candidate remain exact; the room dialog does not rebuild
+the user's wall intent. Cancel changes neither geometry nor history. Source,
+selection, workspace and retained endpoint-view authority remain fenced through
+the nested review. Walls without affected room consumers keep direct Apply.
+Source review corrected coverage for changed thickness/layers/height and
+rejected physical-wall creation/removal through a nested consequence lane.
+The ordinary and background curve paths share one consequence preflight;
+neither scan grants command authority.
+
+This remains source implementation only. Affected rooms outside one resolved
+context and plane refuse; multi-context review and other wall mutation routes
+remain open. No builds, tests, probes, launches, packages or installations ran.
+Compilation, interaction, persistence and performance remain unverified; the
+installed candidate is unchanged.
+
 ### October 8 atomic curved-wall and room review
 
 The curved-wall editor now opens room correspondence against its detached
@@ -2339,13 +2365,13 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Extend detached room-consequence review to ordinary physical-wall length
-   and endpoint editing. Preserve the original snapshot fence and one complete
-   geometry/room event. No intermediate wall or room commit, guessed
-   classification, silent identity reassignment or reference loss is permitted.
-   Explicit connected curve construction and its atomic room review source
-   work are recorded above; do not restart them. Reviews spanning multiple
-   contexts/planes remain open. Persisted tangent relations already exist in
+1. Finish reviewed room consequences across affected contexts/planes and
+   remaining physical-wall mutation routes. Preserve the original snapshot
+   fence and one complete geometry/room event. No intermediate wall or room
+   commit, guessed classification, silent identity reassignment or reference
+   loss is permitted. Ordinary length/endpoint editing, explicit connected curve
+   construction and their atomic room reviews are recorded above; do not restart
+   them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent
    selection source changes are recorded above; do not restart them.

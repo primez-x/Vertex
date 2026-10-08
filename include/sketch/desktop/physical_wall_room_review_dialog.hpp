@@ -8,8 +8,9 @@
 
 namespace sketch::desktop {
 // Collects complete decisions against one immutable source, optionally after
-// a detached curve proposal. The owner applies the accepted single command
-// after its own workspace/selection fence against the original captured source.
+// a detached ordinary wall-edit or curve proposal. The owner applies the
+// accepted single command after its own workspace/selection fence against the
+// original captured source.
 class PhysicalWallRoomReviewDialog final : public QDialog {
 public:
     PhysicalWallRoomReviewDialog(DocumentSnapshot source,std::string selected_wall_id,
