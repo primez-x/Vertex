@@ -14,6 +14,49 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 separate proposed wall identities
+
+Source implementation adds independent proposed replacements when a semantic
+wall edit touches shared baseline walls in the saved active alternative.
+Discovery uses typed edit roots before solving original geometry. Closure
+includes physical contacts, room-lineage transit, typed relationships, hosted
+openings, joins, supported identified boundaries, measured linework and complete
+validated measurement source cohorts. Fresh owner and child identities bind an
+exact derived inventory; the named registry adds proposals and demolition
+membership while original baseline objects and unrelated alternatives remain
+intact.
+
+Room-bound copied constraints are withheld from the physical solve, then included
+in complete incoming room evidence. Mandatory reviewed room definitions and
+explicit Keep/Remap/Omit decisions complete the same outer event. Mapped room
+endpoints retain their original context and plane. Requested relationship removal
+must omit only its new copy. Source/history/save authority always identifies the
+actual original capture; only the room child's entity digest identifies the
+independently reconstructed physical stage.
+
+The normal authoring route now enters proposed-room completion before ordinary
+room review. Selection follows fresh proposed identities at the committed head;
+Cancel publishes nothing. Dimension/constraint editing now previews the
+proposed physical stage before the original solve, then completes mandatory
+room review and checks its original source authority on acceptance.
+Native 87/extraction 85 reserve retained copy identities, including omitted
+copies and undone operations. Independent copy review identified room discovery
+after closure and an exterior-arc receipt with its original child ID; both
+source corrections are applied. Independent command/history review identified
+selection suffix comparison and DISTO attachment to preserved original IDs.
+The selection suffix now retains independently admitted ordinary changes while
+guarding reviewed room topology and lineage; DISTO preparation, replay and
+retained validation derive the proposed target from the original binding.
+Scoped source review approved those corrected paths and storage/format wiring.
+Root reviewed desktop callbacks, acceptance routing and selection lifetime.
+
+No builds, tests, probes, scripts, launches, packages or installations run.
+Compilation, interaction, persistence and Undo remain unverified. The installed
+candidate is unchanged. Remaining source gaps include broader baseline wall
+profile/lifecycle edits, pre-promotion drag previews using the original solve,
+physical-room split/merge repair proofs and compound
+replacement across multiple phase registries; qualification remains separate.
+
 ### October 8 active-design connected constraint authoring
 
 Source implementation now derives actual saved-active scope from every admitted

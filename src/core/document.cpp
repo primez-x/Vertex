@@ -43,6 +43,7 @@
 #include "sketch/joint_translation_replay.hpp"
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
 #ifdef _WIN32
@@ -1629,12 +1630,57 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
     return create(make_stable_id(), std::move(media_type), std::move(bytes), std::move(metadata));
 }
 
+static std::string disto_completed_owner_id(const ApplyBoundaryConstraintChanges& geometry,
+    const DistoMeasurementAttachment& attachment);
+static void attach_disto_measurement(const std::map<std::string,Entity,std::less<>>& source,
+    std::map<std::string,Entity,std::less<>>& completed,const DistoMeasurementAttachment& attachment,
+    std::string_view completed_owner_id={});
+
 void validate_physical_room_source_transition(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const BoundaryGeometryEdit* reviewed_edit=nullptr,
     const ApplyBoundaryConstraintChanges* reviewed_batch=nullptr,
-    bool active_phase_constraints=false) {
+    bool active_phase_constraints=false,
+    bool composed_selection=false) {
+    if (reviewed_batch && reviewed_batch->phase_constraint_authoring_completion &&
+        !reviewed_batch->phase_constraint_authoring_intent.is_null()) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+        const auto intent=decode_phase_constraint_authoring_intent(reviewed_batch->phase_constraint_authoring_intent);
+        if (!intent.wall_replacement.is_null()) {
+            (void)command_to_json(Command{*reviewed_batch});
+            auto replay=replay_phase_constraint_authoring(before,reviewed_batch->phase_constraint_authoring_intent);
+            const bool ordinary_suffix=composed_selection || reviewed_batch->selection_completion;
+            if (!ordinary_suffix && reviewed_batch->disto_measurement_completion) {
+                if (!reviewed_batch->disto_measurement)
+                    document_error(DocumentErrorCode::invalid_entity,"Proposed wall observation is missing");
+                attach_disto_measurement(before,replay,*reviewed_batch->disto_measurement,
+                    disto_completed_owner_id(*reviewed_batch,*reviewed_batch->disto_measurement));
+            }
+            if (!ordinary_suffix && entity_map_digest(replay)!=entity_map_digest(after))
+                document_error(DocumentErrorCode::invalid_entity,"Proposed wall/room changes differ from their verified source-bound edit");
+            if (ordinary_suffix) {
+                // The child was compared exactly before the separately
+                // admitted ordinary selection lane was merged. Its physical
+                // room topology and source lineage still remain authoritative;
+                // ordinary object/annotation edits cannot grant room authority.
+                std::set<std::string,std::less<>> rooms;
+                const auto& room_replay=std::as_const(replay);
+                for (const auto* entities:{&room_replay,&after})
+                    for (const auto& [id,entity]:*entities) if (is_physical_wall_room(entity)) rooms.insert(id);
+                for (const auto& id:rooms) {
+                    const auto original=room_replay.find(id),completed=after.find(id);
+                    if (original==room_replay.end() || completed==after.end() ||
+                        !is_physical_wall_room(original->second) || !is_physical_wall_room(completed->second) ||
+                        original->second.extensions.at("physical_wall_room").dump()!=completed->second.extensions.at("physical_wall_room").dump() ||
+                        decode_identified_boundary_entity(original->second)!=decode_identified_boundary_entity(completed->second))
+                        document_error(DocumentErrorCode::invalid_entity,"Selection completion changed reviewed room topology or source lineage");
+                }
+            }
+            return;
+        }
+#endif
+    }
     // Explicit phase review is a separate authority. Admit a source-bound
     // proposal change only when its exclusive, canonical proof independently
     // reconstructs this complete destination; ordinary payloads cannot borrow it.
@@ -1812,18 +1858,39 @@ static void restore_disto_measurements(const Entity& source, Entity& completed) 
     else completed.extensions["disto_measurements"] = *prior;
 }
 
+static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const ApplyBoundaryConstraintChanges& command);
+static std::string disto_completed_owner_id(const ApplyBoundaryConstraintChanges& geometry,
+    const DistoMeasurementAttachment& attachment) {
+    auto target=attachment.owner_id;
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    for (const auto& encoded:phase_constraint_authoring_proofs(geometry)) {
+        const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        if (intent.wall_replacement.is_null()) continue;
+        const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+        const auto found=replacement.identities.find(attachment.owner_id);
+        if (found==replacement.identities.end()) continue;
+        if (target!=attachment.owner_id && target!=found->second)
+            throw std::invalid_argument("DISTO observation has conflicting proposed owner mappings");
+        target=found->second;
+    }
+#endif
+    return target;
+}
+
 static void attach_disto_measurement(
     const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& completed,
-    const DistoMeasurementAttachment& attachment) {
+    const DistoMeasurementAttachment& attachment,
+    std::string_view completed_owner_id) {
     const auto encoded = nlohmann::json::parse(disto_measurement_json(attachment.record));
     if (!is_valid_identifier(attachment.owner_id))
         throw std::invalid_argument("DISTO observation owner ID is invalid");
     const auto prior_owner = source.find(attachment.owner_id);
-    const auto owner = completed.find(attachment.owner_id);
+    const auto completed_id=completed_owner_id.empty()?attachment.owner_id:std::string(completed_owner_id);
+    const auto owner = completed.find(completed_id);
     if (prior_owner == source.end() || owner == completed.end() ||
         prior_owner->second.type != owner->second.type)
-        throw std::invalid_argument("DISTO observation requires the same existing completed owner");
+        throw std::invalid_argument("DISTO observation requires its admitted original or proposed completed owner");
     auto& entity = owner->second;
     const auto& record = attachment.record;
     const auto target = record.target_field;
@@ -2394,6 +2461,22 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
     return result;
 }
 
+static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryConstraintChanges& command) {
+    const auto proofs=phase_constraint_authoring_proofs(command);
+    return std::none_of(proofs.begin(),proofs.end(),[](const auto& intent) {
+        return intent.contains("wall_replacement") && !intent.at("wall_replacement").is_null();
+    });
+}
+static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,const ApplyBoundaryConstraintChanges& command) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
+        const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        if (!intent.wall_replacement.is_null()) validate_phase_wall_replacement_originals(source,candidate,intent);
+    }
+#endif
+}
+
 static void validate_active_design_preserved_dependents(const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,bool freeze_registries=true) {
     const auto scope=constraint_phase_scope(source);
@@ -2503,19 +2586,72 @@ static void validate_retained_phase_constraint_authoring_source(const DocumentSn
     }
 }
 
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+static void validate_phase_room_review_lifetime(const nlohmann::json& encoded,
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records);
+#endif
 static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,
-    const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records,
+    const ApplyBoundaryConstraintChanges& command) {
     std::set<std::string,std::less<>> fresh;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
     }
+    for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
+        const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        if (intent.wall_replacement.is_null()) continue;
+        const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+        for (const auto& [original,id]:replacement.identities) {
+            (void)original;fresh.insert(id);
+        }
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+        if (!replacement.room_review_intent.is_null()) {
+            validate_phase_room_review_lifetime(replacement.room_review_intent,history,preceding_records);
+            const auto room=decode_physical_wall_phase_room_review_intent(replacement.room_review_intent);
+            std::set<std::string,std::less<>> mapped;
+            for (const auto& [original,id]:replacement.identities) { (void)original;mapped.insert(id); }
+            const auto reserve_room=[&](const std::string& id) {
+                if (mapped.contains(id)) throw std::invalid_argument("Proposed room identity overlaps a declared wall copy: "+id);
+                fresh.insert(id);
+            };
+            for (const auto& plane:room.planes) {
+                for (const auto& decision:plane.fresh) {
+                    if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed &&
+                        decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) continue;
+                    if (decision.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) reserve_room(decision.room_id);
+                    for (const auto& id:decision.fresh_ids.segment_ids) reserve_room(id);
+                    for (const auto& id:decision.fresh_ids.vertex_ids) reserve_room(id);
+                }
+                for (const auto& decision:plane.source_rooms)
+                    for (const auto& id:decision.replacement_dimension_ids) reserve_room(id);
+            }
+        }
+#endif
+    }
     if (fresh.empty()) return;
     if (fresh.size()>4096) throw std::invalid_argument("Active design fresh identity budget exceeded");
-    for (std::size_t index=0;index<preceding_records;++index)
+    for (std::size_t index=0;index<preceding_records;++index) {
+        const auto& record=history.at(index);
+        // A deliberately omitted fresh relationship copy is still a declared
+        // identity in the recorded semantic operation. Undo cannot release it.
+        if (record.boundary_constraint_changes)
+            for (const auto& encoded:phase_constraint_authoring_proofs(*record.boundary_constraint_changes)) {
+                const auto intent=decode_phase_constraint_authoring_intent(encoded);
+                if (intent.wall_replacement.is_null()) continue;
+                const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+                for (const auto& [original,id]:replacement.identities) {
+                    (void)original;
+                    if (fresh.contains(id)) throw std::invalid_argument("Proposed identity was already reserved by retained replacement intent: "+id);
+                }
+            }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
+            if (entity.type=="wall" && entity.properties.contains("layers"))
+                for (const auto& layer:entity.properties.at("layers"))
+                    if (fresh.contains(layer.at("id").get<std::string>()))
+                        throw std::invalid_argument("Active design identity collides with a retained wall layer: "+id);
             if (entity.type=="measurement_linework") {
                 const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
                 if (decoded.supported()) for (const auto& edge : decoded.model->edges)
@@ -2528,6 +2664,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
                     throw std::invalid_argument("Active design identity collides with retained boundary children: "+id);
         }
+    }
 }
 #endif
 
@@ -2778,12 +2915,13 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
         if (!command.disto_measurement_completion || !command.disto_measurement)
             document_error(DocumentErrorCode::constraint_violation, "DISTO completion requires its observation");
         auto geometry = after;
-        const auto& id = command.disto_measurement->owner_id;
-        if (!before.contains(id) || !geometry.contains(id))
+        const auto& source_id = command.disto_measurement->owner_id;
+        const auto id=disto_completed_owner_id(without_disto_measurement(command),*command.disto_measurement);
+        if (!before.contains(source_id) || !geometry.contains(id))
             document_error(DocumentErrorCode::constraint_violation, "DISTO completion owner is missing");
-        restore_disto_measurements(before.at(id), geometry.at(id));
+        restore_disto_measurements(before.at(source_id), geometry.at(id));
         auto expected = geometry;
-        try { attach_disto_measurement(before, expected, *command.disto_measurement); }
+        try { attach_disto_measurement(before, expected, *command.disto_measurement,id); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation, error.what()); }
         if (expected != after)
             document_error(DocumentErrorCode::constraint_violation, "DISTO completion differs from its observation");
@@ -4266,7 +4404,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             validate_phase_constraint_authoring_mode(command);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
             auto result=replay_phase_constraint_authoring(source,command.phase_constraint_authoring_intent);
-            validate_active_design_preserved_dependents(source,result);
+            const auto intent=decode_phase_constraint_authoring_intent(command.phase_constraint_authoring_intent);
+            validate_active_design_preserved_dependents(source,result,intent.wall_replacement.is_null());
             validate_boundary_identity_transition(history,source,result);
             (void)validate_state(result,source_assets,true);
             return result;
@@ -4330,8 +4469,11 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 } else current->second = admitted;
             }
             (void)validate_state(result, geometry_assets,active_policy);
-            if (!phase_constraint_authoring_proofs(geometry).empty()) validate_active_design_preserved_dependents(source,result);
-            validate_physical_room_source_transition(source, result, nullptr, &geometry,active_policy);
+            if (!phase_constraint_authoring_proofs(geometry).empty()) {
+                validate_active_design_preserved_dependents(source,result,phase_constraint_authoring_preserves_registries(geometry));
+                validate_phase_constraint_composed_originals(source,result,geometry);
+            }
+            validate_physical_room_source_transition(source, result, nullptr, &geometry,active_policy,true);
             return result;
         } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
@@ -4343,8 +4485,12 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
         try {
             (void)command_to_json(Command{command});
             auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay,active_policy);
-            attach_disto_measurement(source, result, *command.disto_measurement);
-            if (!phase_constraint_authoring_proofs(command).empty()) validate_active_design_preserved_dependents(source,result);
+            attach_disto_measurement(source, result, *command.disto_measurement,
+                disto_completed_owner_id(without_disto_measurement(command),*command.disto_measurement));
+            if (!phase_constraint_authoring_proofs(command).empty()) {
+                validate_active_design_preserved_dependents(source,result,phase_constraint_authoring_preserves_registries(command));
+                validate_phase_constraint_composed_originals(source,result,command);
+            }
             return result;
         } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
@@ -7314,7 +7460,8 @@ Command complete_disto_measurement_command(
     const DistoMeasurementAttachment attachment{std::string(owner_id), record, replace_existing};
     const auto geometry = Document::preview_command(source, geometry_command);
     auto completed = geometry.entities();
-    try { attach_disto_measurement(source.entities(), completed, attachment); }
+    try { attach_disto_measurement(source.entities(), completed, attachment,
+        constrained?disto_completed_owner_id(*constrained,attachment):attachment.owner_id); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     Command result = geometry_command;
     if (auto* changes = std::get_if<ApplyEntityChanges>(&result)) {
@@ -7487,7 +7634,7 @@ Revision Document::apply(const Command& command) {
                 next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                 if (!phase_constraint_authoring_proofs(typed_command).empty())
-                    validate_phase_constraint_fresh_lifetime(current.entities,next.entities,history_,history_.size());
+                    validate_phase_constraint_fresh_lifetime(current.entities,next.entities,history_,history_.size(),typed_command);
 #endif
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
                 try {
@@ -7976,7 +8123,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets, proof, true,active_policies.at(index-1));
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     if (!phase_constraint_authoring_proofs(proof).empty())
-                        validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index);
+                        validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);
 #endif
                     expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?

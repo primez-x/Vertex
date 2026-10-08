@@ -812,7 +812,9 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # Document replay and interactive preparation share the same deterministic
   # connected solve. Keep it in the authoritative library without a cyclic
   # document/authoring dependency; the public authoring target remains stable.
-  target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp)
+  target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp
+    src/core/phase_wall_replacement.cpp src/core/phase_wall_replacement_authoring.cpp
+    src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
   target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision)
   add_library(sketch_constraint_authoring INTERFACE)

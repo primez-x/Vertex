@@ -4,7 +4,7 @@
 
 namespace sketch {
 
-// Version-one semantic authority. Geometry payloads are outputs of replay;
+// Versioned semantic authority. Geometry payloads are outputs of replay;
 // every source binding and saved phase choice describes the actual source.
 struct PhaseConstraintAuthoringIntent {
     Revision expected_revision{};
@@ -14,6 +14,10 @@ struct PhaseConstraintAuthoringIntent {
     std::optional<Revision> source_saved_revision;
     nlohmann::json phase_selections;
     ConstraintAuthoringIntent intent;
+    // Dialect two only: a typed wall identity replacement and reviewed room
+    // completion, independently replayed before publication. Null keeps the
+    // version-one semantics and exact wire keys.
+    nlohmann::json wall_replacement=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

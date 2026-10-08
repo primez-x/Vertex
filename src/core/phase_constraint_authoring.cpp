@@ -5,6 +5,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/joint_translation_replay.hpp"
+#include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -290,11 +291,17 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     if (value.source_saved_revision && *value.source_saved_revision>value.expected_revision)
         invalid("Phase constraint saved revision exceeds its source revision");
     selections(value.phase_selections);
-    Json result={{"version",1},{"expected_revision",value.expected_revision},
+    Json result={{"version",value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
         {"phase_selections",value.phase_selections},{"intent",encode_intent(value.intent)}};
+    if (!value.wall_replacement.is_null()) {
+        const auto replacement=decode_phase_wall_replacement_authoring(value.wall_replacement);
+        if (encode_phase_wall_replacement_authoring(replacement).dump()!=value.wall_replacement.dump())
+            invalid("Wall replacement decisions are not canonical");
+        result["wall_replacement"]=value.wall_replacement;
+    }
     // dump validates UTF-8 as well as the complete byte resource bound.
     resource_shape(result);
     if (result.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
@@ -304,9 +311,12 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
 PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Json& value) {
     resource_shape(value);
     if (value.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
-    keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+    const bool replacement=value.is_object() && value.contains("version") && value.at("version")==2;
+    if (replacement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
+    else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -315,6 +325,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         value.at("source_entities_digest").get<std::string>(),
         value.at("source_saved_revision").is_null() ? std::nullopt : std::optional<Revision>{value.at("source_saved_revision").get<Revision>()},
         value.at("phase_selections"),decode_intent(value.at("intent"))};
+    if (replacement) {
+        result.wall_replacement=value.at("wall_replacement");
+        if (result.wall_replacement.is_null()) invalid("Version two requires wall replacement decisions");
+        (void)decode_phase_wall_replacement_authoring(result.wall_replacement);
+    }
     if (encode_phase_constraint_authoring_intent(result)!=value) invalid("Phase constraint proof is not canonical");
     return result;
 }
@@ -332,6 +347,7 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
     if (decoded.source_entities_digest!=entity_map_digest(source) ||
         decoded.phase_selections!=phase_constraint_authoring_selections(source))
         invalid("Phase constraint proof does not describe the actual source entities and saved choices");
-    return reconstruct_active_phase_constraint_authoring(source,decoded.intent);
+    return decoded.wall_replacement.is_null() ? reconstruct_active_phase_constraint_authoring(source,decoded.intent)
+        : replay_phase_wall_replacement_authoring(source,decoded);
 }
 } // namespace sketch

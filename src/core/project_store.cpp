@@ -311,6 +311,21 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null() ||
                 active_constraint_proof(command.room_review_geometry_proof))
                 required=std::max(required,86U);
+            const auto replacement_proof=[](const auto& self,const nlohmann::json& proof,unsigned depth)->bool {
+                if (depth>2 || !proof.is_object() || !proof.contains("kind") ||
+                    proof.at("kind")!="apply_boundary_constraint_changes" || !proof.contains("version")) return false;
+                if (proof.at("version")==34) {
+                    const auto found=proof.find("phase_constraint_authoring_intent");
+                    return found!=proof.end() && found->is_object() && found->contains("version") && found->at("version")==2;
+                }
+                if ((proof.at("version")==22 || proof.at("version")==19) && proof.contains("proof"))
+                    return self(self,proof.at("proof"),depth+1);
+                return proof.contains("room_review_geometry_proof") && self(self,proof.at("room_review_geometry_proof"),depth+1);
+            };
+            if ((command.phase_constraint_authoring_intent.is_object() &&
+                 command.phase_constraint_authoring_intent.contains("version") && command.phase_constraint_authoring_intent.at("version")==2) ||
+                replacement_proof(replacement_proof,command.room_review_geometry_proof,0))
+                required=std::max(required,87U);
             if (command.phase_room_review_completion || !command.phase_room_review_intent.is_null())
                 required=std::max(required,
                     command.phase_room_review_intent.is_object() &&
@@ -2071,6 +2086,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 87 &&
          sqlite3_column_int(user_version.get(), 0) != 86 &&
          sqlite3_column_int(user_version.get(), 0) != 85 &&
          sqlite3_column_int(user_version.get(), 0) != 84 &&
@@ -2323,12 +2339,12 @@ void verify_sqlite_content_integrity(sqlite3* database) {
 DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nullptr,
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
-    if (format != "86" && format != "85" && format != "84" && format != "83" && format != "82" && format != "81" && format != "80" && format != "79" && format != "78" && format != "77" && format != "76" && format != "75" && format != "74" && format != "73" && format != "72" && format != "71" && format != "70" && format != "69" && format != "68" && format != "67" && format != "66" && format != "65" && format != "64" && format != "63" && format != "62" && format != "61" && format != "60" && format != "59" && format != "58" && format != "57" && format != "56" && format != "55" && format != "54" && format != "53" && format != "52" && format != "51" && format != "50" && format != "49" && format != "48" && format != "47" && format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
+    if (format != "87" && format != "86" && format != "85" && format != "84" && format != "83" && format != "82" && format != "81" && format != "80" && format != "79" && format != "78" && format != "77" && format != "76" && format != "75" && format != "74" && format != "73" && format != "72" && format != "71" && format != "70" && format != "69" && format != "68" && format != "67" && format != "66" && format != "65" && format != "64" && format != "63" && format != "62" && format != "61" && format != "60" && format != "59" && format != "58" && format != "57" && format != "56" && format != "55" && format != "54" && format != "53" && format != "52" && format != "51" && format != "50" && format != "49" && format != "48" && format != "47" && format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
         format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && format != "26" && format != "27" && format != "28" && format != "29" && format != "30" && format != "31" && format != "32" && format != "33" && format != "34" && format != "35" && format != "36" && format != "37" && format != "38" && format != "39" && format != "40" && format != "41" && format != "42" && format != "43" && format != "44" && format != "45" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "86" ? 86U : format == "85" ? 85U : format == "84" ? 84U : format == "83" ? 83U : format == "82" ? 82U : format == "81" ? 81U : format == "80" ? 80U : format == "79" ? 79U : format == "78" ? 78U : format == "77" ? 77U : format == "76" ? 76U : format == "75" ? 75U : format == "74" ? 74U : format == "73" ? 73U : format == "72" ? 72U : format == "71" ? 71U : format == "70" ? 70U : format == "69" ? 69U : format == "68" ? 68U : format == "67" ? 67U : format == "66" ? 66U : format == "65" ? 65U : format == "64" ? 64U : format == "63" ? 63U : format == "62" ? 62U : format == "61" ? 61U : format == "60" ? 60U : format == "59" ? 59U : format == "58" ? 58U : format == "57" ? 57U : format == "56" ? 56U : format == "55" ? 55U : format == "54" ? 54U : format == "53" ? 53U : format == "52" ? 52U : format == "51" ? 51U : format == "50" ? 50U : format == "49" ? 49U : format == "48" ? 48U : format == "47" ? 47U : format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "87" ? 87U : format == "86" ? 86U : format == "85" ? 85U : format == "84" ? 84U : format == "83" ? 83U : format == "82" ? 82U : format == "81" ? 81U : format == "80" ? 80U : format == "79" ? 79U : format == "78" ? 78U : format == "77" ? 77U : format == "76" ? 76U : format == "75" ? 75U : format == "74" ? 74U : format == "73" ? 73U : format == "72" ? 72U : format == "71" ? 71U : format == "70" ? 70U : format == "69" ? 69U : format == "68" ? 68U : format == "67" ? 67U : format == "66" ? 66U : format == "65" ? 65U : format == "64" ? 64U : format == "63" ? 63U : format == "62" ? 62U : format == "61" ? 61U : format == "60" ? 60U : format == "59" ? 59U : format == "58" ? 58U : format == "57" ? 57U : format == "56" ? 56U : format == "55" ? 55U : format == "54" ? 54U : format == "53" ? 53U : format == "52" ? 52U : format == "51" ? 51U : format == "50" ? 50U : format == "49" ? 49U : format == "48" ? 48U : format == "47" ? 47U : format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -2612,6 +2628,9 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=87)
+            storage_error(StorageErrorCode::unsupported_format,
+                "retained baseline-preserving proposed wall edits require project format v"+std::to_string(required_format));
         if (required_format>=86)
             storage_error(StorageErrorCode::unsupported_format,
                 "retained active-design constraint authoring requires project format v"+std::to_string(required_format));

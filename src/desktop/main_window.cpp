@@ -30,6 +30,8 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_wall_replacement_command.hpp"
+#include "sketch/phase_wall_replacement_request.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
@@ -7808,8 +7810,8 @@ public:
                 const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
                     found->first, authority, owner);
                 if (!reviewed) { clearError(); refreshInspector(); return false; }
-                applyDocumentCommand(*reviewed);
-            } else applyAuthoredCommand(command);
+                if (!applyDocumentCommand(*reviewed)) { clearError(); refreshInspector(); return false; }
+            } else if (!applyAuthoredCommand(command)) { clearError(); refreshInspector(); return false; }
             m_selected_id = id_from(root);
             clearError();
             refresh();
@@ -22331,7 +22333,7 @@ public:
                     requireAcceptedConstraintPreview(preview);
                     if (!sourceEditAuthorityCurrent(authority))
                         throw std::invalid_argument("The curved wall source or editing context changed. Reopen its properties.");
-                    applyConstraintPreview(preview);
+                    if (!applyConstraintPreview(preview)) { clearError(); refreshInspector(); return false; }
                     clearError();
                     m_selected_id = QString::fromStdString(selected->id);
                     refresh();
@@ -23405,7 +23407,7 @@ public:
                         clearError(); refresh(); return true;
                     }
                 }
-                applyConstraintPreview(preview);
+                if (!applyConstraintPreview(preview)) { clearError(); refreshInspector(); return false; }
                 clearError();
                 refresh();
                 return true;
@@ -31911,13 +31913,23 @@ public:
             }
             // Programmatic edits use the same validated intent as the dialog.
             // The interactive inspector opens a preview before committing.
-            ConstraintDialog dialog(authoringSnapshot(), m_selected_id, m_metric_units, owner);
+            const auto source=authoringSnapshot();
+            const auto authority=captureSourceEditAuthority(source);
+            ConstraintDialog dialog(source, m_selected_id, m_metric_units, owner);
+            dialog.setCurrentSource([this,authority] {
+                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The wall editing context changed. Reopen its dimensions.");
+                return authoringSnapshot();
+            });
             dialog.setLengthExpression(expression);
             if (!dialog.previewEdit() || !dialog.submit()) {
                 setError(dialog.lastError());
                 return false;
             }
-            if (const auto preview = dialog.acceptedPreview()) applyConstraintPreview(*preview);
+            if (const auto command=dialog.acceptedCommand()) {
+                if (!applyAuthoredCommand(Command{*command})) { clearError(); refreshInspector(); return false; }
+            } else if (const auto preview = dialog.acceptedPreview(); preview && !applyConstraintPreview(*preview)) {
+                clearError(); refreshInspector(); return false;
+            }
             clearError();
             refresh();
             return true;
@@ -31977,14 +31989,21 @@ public:
                         {EntityChange::upsert(selected->second)}, {}, "Apply measurement"};
                 } else {
                     ConstraintDialog dialog(source, m_selected_id, m_metric_units, owner);
+                    dialog.setCurrentSource([this,authority] {
+                        if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The measurement target changed. Apply the reading again.");
+                        return authoringSnapshot();
+                    });
                     dialog.setLengthExpression(expression);
                     if (!dialog.previewEdit() || !dialog.submit())
                         throw std::invalid_argument(dialog.lastError().isEmpty()
                             ? "The wall reading conflicts with its connected geometry."
                             : dialog.lastError().toStdString());
-                    const auto preview = dialog.acceptedPreview();
-                    if (!preview) throw std::invalid_argument("The wall measurement has no accepted geometry preview.");
-                    command = constraint_authoring_verified_command(source, *preview, nullptr);
+                    if (const auto replacement=dialog.acceptedCommand()) command=*replacement;
+                    else {
+                        const auto preview = dialog.acceptedPreview();
+                        if (!preview) throw std::invalid_argument("The wall measurement has no accepted geometry preview.");
+                        command = constraint_authoring_verified_command(source, *preview, nullptr);
+                    }
                 }
             } else {
                 auto edited = selected->second;
@@ -40658,19 +40677,101 @@ private:
         return complete_exterior_wall_measurement_command(source, authored_command);
     }
 
-    void applyAuthoredCommand(const Command& command) {
+    std::optional<Command> reviewAlternativeWallEdit(const Command& command,
+        PhaseWallReplacementIdentityMap& proposed_ids) {
+        const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!constrained || !constrained->phase_constraint_authoring_completion ||
+            constrained->phase_constraint_authoring_intent.is_null()) return command;
+        auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
+        if (!intent.wall_replacement.is_null()) {
+            proposed_ids=decode_phase_wall_replacement_authoring(intent.wall_replacement).identities;
+            return command;
+        }
+        const auto source=authoringSnapshot();
+        if (intent.expected_revision!=source.revision() || intent.source_snapshot_digest!=document_snapshot_digest(source) ||
+            intent.source_authoring_digest!=document_authoring_source_digest_v2(source) ||
+            intent.source_saved_revision!=source.saved_revision_optional())
+            throw std::invalid_argument("The project changed before the proposed wall edit could be prepared.");
+        // Find semantic roots before any solve. Existing room locks must not
+        // force the shared baseline through a proposed edit's temporary state.
+        const auto requests=phase_wall_replacement_requests(source.entities(),intent.intent);
+        if (requests.empty()) return command;
+        if (requests.size()!=1) throw std::invalid_argument("This edit replaces baseline walls in several design registries. Edit each building's alternative separately.");
+        const auto& request=requests.front();
+        const auto plan=inspect_phase_wall_replacement_plan(source.entities(),request.seed_wall_ids,
+            request.registry_id,request.alternative_id);
+        if (!plan.ready()) {
+            QStringList reasons;
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
+                reasons.push_back(id_from(diagnostic.entity_id)+QStringLiteral(": ")+QString::fromStdString(diagnostic.reason));
+            throw std::invalid_argument(reasons.join(QStringLiteral("\n")).toStdString());
+        }
+        PhaseWallReplacementAuthoring replacement;replacement.registry_id=request.registry_id;
+        replacement.alternative_id=request.alternative_id;replacement.seed_wall_ids=request.seed_wall_ids;
+        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
+            for (const auto& id:*ids) replacement.identities.emplace(id,new_id("proposed"));
+        intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
+        const auto preview=inspect_phase_wall_replacement_authoring(source,intent);
+        auto completed=*constrained;
+        if (preview.needs_room_review) {
+            const auto authority=captureSourceEditAuthority(source);
+            PhysicalWallPhaseRoomReviewDialog dialog(source,intent,m_metric_units,[this,authority] {
+                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The project or drawing context changed. Reopen the proposed wall review.");
+                return authoringSnapshot();
+            },owner);
+            styleDialog(dialog);
+            if (dialog.exec()!=QDialog::Accepted || !dialog.acceptedCommand() || !sourceEditAuthorityUnchanged(authority))
+                return std::nullopt;
+            completed.phase_constraint_authoring_intent=dialog.acceptedCommand()->phase_constraint_authoring_intent;
+        } else completed.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        proposed_ids=replacement.identities;
+        // Keep the original selection/device wrapper; the new semantic child
+        // receives normal complete command admission against this capture.
+        (void)Document::preview_command(source,Command{completed});
+        return Command{std::move(completed)};
+    }
+
+    void remapProposedWallSelection(const PhaseWallReplacementIdentityMap& proposed_ids) {
+        if (const auto found=proposed_ids.find(m_selected_id.toStdString());found!=proposed_ids.end())
+            m_selected_id=id_from(found->second);
+        QStringList selected;
+        for (const auto& id:m_selected_ids) {
+            const auto found=proposed_ids.find(id.toStdString());
+            const auto mapped=found==proposed_ids.end()?id:id_from(found->second);
+            if (!selected.contains(mapped)) selected.push_back(mapped);
+        }
+        m_selected_ids=std::move(selected);
+    }
+
+    bool applyAuthoredCommand(const Command& requested) {
+        requireSiteCommandAdmission(requested);
+        PhaseWallReplacementIdentityMap proposed_ids;
+        const auto reviewed=reviewAlternativeWallEdit(requested,proposed_ids);
+        if (!reviewed) return false;
+        const auto& command=*reviewed;
         requireSiteCommandAdmission(command);
         if (m_recovery_ledger.empty()) {
             measureDocumentEdit([&] { m_document->apply(command); });
-            return;
+        } else {
+            requireWorkspaceDocument();
+            auto edit = m_project_workspace->prepare(command);
+            commitWorkspaceEdit(edit);
         }
-        requireWorkspaceDocument();
-        auto edit = m_project_workspace->prepare(command);
-        commitWorkspaceEdit(edit);
+        if (!proposed_ids.empty()) {
+            remapProposedWallSelection(proposed_ids);
+            // Legacy callers can assign their captured original IDs after
+            // Apply. Resolve them once at the same committed head, before
+            // selection reconciliation; never carry this redirect into Undo
+            // or a different document.
+            m_pending_proposed_selection=std::move(proposed_ids);
+            m_pending_proposed_selection_document=m_document;
+            m_pending_proposed_selection_revision=authoringSnapshot().revision();
+        }
+        return true;
     }
 
-    void applyDocumentCommand(const Command& command) {
-        applyAuthoredCommand(augmentAuthoredCommand(command));
+    bool applyDocumentCommand(const Command& command) {
+        return applyAuthoredCommand(augmentAuthoredCommand(command));
     }
 
     DocumentSnapshot authoringSnapshot() const {
@@ -40681,18 +40782,9 @@ private:
         return m_project_workspace->snapshot();
     }
 
-    void applyConstraintPreview(const ConstraintAuthoringPreview& preview) {
-        if (siteCanvas(m_architecturalCanvas)) {
-            const auto command=constraint_authoring_verified_command(authoringSnapshot(),preview,nullptr);
-            requireSiteCommandAdmission(command);
-        }
-        if (m_recovery_ledger.empty()) {
-            measureDocumentEdit([&] { apply_constraint_authoring(*m_document, preview); });
-            return;
-        }
-        requireWorkspaceDocument();
-        auto edit = m_project_workspace->prepare_constraint_authoring(preview);
-        commitWorkspaceEdit(edit);
+    bool applyConstraintPreview(const ConstraintAuthoringPreview& preview) {
+        const auto command=constraint_authoring_verified_command(authoringSnapshot(),preview,nullptr);
+        return applyAuthoredCommand(command);
     }
 
     RecoveryLedger currentRecoveryLedger(const ProjectWorkspaceSnapshot& snapshot) const {
@@ -42087,6 +42179,11 @@ private:
             if (!item || m_navigator->checkboxInteraction()) return;
             const auto id = item->data(0, Qt::UserRole).toString();
             const auto snapshot = authoringSnapshot();
+            if (m_pending_proposed_selection_document.lock()==m_document &&
+                m_pending_proposed_selection_revision==snapshot.revision())
+                remapProposedWallSelection(m_pending_proposed_selection);
+            m_pending_proposed_selection.clear();
+            m_pending_proposed_selection_document.reset();
             const auto found = snapshot.entities().find(id.toStdString());
             if (found == snapshot.entities().end() || !supportsSitePlacement(found->second)) return;
             if (!selectEntity(id, false)) return;
@@ -46915,6 +47012,16 @@ private:
                     direct.disto_measurement_completion=false;direct.disto_measurement.reset();
                     (void)command_to_json(Command{direct});
                     const auto after=replay_phase_constraint_authoring(source.entities(),direct.phase_constraint_authoring_intent);
+                    const auto intent=decode_phase_constraint_authoring_intent(direct.phase_constraint_authoring_intent);
+                    if (!intent.wall_replacement.is_null()) {
+                        const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+                        // Shared originals remain byte-identical, but replacing
+                        // their presented physical role still touches the
+                        // captured selection and requires its site authority.
+                        for (const auto& [original,fresh]:replacement.identities) {
+                            (void)fresh;targets.insert(original);
+                        }
+                    }
                     for (const auto& [id,entity]:source.entities())
                         if (!after.contains(id) || entity!=after.at(id) ||
                             entity.properties.dump()!=after.at(id).properties.dump() ||
@@ -54475,6 +54582,15 @@ public:
         if (((deletion || grouped_geometry) && fullSnapshotDigest(derived) != fullSnapshotDigest(candidate)) ||
             entity_map_digest(derived.entities()) != entity_map_digest(candidate.entities()) || derived.assets() != candidate.assets())
             throw std::invalid_argument("The room review geometry differs from the admitted wall proposal.");
+        PhaseWallReplacementIdentityMap proposed_ids;
+        const auto replacement=reviewAlternativeWallEdit(geometry_command,proposed_ids);
+        if (!replacement) return std::nullopt;
+        if (!proposed_ids.empty()) {
+            (void)current_source();
+            const auto* completed=std::get_if<ApplyBoundaryConstraintChanges>(&*replacement);
+            if (!completed) throw std::invalid_argument("The proposed wall edit lost its complete room review command.");
+            return *completed;
+        }
         const auto groups = affectedPhysicalWallRoomGroups(source, derived.entities(), selected_wall_id, deletion);
         if (groups.size() > 32)
             throw std::invalid_argument("The wall proposal exceeds the supported batch of 32 room review contexts and planes.");
@@ -54587,10 +54703,18 @@ public:
             const auto source = authoringSnapshot();
             const auto authority = captureSourceEditAuthority(source);
             ConstraintDialog dialog(source, m_selected_id, m_metric_units, owner);
+            dialog.setCurrentSource([this,authority] {
+                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The selected object or drawing context changed. Reopen its dimensions.");
+                return authoringSnapshot();
+            });
             styleDialog(dialog);
             if (!initial_length.isEmpty()) dialog.setLengthExpression(initial_length);
             if (dialog.exec() != QDialog::Accepted) { refreshInspector(); return; }
             if (!sourceEditAuthorityUnchanged(authority)) return;
+            if (const auto replacement=dialog.acceptedCommand()) {
+                if (!applyAuthoredCommand(Command{*replacement})) { clearError(); refreshInspector(); return; }
+                clearError(); refresh(); return;
+            }
             const auto preview = dialog.acceptedPreview();
             if (!preview) { clearError(); refreshInspector(); return; }
             if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
@@ -54606,7 +54730,7 @@ public:
                 applyDocumentCommand(*reviewed);
             } else {
                 if (!sourceEditAuthorityUnchanged(authority)) return;
-                applyConstraintPreview(*preview);
+                if (!applyConstraintPreview(*preview)) { clearError(); refreshInspector(); return; }
             }
             clearError();
             refresh();
@@ -55931,7 +56055,7 @@ private:
                                              return;
                                          }
                                          requireAcceptedConstraintPreview(*retained_preview);
-                                         applyConstraintPreview(*retained_preview);
+                                         if (!applyConstraintPreview(*retained_preview)) { clearError(); refreshInspector(); return; }
                                          clearError();
                                          m_selected_id = QString::fromStdString(selected->id);
                                          refresh();
@@ -56786,6 +56910,9 @@ private:
     QLabel* m_drawing_context_label{};
     QString m_selected_id;
     QStringList m_selected_ids;
+    PhaseWallReplacementIdentityMap m_pending_proposed_selection;
+    std::weak_ptr<Document> m_pending_proposed_selection_document;
+    std::uint64_t m_pending_proposed_selection_revision{};
     std::vector<CanvasLabelPresentationIdentity> m_selected_generated_labels;
     std::weak_ptr<Document> m_generated_label_selection_document;
     QString m_last_error;

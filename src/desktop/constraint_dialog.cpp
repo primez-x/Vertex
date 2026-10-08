@@ -4,6 +4,12 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/document_digest.hpp"
+#include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_wall_replacement_request.hpp"
+#include "sketch/phase_wall_replacement_command.hpp"
+#include "sketch/desktop/physical_wall_phase_room_review_dialog.hpp"
+#include "plan_canvas.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -65,8 +71,7 @@ std::vector<EndpointEdge> endpoint_edges(const Entity& entity) {
 }
 
 QString dimension(double metres, bool metric) {
-    return QString::number(metric ? metres : metres / 0.3048, 'g', 9) +
-        (metric ? QStringLiteral(" m") : QStringLiteral(" ft"));
+    return PlanCanvas::drawingLengthText(metres, metric);
 }
 
 QString relation_label(ConstraintRelationKind kind) {
@@ -131,9 +136,9 @@ QString stored_freedom_value(const PersistentConstraintComponentAnalysis& analys
 
 // The service validates pure semantics; the desktop additionally checks actual
 // architectural solids before presenting an applicable candidate.
-void validate_solids(const ConstraintAuthoringPreview& preview) {
-    for (const auto& change : preview.changed_walls()) {
-        const auto& entity = preview.candidate_entities().at(change.wall_id);
+void validate_solids(const PhaseWallReplacementEntities& entities, const std::vector<std::string>& wall_ids) {
+    for (const auto& wall_id : wall_ids) {
+        const auto& entity = entities.at(wall_id);
         const auto& p = entity.properties;
         Wall wall{entity.id, baseline(entity), p.at("thickness_m").get<double>(),
                   p.at("height_m").get<double>(), p.at("elevation_m").get<double>(), {}};
@@ -142,7 +147,7 @@ void validate_solids(const ConstraintAuthoringPreview& preview) {
         }
         std::string top_error;
         if (!read_document_wall_top_profile(entity,wall,top_error)) throw std::invalid_argument(top_error);
-        for (const auto& [id, opening] : preview.candidate_entities()) {
+        for (const auto& [id, opening] : entities) {
             if (opening.type != "opening" || opening.properties.value("wall_id", std::string{}) != entity.id)
                 continue;
             const auto& o = opening.properties;
@@ -151,6 +156,11 @@ void validate_solids(const ConstraintAuthoringPreview& preview) {
         }
         (void)make_wall(wall);
     }
+}
+void validate_solids(const ConstraintAuthoringPreview& preview) {
+    std::vector<std::string> wall_ids;
+    for (const auto& change : preview.changed_walls()) wall_ids.push_back(change.wall_id);
+    validate_solids(preview.candidate_entities(), wall_ids);
 }
 } // namespace
 
@@ -442,7 +452,8 @@ public:
     }
 
     QString owner_label(const std::string& id) const {
-        return owner_labels.at(id);
+        const auto found = owner_labels.find(id);
+        return found == owner_labels.end() ? text(id) : found->second;
     }
 
     bool ownerParticipates(const std::string& id) const {
@@ -474,7 +485,8 @@ public:
 
     void invalidate() {
         if (loading) return;
-        preview.reset(); accepted.reset(); unchanged_resize = false; apply_button->setEnabled(false);
+        preview.reset(); accepted.reset(); replacement_preview.reset(); replacement_intent.reset();
+        accepted_command.reset(); unchanged_resize = false; apply_button->setEnabled(false);
         showPersistentFreedom();
         std::vector<WallPreviewDrawing> current;
         appendCurrentGeometry(current, selected_id);
@@ -742,10 +754,144 @@ public:
         return result;
     }
 
+    DocumentSnapshot currentSource() const {
+        return current_source ? current_source() : snapshot;
+    }
+
+    void requireCurrentSource() const {
+        const auto current = currentSource();
+        if (!snapshot.is_editable() || !current.is_editable() ||
+            document_snapshot_digest(current) != document_snapshot_digest(snapshot))
+            throw std::invalid_argument("The project or edit authority changed. Reopen the constraint dialog before applying this edit.");
+    }
+
+    bool previewReplacement(const ConstraintAuthoringIntent& command, const PhaseWallReplacementRequest& request) {
+        const auto plan = inspect_phase_wall_replacement_plan(snapshot.entities(), request.seed_wall_ids,
+            request.registry_id, request.alternative_id);
+        if (!plan.ready()) {
+            QStringList reasons;
+            for (const auto& diagnostic : plan.diagnostics)
+                if (diagnostic.blocking) reasons.push_back(diagnostic_text(diagnostic.reason));
+            throw std::invalid_argument(reasons.isEmpty() ? "The proposed wall replacement has unsupported dependencies."
+                : reasons.join('\n').toStdString());
+        }
+        // Keep each allocation for the captured source throughout this dialog.
+        // The command receives exactly the independently discovered inventory,
+        // including typed child IDs, even if another preview needs fewer copies.
+        PhaseWallReplacementAuthoring edit;
+        edit.registry_id = request.registry_id;
+        edit.alternative_id = request.alternative_id;
+        edit.seed_wall_ids = request.seed_wall_ids;
+        const auto allocate = [&](const std::string& original) {
+            auto found = replacement_identities.find(original);
+            if (found == replacement_identities.end())
+                found = replacement_identities.emplace(original, make_stable_id()).first;
+            edit.identities.emplace(original, found->second);
+        };
+        for (const auto& id : plan.required_entity_ids) allocate(id);
+        for (const auto& id : plan.required_child_ids) allocate(id);
+        auto phase_intent = make_phase_constraint_authoring_intent(snapshot, command);
+        phase_intent.wall_replacement = encode_phase_wall_replacement_authoring(edit);
+        auto candidate = inspect_phase_wall_replacement_authoring(snapshot, phase_intent);
+        const auto candidate_scope = constraint_phase_scope(candidate.edited_entities);
+        std::map<std::string, std::string, std::less<>> originals;
+        for (const auto& [original, proposed] : candidate.replacement.original_to_proposed)
+            originals.emplace(proposed, original);
+        std::vector<WallPreviewDrawing> drawing;
+        std::vector<std::string> proposed_walls;
+        QStringList summary{QStringLiteral("This edit creates proposed objects in the saved active alternative. Original baseline geometry is preserved.")};
+        changes->setRowCount(0);
+        const auto add_segment = [&](const QString& label, const std::string& proposed_id,
+            const Segment& before, const Segment& after) {
+            drawing.push_back({label, before, after});
+            const auto displacement = std::max(std::hypot(before.start.x - after.start.x, before.start.y - after.start.y),
+                std::hypot(before.end.x - after.end.x, before.end.y - after.end.y));
+            const int row = changes->rowCount();
+            changes->insertRow(row);
+            const QStringList values{label, dimension(segment_length(before), metric),
+                dimension(segment_length(after), metric), dimension(displacement, metric)};
+            for (int column = 0; column < values.size(); ++column) {
+                auto* item = new QTableWidgetItem(values[column]);
+                item->setToolTip(text(proposed_id));
+                changes->setItem(row, column, item);
+            }
+            if (summary.size() < 4)
+                summary.push_back(QStringLiteral("%1: %2 → %3; endpoint movement up to %4")
+                    .arg(values[0], values[1], values[2], values[3]));
+        };
+        const auto same_segment = [](const Segment& first, const Segment& second) {
+            return first.start.x == second.start.x && first.start.y == second.start.y &&
+                first.end.x == second.end.x && first.end.y == second.end.y && first.sweep_radians == second.sweep_radians;
+        };
+        for (const auto& [id, entity] : candidate.edited_entities) {
+            if (candidate_scope.inactive_owner_ids.contains(id) || !ConstraintDialog::supportsEntity(entity)) continue;
+            const auto mapping = originals.find(id);
+            const bool copied = mapping != originals.end();
+            const auto original = copied ? mapping->second : id;
+            const auto source = snapshot.entities().find(original);
+            if (source == snapshot.entities().end())
+                throw std::invalid_argument("Proposed geometry has no original object for comparison.");
+            const auto label = owner_label(original) + (copied ? QStringLiteral(" · Proposed") : QString{});
+            if (entity.type == "wall") {
+                const auto before = baseline(source->second), after = baseline(entity);
+                if (!copied && original != selected_id && same_segment(before, after)) continue;
+                proposed_walls.push_back(id);
+                add_segment(label, id, before, after);
+            } else {
+                const auto before = endpoint_edges(source->second), after = endpoint_edges(entity);
+                for (std::size_t index = 0; index < before.size(); ++index) {
+                    const auto& edge = before[index];
+                    const auto target = candidate.replacement.original_to_proposed.find(edge.segment_id);
+                    const auto proposed_segment = target == candidate.replacement.original_to_proposed.end()
+                        ? edge.segment_id : target->second;
+                    const auto changed = std::find_if(after.begin(), after.end(), [&](const auto& value) {
+                        return value.segment_id == proposed_segment;
+                    });
+                    if (changed == after.end())
+                        throw std::invalid_argument("Proposed geometry changed an edge identity outside the reviewed replacement.");
+                    if (!copied && original != selected_id && same_segment(edge.segment, changed->segment)) continue;
+                    add_segment(label + QStringLiteral(" · %1 %2").arg(entity.type == "measurement_linework"
+                        ? QStringLiteral("Segment") : QStringLiteral("Edge")).arg(index + 1), id, edge.segment, changed->segment);
+                }
+            }
+        }
+        validate_solids(candidate.edited_entities, proposed_walls);
+        // Deferred room relations deliberately did not constrain the physical
+        // stage. Report that same stage's freedom, without implying completed
+        // room constraints or substituting a fabricated source Snapshot.
+        auto physical_entities = candidate.edited_entities;
+        for (const auto& [id, entity] : candidate.replacement.deferred_room_constraints) physical_entities.erase(id);
+        std::vector<std::string> seeds;
+        for (const auto& id : request.seed_wall_ids) seeds.push_back(candidate.replacement.original_to_proposed.at(id));
+        const auto freedom = stored_component_analysis(physical_entities, seeds, true);
+        persistent_freedom->setText(QStringLiteral("Degrees of freedom: current %1 · proposed physical stage %2")
+            .arg(stored_freedom_value(source_freedom), stored_freedom_value(freedom)));
+        QStringList freedom_details{QStringLiteral("The proposed value counts stored constraints on the actual proposed physical geometry. Room relationships awaiting explicit review are excluded. Temporary edit anchors and pins are excluded; room review can change the final value.")};
+        for (const auto& diagnostic : freedom.diagnostics) freedom_details.push_back(diagnostic_text(diagnostic));
+        persistent_freedom->setToolTip(freedom_details.join('\n'));
+        if (candidate.needs_room_review)
+            summary.push_back(QStringLiteral("Apply opens the required proposed-room and relationship review. Cancel leaves this edit unapplied."));
+        else
+            summary.push_back(QStringLiteral("Apply records one undoable proposed wall edit."));
+        requireCurrentSource();
+        canvas->setWalls(std::move(drawing));
+        replacement_intent = std::move(phase_intent);
+        replacement_preview = std::move(candidate);
+        apply_button->setEnabled(true);
+        status->setPlainText(summary.join('\n'));
+        return true;
+    }
+
     bool previewEdit() {
         invalidate();
         try {
+            requireCurrentSource();
             const auto command = intent();
+            const auto replacements = phase_scope.registries.empty() ? std::vector<PhaseWallReplacementRequest>{}
+                : phase_wall_replacement_requests(snapshot.entities(), command);
+            if (replacements.size() > 1)
+                throw std::invalid_argument("This edit requires wall replacements in multiple phase registries. Edit one design registry at a time.");
+            if (!replacements.empty()) return previewReplacement(command, replacements.front());
             // A validated unchanged resize closes the dialog without inventing
             // an accepted service receipt or recording an empty history event.
             if (command.measured_stroke_resize) {
@@ -861,6 +1007,51 @@ public:
     }
 
     bool submit() {
+        if (replacement_preview && replacement_intent) {
+            try {
+                requireCurrentSource();
+                std::optional<ApplyBoundaryConstraintChanges> command;
+                if (replacement_preview->needs_room_review) {
+                    PhysicalWallPhaseRoomReviewDialog review(snapshot, *replacement_intent, metric,
+                        [this] { return currentSource(); }, owner);
+                    if (review.exec() != QDialog::Accepted) {
+                        accepted_command.reset();
+                        error = review.lastError();
+                        status->setPlainText(error.isEmpty()
+                            ? QStringLiteral("Room review was canceled. The wall edit has not been applied.") : error);
+                        return false;
+                    }
+                    command = review.acceptedCommand();
+                    if (!command) throw std::invalid_argument("Complete the required room review before applying the wall edit.");
+                } else {
+                    command = phase_wall_replacement_authoring_command(*replacement_intent);
+                }
+                requireCurrentSource();
+                // Validate the complete command against the actual capture,
+                // including retained history and exact fresh-ID reservations.
+                // The live Document independently repeats this admission.
+                (void)Document::preview_command(snapshot, *command);
+                requireCurrentSource();
+                accepted_command = std::move(command);
+                accepted.reset();
+                error.clear();
+                owner->accept();
+                return true;
+            } catch (const std::exception& exception) {
+                accepted_command.reset();
+                error = diagnostic_text(exception.what());
+                status->setPlainText(QStringLiteral("Apply: ") + error);
+                return false;
+            }
+        }
+        try {
+            requireCurrentSource();
+        } catch (const std::exception& exception) {
+            accepted.reset();
+            error = diagnostic_text(exception.what());
+            status->setPlainText(QStringLiteral("Apply: ") + error);
+            return false;
+        }
         if (unchanged_resize) {
             owner->accept();
             return true;
@@ -893,6 +1084,11 @@ public:
     std::optional<PersistentConstraint> selected_constraint;
     std::optional<ConstraintRelationKind> configured_relation;
     std::optional<ConstraintAuthoringPreview> preview, accepted;
+    std::function<DocumentSnapshot()> current_source;
+    PhaseWallReplacementIdentityMap replacement_identities;
+    std::optional<PhaseWallReplacementAuthoringPreview> replacement_preview;
+    std::optional<PhaseConstraintAuthoringIntent> replacement_intent;
+    std::optional<ApplyBoundaryConstraintChanges> accepted_command;
     std::map<std::string, QString, std::less<>> owner_labels;
     PersistentConstraintComponentAnalysis source_freedom;
     QString error;
@@ -925,9 +1121,14 @@ ConstraintDialog::ConstraintDialog(DocumentSnapshot snapshot, QString selected_e
 }
 ConstraintDialog::~ConstraintDialog() = default;
 void ConstraintDialog::setLengthExpression(const QString& expression) { m_impl->length->setText(expression); }
+void ConstraintDialog::setCurrentSource(std::function<DocumentSnapshot()> current_source) {
+    m_impl->current_source = std::move(current_source);
+    m_impl->invalidate();
+}
 bool ConstraintDialog::previewEdit() { return m_impl->previewEdit(); }
 bool ConstraintDialog::submit() { return m_impl->submit(); }
 std::optional<ConstraintAuthoringPreview> ConstraintDialog::acceptedPreview() const { return m_impl->accepted; }
+std::optional<ApplyBoundaryConstraintChanges> ConstraintDialog::acceptedCommand() const { return m_impl->accepted_command; }
 QString ConstraintDialog::lastError() const { return m_impl->error; }
 
 } // namespace sketch::desktop

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/physical_wall_room_review.hpp"
+#include <set>
 
 namespace sketch {
 
@@ -114,28 +115,56 @@ struct PreparedPhysicalWallPhaseRoomReview : ReplayedPhysicalWallPhaseRoomReview
 [[nodiscard]] PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review(
     const DocumentSnapshot& source,const ApplyEntityChanges& registry_command,
     const PhysicalWallPhaseSelection& destination);
+// A separately reconstructed full physical stage may be inspected without
+// fabricating a document/history. Snapshot bindings still name the original
+// actual capture; its entity-map binding names this explicit analytical stage.
+[[nodiscard]] PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review(
+    const DocumentSnapshot& captured_source,const std::map<std::string,Entity,std::less<>>& analytical_entities,
+    const ApplyEntityChanges& registry_command,const PhysicalWallPhaseSelection& destination);
+[[nodiscard]] PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review_entities(
+    const std::map<std::string,Entity,std::less<>>& analytical_entities,
+    const PhysicalWallRoomPhaseReviewIntent& captured_binding);
 // Proposed exact baseline-only acknowledgements for GUI review, never implicit
 // acceptance. The named registry may be absent when its separate child creates
 // it; an existing registry admits only its actual shared baseline room owners.
 [[nodiscard]] std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> physical_wall_phase_room_baseline_dependents(
     const DocumentSnapshot& source,const std::string& registry_id,
     const std::vector<std::string>& superseded_room_ids);
+[[nodiscard]] std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> physical_wall_phase_room_baseline_dependents(
+    const DocumentSnapshot& captured_source,const std::map<std::string,Entity,std::less<>>& analytical_entities,
+    const std::string& registry_id,const std::vector<std::string>& superseded_room_ids);
 // Pure captured-source evidence. Every requested owner must be an actual
 // original proposal of this exact registry/alternative; no decisions are made.
 [[nodiscard]] PhysicalWallRoomPhaseProposedDependents physical_wall_phase_room_proposed_dependents(
     const DocumentSnapshot& source,const PhysicalWallPhaseSelection& destination,
     const std::vector<std::string>& changed_proposed_room_ids);
+[[nodiscard]] PhysicalWallRoomPhaseProposedDependents physical_wall_phase_room_proposed_dependents(
+    const DocumentSnapshot& captured_source,const std::map<std::string,Entity,std::less<>>& analytical_entities,
+    const PhysicalWallPhaseSelection& destination,const std::vector<std::string>& changed_proposed_room_ids);
 // Pure evidence for known sheet restrictions/overlays/appearance and annotation
 // overrides. Returns sorted exact before/after entity proofs, never acceptance.
 [[nodiscard]] std::vector<PhysicalWallRoomPhasePresentationRemoval> physical_wall_phase_room_presentation_removals(
     const DocumentSnapshot& source,const std::vector<std::string>& removed_entity_ids);
+[[nodiscard]] std::vector<PhysicalWallRoomPhasePresentationRemoval> physical_wall_phase_room_presentation_removals(
+    const DocumentSnapshot& captured_source,const std::map<std::string,Entity,std::less<>>& analytical_entities,
+    const std::vector<std::string>& removed_entity_ids);
 // Pure source-map replay. Registry proof is a canonical single raw upsert;
 // all room geometry is rederived from explicit phase detection.
 [[nodiscard]] ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(
     const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent,
     bool active_phase_constraints=false);
+// Intermediate typed composition only. Listed fresh copies are reconstructed
+// by wall replacement and receive explicit endpoint dispositions afterwards.
+// Their complete payloads remain visible to room evidence/reference admission;
+// the enclosing command must validate every final structural binding/residual.
+[[nodiscard]] ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review_with_deferred_constraints(
+    const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent,
+    const std::set<std::string,std::less<>>& deferred_constraint_ids);
 // Binds complete original source/history/save state without Document mutation,
 // preview, application or command-authority admission.
 [[nodiscard]] PreparedPhysicalWallPhaseRoomReview prepare_physical_wall_phase_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomPhaseReviewIntent& intent);
+[[nodiscard]] PreparedPhysicalWallPhaseRoomReview prepare_physical_wall_phase_room_review(
+    const DocumentSnapshot& captured_source,const std::map<std::string,Entity,std::less<>>& analytical_entities,
+    const PhysicalWallRoomPhaseReviewIntent& intent,bool active_phase_constraints);
 } // namespace sketch

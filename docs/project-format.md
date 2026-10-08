@@ -1,4 +1,52 @@
-# Vertex project formats v1 through v86
+# Vertex project formats v1 through v87
+
+## Proposed replacements for shared baseline walls (v87)
+
+Native format 87 and JSON/assets extraction version 85 retain envelope 34 with
+version-two `phase_constraint_authoring_intent`. Version one keeps its exact
+keys and replay. Version two adds `wall_replacement`; its strict version-one
+record contains `registry_id`, `alternative_id`, sorted `seed_wall_ids`, a
+complete `identities` map, `room_review_intent`, and
+`room_constraint_decisions`. Geometry is independently reconstructed rather
+than supplied as a replacement payload.
+
+Semantic root discovery precedes solving original geometry. The actual saved
+alternative, baseline membership, physical contacts, typed relationships,
+hosted openings, joins and supported measurement source cohorts determine the
+required replacement graph. Each copied owner and owned child receives a fresh
+identity. The named alternative marks original baseline model members demolished
+and adds the independent replacements as proposals. All original objects,
+unrelated registry records and other alternatives remain intact. Retained
+history reserves declared copy identities even when an explicitly omitted new
+relationship never appears in the final entity map.
+
+Physical-room owners are not copied from stale outlines. The full detached
+physical stage supplies mandatory room correspondence and incoming-reference
+evidence. The room-review child binds this independently reconstructed entity
+map while its snapshot, authoring history, saved revision and expected revision
+still identify the complete original capture. A required room child cannot be
+omitted, and its registry command cannot alter the derived replacement registry.
+
+Copied relationships with physical-room endpoints are withheld from the
+physical solve and included in room review evidence. Every copy requires an
+explicit Keep, Remap or Omit decision. Remapping names each original room
+binding index and a reviewed active room's stable edge, vertex and endpoint
+role in the same drawing context and physical plane. Removal intent requires
+Omit. Transient room completion may defer only these independently reconstructed
+fresh copies; original relationships and final active residual validation are
+preserved. The complete wall and room edit commits as one reversible event.
+
+Selection composition first validates the exact geometry child, then its
+separately admitted ordinary edits and final reviewed room topology/lineage.
+DISTO attachment retains the original source owner in its observation intent;
+only a canonical replacement map can redirect the completed target to its new
+proposed identity. The original observation metadata stays intact.
+
+Unknown affected references, stale source evidence and unsupported retained
+proofs refuse without partial changes. Physical-room split/merge repair proofs
+and replacement across several registries need additional lifecycle support.
+Reader floors cover all retained direct and composed proofs, including after
+Undo. This source has not been compiled or qualified in the installed app.
 
 ## Active-design constraint authoring (v86)
 

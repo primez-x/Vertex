@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/physical_wall_phase.hpp"
+#include "sketch/phase_constraint_authoring.hpp"
 #include <QDialog>
 #include <QString>
 #include <functional>
@@ -19,6 +20,10 @@ public:
     PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,ApplyEntityChanges registry_command,
         PhysicalWallPhaseSelection destination,bool metric_units,
         std::function<DocumentSnapshot()> current_source,QWidget* parent=nullptr);
+    // The wall replacement's full analytical stage supplies room evidence;
+    // the final command and source fence still name this actual capture.
+    PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,PhaseConstraintAuthoringIntent replacement_intent,
+        bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent=nullptr);
     ~PhysicalWallPhaseRoomReviewDialog() override;
     [[nodiscard]] const std::optional<ApplyBoundaryConstraintChanges>& acceptedCommand() const;
     [[nodiscard]] QString lastError() const;

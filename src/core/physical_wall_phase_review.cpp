@@ -582,10 +582,15 @@ void validate_baseline_presentation_preservation(const Entity& before,const Enti
 }
 void validate_baseline_dependent_preservation(const Entities& source,const Entities& result,const std::string& registry_id,
     const std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement>& baseline,
-    const std::vector<PhysicalWallRoomPhasePresentationRemoval>& presentation) {
+    const std::vector<PhysicalWallRoomPhasePresentationRemoval>& presentation,
+    const std::set<std::string,std::less<>>& deferred_constraints={}) {
     std::map<std::string,const PhysicalWallRoomPhasePresentationRemoval*,std::less<>> presentation_decisions;
     for (const auto& d:presentation) presentation_decisions.emplace(d.entity_id,&d);
     for (const auto& d:baseline) {
+        // Only the enclosing wall replacement's independently reconstructed
+        // fresh copies can receive a later explicit endpoint disposition.
+        // Original baseline records never enter this exception.
+        if (deferred_constraints.contains(d.entity_id)) continue;
         const auto found=result.find(d.entity_id);
         if (found==result.end()) reject("baseline-only acknowledged dependent cannot be removed: "+d.entity_id);
         auto before=source.at(d.entity_id),after=found->second;
@@ -945,33 +950,46 @@ Json encode_physical_wall_phase_room_review_intent(const PhysicalWallRoomPhaseRe
 
 PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review(
     const DocumentSnapshot& source,const ApplyEntityChanges& command,const PhysicalWallPhaseSelection& destination) {
+    return inspect_physical_wall_phase_room_review(source,source.entities(),command,destination);
+}
+PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review(
+    const DocumentSnapshot& source,const Entities& analytical_entities,const ApplyEntityChanges& command,
+    const PhysicalWallPhaseSelection& destination) {
     if (!source.is_editable()) reject("captured document is read-only");
     PhysicalWallRoomPhaseReviewInventory result;
     auto& intent=result.intent;
     intent.source_snapshot_digest=document_snapshot_digest(source);
     intent.source_authoring_digest=document_authoring_source_digest_v2(source);
     intent.source_saved_revision=source.saved_revision_optional();
-    intent.source_entities_digest=entity_map_digest(source.entities());
+    intent.source_entities_digest=entity_map_digest(analytical_entities);
     intent.expected_revision=source.revision();
     intent.registry_id=destination.registry_id;
     intent.alternative_id=destination.alternative_id;
-    if (const auto found=source.entities().find(intent.registry_id); found!=source.entities().end())
+    if (const auto found=analytical_entities.find(intent.registry_id); found!=analytical_entities.end())
         intent.source_registry_entity_digest=entity_digest(found->second);
     intent.registry_command_proof=command_to_json(Command{command});
+    return inspect_physical_wall_phase_room_review_entities(analytical_entities,intent);
+}
+PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review_entities(
+    const Entities& analytical_entities,const PhysicalWallRoomPhaseReviewIntent& captured_binding) {
+    PhysicalWallRoomPhaseReviewInventory result;result.intent=captured_binding;
+    auto& intent=result.intent;
+    const PhysicalWallPhaseSelection destination{intent.registry_id,intent.alternative_id};
+    if (intent.source_entities_digest!=entity_map_digest(analytical_entities)) reject("analytical stage binding changed");
     // Admit the full source binding and canonical child before deriving any
     // evidence. Empty decision collections are preparation, not acceptance.
     (void)encode_physical_wall_phase_room_review_intent(intent);
-    const auto transition=registry_transition(source.entities(),intent);
+    const auto transition=registry_transition(analytical_entities,intent);
     if (!transition.created && intent.alternative_id)
-        intent.proposed_room_completion=!original_target_proposals(source.entities(),destination).empty();
-    const auto coverage=phase_review_coverage(source.entities(),intent,transition);
-    const auto occupied=source_identity_inventory(source.entities());
+        intent.proposed_room_completion=!original_target_proposals(analytical_entities,destination).empty();
+    const auto coverage=phase_review_coverage(analytical_entities,intent,transition);
+    const auto occupied=source_identity_inventory(analytical_entities);
     if (transition.created && occupied.contains(intent.registry_id)) reject("fresh identity is already occupied: "+intent.registry_id);
     std::set<std::string> reviewed_components;
     std::size_t fresh_count=0;
     for (const auto& plane:coverage.affected) {
         const auto rooms=phase_review_plane_rooms(coverage,plane);
-        auto report=phase_review_plane_report(source.entities(),coverage,destination,plane,rooms);
+        auto report=phase_review_plane_report(analytical_entities,coverage,destination,plane,rooms);
         admit_phase_review_components(report,reviewed_components);
         if (report.correspondence.fresh.size()>maximum_rows-fresh_count) reject("room decision budget exceeded");
         fresh_count+=report.correspondence.fresh.size();
@@ -985,26 +1003,35 @@ PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review(
 PhysicalWallRoomPhaseProposedDependents physical_wall_phase_room_proposed_dependents(
     const DocumentSnapshot& source,const PhysicalWallPhaseSelection& destination,
     const std::vector<std::string>& changed_proposed_room_ids) {
+    return physical_wall_phase_room_proposed_dependents(source,source.entities(),destination,changed_proposed_room_ids);
+}
+PhysicalWallRoomPhaseProposedDependents physical_wall_phase_room_proposed_dependents(
+    const DocumentSnapshot& source,const Entities& analytical_entities,const PhysicalWallPhaseSelection& destination,
+    const std::vector<std::string>& changed_proposed_room_ids) {
     if (!source.is_editable()) reject("captured document is read-only");
     identities(changed_proposed_room_ids);
     if (changed_proposed_room_ids.size()>maximum_rows) reject("proposed room evidence exceeds budget");
-    const auto proposals=original_target_proposals(source.entities(),destination);
+    const auto proposals=original_target_proposals(analytical_entities,destination);
     const std::set<std::string> changed(changed_proposed_room_ids.begin(),changed_proposed_room_ids.end());
-    const auto organization=organize_project(source.entities());
+    const auto organization=organize_project(analytical_entities);
     for (const auto& id:changed) {
         if (!proposals.contains(id)) reject("changed owner is not an original proposal of the named target");
         const auto c=organization.drawing_context(id);
         if (!c || !c->complete()) reject("proposed room context is unresolved");
-        (void)validate_retained_physical_wall_room_lineage(source.entities().at(id),*c);
+        (void)validate_retained_physical_wall_room_lineage(analytical_entities.at(id),*c);
     }
-    return proposed_dependents(source.entities(),changed);
+    return proposed_dependents(analytical_entities,changed);
 }
 
 std::vector<PhysicalWallRoomPhasePresentationRemoval> physical_wall_phase_room_presentation_removals(
     const DocumentSnapshot& source,const std::vector<std::string>& removed_entity_ids) {
+    return physical_wall_phase_room_presentation_removals(source,source.entities(),removed_entity_ids);
+}
+std::vector<PhysicalWallRoomPhasePresentationRemoval> physical_wall_phase_room_presentation_removals(
+    const DocumentSnapshot& source,const Entities& analytical_entities,const std::vector<std::string>& removed_entity_ids) {
     if (!source.is_editable()) reject("captured document is read-only");
     identities(removed_entity_ids);
-    const auto& entities=source.entities();
+    const auto& entities=analytical_entities;
     for (const auto& id:removed_entity_ids) {
         const auto found=entities.find(id);
         if (found==entities.end() || found->second.id!=id) reject("presentation removal evidence requires actual original entity identities");
@@ -1020,10 +1047,15 @@ std::vector<PhysicalWallRoomPhasePresentationRemoval> physical_wall_phase_room_p
 
 std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> physical_wall_phase_room_baseline_dependents(
     const DocumentSnapshot& source,const std::string& registry_id,const std::vector<std::string>& superseded_room_ids) {
+    return physical_wall_phase_room_baseline_dependents(source,source.entities(),registry_id,superseded_room_ids);
+}
+std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> physical_wall_phase_room_baseline_dependents(
+    const DocumentSnapshot& source,const Entities& analytical_entities,const std::string& registry_id,
+    const std::vector<std::string>& superseded_room_ids) {
     if (!source.is_editable()) reject("captured document is read-only");
     identity(registry_id); identities(superseded_room_ids);
     if (superseded_room_ids.size()>maximum_rows) reject("room decision budget exceeded");
-    const auto& entities=source.entities();
+    const auto& entities=analytical_entities;
     const auto registry=entities.find(registry_id);
     std::optional<ModelPhases> model;
     std::set<std::string> foreign_registered;
@@ -1066,7 +1098,7 @@ std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> physical_wall_phase_ro
 namespace {
 ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entities& source,
     const PhysicalWallRoomPhaseReviewIntent& intent,const RegistryTransition& transition,const PhaseReviewCoverage& coverage,
-    bool active_phase_constraints) {
+    bool active_phase_constraints,const std::set<std::string,std::less<>>& deferred_constraints) {
     const PhysicalWallPhaseSelection destination{intent.registry_id,intent.alternative_id};
     // A v2 review may also contain only baseline decisions. Editing authority is
     // independently restricted to the original actual target proposals below.
@@ -1267,8 +1299,10 @@ ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entiti
         result.entities=edited_boundary_entities_for_phase_room_review(result.entities,edit,plane_owners,destination);
     }
     if (const auto error=validate_boundary_integrity(result.entities)) reject(*error);
-    if (const auto error=active_phase_constraints ? validate_active_phase_constraint_integrity(result.entities) :
-        validate_constraint_integrity(result.entities)) reject(*error);
+    auto constraint_stage=result.entities;
+    for (const auto& id:deferred_constraints) constraint_stage.erase(id);
+    if (const auto error=active_phase_constraints ? validate_active_phase_constraint_integrity(constraint_stage) :
+        validate_constraint_integrity(constraint_stage)) reject(*error);
     (void)physical_wall_phase_states(result.entities,destination);
     // Numeric resolution alone evaluates the named target on a detached map.
     // This saved-choice adjustment never becomes source or published authority.
@@ -1301,7 +1335,7 @@ ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entiti
         if (found==result.entities.end() || entity_digest(found->second)!=d.expected_replacement_entity_digest)
             reject("reviewed saved presentation replacement changed during reconstruction: "+d.entity_id);
     }
-    validate_baseline_dependent_preservation(source,result.entities,intent.registry_id,expected_baseline,intent.presentation_removals);
+    validate_baseline_dependent_preservation(source,result.entities,intent.registry_id,expected_baseline,intent.presentation_removals,deferred_constraints);
     for (const auto& id:redefined) {
         auto before=source.at(id),after=result.entities.at(id);
         // These are the only geometry/provenance fields the qualified lower
@@ -1331,13 +1365,18 @@ ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entiti
 }
 } // namespace
 
-ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(const Entities& source,const Json& encoded,
-    bool active_phase_constraints) {
+static ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review_impl(const Entities& source,const Json& encoded,
+    bool active_phase_constraints,const std::set<std::string,std::less<>>& deferred_constraints) {
+    for (const auto& id:deferred_constraints) {
+        const auto found=source.find(id);
+        if (found==source.end() || found->second.type!="constraint" || !decode_constraint_entity(found->second).supported())
+            reject("deferred relationship must be a reconstructed supported fresh constraint");
+    }
     const auto intent=decode_physical_wall_phase_room_review_intent(encoded);
     if (entity_map_digest(source)!=intent.source_entities_digest) reject("original entity map changed");
     auto transition=registry_transition(source,intent);
     const auto coverage=phase_review_coverage(source,intent,transition);
-    if (intent.proposed_room_completion) return replay_proposed_room_completion(source,intent,transition,coverage,active_phase_constraints);
+    if (intent.proposed_room_completion) return replay_proposed_room_completion(source,intent,transition,coverage,active_phase_constraints,deferred_constraints);
     const PhysicalWallPhaseSelection destination_selection{intent.registry_id,intent.alternative_id};
     // Extra rows are allowed for explicit review of an unchanged plane, but
     // every semantic inventory/retained-lineage affected plane is mandatory.
@@ -1458,15 +1497,29 @@ ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(const
     return result;
 }
 
+ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(const Entities& source,const Json& intent,
+    bool active_phase_constraints) {
+    return replay_physical_wall_phase_room_review_impl(source,intent,active_phase_constraints,{});
+}
+ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review_with_deferred_constraints(
+    const Entities& source,const Json& intent,const std::set<std::string,std::less<>>& deferred_constraint_ids) {
+    return replay_physical_wall_phase_room_review_impl(source,intent,true,deferred_constraint_ids);
+}
+
 PreparedPhysicalWallPhaseRoomReview prepare_physical_wall_phase_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomPhaseReviewIntent& intent) {
+    return prepare_physical_wall_phase_room_review(source,source.entities(),intent,source.uses_active_phase_constraints());
+}
+PreparedPhysicalWallPhaseRoomReview prepare_physical_wall_phase_room_review(
+    const DocumentSnapshot& source,const Entities& analytical_entities,const PhysicalWallRoomPhaseReviewIntent& intent,
+    bool active_phase_constraints) {
     if (!source.is_editable()) reject("captured document is read-only");
     if (intent.expected_revision!=source.revision() || intent.source_snapshot_digest!=document_snapshot_digest(source) ||
         intent.source_authoring_digest!=document_authoring_source_digest_v2(source) ||
-        intent.source_saved_revision!=source.saved_revision_optional() || intent.source_entities_digest!=entity_map_digest(source.entities()))
+        intent.source_saved_revision!=source.saved_revision_optional() || intent.source_entities_digest!=entity_map_digest(analytical_entities))
         reject("complete original captured source changed");
     auto encoded=encode_physical_wall_phase_room_review_intent(intent);
-    auto replayed=replay_physical_wall_phase_room_review(source.entities(),encoded,source.uses_active_phase_constraints());
+    auto replayed=replay_physical_wall_phase_room_review(analytical_entities,encoded,active_phase_constraints);
     return {std::move(replayed),std::move(encoded)};
 }
 } // namespace sketch
