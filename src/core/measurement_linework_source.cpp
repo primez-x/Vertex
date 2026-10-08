@@ -223,18 +223,21 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
                 throw std::invalid_argument("Measured area group requires retained outer source lineage.");
             const auto expected=grouped ? read_group_outer(area.extensions.at("measurement_linework_sources"),saved.size()) :
                 read_uses(area.extensions.at("measurement_linework_sources"),saved.size());
-            std::map<std::string,std::set<std::string>,std::less<>> validated_group_sources;
+            // An owner is immutable for this area's complete lineage check.
+            // Reuse its validated segment identities instead of decoding the
+            // same canonical stroke for every exterior source use. Ordinary
+            // areas retain at most 16 owners; grouped checks keep their
+            // existing complete member-validation cache.
+            std::map<std::string,std::set<std::string>,std::less<>> validated_sources;
             SourceOwners source_owners;
             const auto validate_sources=[&](const Uses& inputs) {
             for(const auto& edge:inputs)for(const auto& use:edge) {
                 source_owners.insert(use.owner_id);
-                if(grouped) {
-                    const auto validated=validated_group_sources.find(use.owner_id);
-                    if(validated!=validated_group_sources.end()) {
-                        if(!validated->second.contains(use.segment_id))
-                            throw std::invalid_argument("A measured area source segment no longer exists.");
-                        continue;
-                    }
+                const auto validated=validated_sources.find(use.owner_id);
+                if(validated!=validated_sources.end()) {
+                    if(!validated->second.contains(use.segment_id))
+                        throw std::invalid_argument("A measured area source segment no longer exists.");
+                    continue;
                 }
                 const auto owner=entities.find(use.owner_id);
                 if(owner==entities.end() || owner->second.type!="measurement_linework")throw std::invalid_argument("A measured area source was deleted or replaced: "+use.owner_id);
@@ -244,8 +247,8 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
                 if(!decoded.supported())throw std::invalid_argument("A measured area source has an unsupported model.");
                 if(std::none_of(decoded.model->edges.begin(),decoded.model->edges.end(),[&](const auto& value){return value.segment_id==use.segment_id;}))
                     throw std::invalid_argument("A measured area source segment no longer exists.");
-                if(grouped) {
-                    auto& ids=validated_group_sources[use.owner_id];
+                if(grouped || validated_sources.size()<16) {
+                    auto& ids=validated_sources[use.owner_id];
                     for(const auto& segment:decoded.model->edges)ids.insert(segment.segment_id);
                 }
             }

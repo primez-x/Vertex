@@ -236,9 +236,10 @@ BuildingObject transform_building_object(BuildingObject object,
                 value.base_center = transform_point(value.base_center, transform);
                 value.radius *= transform.scale;
                 value.height *= transform.scale;
-                value.rotation_radians = std::remainder(
-                    value.rotation_radians + transform.rotation_z_radians,
-                    2.0 * std::numbers::pi);
+                if (transform.rotation_z_radians != 0.0)
+                    value.rotation_radians = std::remainder(
+                        value.rotation_radians + transform.rotation_z_radians,
+                        2.0 * std::numbers::pi);
             } else if constexpr (std::is_same_v<Object, Beam>) {
                 value.start = transform_point(value.start, transform);
                 value.end = transform_point(value.end, transform);
@@ -615,7 +616,7 @@ Entity transform_building_entity(const Entity& source,
                                  const ArchitecturalTransform& transform) {
     if (source.type == "stair" && source.properties.contains("level_connection") &&
         !source.properties.at("level_connection").is_null() &&
-        std::abs(transform.scale - 1.0) > 1e-9) {
+        transform.scale != 1.0) {
         // A connected stair's total rise is tied to the graph's floor-to-floor
         // height.  Scaling only the stair would silently break that relation;
         // edit the level graph (or disconnect the stair) before changing size.
@@ -625,11 +626,15 @@ Entity transform_building_entity(const Entity& source,
     const auto transformed = transform_building_object(decode_building_entity(source), transform);
     const auto canonical = encode_building_entity(transformed, source.extensions);
     Entity result = source;
-    result.properties = canonical.properties;
+    for (const auto& [key,value] : canonical.properties.items())
+        if (key != "version") result.properties[key] = value;
+    // Placement changes do not migrate a schema. In particular, an authored
+    // version-3 stair without explicit per-flight overrides and a version-2
+    // roof with an empty opening array must retain their original version.
     // Canonical codecs describe geometry, while child records may also carry
     // opaque source and quantity metadata. Keep those records and update only
     // the fields owned by the codec, without recursively rewriting strings.
-    for (const auto* key : {"flights", "landings"}) {
+    for (const auto* key : {"flights", "landings", "roof_openings"}) {
         if (!canonical.properties.contains(key)) continue;
         auto records = source.properties.at(key);
         const auto& encoded = canonical.properties.at(key);
@@ -649,16 +654,9 @@ Entity transform_building_entity(const Entity& source,
         for(const auto& [key,value]:canonical.properties.at("level_connection").items())
             result.properties["level_connection"][key]=value;
     }
-    // Retain application-owned properties such as marks, material
-    // assignments, quantity receipts, and future extensions while replacing
-    // every canonical building field with the transformed value.  A legacy
-    // marker is deliberately dropped because it would describe stale geometry.
-    for (const auto& item : source.properties.items()) {
-        const auto& key = item.key();
-        if (!canonical.properties.contains(key) && key != "transform") {
-            result.properties[key] = item.value();
-        }
-    }
+    // Retain application-owned raw properties and child metadata. A legacy
+    // marker would describe stale geometry and must not remain authoritative.
+    result.properties.erase("transform");
     return result;
 }
 
@@ -795,7 +793,11 @@ EntityState apply_operations(const DocumentSnapshot& source,
                 const AssemblyTransform outer{{movement.x, movement.y, movement.z},
                     movement.rotation_z_radians, movement.scale};
                 value.instance.root_transform = compose_assembly_transform(outer, *value.instance.root_transform);
-                found->second = encode_document_assembly_instance(found->second, value);
+                // Only placement changes; retain raw override/provenance
+                // records rather than re-encoding the whole instance.
+                found->second.properties.at("instance")["root_transform"] =
+                    encode_assembly_transform(*value.instance.root_transform);
+                (void)decode_document_assembly_instance(found->second);
             } else if (can_recognize_building_entity_type(found->second.type)) {
                 found->second = transform_building_entity(found->second, *operation.transform);
             } else if (const auto transformed =
@@ -1481,6 +1483,128 @@ ApplyEntityChanges architectural_transaction_command(const DocumentSnapshot& sou
                                                      const ArchitecturalTransaction& transaction,
                                                      Revision expected_revision) {
     return make_command(source, transaction, expected_revision);
+}
+
+ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot& source,
+    std::span<const std::string> entity_ids, const ArchitecturalGroupTransform& transform,
+    const std::string& transaction_id, Revision expected_revision) {
+    if (source.revision()!=expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision,"The architectural group source changed.");
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only,"The architectural group source is read-only.");
+    if (entity_ids.empty() || entity_ids.size()>maximum_architectural_group_targets)
+        throw std::invalid_argument("An architectural group requires between 1 and 1000 objects.");
+    const auto finite_point=[](Vec3 point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    };
+    if (!finite_point(transform.pivot) || !finite_point(transform.offset) ||
+        !std::isfinite(transform.rotation_z_radians) ||
+        !std::isfinite(transform.scale) || !(transform.scale>0.0))
+        throw std::invalid_argument("Architectural group transforms must be finite with a positive scale.");
+    std::set<std::string,std::less<>> selected;
+    std::vector<std::string> targets;
+    targets.reserve(entity_ids.size());
+    for (const auto& id : entity_ids) {
+        const auto found=source.entities().find(id);
+        if (!selected.insert(id).second)
+            throw std::invalid_argument("An architectural group contains a duplicate target.");
+        if (found==source.entities().end() || !can_transform_architectural_entity_type(found->second.type))
+            throw std::invalid_argument("Every architectural group target must be a supported persisted object.");
+        if (id != found->second.id)
+            throw std::invalid_argument("An architectural group target has an inconsistent persisted identity.");
+        if (found->second.type=="wall")
+            throw std::invalid_argument("Planar wall groups require connected-wall transform authority.");
+        targets.push_back(id);
+    }
+    // Validate real descriptors even for identity intent. This group boundary
+    // never admits the transaction lane's legacy transport-marker fallback.
+    std::map<std::string,double,std::less<>> level_shifts;
+    std::set<std::string,std::less<>> hosted_targets;
+    for (const auto& id : targets) {
+        const auto& entity=source.entities().at(id);
+        if (!entity.properties.is_object())
+            throw std::invalid_argument("An architectural group requires physical object properties.");
+        if (canonical_hosted_railing(entity)) {
+            const auto railing=decode_railing_properties(id,entity.properties);
+            const auto& host_id=railing.host?railing.host->stair_id:railing.landing_host->stair_id;
+            if (!selected.contains(host_id) || !canonical_stair(source.entities().at(host_id)))
+                throw std::invalid_argument("Hosted railing placement follows its stair; select its persisted host stair too.");
+            (void)make_building_shape(BuildingObject{railing},source.entities());
+            hosted_targets.insert(id);
+            continue;
+        }
+        const auto effective=resolve_vertical_placement(source,entity);
+        if (entity.type=="slab") {
+            Slab slab;
+            std::string error;
+            if (!read_document_slab(effective,slab,error))
+                throw std::invalid_argument("Architectural group slab " + id + ": " + error);
+            (void)make_slab(slab);
+        } else if (entity.type=="room") {
+            (void)transform_room_entity(effective,ArchitecturalTransform{});
+        } else if (entity.type=="assembly_instance") {
+            (void)decode_document_assembly_instance(entity);
+        } else {
+            // Dedicated codecs reject unsupported versions/forms explicitly.
+            (void)decode_building_entity(effective);
+        }
+        const auto placement=entity.properties.find("vertical_placement");
+        if (placement!=entity.properties.end() && placement->at("mode")=="level") {
+            // A level's world shift is outside its raw object coordinates.
+            // Keep the binding and compensate it in the local affine Z term:
+            // s*(raw+shift)+tz-shift = s*raw+tz+(s-1)*shift.
+            double shift{};
+            if (entity.type=="slab" || entity.type=="room")
+                shift=effective.properties.at("elevation_m").get<double>()-
+                    entity.properties.at("elevation_m").get<double>();
+            else {
+                const char* point=entity.type=="column"?"base_center_m":
+                    (entity.type=="beam"?"start_m":"base_position_m");
+                shift=effective.properties.at(point).at(2).get<double>()-
+                    entity.properties.at(point).at(2).get<double>();
+            }
+            level_shifts.emplace(id,shift);
+        }
+    }
+    // Whole turns use the exact identity operator even when combined with
+    // movement/scale, avoiding a tiny sine term multiplied by distant pivots.
+    const auto angle=std::remainder(transform.rotation_z_radians,2.0*std::numbers::pi);
+    const bool identity=transform.scale==1.0 && transform.offset.x==0.0 && transform.offset.y==0.0 &&
+        transform.offset.z==0.0 && angle==0.0;
+    const auto c=std::cos(angle),s=std::sin(angle);
+    ArchitecturalTransform affine;
+    // Difference form avoids cancelling pivot+offset against the same pivot
+    // during a pure translation (which could otherwise swallow the offset).
+    affine.x=transform.offset.x+(1.0-transform.scale)*transform.pivot.x+
+        transform.scale*((1.0-c)*transform.pivot.x+s*transform.pivot.y);
+    affine.y=transform.offset.y+(1.0-transform.scale)*transform.pivot.y+
+        transform.scale*((1.0-c)*transform.pivot.y-s*transform.pivot.x);
+    affine.z=transform.offset.z+(1.0-transform.scale)*transform.pivot.z;
+    affine.rotation_z_radians=angle;
+    affine.scale=transform.scale;
+    if (!std::isfinite(affine.x) || !std::isfinite(affine.y) || !std::isfinite(affine.z))
+        throw std::invalid_argument("The architectural group pivot exceeds the supported transform range.");
+    std::vector<ArchitecturalOperation> operations;
+    operations.reserve(targets.size());
+    for (const auto& id : targets) {
+        // Hosted selected members participate in validation/selection, while
+        // the host operation alone updates all visible or hidden dependents.
+        if (hosted_targets.contains(id)) continue;
+        ArchitecturalOperation operation{ArchitecturalAction::transform,id};
+        operation.transform=affine;
+        if (const auto shift=level_shifts.find(id); shift!=level_shifts.end()) {
+            operation.transform->z+=(transform.scale-1.0)*shift->second;
+            if (!std::isfinite(operation.transform->z))
+                throw std::invalid_argument("The architectural group level placement exceeds the supported transform range.");
+        }
+        operations.push_back(std::move(operation));
+    }
+    const auto transaction=ArchitecturalTransaction::create(transaction_id,std::to_string(source.revision()),
+        targets,std::move(operations),"Transform architectural group");
+    // Creating the validated transaction also checks transaction/target lexical
+    // identities on the no-op path without re-encoding any source metadata.
+    if (identity) return {expected_revision,{}, {},"Transform architectural group"};
+    return architectural_transaction_command(source,transaction,expected_revision);
 }
 
 DocumentSnapshot preview_architectural_transaction(const DocumentSnapshot& source,

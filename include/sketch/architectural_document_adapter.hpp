@@ -4,6 +4,11 @@
 #include "sketch/document.hpp"
 #include "sketch/assembly_model.hpp"
 
+#include <cstddef>
+#include <span>
+#include <string>
+#include <vector>
+
 namespace sketch {
 
 enum class RoomFootprintAnchor { first_corner, center, opposite_corner };
@@ -92,6 +97,34 @@ struct RailingEndpointEdit {
 // emits at most one change per entity, so the operation is atomic and undoable.
 [[nodiscard]] ApplyEntityChanges architectural_transaction_command(
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
+    Revision expected_revision);
+
+// A shared model-space pivot for rotation, uniform scaling and XYZ movement.
+// Every object receives the same affine operator; its own position must never
+// become a separate pivot. Hosted railings follow their selected stair once.
+struct ArchitecturalGroupTransform {
+    Vec3 pivot{};
+    Vec3 offset{};
+    double rotation_z_radians{};
+    double scale{1.0};
+};
+inline constexpr std::size_t maximum_architectural_group_targets = 1000;
+
+// Complete persisted physical-object group through the existing transaction
+// and native admission boundary. Planar walls use the qualified connected-wall
+// lane instead; callers may merge non-wall changes into that complete command.
+// Render aliases/embedded profiles are not persisted targets. Caller retains
+// the complete source, view/selection and compatible Site-frame authority.
+// Proper Z yaw, XYZ offset and positive uniform scale are supported; reflection
+// and incomplete/future physical descriptors require a qualified family lane.
+// Level-relative placements retain their bindings and share the world pivot.
+// A selected hosted railing requires its selected stair; selected/hidden
+// dependents follow the host once. Connected stair dimensions cannot scale.
+// Equivalent identity intent validates targets/transaction identity and returns
+// no history edit. Walls, joins and embedded assembly members are not targets.
+[[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
+    const DocumentSnapshot& source, std::span<const std::string> entity_ids,
+    const ArchitecturalGroupTransform& transform, const std::string& transaction_id,
     Revision expected_revision);
 
 // Admit changed physical wall/opening, slab, room, canonical beam and independent

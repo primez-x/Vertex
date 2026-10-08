@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 shared architectural selection transforms
+
+Persisted nonwall architectural groups now enter the numerical Transform
+selection editor with walls, measured geometry, explicit annotations and
+references. Canonical plan extents supply one source-model center. A shared
+proper yaw and X/Y offset drive the physical-object transaction; qualified
+wall/boundary commands retain their own proof lane. Identical dependency changes
+merge once and differing results refuse the whole operation. Selected hosted
+railings follow their stair once, floor-level bindings remain intact and world
+Z compensation is explicit in the shared core's positive-scale API.
+
+Source/proposed physical profiles, hosted rails and joined-roof consequences
+participate in the full preview. The captured command and selection survive
+Apply. Unambiguous persisted assembly profiles normalize to one root; embedded
+catalog profiles and genuine body/profile collisions still require their
+separate typed lane. The existing single-assembly editor retains Z, scale and
+Copy. Architectural group copying and single-axis reflection remain open;
+double-axis reflection uses its equivalent proper half-turn.
+
+Placement transforms preserve raw roof openings, stair versions and assembly
+records. Sheet membership cleanup also retains model metadata. Measured-area
+source checks reuse at most 16 validated ordinary source owners per area,
+avoiding repeated canonical decoding without changing provenance matching.
+
+Independent source review accepted the corrected shared core and canvas
+integration. Source diff checks passed. No build, test, probe,
+native job, launch, package or installation ran. Compilation, interaction,
+history/reopen and performance remain unverified. Manual checks remain Not tested.
+
 ### October 7 complete numerical selection copies
 
 The numerical Transform selection editor now copies complete supported groups:

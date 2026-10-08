@@ -11002,9 +11002,17 @@ public:
         // while refusing a distinct persisted body hidden behind the same ID.
         const bool presentation_primary = !original || original->type == "reference_asset" ||
             (!siteCanvas(selection_canvas) && annotation_child_exists(source,primary_render_id.toStdString()));
-        const bool group = selection.size() > 1 || presentation_collision || presentation_primary;
+        bool primary_assembly_alias{};
+        try {
+            if (original) primary_assembly_alias=embeddedAssemblyChild(source,original->id).has_value();
+        } catch (const std::exception& error) {
+            setError(QString::fromUtf8(error.what()));
+            return;
+        }
+        const bool group = selection.size() > 1 || presentation_collision || presentation_primary ||
+            primary_assembly_alias;
         if (!group && original && (can_recognize_building_entity_type(original->type) ||
-                         original->type == "slab" || original->type == "room")) {
+                         original->type == "slab" || original->type == "room" || original->type=="assembly_instance")) {
             showArchitecturalObjectTransformEditor();
             return;
         }
@@ -11014,11 +11022,17 @@ public:
             return entity.type == "wall" || entity.type == "measurement_linework" ||
                 is_closed_boundary_entity(entity.type);
         };
+        const auto architectural_root = [](const Entity& entity) {
+            return entity.type == "slab" || entity.type == "room" || entity.type == "column" ||
+                entity.type == "beam" || entity.type == "stair" || entity.type == "railing" ||
+                entity.type == "roof" || entity.type == "assembly_instance";
+        };
         bool supported_selection = original && geometry_root(*original);
         QString selection_diagnostic;
         std::optional<Vec2> group_pivot;
         const bool site_group = group && siteCanvas(m_architecturalCanvas);
         QStringList geometry_selection;
+        std::vector<std::string> architectural_selection;
         std::vector<PresentationAnnotationTarget> annotation_targets, overlay_targets;
         std::vector<std::string> reference_targets;
         std::map<QString,PresentationAnnotationTarget> render_targets;
@@ -11042,14 +11056,31 @@ public:
             try {
                 if (selection.isEmpty() || !selection.contains(primary_render_id))
                     throw std::invalid_argument("The primary presentation is unavailable in the complete selection. Select the group again.");
-                if (std::any_of(selection_presentations.begin(),selection_presentations.end(),[](const auto& identity) {
-                    return !identity.presentation_key.isEmpty();
-                })) throw std::invalid_argument("The selection includes an assembly profile or an ambiguous body/profile identity. Numeric group Transform does not support this architectural group.");
+                if (presentation_collision)
+                    throw std::invalid_argument("A selected ID names distinct body/profile owners. Select an unambiguous semantic group.");
+                for (const auto& identity : selection_presentations) {
+                    if (identity.presentation_key.isEmpty()) continue;
+                    const auto persisted=source.entities().find(identity.id.toStdString());
+                    // Profiles from one independent persisted assembly share
+                    // one command target. An embedded catalog instance is a
+                    // different source owner, even if its raw ID collides.
+                    if (identity.type!=QStringLiteral("assembly_instance") || persisted==source.entities().end() ||
+                        persisted->second.type!="assembly_instance" || embeddedAssemblyChild(source,identity.id.toStdString()))
+                        throw std::invalid_argument("Numeric group Transform requires persisted architectural roots. Embedded assembly profiles need their own complete group command.");
+                    AssemblyExpansionBudget budget;
+                    const auto expansion=expand_document_assembly_instance(persisted->second,source.entities(),budget);
+                    if (std::count_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& profile) {
+                        return identity.presentation_key==QString::fromStdString(json{
+                            {"part_path",profile.part_path},{"type_id",profile.type_id},{"profile_id",profile.profile.id}}.dump());
+                    })!=1)
+                        throw std::invalid_argument("A selected assembly profile has no unique canonical source identity.");
+                }
                 if (site_group) {
                     captureSiteEdit(m_architecturalCanvas);
                     (void)siteEditFrame(selection);
                 }
                 presentation_scene=projectSnapshotPlanScene(source,presentation_options,presentation_caches);
+                if (!site_group && selectionNeedsModelPlanFrame(source,selection)) plan_frame=canvasTransformPlanFrame(source);
                 Boundary geometry;
                 const auto visible = visible_project_entities_with_phase(source, m_view_filter);
                 const auto include_point = [&](Vec2 point) { geometry.push_back({point,point,0.0}); };
@@ -11107,12 +11138,24 @@ public:
                             include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},reference->rotation_degrees*std::numbers::pi/180.0,false,false,reference->position}),false));
                         continue;
                     }
-                    if (found == source.entities().end() || !geometry_root(found->second))
-                        throw std::invalid_argument("Numeric group Transform supports walls, closed areas, measured lines, explicit symbol/text children and reference images. This selection includes another architectural family or a generated label/dimension.");
+                    if (found == source.entities().end() || (!geometry_root(found->second) && !architectural_root(found->second)))
+                        throw std::invalid_argument("Select supported persisted plan objects, explicit symbol/text children and reference images. Generated labels/dimensions and embedded assembly groups require their semantic owner.");
                     if (!visible.contains(found->first))
                         throw std::invalid_argument("A selected object is outside the current visible source. Reopen Transform with a visible selection.");
-                    geometry_selection.push_back(id);
                     const auto& entity = found->second;
+                    if (embeddedAssemblyChild(source,found->first))
+                        throw std::invalid_argument("A selected ID names both a persisted body and an embedded assembly. Select an unambiguous semantic target.");
+                    if (architectural_root(entity)) {
+                        if (std::find(architectural_selection.begin(),architectural_selection.end(),found->first)!=architectural_selection.end()) continue;
+                        if (architectural_selection.size()>=maximum_architectural_group_targets)
+                            throw std::invalid_argument("The architectural selection exceeds the 1000-object limit.");
+                        const auto path=assemblyHostPlan(source,found->first,presentation_scene->wall_plans);
+                        if (path.empty()) throw std::invalid_argument("A selected architectural object has no canonical plan profile.");
+                        geometry.insert(geometry.end(),path.begin(),path.end());
+                        architectural_selection.push_back(found->first);
+                        continue;
+                    }
+                    geometry_selection.push_back(id);
                     if (entity.type == "wall") {
                         const auto baseline = read_required_segment(entity.properties, "baseline");
                         if (!baseline) throw std::invalid_argument("A selected wall has no canonical axis geometry.");
@@ -11271,6 +11314,10 @@ public:
                     const PlanarTransform transform{*group_pivot, angle * std::numbers::pi / 180.0,
                         horizontal, vertical,
                         {offset(offset_x->text()), offset(offset_y->text())}};
+                    if (!architectural_selection.empty() && clone->isChecked())
+                        throw std::invalid_argument("Copying a group containing architectural objects requires a complete independent architectural group copy command.");
+                    if (!architectural_selection.empty() && (horizontal || vertical))
+                        throw std::invalid_argument("A single-axis reflection of an architectural group is unavailable. Rotate and offset the complete group, or clear the reflection.");
                     ApplyEntityChanges presentation{source.revision(),{}, {},"Transform presentation group"};
                     if (!annotation_targets.empty() || !reference_targets.empty()) {
                         presentation=presentation_group_transform_command(source,annotation_targets,reference_targets,transform,source.revision());
@@ -11374,8 +11421,55 @@ public:
                             candidate_copy_children.at({target->second.owner_id,target->second.child_id});
                         return {std::move(copied),primary};
                     }
-                    return {geometry_selection.isEmpty() ? Command{std::move(presentation)} :
-                        makeSelectionGeometryTransformCommand(source,geometry_selection,transform,std::move(presentation.entity_changes)),primary_render_id.toStdString()};
+                    auto command=geometry_selection.isEmpty() ? Command{std::move(presentation)} :
+                        makeSelectionGeometryTransformCommand(source,geometry_selection,transform,std::move(presentation.entity_changes));
+                    if (!architectural_selection.empty()) {
+                        const auto architectural=architectural_group_transform_command(source,architectural_selection,
+                            ArchitecturalGroupTransform{{group_pivot->x,group_pivot->y,0.0},
+                                {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0},
+                            new_id("architectural-group-transform"),source.revision());
+                        if (architectural.expected_revision!=source.revision() || !architectural.asset_changes.empty())
+                            throw std::invalid_argument("An architectural group transform must retain its captured revision and local assets.");
+                        const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
+                        const auto geometry_candidate=ordinary && ordinary->entity_changes.empty() ? source :
+                            Document::preview_command(source,command);
+                        // Both lanes replay the captured source. Never silently
+                        // overwrite a dependency solved by another selected
+                        // owner or transform an architectural child twice.
+                        std::set<std::string,std::less<>> merged;
+                        std::vector<EntityChange> supplements;
+                        for (const auto& change : architectural.entity_changes) {
+                            if (change.kind!=EntityChangeKind::upsert || !merged.insert(change.entity.id).second)
+                                throw std::invalid_argument("The architectural group contains conflicting dependency edits.");
+                            const auto before=source.entities().find(change.entity.id);
+                            const auto current=geometry_candidate.entities().find(change.entity.id);
+                            if (before==source.entities().end() || current==geometry_candidate.entities().end())
+                                throw std::invalid_argument("A group transform lost its captured dependency identity.");
+                            if (current->second!=before->second) {
+                                if (current->second!=change.entity)
+                                    throw std::invalid_argument("Selected objects require differing transforms of the same dependency: "+change.entity.id);
+                                continue;
+                            }
+                            if (change.entity!=before->second) supplements.push_back(change);
+                        }
+                        if (auto* entity_command=std::get_if<ApplyEntityChanges>(&command)) {
+                            entity_command->entity_changes.insert(entity_command->entity_changes.end(),supplements.begin(),supplements.end());
+                            entity_command->message="Transform complete selection";
+                        } else if (auto* boundary_command=std::get_if<TransformBoundaries>(&command)) {
+                            boundary_command->entity_changes.insert(boundary_command->entity_changes.end(),supplements.begin(),supplements.end());
+                            boundary_command->message="Transform complete selection";
+                        } else if (auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command)) {
+                            proof->supplemental_entity_changes.insert(proof->supplemental_entity_changes.end(),supplements.begin(),supplements.end());
+                            proof->supplemental_source_completion=proof->supplemental_source_completion || !supplements.empty();
+                            proof->message="Transform complete selection";
+                        } else throw std::invalid_argument("The geometric group command cannot retain architectural consequences atomically.");
+                        const auto* result=std::get_if<ApplyEntityChanges>(&command);
+                        const auto complete=result && result->entity_changes.empty() ? source : Document::preview_command(source,command);
+                        for (const auto& change : architectural.entity_changes)
+                            if (complete.entities().at(change.entity.id)!=change.entity)
+                                throw std::invalid_argument("The complete group command changed a reviewed architectural consequence: "+change.entity.id);
+                    }
+                    return {std::move(command),primary_render_id.toStdString()};
                 }();
                 const auto copy_intent = group && clone->isChecked() ?
                     std::optional<ApplyEntityChanges>{std::get<ApplyEntityChanges>(candidate.first)} : std::nullopt;
@@ -11402,6 +11496,64 @@ public:
                 std::vector<CanvasLabel> labels;
                 std::vector<CanvasReference> references;
                 std::array<std::set<std::string, std::less<>>, 2> preview_ids;
+                std::optional<SnapshotPlanScene> proposed_scene;
+                std::set<std::string,std::less<>> physical_preview_ids(architectural_selection.begin(),architectural_selection.end());
+                if (group) {
+                    PlanSceneCaches caches;
+                    proposed_scene=projectSnapshotPlanScene(proposed,presentation_options,caches);
+                    const auto same_path=[](const Boundary& left,const Boundary& right) {
+                        if (left.size()!=right.size()) return false;
+                        for (std::size_t index=0;index<left.size();++index) {
+                            const auto& a=left[index];const auto& b=right[index];
+                            if (a.start.x!=b.start.x || a.start.y!=b.start.y || a.end.x!=b.end.x ||
+                                a.end.y!=b.end.y || a.sweep_radians!=b.sweep_radians) return false;
+                        }
+                        return true;
+                    };
+                    const auto physical=[](const CanvasEntity& item) {
+                        const auto type=item.type.toStdString();
+                        return type=="slab" || type=="room" || type=="column" || type=="beam" ||
+                            type=="stair" || type=="railing" || type=="roof" || type=="roof_join" ||
+                            type=="assembly_instance";
+                    };
+                    // Descriptor changes alone miss hosted rails, fused roof
+                    // joins and host-copy profiles whose source geometry moves.
+                    // Compare canonical model projections, never canvas pixels.
+                    using PhysicalIdentity=std::tuple<QString,QString,QString>;
+                    const auto physical_index=[&](const SnapshotPlanScene& scene) {
+                        std::map<PhysicalIdentity,std::vector<const CanvasEntity*>> index;
+                        for (const auto& item : scene.all_geometry) if (physical(item))
+                            index[PhysicalIdentity{item.id,item.presentation_key,item.type}].push_back(&item);
+                        return index;
+                    };
+                    const auto before_physical=physical_index(*presentation_scene);
+                    const auto after_physical=physical_index(*proposed_scene);
+                    const auto retain_physical_consequences=[&](const SnapshotPlanScene& scene,const auto& other) {
+                        std::map<PhysicalIdentity,std::size_t> occurrences;
+                        for (const auto& item : scene.all_geometry) {
+                            if (!physical(item)) continue;
+                            const PhysicalIdentity key{item.id,item.presentation_key,item.type};
+                            const auto ordinal=occurrences[key]++;
+                            const auto found=other.find(key);
+                            const auto* matching=found==other.end() || ordinal>=found->second.size() ? nullptr : found->second[ordinal];
+                            bool changed=!matching;
+                            if (!changed) {
+                                changed=!same_path(item.segments,matching->segments) || item.holes.size()!=matching->holes.size() ||
+                                    item.stroke_segments.has_value()!=matching->stroke_segments.has_value();
+                                if (!changed && item.stroke_segments) changed=!same_path(*item.stroke_segments,*matching->stroke_segments);
+                                for (std::size_t index=0;!changed && index<item.holes.size();++index)
+                                    changed=!same_path(item.holes[index],matching->holes[index]);
+                            }
+                            const auto before=source.entities().find(item.id.toStdString());
+                            const auto after=proposed.entities().find(item.id.toStdString());
+                            if (changed || (before!=source.entities().end() && after!=proposed.entities().end() && before->second!=after->second))
+                                physical_preview_ids.insert(item.id.toStdString());
+                        }
+                    };
+                    retain_physical_consequences(*presentation_scene,after_physical);
+                    retain_physical_consequences(*proposed_scene,before_physical);
+                    for (auto& ids : preview_ids) ids.insert(physical_preview_ids.begin(),physical_preview_ids.end());
+                }
                 const auto add_owner = [&](const DocumentSnapshot& snapshot, const std::string& root, bool selected) {
                     auto& ids = preview_ids[selected ? 1 : 0];
                     if (!ids.insert(root).second) return;
@@ -11474,7 +11626,13 @@ public:
                             const auto before = source.entities().find(id);
                             const auto after = proposed.entities().find(id);
                             if (before != source.entities().end() && after != proposed.entities().end() &&
-                                before->second == after->second) continue;
+                                before->second == after->second) {
+                                if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                                    const auto decoded=decode_boundary_dimension_entity(entity);
+                                    if (decoded.supported() && physical_preview_ids.contains(decoded.dimension->boundary_id)) add_seed(entity);
+                                }
+                                continue;
+                            }
                             if (geometry_root(entity) || can_recognize_boundary_dimension_entity_type(entity.type)) add_seed(entity);
                         }
                     }
@@ -11522,8 +11680,7 @@ public:
                         project_plan_model_labels(labels,proposed,*plan_frame);
                     }
                     const auto add_presentations = [&](const DocumentSnapshot& snapshot,bool selected) {
-                        PlanSceneCaches caches;
-                        const auto scene=selected ? projectSnapshotPlanScene(snapshot,presentation_options,caches) : *presentation_scene;
+                        const auto& scene=selected ? *proposed_scene : *presentation_scene;
                         const auto render_id = [&](const QString& id) -> std::optional<QString> {
                             for (const auto& [render,target] : render_targets) {
                                 const auto copied = selected && clone->isChecked();
@@ -11541,6 +11698,38 @@ public:
                             return std::nullopt;
                         };
                         std::set<QString> admitted_artwork,admitted_references;
+                        std::set<std::pair<QString,QString>> admitted_physical;
+                        for (auto entity : scene.all_geometry) {
+                            if (!physical_preview_ids.contains(entity.id.toStdString())) continue;
+                            if (!admitted_physical.emplace(entity.id,entity.presentation_key).second)
+                                throw std::invalid_argument("A physical consequence has an ambiguous canonical preview profile.");
+                            entity.selected=selected;
+                            if (plan_frame) {
+                                entity.segments=project_plan_path(std::move(entity.segments),*plan_frame);
+                                if (entity.stroke_segments) *entity.stroke_segments=project_plan_path(std::move(*entity.stroke_segments),*plan_frame);
+                                for (auto& hole : entity.holes) hole=project_plan_path(std::move(hole),*plan_frame);
+                                entity.hit_segments=project_plan_path(std::move(entity.hit_segments),*plan_frame);
+                                entity.snap_segments=project_plan_path(std::move(entity.snap_segments),*plan_frame);
+                            }
+                            if (!selected) {
+                                entity.stroke_color=QColor(140,148,158);
+                                entity.dark_stroke_color=QColor{};
+                            }
+                            geometry.push_back(std::move(entity));
+                        }
+                        for (const auto& id : architectural_selection)
+                            if (std::none_of(admitted_physical.begin(),admitted_physical.end(),[&](const auto& key) {return key.first.toStdString()==id;}))
+                                throw std::invalid_argument("A selected architectural root is unavailable in the complete canonical preview: "+id);
+                        for (const auto& id : physical_preview_ids) {
+                            const auto& other=selected ? *presentation_scene : *proposed_scene;
+                            const bool existed=source.entities().contains(id) || std::any_of(presentation_scene->all_geometry.begin(),presentation_scene->all_geometry.end(),
+                                [&](const auto& item) {return item.id.toStdString()==id;});
+                            if (!selected && !existed) continue;
+                            if (!snapshot.entities().contains(id) && std::none_of(other.all_geometry.begin(),other.all_geometry.end(),
+                                [&](const auto& item) {return item.id.toStdString()==id;})) continue;
+                            if (std::none_of(admitted_physical.begin(),admitted_physical.end(),[&](const auto& key) {return key.first.toStdString()==id;}))
+                                throw std::invalid_argument("A changed physical consequence cannot be displayed from the complete source: "+id);
+                        }
                         for (auto entity : scene.geometry) {
                             const auto render=render_id(entity.id);
                             if (!render || entity.type!=QStringLiteral("symbol")) continue;
@@ -11558,9 +11747,12 @@ public:
                         std::set<QString> existing_labels;
                         for (const auto& label : labels)
                             if (label.selected==selected) existing_labels.insert(plan_label_instance_key(label));
-                        for (auto label : scene.labels) {
+                        for (auto label : scene.all_labels) {
                             const auto render=render_id(label.id);
-                            if (!render && !preview_ids[selected ? 1 : 0].contains(label.id.toStdString())) continue;
+                            const bool physical_label=std::any_of(physical_preview_ids.begin(),physical_preview_ids.end(),[&](const auto& id) {
+                                return label.id==id_from(id) || label.id.startsWith(id_from(id)+QStringLiteral(":"));
+                            });
+                            if (!render && !physical_label && !preview_ids[selected ? 1 : 0].contains(label.id.toStdString())) continue;
                             if (render && !admitted_artwork.insert(*render).second)
                                 throw std::invalid_argument("A selected label has an ambiguous candidate presentation.");
                             if (existing_labels.contains(plan_label_instance_key(label))) continue;
@@ -38000,9 +38192,10 @@ private:
                         if (references != view.object_ids.size()) view.restrict_to_objects = restricted;
                     }
                     if (!changed) continue;
-                    updated.properties = make_sheet_view_entity(id, SheetViewModel::create(std::move(views),
-                        model.sheets(), model.to_json().at("schedule_ids").get<std::vector<std::string>>(),
-                        model.sheet_order())).properties;
+                    const auto replacement=SheetViewModel::create(std::move(views),
+                        model.sheets(), model.to_json().at("schedule_ids").get<std::vector<std::string>>(),model.sheet_order());
+                    updated.properties["model"]=merge_canonical_metadata(updated.properties.at("model"),
+                        updated.properties.at("model"),replacement.to_json());
                     std::erase_if(changes->entity_changes, [&](const auto& change) {
                         return change.kind == EntityChangeKind::upsert && change.entity.id == id;
                     });
