@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 baseline-preserving roof profile implementation
+
+The source now routes same-form baseline roof dimension edits in the active
+alternative to distinct proposed owners. Typed run/length, span, rise, overhang
+and thickness replay preserves pose, context, materials, roof openings and
+opaque data. A shared document-independent roof codec serves historical
+building entity decoding and the new profile authority without a library cycle.
+The dialog uses the same pitch derivation, retains receipt extras and preserves
+schema-two empty opening rosters.
+
+Source-derived replacement copies the complete fused roof cohort, joins, owned
+opening identities and bound view overlays. Coordinated object lists,
+appearance rows and annotation overrides gain additive proposed references;
+original owners and other alternatives remain intact. Phase intent four is
+exclusive, actual snapshot/history/saved choices remain fenced, and retained
+history reserves fresh child and overlay names after Undo. Current ordinary
+authoring refuses baseline mutations while an alternative is active; historical
+ordinary replay keeps its earlier meaning. Native 94/extraction 92 track the
+retained proof through direct/composed history.
+
+Root integration and independent source review are complete for this bounded
+slice. Review corrections close equivalent-input and legacy numeric-wire
+rejections, preserve opening metadata, require exact changed seed targets and
+include preserved roofs in Site Plan selection admission. The reviewer approved
+the corrected source. No compilation or runtime acceptance is claimed. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations run. The installed candidate remains
+unchanged. Typed roof opening add/edit/remove helpers are written and their
+phase/controller integration is the next source task; form/pose and
+clone/delete alternatives, unsupported affected legacy references and other
+non-wall families remain visible implementation gaps.
+
 ### October 8 explicit per-root assembly transforms
 
 Embedded assembly group targets now carry an optional per-root operator;

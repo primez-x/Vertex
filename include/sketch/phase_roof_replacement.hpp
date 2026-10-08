@@ -1,0 +1,81 @@
+#pragma once
+
+#include "sketch/phase_roof_profile_edit.hpp"
+
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace sketch {
+
+using PhaseRoofReplacementEntities = std::map<std::string, Entity, std::less<>>;
+using PhaseRoofReplacementIdentityMap = std::map<std::string, std::string, std::less<>>;
+
+struct PhaseRoofReplacementDiagnostic {
+    std::string entity_id;
+    std::string reason;
+    bool blocking{true};
+    bool operator==(const PhaseRoofReplacementDiagnostic&) const = default;
+};
+
+// Source-derived inventory only, never authority for caller-supplied clones.
+struct PhaseRoofReplacementPlan {
+    std::string registry_id;
+    std::string alternative_id;
+    std::vector<std::string> seed_roof_ids;
+    std::vector<std::string> required_entity_ids;
+    // Roof openings and copied bound view overlays share the document namespace.
+    std::vector<std::string> required_child_ids;
+    std::vector<PhaseRoofReplacementDiagnostic> diagnostics;
+    [[nodiscard]] bool ready() const noexcept;
+    bool operator==(const PhaseRoofReplacementPlan&) const = default;
+};
+
+struct PhaseRoofReplacementResult {
+    PhaseRoofReplacementEntities entities;
+    PhaseRoofReplacementIdentityMap original_to_proposed;
+    std::vector<std::string> fresh_identity_ids;
+};
+
+[[nodiscard]] PhaseRoofReplacementPlan inspect_phase_roof_replacement_plan(
+    const PhaseRoofReplacementEntities& source, const std::vector<std::string>& seed_roof_ids,
+    const std::string& registry_id, const std::string& alternative_id);
+
+// Reinspects the full retained map, independently replays typed edits on source
+// owners, then derives copies. Only registry and qualified presentation owners
+// change in place. The enclosing Document reserves identities across history.
+[[nodiscard]] PhaseRoofReplacementResult replay_phase_roof_replacement(
+    const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementPlan& plan,
+    const PhaseRoofReplacementIdentityMap& identities,
+    const std::vector<RoofProfileEditIntent>& roof_profiles);
+
+struct PhaseRoofReplacementAuthoring {
+    std::string registry_id;
+    std::string alternative_id;
+    std::vector<std::string> seed_roof_ids;
+    PhaseRoofReplacementIdentityMap identities;
+    std::vector<RoofProfileEditIntent> roof_profiles;
+};
+
+[[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
+    const PhaseRoofReplacementAuthoring& authoring);
+[[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(
+    const nlohmann::json& value);
+[[nodiscard]] PhaseRoofReplacementEntities replay_phase_roof_replacement_authoring(
+    const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementAuthoring& authoring);
+
+struct PhaseRoofProfileReplacementRequest {
+    std::string registry_id;
+    std::string alternative_id;
+    std::vector<std::string> seed_roof_ids;
+    bool operator==(const PhaseRoofProfileReplacementRequest&) const = default;
+};
+
+// Source-equivalent edits return nullopt before callers allocate identities.
+// A shared-baseline request requires one actual saved active alternative and
+// refuses mixed baseline/ordinary, foreign, inactive or dangling targets.
+[[nodiscard]] std::optional<PhaseRoofProfileReplacementRequest> phase_roof_profile_replacement_request(
+    const PhaseRoofReplacementEntities& source, const std::vector<RoofProfileEditIntent>& roof_profiles);
+
+} // namespace sketch

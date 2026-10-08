@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 92 retains baseline-preserving proposed roof profiles and
+requires native reader 94. It preserves exclusive phase intent version four,
+exact profile quantities, complete source-derived roof/join replacements,
+owned opening/overlay mappings and additive coordinated-view references.
+Original baseline owners and every retained edit remain present, including
+after Undo; extraction cannot lower the floor by inspecting only the current
+drawing. Earlier phase dialects retain their existing extraction floors.
+
 Exchange version 82 retains baseline-preserving room alternatives and requires
 native reader 84. Exclusive command envelope 33 includes its exact original
 source/registry bindings, explicit room decisions and baseline-reference

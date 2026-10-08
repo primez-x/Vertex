@@ -1,4 +1,41 @@
-# Vertex project formats v1 through v93
+# Vertex project formats v1 through v94
+
+## Baseline-preserving proposed roof profiles (v94)
+
+Native format 94 and JSON/assets extraction version 92 retain roof replacements
+under exclusive command envelope 34 and phase authoring intent version four.
+Earlier phase intent versions and roof entity schemas keep their previous wire
+meaning. The floor follows retained direct and composed proofs, including Undo.
+
+Version four adds only `roof_replacement` to the source-bound phase envelope.
+It cannot accompany wall replacement, opening demolition, geometry targets,
+relationships, raw entity payloads or supplemental edit authority. Source
+revision, snapshot/history, authoring digest, entity digest, saved marker and
+actual saved phase selections bind the same captured document.
+
+The replacement record is version one with exactly `version`, `registry_id`,
+`alternative_id`, `seed_roof_ids`, `identities` and `roof_profiles`. Each profile
+has exactly `version`, `roof_id`, `length`, `span`, `rise`, `overhang` and
+`thickness`; absent dimensions are null. Length represents the horizontal run
+of a sloped panel or ridge length of a gable/hip roof. Quantities retain exact
+entered expressions and units. Dependent pitch is reconstructed from the
+resulting rise and run or half-span. Equal values preserve source data exactly.
+
+Replay derives the complete joined roof cohort from the full actual map and
+requires baseline membership in the named saved active alternative. Fresh,
+injective identities cover roofs, joins, owned roof openings and copied bound
+view overlays. Existing roofs and joins remain exact; only the named registry
+and qualified additive presentation consumers change in place. Other
+alternatives, view definitions, sheets, viewport links, scales and unrelated
+rows remain retained. Roof-opening receipt keys follow their copied children;
+opaque data is preserved. Retained history continues to reserve all fresh
+identities after Undo.
+
+Same-form profile changes are supported by this dialect. Form/pose changes,
+opening-roster edits and unsupported affected references require further typed
+contracts; they cannot fall through to a baseline-changing ordinary edit.
+Native roof/join admission is derived from resolved physical placement and the
+shared roof codec, rather than persisted BRep geometry or caller candidates.
 
 ## Exact wall top-rise and reviewed profile quantities (v93)
 

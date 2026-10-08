@@ -21,6 +21,9 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect three only: registry-only opening demolition. It cannot borrow
     // wall replacements, geometry edits, relationships or arbitrary payloads.
     nlohmann::json opening_demolition=nullptr;
+    // Dialect four only: source-derived roof replacement. No ordinary entity
+    // payload, wall edit or relationship authority accompanies this operation.
+    nlohmann::json roof_replacement=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

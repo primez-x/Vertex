@@ -381,8 +381,30 @@ public:
                 if (merged.type == "railing" && canonical.properties.contains("host")) {
                     for (const auto* key : {"base_position_m", "orientation_rad", "length_m"}) merged.properties.erase(key);
                 }
-                if (merged.type == "roof" && !canonical.properties.contains("roof_openings"))
-                    merged.properties.erase("roof_openings");
+                if (merged.type == "roof" && canonical.properties.contains("roof_openings") &&
+                    original_entity->properties.contains("roof_openings") &&
+                    original_entity->properties.value("form", std::string{}) == canonical.properties.value("form", std::string{})) {
+                    for (auto& row : merged.properties.at("roof_openings")) {
+                        for (const auto& source : original_entity->properties.at("roof_openings")) {
+                            if (row.at("id") != source.at("id")) continue;
+                            const bool unchanged = std::all_of(roof_opening_keys.begin(), roof_opening_keys.end(),
+                                [&](const auto* key) { return row.at(key) == source.at(key); });
+                            if (unchanged) row = source;
+                            break;
+                        }
+                    }
+                }
+                if (merged.type == "roof" && !canonical.properties.contains("roof_openings")) {
+                    const auto& source = original_entity->properties;
+                    if (source.value("form", std::string{}) == canonical.properties.value("form", std::string{}) &&
+                        source.value("version", json{}) == 2 && source.contains("roof_openings") &&
+                        source.at("roof_openings").is_array() && source.at("roof_openings").empty()) {
+                        merged.properties["version"] = 2;
+                        merged.properties["roof_openings"] = source.at("roof_openings");
+                    } else {
+                        merged.properties.erase("roof_openings");
+                    }
+                }
                 apply_quantity_entries(merged.properties, canonical.properties);
                 candidate_entity = std::move(merged);
             } else {
@@ -391,8 +413,16 @@ public:
                                        candidate_entity->properties);
             }
             if (candidate_entity->type == "roof" && roof_openings_changed) {
-                candidate_entity->extensions["roof_opening_input"] =
-                    {{"version", 1}, {"entries", roof_opening_receipts}};
+                auto envelope = json::object();
+                if (original_entity && original_entity->extensions.contains("roof_opening_input")) {
+                    envelope = original_entity->extensions.at("roof_opening_input");
+                    if (!envelope.is_object() || envelope.value("version", json{}) != 1 ||
+                        !envelope.contains("entries") || !envelope.at("entries").is_object())
+                        throw std::invalid_argument("The roof opening input has an unsupported receipt version.");
+                }
+                envelope["version"] = 1;
+                envelope["entries"] = roof_opening_receipts;
+                candidate_entity->extensions["roof_opening_input"] = std::move(envelope);
             }
             clear_error();
             related_entities = std::move(upgrades);
@@ -1515,11 +1545,20 @@ private:
                         const auto quantity = parse_quantity(text.toStdString(), metric ? Unit::metre : Unit::foot);
                         values[column] = quantity.metres;
                         if (!receipts[id].is_object()) receipts[id] = json::object();
-                        receipts[id][roof_opening_keys[column]] =
-                            {{"original_expression", quantity.original_expression},
+                        auto updated = json{{"original_expression", quantity.original_expression},
                              {"default_unit", metric ? "m" : "ft"},
                              {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
                                                {"denominator", quantity.exact_metres.denominator}}}};
+                        auto& receipt = receipts[id][roof_opening_keys[column]];
+                        if (receipt.is_object()) {
+                            auto exact = receipt.value("exact_metres", json::object());
+                            if (!exact.is_object()) exact = json::object();
+                            exact.update(updated.at("exact_metres"));
+                            receipt.update(updated);
+                            receipt["exact_metres"] = std::move(exact);
+                        } else {
+                            receipt = std::move(updated);
+                        }
                     } catch (const std::exception& caught) {
                         roof_openings_table->setCurrentCell(row, column);
                         roof_openings_table->setFocus();
@@ -1534,14 +1573,23 @@ private:
             openings.push_back({id, values[0], values[1], values[2], values[3]});
             entries.push_back(std::move(entry));
         }
+        auto original_entries = json::array();
+        if (original_entity && original_entity->properties.contains("roof_openings")) {
+            for (const auto& source : original_entity->properties.at("roof_openings")) {
+                json understood{{"id", source.at("id")}};
+                for (const auto* key : roof_opening_keys) understood[key] = source.at(key);
+                original_entries.push_back(std::move(understood));
+            }
+        }
         for (auto receipt = receipts.begin(); receipt != receipts.end();) {
             const bool retained = std::any_of(openings.begin(), openings.end(), [&](const auto& opening) {
                 return opening.id == receipt.key();
             });
-            if (!retained) receipt = receipts.erase(receipt); else ++receipt;
+            const bool original_child = std::any_of(original_entries.begin(), original_entries.end(), [&](const auto& opening) {
+                return opening.at("id") == receipt.key();
+            });
+            if (!retained && original_child) receipt = receipts.erase(receipt); else ++receipt;
         }
-        const auto original_entries = original_entity
-            ? original_entity->properties.value("roof_openings", json::array()) : json::array();
         roof_openings_changed = entries != original_entries || receipts != original_roof_opening_receipts;
         roof_opening_receipts = std::move(receipts);
         return openings;
@@ -2409,10 +2457,9 @@ private:
                 return std::nullopt;
             }
             const auto pitch = fallback != nullptr &&
-                                       !dirty.contains("buildingObjectRun") &&
-                                       !dirty.contains("buildingObjectRise")
+                                       *run == fallback->run && *rise == fallback->rise
                                    ? fallback->pitch_radians
-                                   : std::atan(*rise / *run);
+                                   : std::atan2(*rise, *run);
             const auto openings = read_roof_openings();
             if (!openings) return std::nullopt;
             return SlopedRoofPanel{
@@ -2447,10 +2494,9 @@ private:
                     return std::nullopt;
                 }
                 const auto pitch = fallback != nullptr &&
-                                           !dirty.contains("buildingObjectSpan") &&
-                                           !dirty.contains("buildingObjectRise")
+                                           *span == fallback->span && *rise == fallback->rise
                                        ? fallback->pitch_radians
-                                       : std::atan(*rise / (*span * 0.5));
+                                       : std::atan2(*rise, *span * 0.5);
                 const auto openings = read_roof_openings();
                 if (!openings) return std::nullopt;
                 return Roof{
@@ -2481,12 +2527,29 @@ private:
             const auto* canonical = json_at_pointer(canonical_properties, pointer);
             const auto parsed = parsed_quantities.find(pointer);
             if (parsed != parsed_quantities.end()) {
+                const auto original = original_quantity_entries.find(pointer);
+                const bool same_roof_form = original_entity && original_entity->type == "roof" &&
+                    original_entity->properties.value("form", std::string{}) ==
+                        canonical_properties.value("form", std::string{});
+                if (same_roof_form && original != original_quantity_entries.end() &&
+                    !decode_quantity_receipt(original->second)) {
+                    throw std::invalid_argument("The edited roof quantity has an unsupported receipt.");
+                }
                 if (canonical != nullptr && canonical->is_number()) {
                     try {
                         const auto authoritative = canonical->get<double>();
                         if (std::isfinite(authoritative) &&
                             parsed->second.metres == authoritative) {
-                            entries[pointer] = quantity_receipt_json(parsed->second);
+                            auto updated = quantity_receipt_json(parsed->second);
+                            if (same_roof_form && original != original_quantity_entries.end()) {
+                                auto retained = original->second;
+                                auto exact = retained.at("exact_metres");
+                                exact.update(updated.at("exact_metres"));
+                                retained.update(updated);
+                                retained["exact_metres"] = std::move(exact);
+                                updated = std::move(retained);
+                            }
+                            entries[pointer] = std::move(updated);
                         } else {
                             entries.erase(pointer);
                         }

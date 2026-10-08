@@ -44,6 +44,7 @@
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_opening_demolition.hpp"
+#include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -2491,7 +2492,8 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
     const auto proofs=phase_constraint_authoring_proofs(command);
     return std::none_of(proofs.begin(),proofs.end(),[](const auto& intent) {
         return (intent.contains("wall_replacement") && !intent.at("wall_replacement").is_null()) ||
-            (intent.contains("opening_demolition") && !intent.at("opening_demolition").is_null());
+            (intent.contains("opening_demolition") && !intent.at("opening_demolition").is_null()) ||
+            (intent.contains("roof_replacement") && !intent.at("roof_replacement").is_null());
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2505,6 +2507,12 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
                 decode_phase_opening_demolition_intent(intent.opening_demolition));
             if (entity_map_digest(replay) != entity_map_digest(candidate))
                 throw std::invalid_argument("Opening demolition cannot change retained owners or borrow other edit authority");
+        }
+        if (!intent.roof_replacement.is_null()) {
+            const auto replay = replay_phase_roof_replacement_authoring(source,
+                decode_phase_roof_replacement_authoring(intent.roof_replacement));
+            if (entity_map_digest(replay) != entity_map_digest(candidate))
+                throw std::invalid_argument("Roof replacement cannot change retained owners or borrow other edit authority");
         }
     }
 #endif
@@ -2628,12 +2636,19 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records,
     const ApplyBoundaryConstraintChanges& command) {
     std::set<std::string,std::less<>> fresh;
+    std::set<std::string,std::less<>> roof_fresh;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
     }
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        if (!intent.roof_replacement.is_null()) {
+            const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
+            for (const auto& [original,id]:replacement.identities) {
+                (void)original;fresh.insert(id);roof_fresh.insert(id);
+            }
+        }
         if (intent.wall_replacement.is_null()) continue;
         const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
         for (const auto& [original,id]:replacement.identities) {
@@ -2672,15 +2687,43 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         if (record.boundary_constraint_changes)
             for (const auto& encoded:phase_constraint_authoring_proofs(*record.boundary_constraint_changes)) {
                 const auto intent=decode_phase_constraint_authoring_intent(encoded);
-                if (intent.wall_replacement.is_null()) continue;
-                const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
-                for (const auto& [original,id]:replacement.identities) {
-                    (void)original;
-                    if (fresh.contains(id)) throw std::invalid_argument("Proposed identity was already reserved by retained replacement intent: "+id);
-                }
+                const auto require_unused=[&](const auto& identities) {
+                    for (const auto& [original,id]:identities) {
+                        (void)original;
+                        if (fresh.contains(id)) throw std::invalid_argument("Proposed identity was already reserved by retained replacement intent: "+id);
+                    }
+                };
+                if (!intent.wall_replacement.is_null())
+                    require_unused(decode_phase_wall_replacement_authoring(intent.wall_replacement).identities);
+                if (!intent.roof_replacement.is_null())
+                    require_unused(decode_phase_roof_replacement_authoring(intent.roof_replacement).identities);
             }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
+            if (!roof_fresh.empty()) {
+                // Roof openings and view overlays own identities below the
+                // entity level. Retained metadata can reserve future children
+                // too. Undo does not make any of those names available again.
+                std::size_t nodes=0,bytes=0;
+                const auto reserve=[&](const auto& self,const nlohmann::json& value,unsigned depth)->void {
+                    if (depth>64 || ++nodes>4*1024*1024)
+                        throw std::invalid_argument("Retained roof identity nesting/node budget exceeded");
+                    const auto text=[&](const std::string& name) {
+                        if (name.size()>64*1024*1024-bytes)
+                            throw std::invalid_argument("Retained roof identity string budget exceeded");
+                        bytes+=name.size();
+                        if (roof_fresh.contains(name))
+                            throw std::invalid_argument("Proposed roof identity was already retained in history: "+name);
+                    };
+                    if (value.is_string()) text(value.template get_ref<const std::string&>());
+                    else if (value.is_array()) for (const auto& child:value) self(self,child,depth+1);
+                    else if (value.is_object()) for (const auto& [name,child]:value.items()) {
+                        text(name);self(self,child,depth+1);
+                    }
+                };
+                reserve(reserve,entity.properties,0);
+                reserve(reserve,entity.extensions,0);
+            }
             if (entity.type=="wall" && entity.properties.contains("layers"))
                 for (const auto& layer:entity.properties.at("layers"))
                     if (fresh.contains(layer.at("id").get<std::string>()))
@@ -2700,6 +2743,28 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
 }
 #endif
+
+// Current authoring cannot silently rewrite a baseline roof while an
+// alternative is active. Historical ordinary records retain their original
+// meaning: this guard is deliberately outside restore/replay validation.
+static void validate_current_baseline_roof_preservation(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate) {
+    for (const auto& [registry_id,registry]:source) {
+        (void)registry_id;
+        if (registry.type!="model_phases") continue;
+        const auto model=ModelPhases::from_json(registry.properties.at("model"));
+        if (!model.active_alternative()) continue;
+        for (const auto& id:model.baseline_ids()) {
+            const auto original=source.find(id);
+            if (original==source.end() || (original->second.type!="roof" && original->second.type!="roof_join")) continue;
+            const auto after=candidate.find(id);
+            if (after==candidate.end() || !exact_entity_payload(original->second,after->second))
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Editing a baseline roof in an alternative requires a proposed replacement: "+id);
+        }
+    }
+}
 
 static void complete_dimension_placements(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const ApplyBoundaryConstraintChanges& command) {
@@ -7736,6 +7801,7 @@ Revision Document::apply(const Command& command) {
                 next.name = typed_command.name;
             }
 
+            validate_current_baseline_roof_preservation(current.entities,next.entities);
             // Source-bound rooms cannot borrow an ordinary metadata edit to
             // detach their holes or their physical-wall evidence. Deletion is
             // explicit; supported source refresh will need typed authority.

@@ -38,8 +38,11 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_architecture PUBLIC sketch_wall_semantics sketch_slab_semantics sketch_terrain_surface sketch_roof_join_semantics sketch_opening_assembly sketch_door_operation TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKBool)
   add_library(sketch_building_objects src/architecture/building_objects.cpp)
   target_link_libraries(sketch_building_objects PUBLIC sketch_architecture sketch_stair_semantics)
+  add_library(sketch_roof_entity_codec src/architecture/roof_entity_codec.cpp)
+  target_include_directories(sketch_roof_entity_codec PUBLIC include "${SKETCH_DEPS_DIR}/json/include")
+  target_link_libraries(sketch_roof_entity_codec PUBLIC sketch_building_objects)
   add_library(sketch_building_entities src/architecture/building_entity.cpp src/architecture/document_solid.cpp)
-  target_link_libraries(sketch_building_entities PUBLIC sketch_building_objects sketch_document)
+  target_link_libraries(sketch_building_entities PUBLIC sketch_building_objects sketch_roof_entity_codec sketch_document)
   add_library(sketch_performance_workload src/core/performance_workload.cpp)
   target_include_directories(sketch_performance_workload PUBLIC include)
   target_link_libraries(sketch_performance_workload PUBLIC sketch_building_entities sketch_document TKMesh)
@@ -62,6 +65,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   if(MSVC)
     target_compile_options(sketch_architecture PRIVATE /W4 /permissive- /utf-8)
     target_compile_options(sketch_building_objects PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(sketch_roof_entity_codec PRIVATE /W4 /permissive- /utf-8)
     target_compile_options(sketch_building_entities PRIVATE /W4 /permissive- /utf-8)
     target_compile_options(sketch_performance_workload PRIVATE /W4 /permissive- /utf-8)
     target_compile_options(performance-workload PRIVATE /W4 /permissive- /utf-8)
@@ -818,12 +822,13 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_wall_profile_edit.cpp src/core/phase_wall_profile_capture.cpp src/core/phase_wall_canvas_proposal.cpp
     src/core/phase_hosted_opening_edit.cpp src/core/phase_hosted_opening_capture.cpp
     src/core/phase_hosted_opening_rehost.cpp src/core/phase_hosted_opening_family_edit.cpp
-    src/core/phase_opening_demolition.cpp)
+    src/core/phase_opening_demolition.cpp src/core/phase_roof_profile_edit.cpp
+    src/core/phase_roof_replacement.cpp)
   target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
   # Proposed profile replay must use the same hosted-assembly and fused-join
   # admission as native architectural authoring, rather than accept solids
   # that the architectural constructors would subsequently reject.
-  target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision sketch_architecture)
+  target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision sketch_architecture sketch_roof_entity_codec)
   add_library(sketch_constraint_authoring INTERFACE)
   target_link_libraries(sketch_constraint_authoring INTERFACE sketch_document sketch_constraints sketch_precision sketch_project_organization)
   if(BUILD_TESTING)

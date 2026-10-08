@@ -38,6 +38,7 @@
 #include "sketch/phase_hosted_opening_family_edit.hpp"
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/phase_opening_demolition.hpp"
+#include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
@@ -22587,7 +22588,7 @@ public:
         try {
             if (!m_document->is_editable())
                 throw std::runtime_error("This document is read-only.");
-            const auto snapshot = m_document->snapshot();
+            const auto snapshot = authoringSnapshot();
             if (snapshot.revision() != expected_revision)
                 throw std::runtime_error("The project changed. Reopen the object editor.");
             std::vector<EntityChange> changes;
@@ -22642,7 +22643,16 @@ public:
                         candidate.properties.erase(key);
                 }
                 if (candidate.type == "roof") {
-                    if (!canonical.properties.contains("roof_openings")) candidate.properties.erase("roof_openings");
+                    if (!canonical.properties.contains("roof_openings")) {
+                        const bool retained_empty_roster = original->properties.value("version",0)==2 &&
+                            original->properties.value("form",std::string{})==canonical.properties.value("form",std::string{}) &&
+                            original->properties.contains("roof_openings") && original->properties.at("roof_openings").is_array() &&
+                            original->properties.at("roof_openings").empty();
+                        if (retained_empty_roster) {
+                            candidate.properties["version"]=2;
+                            candidate.properties["roof_openings"]=original->properties.at("roof_openings");
+                        } else candidate.properties.erase("roof_openings");
+                    }
                     if (canonical.extensions.contains("roof_opening_input"))
                         candidate.extensions["roof_opening_input"] = canonical.extensions.at("roof_opening_input");
                 }
@@ -22699,14 +22709,20 @@ public:
                     if (context) add_default_level_placement(candidate.properties, *context);
                 }
             }
-            const auto id = id_from(candidate.id);
+            auto id = id_from(candidate.id);
             changes.push_back(EntityChange::upsert(std::move(candidate)));
-            applyDocumentCommand(ApplyEntityChanges{
+            if (!applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = expected_revision,
                 .entity_changes = std::move(changes),
                 .message = replace_selected ? "edit building object" : "create building object",
-            });
+            })) return {};
+            if (m_pending_proposed_selection_document==m_document &&
+                m_pending_proposed_selection_revision==authoringSnapshot().revision()) {
+                const auto proposed=m_pending_proposed_selection.find(id.toStdString());
+                if (proposed!=m_pending_proposed_selection.end()) id=id_from(proposed->second);
+            }
             m_selected_id = id;
+            m_selected_ids = {id};
             clearError();
             refresh();
             return id;
@@ -40403,6 +40419,19 @@ private:
                         clearError(); refresh(); return true;
                     }
                 }
+                if (entity->type == "roof") {
+                    auto proposed=*entity;
+                    proposed.properties=properties;
+                    const Command raw{ApplyEntityChanges{
+                        .expected_revision=source.revision(),
+                        .entity_changes={EntityChange::upsert(std::move(proposed))},
+                        .message=message,
+                    }};
+                    if (const auto applied=tryApplyAlternativeRoofProfileEdit(source,raw,authority)) {
+                        if (*applied) { clearError();refresh(); }
+                        return *applied;
+                    }
+                }
                 if (entity->type == "opening") {
                     auto proposed = *entity;
                     proposed.properties = properties;
@@ -41182,12 +41211,115 @@ private:
         return complete_exterior_wall_measurement_command(source, authored_command);
     }
 
+    std::optional<Command> reviewAlternativeRoofProfileEdit(const Command& requested, bool* handled = nullptr) {
+        if (handled) *handled=false;
+        const auto* raw=std::get_if<ApplyEntityChanges>(&requested);
+        if (!raw) return requested;
+        const auto source=authoringSnapshot();
+        const auto changed=[&](const EntityChange& change) {
+            const auto& id=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+            const auto before=source.entities().find(id);
+            return before!=source.entities().end() && (change.kind!=EntityChangeKind::upsert ||
+                before->second!=change.entity || before->second.properties.dump()!=change.entity.properties.dump() ||
+                before->second.extensions.dump()!=change.entity.extensions.dump());
+        };
+        bool shared_roof=false;
+        for (const auto& [id,registry]:source.entities()) {
+            (void)id;
+            if (registry.type!="model_phases") continue;
+            const auto model=ModelPhases::from_json(registry.properties.at("model"));
+            if (!model.active_alternative()) continue;
+            for (const auto& change:raw->entity_changes) {
+                const auto& target=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+                const auto original=source.entities().find(target);
+                if (original!=source.entities().end() &&
+                    (original->second.type=="roof" || original->second.type=="roof_join") && changed(change) &&
+                    std::find(model.baseline_ids().begin(),model.baseline_ids().end(),target)!=model.baseline_ids().end())
+                    shared_roof=true;
+            }
+        }
+        if (!shared_roof) return requested;
+        if (handled) *handled=true;
+        const auto authority=captureSourceEditAuthority(source);
+        if (raw->expected_revision!=source.revision() || !raw->asset_changes.empty() || raw->entity_changes.size()>2048)
+            throw std::invalid_argument("Proposed roof edits require the unchanged source and a bounded roof-only edit.");
+        std::vector<RoofProfileEditIntent> profiles;
+        std::set<std::string,std::less<>> targets;
+        for (const auto& change:raw->entity_changes) {
+            if (!changed(change)) {
+                if (change.kind!=EntityChangeKind::upsert || !source.entities().contains(change.entity.id))
+                    throw std::invalid_argument("Edit proposed roofs separately from unrelated new or removed objects.");
+                continue;
+            }
+            const auto original=change.kind==EntityChangeKind::upsert ? source.entities().find(change.entity.id) : source.entities().end();
+            if (original==source.entities().end() || original->second.type!="roof" || !targets.insert(original->first).second)
+                throw std::invalid_argument("This alternative edit requires existing roof profiles; change joins or remove roofs separately.");
+            if (const auto captured=capture_roof_profile_edit(original->second,change.entity)) profiles.push_back(*captured);
+        }
+        if (profiles.empty()) return Command{ApplyEntityChanges{source.revision(),{}, {},raw->message}};
+        std::sort(profiles.begin(),profiles.end(),[](const auto& a,const auto& b) { return a.roof_id<b.roof_id; });
+        const auto request=phase_roof_profile_replacement_request(source.entities(),profiles);
+        if (!request) throw std::invalid_argument("The roof's active baseline membership changed before replacement.");
+        const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
+            request->registry_id,request->alternative_id);
+        if (!plan.ready()) {
+            QStringList reasons;
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
+                reasons.push_back(id_from(diagnostic.entity_id)+QStringLiteral(": ")+QString::fromStdString(diagnostic.reason));
+            throw std::invalid_argument(reasons.join(QStringLiteral("\n")).toStdString());
+        }
+        PhaseRoofReplacementAuthoring replacement;
+        replacement.registry_id=request->registry_id;
+        replacement.alternative_id=request->alternative_id;
+        replacement.seed_roof_ids=request->seed_roof_ids;
+        replacement.roof_profiles=std::move(profiles);
+        // Current and retained entity names are reserved before allocation;
+        // replay and Document also check owned children, opaque retained names
+        // and every declared replacement identity, including after Undo.
+        std::set<std::string,std::less<>> occupied;
+        for (const auto& record:source.history())
+            for (const auto& [id,entity]:record.entities) { (void)entity;occupied.insert(id); }
+        for (const auto& [id,asset]:source.assets()) { (void)asset;occupied.insert(id); }
+        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
+            for (const auto& original:*ids) {
+                auto proposed=new_id("proposed");
+                while (!occupied.insert(proposed).second) proposed=new_id("proposed");
+                replacement.identities.emplace(original,std::move(proposed));
+            }
+        ConstraintAuthoringIntent semantic;
+        semantic.message=raw->message;
+        auto intent=make_phase_constraint_authoring_intent(source,semantic);
+        intent.roof_replacement=encode_phase_roof_replacement_authoring(replacement);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();
+        command.message=raw->message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source,Command{command});
+        if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
+        return Command{std::move(command)};
+    }
+
+    std::optional<bool> tryApplyAlternativeRoofProfileEdit(const DocumentSnapshot& source,
+        const Command& raw,const SourceEditAuthority& authority) {
+        if (fullSnapshotDigest(source)!=authority.source_digest || !sourceEditAuthorityUnchanged(authority)) return false;
+        bool handled=false;
+        const auto reviewed=reviewAlternativeRoofProfileEdit(raw,&handled);
+        if (!handled) return std::nullopt;
+        if (!reviewed || !sourceEditAuthorityUnchanged(authority)) return false;
+        return applyAuthoredCommand(*reviewed);
+    }
+
     std::optional<Command> reviewAlternativeWallEdit(const Command& command,
         PhaseWallReplacementIdentityMap& proposed_ids) {
         const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&command);
         if (!constrained || !constrained->phase_constraint_authoring_completion ||
             constrained->phase_constraint_authoring_intent.is_null()) return command;
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
+        if (!intent.roof_replacement.is_null()) {
+            proposed_ids=decode_phase_roof_replacement_authoring(intent.roof_replacement).identities;
+            return command;
+        }
         if (!intent.wall_replacement.is_null()) {
             return finishAlternativeWallEdit(authoringSnapshot(),intent,*constrained,proposed_ids);
         }
@@ -41611,10 +41743,13 @@ private:
 
     bool applyAuthoredCommand(const Command& requested, bool opening_lifecycle_already_captured = false) {
         requireSiteCommandAdmission(requested);
+        const auto roof_profiled=reviewAlternativeRoofProfileEdit(requested);
+        if (!roof_profiled) return false;
+        if (convertedEntityEditNoOp(requested,*roof_profiled)) return true;
         // Only the immediately fenced typed lifecycle path or the already reviewed
         // document path skips raw capture. Document still replays every proof.
-        const auto rehosted=opening_lifecycle_already_captured ? std::optional<Command>{requested} :
-            reviewOpeningRehostEdit(requested);
+        const auto rehosted=opening_lifecycle_already_captured ? roof_profiled :
+            reviewOpeningRehostEdit(*roof_profiled);
         if (!rehosted) return false;
         const auto converted=opening_lifecycle_already_captured ? rehosted : reviewOpeningFamilyEdit(*rehosted);
         if (!converted) return false;
@@ -41650,7 +41785,10 @@ private:
     }
 
     bool applyDocumentCommand(const Command& command) {
-        const auto rehosted=reviewOpeningRehostEdit(command);
+        const auto roof_profiled=reviewAlternativeRoofProfileEdit(command);
+        if (!roof_profiled) return false;
+        if (convertedEntityEditNoOp(command,*roof_profiled)) return true;
+        const auto rehosted=reviewOpeningRehostEdit(*roof_profiled);
         if (!rehosted) return false;
         const auto converted=reviewOpeningFamilyEdit(*rehosted);
         if (!converted) return false;
@@ -47982,6 +48120,12 @@ private:
                         // Shared originals remain byte-identical, but replacing
                         // their presented physical role still touches the
                         // captured selection and requires its site authority.
+                        for (const auto& [original,fresh]:replacement.identities) {
+                            (void)fresh;targets.insert(original);
+                        }
+                    }
+                    if (!intent.roof_replacement.is_null()) {
+                        const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
                         for (const auto& [original,fresh]:replacement.identities) {
                             (void)fresh;targets.insert(original);
                         }
