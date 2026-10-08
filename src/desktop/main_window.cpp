@@ -11,6 +11,7 @@
 
 #include "plan_canvas.hpp"
 #include "horizontal_profile_dialog.hpp"
+#include "horizontal_layer_stack_dialog.hpp"
 #include "site_canvas_presentation.hpp"
 #include "draft_image_stamp.hpp"
 #include "sketch_pdf_output.hpp"
@@ -42,6 +43,7 @@
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
+#include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/phase_roof_demolition.hpp"
 #include "sketch/roof_removal.hpp"
@@ -22706,23 +22708,30 @@ public:
                 if (!sourceEditAuthorityUnchanged(authority) || !applyAuthoredCommand(command)) return false;
                 clearError(); refresh(); return true;
             }
-            auto candidate = *selected;
-            if (layers.empty()) {
-                candidate.properties.erase("layers");
-            } else {
-                candidate.properties["layers"] = slab_layers_json(layers);
+            if (tokens.thickness_inputs.size() != layers.size())
+                throw std::invalid_argument("Every submitted layer must provide its explicit metre thickness.");
+            SlabLayerStackEditIntent stack;
+            stack.slab_id = selected->id;
+            for (std::size_t index = 0; index < layers.size(); ++index) {
+                const auto& layer = layers[index];
+                const auto original = std::find_if(original_slab.layers.begin(), original_slab.layers.end(),
+                    [&](const auto& value) { return value.id == layer.id; });
+                SlabLayerStackRow row;
+                row.layer_id = layer.id;
+                if (original == original_slab.layers.end() || original->thickness != layer.thickness) {
+                    row.thickness = parse_quantity(tokens.thickness_inputs[index] + " m", Unit::metre);
+                    if (row.thickness->metres != layer.thickness)
+                        throw std::invalid_argument("The entered layer thickness does not reproduce its actual submitted dimension.");
+                }
+                if (original == original_slab.layers.end() || original->material != layer.material) {
+                    row.material_mode = layer.material ? SlabLayerMaterialEditMode::set : SlabLayerMaterialEditMode::clear;
+                    row.material = layer.material;
+                }
+                stack.layers.push_back(std::move(row));
             }
-            Slab slab{candidate.id, *boundary, *holes, *thickness, *elevation,
-                      read_slab_element_kind(candidate.properties)};
-            slab.layers = layers;
-            (void)make_slab(slab);
-            if (!sourceEditAuthorityUnchanged(authority)) return false;
-            if (!applyEntity(std::move(candidate), "edit slab assembly layers", revision)) {
-                return false;
-            }
-            m_selected_id = QString::fromStdString(selected->id);
-            refresh();
-            return true;
+            const auto command = sourceDerivedSlabLayerStackEditCommand(source, {stack}, "Edit horizontal layer stack");
+            if (!sourceEditAuthorityUnchanged(authority) || !applyAuthoredCommand(command)) return false;
+            clearError(); refresh(); return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Slab assembly: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -41996,15 +42005,68 @@ private:
         return result;
     }
 
-    static Command sourceDerivedSlabProfileEditCommand(const DocumentSnapshot& source,
-        const std::vector<SlabProfileEditIntent>& edits, const std::string& message) {
-        const auto physical = replay_slab_profile_entities(source.entities(), edits);
-        const auto request = phase_slab_profile_replacement_request(source.entities(), edits);
+    static std::set<std::string, std::less<>> retainedSlabIdentityNames(const DocumentSnapshot& source) {
+        std::set<std::string, std::less<>> occupied;
+        std::size_t nodes{}, bytes{};
+        const auto reserve_text = [&](const std::string& text) {
+            if (text.size() > 64 * 1024 * 1024 - bytes)
+                throw std::invalid_argument("Horizontal assembly identity reservation exceeds its string budget.");
+            bytes += text.size(); occupied.insert(text);
+        };
+        const auto reserve = [&](const json& root) {
+            std::vector<const json*> pending{&root};
+            while (!pending.empty()) {
+                const auto& value = *pending.back(); pending.pop_back();
+                if (++nodes > 4 * 1024 * 1024)
+                    throw std::invalid_argument("Horizontal assembly identity reservation exceeds its JSON budget.");
+                if (value.is_string()) reserve_text(value.get_ref<const std::string&>());
+                else if (value.is_object()) for (const auto& [key, child] : value.items()) {
+                    reserve_text(key); pending.push_back(&child);
+                } else if (value.is_array()) for (const auto& child : value) pending.push_back(&child);
+            }
+        };
+        for (const auto& revision : source.history()) {
+            for (const auto& [id, entity] : revision.entities) {
+                reserve_text(id); reserve_text(entity.type);
+                reserve(entity.properties); reserve(entity.extensions);
+            }
+            if (revision.boundary_constraint_changes)
+                reserve(command_to_json(Command{*revision.boundary_constraint_changes}));
+        }
+        for (const auto& [id, asset] : source.assets()) { (void)asset; reserve_text(id); }
+        return occupied;
+    }
+
+    static Command sourceDerivedSlabEditCommand(const DocumentSnapshot& source,
+        const std::vector<SlabProfileEditIntent>& profiles,
+        const std::vector<SlabLayerStackEditIntent>& stacks, const std::string& message) {
+        if (!profiles.empty() && !stacks.empty())
+            throw std::invalid_argument("Edit horizontal profiles and layer inventories separately.");
+        const bool stack_edit = !stacks.empty();
+        const auto physical = stack_edit ? replay_slab_layer_stack_entities(source.entities(), stacks)
+                                         : replay_slab_profile_entities(source.entities(), profiles);
+        const auto request = stack_edit ? phase_slab_layer_stack_replacement_request(source.entities(), stacks)
+                                        : phase_slab_profile_replacement_request(source.entities(), profiles);
+        std::optional<std::set<std::string, std::less<>>> occupied;
+        if (stack_edit) {
+            for (const auto& stack : stacks) {
+                Slab original; std::string diagnostic;
+                if (!read_document_slab(source.entities().at(stack.slab_id), original, diagnostic))
+                    throw std::invalid_argument(diagnostic);
+                for (const auto& row : stack.layers) {
+                    if (std::any_of(original.layers.begin(), original.layers.end(), [&](const auto& layer) {
+                            return layer.id == row.layer_id;
+                        })) continue;
+                    if (!occupied) occupied = retainedSlabIdentityNames(source);
+                    if (!occupied->insert(row.layer_id).second)
+                        throw std::invalid_argument("A new assembly layer identity is already reserved in retained history.");
+                }
+            }
+        }
         if (!request) {
             ApplyEntityChanges command{source.revision(), {}, {}, message};
-            for (const auto& edit : edits) {
-                const auto& original = source.entities().at(edit.slab_id);
-                const auto& proposed = physical.at(edit.slab_id);
+            for (const auto& [id, proposed] : physical) {
+                const auto& original = source.entities().at(id);
                 if (original != proposed || original.properties.dump() != proposed.properties.dump() ||
                     original.extensions.dump() != proposed.extensions.dump())
                     command.entity_changes.push_back(EntityChange::upsert(proposed));
@@ -42026,35 +42088,13 @@ private:
         replacement.registry_id = request->registry_id;
         replacement.alternative_id = request->alternative_id;
         replacement.seed_slab_ids = request->seed_slab_ids;
-        replacement.slab_profiles = edits;
-        std::set<std::string, std::less<>> occupied;
-        std::size_t nodes{}, bytes{};
-        const auto reserve_text = [&](const std::string& text) {
-            if (text.size() > 64 * 1024 * 1024 - bytes)
-                throw std::invalid_argument("Proposed assembly identity reservation exceeds its string budget.");
-            bytes += text.size(); occupied.insert(text);
-        };
-        const auto reserve = [&](const auto& self, const json& value, unsigned depth) -> void {
-            if (depth > 64 || ++nodes > 4 * 1024 * 1024)
-                throw std::invalid_argument("Proposed assembly identity reservation exceeds its JSON budget.");
-            if (value.is_string()) reserve_text(value.get_ref<const std::string&>());
-            else if (value.is_object()) for (const auto& [key, child] : value.items()) {
-                reserve_text(key); self(self, child, depth + 1);
-            } else if (value.is_array()) for (const auto& child : value) self(self, child, depth + 1);
-        };
-        for (const auto& revision : source.history()) {
-            for (const auto& [id, entity] : revision.entities) {
-                reserve_text(id); reserve_text(entity.type);
-                reserve(reserve, entity.properties, 0); reserve(reserve, entity.extensions, 0);
-            }
-            if (revision.boundary_constraint_changes)
-                reserve(reserve, command_to_json(Command{*revision.boundary_constraint_changes}), 0);
-        }
-        for (const auto& [id, asset] : source.assets()) { (void)asset; reserve_text(id); }
+        replacement.slab_profiles = profiles;
+        replacement.slab_stacks = stacks;
+        if (!occupied) occupied = retainedSlabIdentityNames(source);
         for (const auto* slots : {&plan.required_entity_ids, &plan.required_child_ids})
             for (const auto& original : *slots) {
                 auto proposed = new_id("proposed");
-                while (!occupied.insert(proposed).second) proposed = new_id("proposed");
+                while (!occupied->insert(proposed).second) proposed = new_id("proposed");
                 replacement.identities.emplace(original, std::move(proposed));
             }
         ConstraintAuthoringIntent semantic;
@@ -42068,6 +42108,16 @@ private:
         command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
         (void)Document::preview_command(source, Command{command});
         return command;
+    }
+
+    static Command sourceDerivedSlabProfileEditCommand(const DocumentSnapshot& source,
+        const std::vector<SlabProfileEditIntent>& profiles, const std::string& message) {
+        return sourceDerivedSlabEditCommand(source, profiles, {}, message);
+    }
+
+    static Command sourceDerivedSlabLayerStackEditCommand(const DocumentSnapshot& source,
+        const std::vector<SlabLayerStackEditIntent>& stacks, const std::string& message) {
+        return sourceDerivedSlabEditCommand(source, {}, stacks, message);
     }
 
     std::optional<Command> reviewAlternativeSlabEdit(const Command& requested) {
@@ -42113,6 +42163,7 @@ private:
             return demolition;
         }
         std::vector<SlabProfileEditIntent> edits;
+        std::vector<SlabLayerStackEditIntent> stacks;
         std::set<std::string, std::less<>> targets;
         for (const auto& change : raw->entity_changes) {
             const auto original = change.kind == EntityChangeKind::upsert
@@ -42122,9 +42173,19 @@ private:
                 original->second.extensions.dump() == change.entity.extensions.dump()) continue;
             if (original == source.entities().end() || original->second.type != "slab" || !targets.insert(original->first).second)
                 throw std::invalid_argument("Edit proposed floor, ceiling or foundation profiles separately from other changes.");
-            if (const auto captured = capture_slab_profile_edit(original->second, change.entity)) edits.push_back(*captured);
+            Slab before, after; std::string diagnostic;
+            if (!read_document_slab(original->second, before, diagnostic) ||
+                !read_document_slab(change.entity, after, diagnostic)) throw std::invalid_argument(diagnostic);
+            const bool same_inventory = before.layers.size() == after.layers.size() &&
+                std::equal(before.layers.begin(), before.layers.end(), after.layers.begin(), [](const auto& a, const auto& b) {
+                    return a.id == b.id && a.material == b.material;
+                });
+            if (same_inventory) {
+                if (const auto captured = capture_slab_profile_edit(original->second, change.entity)) edits.push_back(*captured);
+            } else if (const auto captured = capture_slab_layer_stack_edit(original->second, change.entity))
+                stacks.push_back(*captured);
         }
-        const auto command = sourceDerivedSlabProfileEditCommand(source, edits, raw->message);
+        const auto command = sourceDerivedSlabEditCommand(source, edits, stacks, raw->message);
         if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
         return command;
     }
@@ -57541,7 +57602,7 @@ public:
         }
     }
 
-    void showWallLayerEditor(bool raw_horizontal_layers = false) {
+    void showWallLayerEditor(bool edit_horizontal_stack = false) {
         const auto selected = selectedEntity();
         const bool wall = selected && selected->type == "wall";
         const bool slab = selected && selected->type == "slab";
@@ -57549,7 +57610,7 @@ public:
             setError(QStringLiteral("Select an editable wall or horizontal assembly before editing its assembly."));
             return;
         }
-        if (slab && !raw_horizontal_layers) {
+        if (slab && !edit_horizontal_stack) {
             try {
                 const auto context = captureModalContext();
                 if (!context.source) throw std::invalid_argument("The horizontal assembly source is unavailable.");
@@ -57583,6 +57644,38 @@ public:
                 clearError(); refreshInspector();
             } catch (const std::exception& error) {
                 setError(QStringLiteral("Horizontal assembly: %1").arg(QString::fromUtf8(error.what())));
+            }
+            return;
+        }
+        if (slab) {
+            try {
+                const auto context = captureModalContext();
+                if (!context.source) throw std::invalid_argument("The horizontal assembly source is unavailable.");
+                const auto authority = captureSourceEditAuthority(*context.source);
+                std::optional<std::set<std::string, std::less<>>> layer_names;
+                HorizontalLayerStackDialog dialog(*context.source, selected->id, context.metric_units,
+                    [this, context, authority] {
+                        if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
+                            throw std::invalid_argument("The project or drawing context changed. Reopen the layer stack.");
+                        return authoringSnapshot();
+                    }, [&layer_names, source = *context.source] {
+                        if (!layer_names) layer_names = retainedSlabIdentityNames(source);
+                        auto id = new_id("layer");
+                        while (!layer_names->insert(id).second) id = new_id("layer");
+                        return id;
+                    }, owner);
+                styleDialog(dialog);
+                if (dialog.exec() != QDialog::Accepted) { refreshInspector(); return; }
+                if (!modalContextUnchanged(context) || !sourceEditAuthorityUnchanged(authority)) return;
+                if (const auto intent = dialog.acceptedIntent()) {
+                    const auto command = sourceDerivedSlabLayerStackEditCommand(*context.source,
+                        {*intent}, "Edit horizontal layer stack");
+                    if (!sourceEditAuthorityUnchanged(authority) || !applyAuthoredCommand(command)) return;
+                    refresh();
+                }
+                clearError(); refreshInspector();
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Horizontal layers: %1").arg(QString::fromUtf8(error.what())));
             }
             return;
         }

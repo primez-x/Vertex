@@ -38,10 +38,11 @@ bool exact(const Entity& a, const Entity& b) {
 struct Strings {
     Ids values;
     std::size_t nodes{}, bytes{};
+    std::size_t node_limit{4 * 1024 * 1024}, byte_limit{64 * 1024 * 1024};
     void read(const Json& value, std::size_t depth = 0) {
-        if (depth > 64 || ++nodes > 4 * 1024 * 1024) reject("source JSON node/nesting budget exceeded");
+        if (depth > 64 || ++nodes > node_limit) reject("source JSON node/nesting budget exceeded");
         const auto reserve = [&](const std::string& text) {
-            if (text.size() > 64 * 1024 * 1024 - bytes) reject("source JSON string budget exceeded");
+            if (text.size() > byte_limit - bytes) reject("source JSON string budget exceeded");
             bytes += text.size(); values.insert(text);
         };
         if (value.is_string()) reserve(value.get_ref<const std::string&>());
@@ -131,6 +132,14 @@ void admit_slabs(const PhaseSlabReplacementEntities& source, const Ids& owners) 
 // Remove only qualified live identity slots. Quantity-entry paths use actual
 // layer indices, so renaming a layer never changes its receipt pointer/value.
 Entity opaque_remainder(Entity entity) {
+    // Retirement rows bind historical provenance, not live children. Admit the
+    // exact supported envelope before removing only its historical ID slots
+    // from this scratch scan; arbitrary receipt siblings remain opaque.
+    if (entity.type == "slab" && entity.extensions.contains("slab_layer_stack_retirement")) {
+        auto& archive = entity.extensions.at("slab_layer_stack_retirement");
+        validate_slab_layer_stack_retirement(archive);
+        for (auto& row : archive.at("receipts")) row.erase("layer_id");
+    }
     auto& p = entity.properties;
     if (entity.type == "slab" && p.contains("layers")) {
         (void)actual_slab(entity);
@@ -200,6 +209,38 @@ void complete_presentation(PhaseSlabReplacementEntities& candidate,
             validate_annotation_entity(candidate.at(id));
         }
     }
+}
+
+std::optional<PhaseSlabProfileReplacementRequest> replacement_request(
+    const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementEntities& physical,
+    const std::vector<std::string>& targets, const std::string& family, const std::string& target_name) {
+    const auto unchanged = [&](const auto& id) { return exact(source.at(id), physical.at(id)); };
+    if (std::all_of(targets.begin(), targets.end(), unchanged)) return std::nullopt;
+    if (std::any_of(targets.begin(), targets.end(), unchanged))
+        reject("unchanged slab cannot acquire replacement authority as an extra seed");
+    const auto scope = constraint_phase_scope(source);
+    std::optional<PhaseSlabProfileReplacementRequest> request;
+    std::size_t ordinary = 0;
+    for (const auto& id : targets) {
+        if (scope.inactive_owner_ids.contains(id)) reject(target_name + " target is inactive: " + id);
+        const PhysicalWallPhaseState* membership = nullptr;
+        for (const auto& registry : scope.registries)
+            if (std::find(registry.registered_entity_ids.begin(), registry.registered_entity_ids.end(), id) != registry.registered_entity_ids.end()) {
+                if (membership) reject(target_name + " target has overlapping registry membership");
+                membership = &registry;
+            }
+        if (!membership) { ++ordinary; continue; }
+        const auto model = ModelPhases::from_json(source.at(membership->registry_id).properties.at("model"));
+        const bool baseline = std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end();
+        if (!baseline || !model.active_alternative()) { ++ordinary; continue; }
+        if (request && request->registry_id != membership->registry_id)
+            reject(family + " span different shared-baseline registries");
+        if (!request) request = PhaseSlabProfileReplacementRequest{membership->registry_id, *model.active_alternative(), {}};
+        request->seed_slab_ids.push_back(id);
+    }
+    if (request && ordinary) reject(family + " mix shared-baseline and ordinary/proposed slab owners");
+    if (request) std::sort(request->seed_slab_ids.begin(), request->seed_slab_ids.end());
+    return request;
 }
 } // namespace
 
@@ -286,18 +327,25 @@ PhaseSlabReplacementPlan inspect_phase_slab_replacement_plan(
 
 PhaseSlabReplacementResult replay_phase_slab_replacement(
     const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementPlan& plan,
-    const PhaseSlabReplacementIdentityMap& identities, const std::vector<SlabProfileEditIntent>& profiles) {
+    const PhaseSlabReplacementIdentityMap& identities, const std::vector<SlabProfileEditIntent>& profiles,
+    const std::vector<SlabLayerStackEditIntent>& stacks) {
     try {
+        if (profiles.empty() == stacks.empty()) reject("requires exactly one nonempty profile or stack edit family");
         const auto derived = inspect_phase_slab_replacement_plan(source, plan.seed_slab_ids, plan.registry_id, plan.alternative_id);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
         const Ids seeds(plan.seed_slab_ids.begin(), plan.seed_slab_ids.end());
         Ids targets;
-        for (const auto& profile : profiles)
-            if (!seeds.contains(profile.slab_id) || !targets.insert(profile.slab_id).second)
-                reject("profiles require unique explicit seed slabs");
-        if (targets != seeds) reject("slab seeds must exactly match authored profile targets");
-        const auto physical = replay_slab_profile_entities(source, profiles);
+        const auto add_target = [&](const auto& intent) {
+            if (!seeds.contains(intent.slab_id) || !targets.insert(intent.slab_id).second)
+                reject(stacks.empty() ? "profiles require unique explicit seed slabs" : "stacks require unique explicit seed slabs");
+        };
+        for (const auto& profile : profiles) add_target(profile);
+        for (const auto& stack : stacks) add_target(stack);
+        if (targets != seeds) reject(stacks.empty() ? "slab seeds must exactly match authored profile targets" :
+            "slab seeds must exactly match authored stack targets");
+        const auto physical = stacks.empty() ? replay_slab_profile_entities(source, profiles) :
+            replay_slab_layer_stack_entities(source, stacks);
         for (const auto& id : targets) if (exact(source.at(id), physical.at(id)))
             reject("unchanged slab cannot acquire replacement authority as an extra seed");
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
@@ -310,13 +358,33 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             if (!expected.contains(old_id)) reject("mapping contains an unrequested source identity: " + old_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh identity collision: " + new_id);
         }
+        Ids new_layers;
+        for (const auto& stack : stacks) {
+            const auto before = actual_slab(source.at(stack.slab_id));
+            Ids existing;
+            for (const auto& layer : before.layers) existing.insert(layer.id);
+            for (const auto& row : stack.layers) if (!existing.contains(row.layer_id)) {
+                identity(row.layer_id);
+                if (occupied.values.contains(row.layer_id) || !fresh.insert(row.layer_id).second)
+                    reject("new stack layer identity collision: " + row.layer_id);
+                new_layers.insert(row.layer_id);
+            }
+            const auto remainder = opaque_remainder(physical.at(stack.slab_id));
+            if (touches(remainder.properties, expected) || touches(remainder.extensions, expected))
+                reject("proposed stack metadata has an unqualified affected reference: " + stack.slab_id);
+        }
         admit_slabs(physical, seeds);
         PhaseSlabReplacementResult result{source, identities, {}};
         for (const auto& id : plan.required_entity_ids) {
             auto copy = physical.at(id);
             copy.id = identities.at(id);
-            if (copy.properties.contains("layers")) for (auto& layer : copy.properties.at("layers"))
-                layer.at("id") = identities.at(layer.at("id").get<std::string>());
+            if (copy.properties.contains("layers")) for (auto& layer : copy.properties.at("layers")) {
+                const auto layer_id = layer.at("id").get<std::string>();
+                // Existing source children use the complete reserved mapping;
+                // newly authored rows already declare their fresh actual IDs.
+                if (new_layers.contains(layer_id)) continue;
+                layer.at("id") = identities.at(layer_id);
+            }
             const auto copy_id = copy.id;
             if (!result.entities.emplace(copy_id, std::move(copy)).second) reject("copy insertion collides");
         }
@@ -350,42 +418,27 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
 std::optional<PhaseSlabProfileReplacementRequest> phase_slab_profile_replacement_request(
     const PhaseSlabReplacementEntities& source, const std::vector<SlabProfileEditIntent>& profiles) {
     const auto physical = replay_slab_profile_entities(source, profiles);
-    const auto unchanged = [&](const auto& profile) {
-        return exact(source.at(profile.slab_id), physical.at(profile.slab_id));
-    };
-    if (std::all_of(profiles.begin(), profiles.end(), unchanged)) return std::nullopt;
-    if (std::any_of(profiles.begin(), profiles.end(), unchanged))
-        reject("unchanged slab cannot acquire replacement authority as an extra seed");
-    const auto scope = constraint_phase_scope(source);
-    std::optional<PhaseSlabProfileReplacementRequest> request;
-    std::size_t ordinary = 0;
-    for (const auto& profile : profiles) {
-        if (scope.inactive_owner_ids.contains(profile.slab_id)) reject("profile target is inactive: " + profile.slab_id);
-        const PhysicalWallPhaseState* membership = nullptr;
-        for (const auto& registry : scope.registries)
-            if (std::find(registry.registered_entity_ids.begin(), registry.registered_entity_ids.end(), profile.slab_id) != registry.registered_entity_ids.end()) {
-                if (membership) reject("profile target has overlapping registry membership");
-                membership = &registry;
-            }
-        if (!membership) { ++ordinary; continue; }
-        const auto model = ModelPhases::from_json(source.at(membership->registry_id).properties.at("model"));
-        const bool baseline = std::find(model.baseline_ids().begin(), model.baseline_ids().end(), profile.slab_id) != model.baseline_ids().end();
-        if (!baseline || !model.active_alternative()) { ++ordinary; continue; }
-        if (request && request->registry_id != membership->registry_id) reject("profiles span different shared-baseline registries");
-        if (!request) request = PhaseSlabProfileReplacementRequest{membership->registry_id, *model.active_alternative(), {}};
-        request->seed_slab_ids.push_back(profile.slab_id);
-    }
-    if (request && ordinary) reject("profiles mix shared-baseline and ordinary/proposed slab owners");
-    if (request) std::sort(request->seed_slab_ids.begin(), request->seed_slab_ids.end());
-    return request;
+    std::vector<std::string> targets;
+    for (const auto& profile : profiles) targets.push_back(profile.slab_id);
+    return replacement_request(source, physical, targets, "profiles", "profile");
+}
+
+std::optional<PhaseSlabProfileReplacementRequest> phase_slab_layer_stack_replacement_request(
+    const PhaseSlabReplacementEntities& source, const std::vector<SlabLayerStackEditIntent>& stacks) {
+    const auto physical = replay_slab_layer_stack_entities(source, stacks);
+    std::vector<std::string> targets;
+    for (const auto& stack : stacks) targets.push_back(stack.slab_id);
+    return replacement_request(source, physical, targets, "stacks", "stack");
 }
 
 nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacementAuthoring& authoring) {
     identity(authoring.registry_id); identity(authoring.alternative_id);
+    const bool stack_edit = !authoring.slab_stacks.empty();
     if (authoring.seed_slab_ids.empty() || authoring.seed_slab_ids.size() > maximum_replacements ||
         authoring.identities.empty() || authoring.identities.size() > maximum_replacements ||
-        authoring.slab_profiles.empty() || authoring.slab_profiles.size() > maximum_replacements)
-        reject("authoring requires bounded nonempty seeds, mapping and profiles");
+        authoring.slab_profiles.size() > maximum_replacements || authoring.slab_stacks.size() > maximum_replacements ||
+        authoring.slab_profiles.empty() == authoring.slab_stacks.empty())
+        reject("authoring requires bounded nonempty seeds, mapping and exactly one edit family");
     Ids seeds, targets, fresh;
     for (const auto& id : authoring.seed_slab_ids) { identity(id); if (!seeds.insert(id).second) reject("duplicate authoring seed"); }
     for (const auto& [old_id, new_id] : authoring.identities) {
@@ -393,50 +446,65 @@ nlohmann::json encode_phase_slab_replacement_authoring(const PhaseSlabReplacemen
         if (old_id == new_id || !fresh.insert(new_id).second) reject("authoring identities must be fresh and injective");
     }
     for (const auto& id : seeds) if (!authoring.identities.contains(id)) reject("authoring seed has no proposed identity");
-    Json result{{"version", 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
-        {"seed_slab_ids", authoring.seed_slab_ids}, {"identities", authoring.identities}, {"slab_profiles", Json::array()}};
+    const auto* family = stack_edit ? "slab_stacks" : "slab_profiles";
+    Json result{{"version", stack_edit ? 2 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+        {"seed_slab_ids", authoring.seed_slab_ids}, {"identities", authoring.identities}, {family, Json::array()}};
     auto bytes = result.dump().size();
     if (bytes > maximum_authoring_bytes) reject("authoring byte budget exceeded");
-    auto& profiles = result.at("slab_profiles");
-    for (const auto& profile : authoring.slab_profiles) {
-        if (!seeds.contains(profile.slab_id) || !targets.insert(profile.slab_id).second)
-            reject("authoring profiles require unique seed targets");
-        auto encoded = encode_slab_profile_edit_intent(profile);
-        const auto added = encoded.dump().size() + (profiles.empty() ? 0 : 1);
+    auto& rows = result.at(family);
+    const auto append = [&](const auto& intent, Json encoded) {
+        if (!seeds.contains(intent.slab_id) || !targets.insert(intent.slab_id).second)
+            reject(stack_edit ? "authoring stacks require unique seed targets" : "authoring profiles require unique seed targets");
+        const auto added = encoded.dump().size() + (rows.empty() ? 0 : 1);
         if (added > maximum_authoring_bytes - bytes) reject("authoring byte budget exceeded");
-        bytes += added; profiles.push_back(std::move(encoded));
-    }
-    if (targets != seeds) reject("authoring seeds must exactly match profile targets");
+        bytes += added; rows.push_back(std::move(encoded));
+    };
+    for (const auto& profile : authoring.slab_profiles) append(profile, encode_slab_profile_edit_intent(profile));
+    for (const auto& stack : authoring.slab_stacks) append(stack, encode_slab_layer_stack_edit_intent(stack));
+    if (targets != seeds) reject(stack_edit ? "authoring seeds must exactly match stack targets" :
+        "authoring seeds must exactly match profile targets");
     return result;
 }
 
 PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(const nlohmann::json& value) {
     try {
         if (!value.is_object() || value.size() != 6 || !value.contains("version") ||
-            !value.at("version").is_number_integer() || value.at("version") != 1 ||
+            !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2) ||
             !value.contains("registry_id") || !value.contains("alternative_id") || !value.contains("seed_slab_ids") ||
-            !value.contains("identities") || !value.contains("slab_profiles") || !value.at("identities").is_object() ||
-            !value.at("seed_slab_ids").is_array() || !value.at("slab_profiles").is_array())
-            reject("authoring must contain exactly the six version-one fields");
+            !value.contains("identities") || !value.at("identities").is_object() || !value.at("seed_slab_ids").is_array())
+            reject("authoring must contain exactly the six supported versioned fields");
+        const bool stack_edit = value.at("version") == 2;
+        const auto* family = stack_edit ? "slab_stacks" : "slab_profiles";
+        if (!value.contains(family) || !value.at(family).is_array())
+            reject("authoring edit family must exactly match its version");
         if (value.at("seed_slab_ids").size() > maximum_replacements || value.at("identities").size() > maximum_replacements ||
-            value.at("slab_profiles").size() > maximum_replacements || value.dump().size() > maximum_authoring_bytes)
+            value.at(family).size() > maximum_replacements)
             reject("authoring budget exceeded");
+        Strings budget; budget.node_limit = maximum_authoring_bytes; budget.byte_limit = maximum_authoring_bytes;
+        budget.read(value);
+        if (value.dump().size() > maximum_authoring_bytes) reject("authoring byte budget exceeded");
         PhaseSlabReplacementAuthoring result;
         result.registry_id = value.at("registry_id").get<std::string>();
         result.alternative_id = value.at("alternative_id").get<std::string>();
         result.seed_slab_ids = value.at("seed_slab_ids").get<std::vector<std::string>>();
         result.identities = value.at("identities").get<PhaseSlabReplacementIdentityMap>();
-        for (const auto& profile : value.at("slab_profiles")) result.slab_profiles.push_back(decode_slab_profile_edit_intent(profile));
-        (void)encode_phase_slab_replacement_authoring(result);
+        if (stack_edit) for (const auto& stack : value.at(family))
+            result.slab_stacks.push_back(decode_slab_layer_stack_edit_intent(stack));
+        else for (const auto& profile : value.at(family))
+            result.slab_profiles.push_back(decode_slab_profile_edit_intent(profile));
+        const auto canonical = encode_phase_slab_replacement_authoring(result);
+        if (canonical != value || canonical.dump() != value.dump()) reject("authoring differs from its canonical typed encoding");
         return result;
     } catch (const Json::exception& error) { reject(std::string("malformed authoring: ") + error.what()); }
 }
 
 PhaseSlabReplacementEntities replay_phase_slab_replacement_authoring(
     const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementAuthoring& authoring) {
-    (void)encode_phase_slab_replacement_authoring(authoring);
+    const auto encoded = encode_phase_slab_replacement_authoring(authoring);
+    const auto canonical = encode_phase_slab_replacement_authoring(decode_phase_slab_replacement_authoring(encoded));
+    if (canonical != encoded || canonical.dump() != encoded.dump()) reject("authoring typed round trip differs");
     const auto plan = inspect_phase_slab_replacement_plan(source, authoring.seed_slab_ids, authoring.registry_id, authoring.alternative_id);
-    return replay_phase_slab_replacement(source, plan, authoring.identities, authoring.slab_profiles).entities;
+    return replay_phase_slab_replacement(source, plan, authoring.identities, authoring.slab_profiles, authoring.slab_stacks).entities;
 }
 
 } // namespace sketch

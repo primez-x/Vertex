@@ -1,4 +1,47 @@
-# Vertex project formats v1 through v102
+# Vertex project formats v1 through v103
+
+## Source-derived horizontal layer stacks (v103)
+
+Native format 103 and JSON/assets extraction version 101 retain source-derived
+ordered layer inventory/material edits and retired entered layer measurements.
+The strict version-one stack intent has exactly `version`, `slab_id`,
+`thickness` and `layers`. Each ordered row has exactly `layer_id`, `thickness`,
+`material_mode` and `material`. Null thickness retains the existing exact native
+dimension and receipt. Material mode is `retain`, `clear` or `set`; only `set`
+has a version-one actual catalog/material reference.
+
+Rows declare the complete resulting inventory and order. Missing original rows
+are explicitly removed; an empty array clears the stack. New rows require an
+actual entered positive thickness and explicit material choice. Total thickness
+is retained or explicitly entered, never inferred from the layer sum. Native
+layers must sum to that total. Source/result geometry, aliases, resolved levels,
+actual drawing context and actual catalog materials undergo admission.
+
+Known indexed quantity bindings follow actual layer identity through reordering.
+Changed measurements retain opaque receipt siblings. Removed known receipts
+append verbatim to `extensions.slab_layer_stack_retirement`, whose exact
+version-one envelope has `version` and `receipts`; each row has `layer_id`,
+`pointer` and `receipt`. This archive is bounded to 4,096 rows and 1 MiB. Its
+layer IDs are historical provenance. Future or unknown affected bindings refuse
+without losing data; unedited quantities are never reconstructed from a float.
+
+Shared baseline stack edits retain phase envelope five with an exclusive
+version-two slab replacement. Its six fields are `version`, `registry_id`,
+`alternative_id`, `seed_slab_ids`, `identities` and `slab_stacks`. The original
+source child mapping remains complete, including reserved names for removed
+layers. Surviving original layer identities map to new proposed children; new
+authored rows keep their declared fresh IDs. Both are reserved across history,
+including Undo. Original owners and other alternatives stay exact. Supported
+historical retirement IDs remain provenance in proposed copies.
+
+The desktop layer table supports add, remove, reorder, entered thickness and
+catalog material selection, with an explicit total and read-only layer sum.
+Captured document, saved-state and workspace fences precede publication.
+The public layer API captures actual numeric input tokens and uses the same
+semantic editing lane. Direct/wrapped replacement proofs and retained retirement
+archives raise the required-reader floor. Earlier profile wire and floors stay
+unchanged. This documents source contracts; compilation and runtime behavior
+remain unverified for this source batch.
 
 ## Retained baseline horizontal assembly demolition (v102)
 

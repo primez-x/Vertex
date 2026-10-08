@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 101 requires native reader 103 for horizontal layer-stack
+authoring and retired entered layer measurements. It retains exclusive slab
+replacement two inside phase envelope five, ordered stack intent one, actual
+new layer names and complete original child identity mappings. The bounded
+retirement archive preserves removed known receipts verbatim as historical
+provenance. The floor covers direct/wrapped proofs and archived receipts in
+retained revisions, including Undo. Earlier profile wire and floors stay exact.
+
 Exchange version 100 requires native reader 102 for retained baseline horizontal
 assembly demolition. It preserves exclusive phase envelope six and its strict
 actual registry/alternative/slab decision, without replacement identities or

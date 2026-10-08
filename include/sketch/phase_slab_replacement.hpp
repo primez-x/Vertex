@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/phase_slab_profile_edit.hpp"
+#include "sketch/slab_layer_stack_edit.hpp"
 
 #include <map>
 #include <optional>
@@ -34,7 +35,10 @@ struct PhaseSlabReplacementPlan {
 
 struct PhaseSlabReplacementResult {
     PhaseSlabReplacementEntities entities;
+    // Complete source roster, including removed layers whose mapped IDs are
+    // reserved without becoming live proposed children.
     PhaseSlabReplacementIdentityMap original_to_proposed;
+    // Mapping outputs plus actual newly authored stack row IDs.
     std::vector<std::string> fresh_identity_ids;
 };
 
@@ -44,11 +48,14 @@ struct PhaseSlabReplacementResult {
 
 // Reinspect the source, independently replay typed inputs and derive fresh
 // owners. Originals remain exact; qualified presentation rows are additive.
+// Exactly one edit family is nonempty. New stack rows retain their declared
+// fresh IDs; existing rows remap through the complete source-derived mapping.
 // The enclosing Document reserves fresh identities across retained history.
 [[nodiscard]] PhaseSlabReplacementResult replay_phase_slab_replacement(
     const PhaseSlabReplacementEntities& source, const PhaseSlabReplacementPlan& plan,
     const PhaseSlabReplacementIdentityMap& identities,
-    const std::vector<SlabProfileEditIntent>& slab_profiles);
+    const std::vector<SlabProfileEditIntent>& slab_profiles,
+    const std::vector<SlabLayerStackEditIntent>& slab_stacks = {});
 
 struct PhaseSlabReplacementAuthoring {
     std::string registry_id;
@@ -56,10 +63,12 @@ struct PhaseSlabReplacementAuthoring {
     std::vector<std::string> seed_slab_ids;
     PhaseSlabReplacementIdentityMap identities;
     std::vector<SlabProfileEditIntent> slab_profiles;
+    std::vector<SlabLayerStackEditIntent> slab_stacks;
 };
 
 // Exact v1 fields: version, registry_id, alternative_id, seed_slab_ids,
-// identities and slab_profiles. Seeds must exactly match changed edit targets.
+// identities and slab_profiles. Exclusive v2 replaces slab_profiles with
+// slab_stacks. Seeds must exactly match changed edit targets in either family.
 [[nodiscard]] nlohmann::json encode_phase_slab_replacement_authoring(
     const PhaseSlabReplacementAuthoring& authoring);
 [[nodiscard]] PhaseSlabReplacementAuthoring decode_phase_slab_replacement_authoring(
@@ -79,5 +88,7 @@ struct PhaseSlabProfileReplacementRequest {
 // inactive/demolished owners and overlapping membership are refused.
 [[nodiscard]] std::optional<PhaseSlabProfileReplacementRequest> phase_slab_profile_replacement_request(
     const PhaseSlabReplacementEntities& source, const std::vector<SlabProfileEditIntent>& slab_profiles);
+[[nodiscard]] std::optional<PhaseSlabProfileReplacementRequest> phase_slab_layer_stack_replacement_request(
+    const PhaseSlabReplacementEntities& source, const std::vector<SlabLayerStackEditIntent>& slab_stacks);
 
 } // namespace sketch

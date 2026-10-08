@@ -49,6 +49,7 @@
 #include "sketch/phase_roof_resize.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
+#include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #endif
 
@@ -2716,6 +2717,19 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
             }
+            for (const auto& stack : replacement.slab_stacks) {
+                Slab original; std::string diagnostic;
+                if (!read_document_slab(source.at(stack.slab_id), original, diagnostic))
+                    throw std::invalid_argument(diagnostic);
+                for (const auto& row : stack.layers) {
+                    if (std::any_of(original.layers.begin(), original.layers.end(), [&](const auto& layer) {
+                            return layer.id == row.layer_id;
+                        })) continue;
+                    if (!fresh.insert(row.layer_id).second)
+                        throw std::invalid_argument("A new slab layer overlaps another fresh replacement identity: " + row.layer_id);
+                    nested_fresh.insert(row.layer_id);
+                }
+            }
         }
         if (intent.wall_replacement.is_null()) continue;
         const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
@@ -2767,8 +2781,13 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 };
                 if (!intent.wall_replacement.is_null())
                     require_unused(decode_phase_wall_replacement_authoring(intent.wall_replacement).identities);
-                if (!intent.slab_replacement.is_null())
-                    require_unused(decode_phase_slab_replacement_authoring(intent.slab_replacement).identities);
+                if (!intent.slab_replacement.is_null()) {
+                    const auto slab = decode_phase_slab_replacement_authoring(intent.slab_replacement);
+                    require_unused(slab.identities);
+                    for (const auto& stack : slab.slab_stacks)
+                        for (const auto& row : stack.layers) if (fresh.contains(row.layer_id))
+                            throw std::invalid_argument("Slab layer identity was already reserved by retained intent: " + row.layer_id);
+                }
                 if (!intent.roof_replacement.is_null()) {
                     const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
                     require_unused(roof.identities);

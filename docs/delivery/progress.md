@@ -14,6 +14,42 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 horizontal layer-stack editing implementation
+
+Horizontal assemblies now have a table editor for adding, removing and
+reordering layers, entering layer thickness and assigning actual catalog
+materials. Total thickness is explicit and editable; the layer sum is read-only.
+Untouched dimensions retain their actual native values and receipts, including
+values outside the editable rational range. No JSON entry is required for this
+user workflow. Actual captured document/saved/workspace fences and a lifetime
+name allocator guard publication.
+
+The semantic engine derives the complete resulting inventory from actual source
+rows. Qualified indexed receipts follow layer identities through reordering;
+removed known receipts remain verbatim in a bounded retirement archive. Changed
+quantities retain opaque receipt siblings. Unsupported affected bindings refuse,
+and source/final native geometry, resolved placement, context and catalog
+materials undergo admission. Source-equivalent edits retain exact payloads.
+
+Existing ordinary and proposed owners use that same stack engine. Shared
+baseline edits derive distinct proposed owners and surviving child identities,
+with actual new layer IDs preserved and reserved throughout history. Baseline
+owners and other alternatives remain exact; qualified presentation additions
+remain additive. Stack replacement two, native 103/extraction 101 and supported
+retirement provenance retain these operations. The public layer API captures
+actual numeric tokens and no longer falls through to receipt-blind raw updates.
+
+Independent bounded source review approved the complete core, dialog and
+proposed-edit integration with no outstanding source findings. Root also
+adjusted the read-only sum display for imperial inches and readable precision;
+the underlying dimensions and validation retain their exact values. This
+supplies source review only.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran; the installed candidate stays unchanged. Compilation, interaction, Undo/
+Redo and storage round trips remain unverified. Proposed footprint, transforms,
+independent copy and mixed-family authoring remain active implementation gaps.
+No production acceptance or completion estimate is claimed.
+
 ### October 8 retained horizontal assembly demolition implementation
 
 Delete and Cut now derive demolition from actual active shared baseline slabs,
