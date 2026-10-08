@@ -5283,6 +5283,7 @@ class MainWindow::Impl {
         std::map<QString,SiteAnnotationTarget> move_annotation_targets;
         std::vector<CanvasReference> move_references;
         std::optional<SitePresentationPlacement> move_frame;
+        std::map<QString,SitePresentationPlacement> move_frames;
     };
 
     struct SiteTransformPreviewCapture {
@@ -5307,6 +5308,10 @@ class MainWindow::Impl {
     struct SelectionMoveIntent {
         QStringList ids;
         Vec2 local_delta;
+        Vec2 canvas_delta;
+    };
+    struct SiteSelectionMoveIntent {
+        QStringList ids;
         Vec2 canvas_delta;
     };
     struct CanvasEditSourceCapture {
@@ -5379,7 +5384,7 @@ class MainWindow::Impl {
     struct SiteWallMovePreviewCommand {
         std::shared_ptr<const SiteTransformPreviewCapture> capture;
         std::uint64_t serial{};
-        SelectionMoveIntent intent;
+        SiteSelectionMoveIntent intent;
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
     };
@@ -5529,7 +5534,7 @@ class MainWindow::Impl {
         double axis_resize_model_angle{};
         std::shared_ptr<std::optional<Command>> axis_resize_command;
         std::shared_ptr<const SiteTransformPreviewCapture> site_transform_capture;
-        std::optional<SelectionMoveIntent> site_wall_move;
+        std::optional<SiteSelectionMoveIntent> site_wall_move;
         std::shared_ptr<const SiteTransformPreviewCapture> site_wall_move_capture;
         std::shared_ptr<std::optional<Command>> physical_rotation_command;
         std::optional<std::pair<double,double>> physical_rotation_parameters;
@@ -7787,7 +7792,8 @@ public:
 
     static Command completeAreaCalloutTransform(const DocumentSnapshot& source, Command command,
         const PlanarTransform& transform,
-        const std::map<std::string,std::string,std::less<>>* copy_ids = nullptr) {
+        const std::map<std::string,std::string,std::less<>>* copy_ids = nullptr,
+        const std::function<PlanarTransform(const std::string&)>& owner_transform = {}) {
         const auto angle=std::remainder(transform.rotation_radians,2.0*std::numbers::pi);
         const bool linear_identity=(!transform.flip_horizontal && !transform.flip_vertical && angle==0.0) ||
             (transform.flip_horizontal && transform.flip_vertical && std::abs(angle)==std::numbers::pi);
@@ -7810,19 +7816,16 @@ public:
         const auto matching_point=[](Vec2 a,Vec2 b) {
             return std::hypot(a.x-b.x,a.y-b.y)<=default_geometry_tolerance_metres;
         };
-        const auto rigid_match=[&](const Boundary& before,const Boundary& after) {
+        const auto rigid_match=[&](const Boundary& before,const Boundary& after,const PlanarTransform& operation) {
             if (before.empty() || before.size()!=after.size()) return false;
             for (std::size_t index=0;index<before.size();++index) {
-                const auto expected=transform_segment(before[index],transform);
+                const auto expected=transform_segment(before[index],operation);
                 const auto& actual=after[index];
                 if (!matching_point(expected.start,actual.start) || !matching_point(expected.end,actual.end) ||
                     std::abs(expected.sweep_radians-actual.sweep_radians)>1e-12) return false;
             }
             return true;
         };
-        const PlanarTransform linear{{},transform.rotation_radians,
-            transform.flip_horizontal,transform.flip_vertical,{}};
-        const bool oriented=!linear_identity;
         std::vector<AreaCalloutPlacement> placements;
         for (const auto& [id,entity] : source.entities()) {
             if (!is_closed_boundary_entity(entity.type) && entity.type!="room") continue;
@@ -7837,9 +7840,15 @@ public:
                 (!copy_ids && proposed->second==entity)) continue;
             const auto before=read_boundary(entity.properties);
             const auto after=read_boundary(proposed->second.properties);
+            const auto operation=owner_transform ? owner_transform(id) : transform;
             // A partially solved/deformed consequence keeps its own automatic
             // anchor. Only a proved shared rigid replay receives this operator.
-            if (!rigid_match(before,after)) continue;
+            if (!rigid_match(before,after,operation)) continue;
+            const PlanarTransform linear{{},operation.rotation_radians,
+                operation.flip_horizontal,operation.flip_vertical,{}};
+            const auto operation_angle=std::remainder(operation.rotation_radians,2.0*std::numbers::pi);
+            const bool oriented=!((!operation.flip_horizontal && !operation.flip_vertical && operation_angle==0.0) ||
+                (operation.flip_horizontal && operation.flip_vertical && std::abs(operation_angle)==std::numbers::pi));
             const auto anchor=area_label_anchor(before);
             const bool separated=presentations.contains({id,"area_name"}) ||
                 presentations.contains({id,"area_calculation"});
@@ -7856,7 +7865,7 @@ public:
                 const Vec2 fallback{0.0,role=="area_name" ? .18 : role=="area_calculation" ? -.18 : 0.0};
                 const auto offset=value!=presentations.end() ? value->second.plan_label_offset.value_or(fallback) : fallback;
                 const auto rotation=value!=presentations.end() ? value->second.plan_label_rotation_radians.value_or(0.0) : 0.0;
-                const auto position=transform_point({anchor.x+offset.x,anchor.y+offset.y},transform);
+                const auto position=transform_point({anchor.x+offset.x,anchor.y+offset.y},operation);
                 const auto direction=oriented ? transform_point({std::cos(rotation),std::sin(rotation)},linear) : Vec2{};
                 placements.push_back({target_id,role,position,oriented ? std::atan2(direction.y,direction.x) : rotation});
             }
@@ -7881,6 +7890,7 @@ public:
         };
         if (auto* entity_command=std::get_if<ApplyEntityChanges>(&command)) merge(entity_command->entity_changes);
         else if (auto* boundary_command=std::get_if<TransformBoundaries>(&command)) merge(boundary_command->entity_changes);
+        else if (auto* boundary_command=std::get_if<TranslateBoundaries>(&command)) merge(boundary_command->entity_changes);
         else if (auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command)) {
             merge(proof->supplemental_entity_changes);
             proof->supplemental_source_completion=true;
@@ -7889,6 +7899,53 @@ public:
         for (const auto& change : placement.entity_changes)
             if (complete.entities().at(change.entity.id)!=change.entity)
                 throw std::invalid_argument("The complete transform changed a reviewed live callout placement.");
+        return command;
+    }
+
+    static Command mergeSourceDerivedSelectionChanges(const DocumentSnapshot& source,Command command,
+        const ApplyEntityChanges& changes,const std::string& message) {
+        if (changes.expected_revision!=source.revision() || !changes.asset_changes.empty())
+            throw std::invalid_argument("A selection edit must retain its captured revision and local assets.");
+        const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
+        const auto candidate=ordinary && ordinary->entity_changes.empty() ? source :
+            Document::preview_command(source,command);
+        std::set<std::string,std::less<>> merged;
+        std::vector<EntityChange> supplements;
+        for (const auto& change : changes.entity_changes) {
+            if (change.kind!=EntityChangeKind::upsert || !merged.insert(change.entity.id).second)
+                throw std::invalid_argument("The selection contains conflicting dependency edits.");
+            const auto before=source.entities().find(change.entity.id);
+            const auto current=candidate.entities().find(change.entity.id);
+            if (before==source.entities().end() || current==candidate.entities().end())
+                throw std::invalid_argument("A selection edit lost its captured dependency identity.");
+            // Both lanes replay the original source. Equal consequences join
+            // once; differing results never overwrite another owner's solve.
+            if (current->second!=before->second) {
+                if (current->second!=change.entity)
+                    throw std::invalid_argument("Selected objects require differing edits of the same dependency: "+change.entity.id);
+                continue;
+            }
+            if (change.entity!=before->second) supplements.push_back(change);
+        }
+        if (supplements.empty()) return command;
+        if (auto* entities=std::get_if<ApplyEntityChanges>(&command)) {
+            entities->entity_changes.insert(entities->entity_changes.end(),supplements.begin(),supplements.end());
+            entities->message=message;
+        } else if (auto* boundaries=std::get_if<TransformBoundaries>(&command)) {
+            boundaries->entity_changes.insert(boundaries->entity_changes.end(),supplements.begin(),supplements.end());
+            boundaries->message=message;
+        } else if (auto* boundaries=std::get_if<TranslateBoundaries>(&command)) {
+            boundaries->entity_changes.insert(boundaries->entity_changes.end(),supplements.begin(),supplements.end());
+            boundaries->message=message;
+        } else if (auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command)) {
+            proof->supplemental_entity_changes.insert(proof->supplemental_entity_changes.end(),supplements.begin(),supplements.end());
+            proof->supplemental_source_completion=true;
+            proof->message=message;
+        } else throw std::invalid_argument("The geometric selection command cannot retain its complete consequences atomically.");
+        const auto complete=Document::preview_command(source,command);
+        for (const auto& change : changes.entity_changes)
+            if (complete.entities().at(change.entity.id)!=change.entity)
+                throw std::invalid_argument("The complete selection edit changed a reviewed consequence: "+change.entity.id);
         return command;
     }
 
@@ -8149,7 +8206,9 @@ public:
 
     static Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
         QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {},
-        std::optional<Vec2> presentation_delta = std::nullopt) {
+        std::optional<Vec2> presentation_delta = std::nullopt,
+        std::span<const JointAnnotationTranslationIntent> annotation_moves = {},
+        std::span<const JointReferenceTranslationIntent> reference_moves = {}) {
         model_ids=translationModelRoots(source,std::move(model_ids));
         const auto movement_error = [](const ConstraintAuthoringPreview& preview) {
             std::string message;
@@ -8186,13 +8245,29 @@ public:
             }
             return std::nullopt;
         }();
+        const auto complete_joint_presentations=[&](JointTranslationIntent& joint) {
+            joint.presentation_offset=presentation_offset;
+            if (annotation_moves.empty() && reference_moves.empty()) return;
+            joint.annotation_translations.assign(annotation_moves.begin(),annotation_moves.end());
+            joint.reference_translations.assign(reference_moves.begin(),reference_moves.end());
+            joint.per_target_presentation_completion=true;
+            joint.presentation_offset.reset();
+        };
         const auto append_presentations = [&](Command movement) {
             auto* connected = std::get_if<ApplyBoundaryConstraintChanges>(&movement);
             if (!connected || !connected->joint_translation_completion)
                 throw std::invalid_argument("The connected selection did not produce translation authority.");
             for (const auto& change : changes) {
                 if (change.kind == EntityChangeKind::upsert && can_recognize_boundary_dimension_entity_type(change.entity.type)) continue;
-                connected->supplemental_entity_changes.push_back(change);
+                const auto id=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+                const auto existing=std::find_if(connected->supplemental_entity_changes.begin(),
+                    connected->supplemental_entity_changes.end(),[&](const auto& value) {
+                        return (value.kind==EntityChangeKind::upsert ? value.entity.id : value.entity_id)==id;
+                    });
+                if (existing!=connected->supplemental_entity_changes.end()) {
+                    if (existing->kind!=change.kind || (change.kind==EntityChangeKind::upsert && existing->entity!=change.entity))
+                        throw std::invalid_argument("The selected presentation differs from its captured-source translation: "+id);
+                } else connected->supplemental_entity_changes.push_back(change);
                 connected->supplemental_source_completion = true;
             }
             (void)Document::preview_command(source,movement);
@@ -8220,7 +8295,7 @@ public:
                return type=="wall" || type=="measurement_linework";})) {
             JointTranslationIntent joint;
             joint.offset=offset;
-            joint.presentation_offset=presentation_offset;
+            complete_joint_presentations(joint);
             for(const auto& id:model_ids) {
                 const auto& entity=source.entities().at(id.toStdString());
                 if(entity.type=="wall") joint.partial_wall_ids.push_back(entity.id);
@@ -8294,7 +8369,7 @@ public:
             if(!partial_ids.isEmpty()) {
                 JointTranslationIntent joint;
                 joint.offset=offset;
-                joint.presentation_offset=presentation_offset;
+                complete_joint_presentations(joint);
                 for(const auto& id:rigid_ids) {
                     const auto& entity=source.entities().at(id.toStdString());
                     if(is_closed_boundary_entity(entity.type)) joint.rigid_boundary_ids.push_back(entity.id);
@@ -8703,8 +8778,12 @@ public:
         const ApplyEntityChanges& presentation,
         std::map<std::string,std::string,std::less<>>& identities,
         std::map<std::pair<std::string,std::string>,std::string>& child_identities,
-        std::size_t maximum_entities = kMaximumClipboardEntities) {
+        std::size_t maximum_entities = kMaximumClipboardEntities,
+        const std::function<PlanarTransform(const std::string&)>& owner_transform = {}) {
         const auto graph = independentAreaCopyGraph(source,std::move(seeds),true,true,maximum_entities,true);
+        const auto operation_for=[&](const std::string& id) {
+            return owner_transform ? owner_transform(id) : transform;
+        };
         for (const auto& entity : graph) identities.emplace(entity.id,new_id(entity.type));
         // Flights and landings are qualified by their persisted stair owner.
         // They can share a spelling with a body or another stair's children.
@@ -8739,10 +8818,14 @@ public:
         }
         std::map<std::string,Entity,std::less<>> physical_values;
         if (!physical_roots.empty()) {
-            const auto physical = architectural_group_transform_command(source,physical_roots,
-                ArchitecturalGroupTransform{{transform.pivot.x,transform.pivot.y,0.0},
-                    {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0,
-                    transform.flip_horizontal,transform.flip_vertical},
+            std::vector<ArchitecturalGroupTransformTarget> targets;
+            for (const auto& id : physical_roots) {
+                const auto operation=operation_for(id);
+                targets.push_back({id,{{operation.pivot.x,operation.pivot.y,0.0},
+                    {operation.offset.x,operation.offset.y,0.0},operation.rotation_radians,1.0,
+                    operation.flip_horizontal,operation.flip_vertical}});
+            }
+            const auto physical=architectural_group_transform_command(source,targets,
                 new_id("architectural-group-copy"),source.revision());
             if (physical.expected_revision!=source.revision() || !physical.asset_changes.empty())
                 throw std::invalid_argument("An architectural copy must retain its captured revision and shared assets.");
@@ -8779,16 +8862,17 @@ public:
             auto clone = entity;
             clone.id = identities.at(entity.id);
             const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
-            clone.properties["model"] = encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
+            clone.properties["model"] = encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,operation_for(entity.id)));
             remap_entity_references(clone,identities);
             clone.extensions["measurement_linework_copy_scope"] = {{"version",1}};
             copied.insert_or_assign(clone.id,std::move(clone));
         }
         for (const auto& entity : graph) {
             if (!is_closed_boundary_entity(entity.type) && entity.type != "wall") continue;
+            const auto operation=operation_for(entity.id);
             const auto built = entity.type == "wall"
-                ? makeWallTransformCommand(source,entity,{},false,false,{}, {},true,transform,&identities,false,maximum_entities)
-                : makeBoundaryTransformCommand(source,entity,{},false,false,{}, {},true,std::nullopt,transform,false,&identities);
+                ? makeWallTransformCommand(source,entity,{},false,false,{}, {},true,operation,&identities,false,maximum_entities)
+                : makeBoundaryTransformCommand(source,entity,{},false,false,{}, {},true,std::nullopt,operation,false,&identities);
             const auto* changes = std::get_if<ApplyEntityChanges>(&built.first);
             if (!changes) throw std::invalid_argument("The area copy did not produce a detached geometry command.");
             for (const auto& change : changes->entity_changes) {
@@ -8801,17 +8885,24 @@ public:
                 const auto decoded = decode_constraint_entity(entity);
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                 auto constraint = *decoded.constraint;
+                auto operation=transform;
+                if (owner_transform && !constraint.bindings.empty()) {
+                    operation=operation_for(constraint.bindings.front().owner_id);
+                    for (const auto& binding : constraint.bindings)
+                        if (!equivalentPlanOperators(operation,operation_for(binding.owner_id)))
+                            throw std::invalid_argument("A copied relationship connects different Site coordinate frames. Review that relationship before transforming its owners.");
+                }
                 constraint.id = identities.at(entity.id);
                 for (auto& binding : constraint.bindings) {
                     binding.owner_id = identities.at(binding.owner_id);
                     if (!binding.segment_id.empty()) binding.segment_id = identities.at(binding.segment_id);
                     if (!binding.vertex_id.empty()) binding.vertex_id = identities.at(binding.vertex_id);
                 }
-                if (constraint.anchor) constraint.anchor = transform_point(*constraint.anchor,transform);
+                if (constraint.anchor) constraint.anchor = transform_point(*constraint.anchor,operation);
                 if (constraint.relation == ConstraintRelationKind::horizontal || constraint.relation == ConstraintRelationKind::vertical) {
-                    if (std::abs(std::remainder(transform.rotation_radians,std::numbers::pi/2)) > 1e-12)
+                    if (std::abs(std::remainder(operation.rotation_radians,std::numbers::pi/2)) > 1e-12)
                         throw std::invalid_argument("Horizontal or vertical locked relationships require a quarter-turn rotation when copied.");
-                    if (std::llround(transform.rotation_radians/(std::numbers::pi/2))%2 != 0)
+                    if (std::llround(operation.rotation_radians/(std::numbers::pi/2))%2 != 0)
                         constraint.relation = constraint.relation == ConstraintRelationKind::horizontal
                             ? ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
                 }
@@ -8832,7 +8923,8 @@ public:
                 // consequence may already have moved its saved text position.
                 const auto original_dimension = decode_boundary_dimension_entity(entity);
                 if (!original_dimension.supported()) throw std::invalid_argument(original_dimension.unsupported_reason);
-                dimension.text_position = transform_point(original_dimension.dimension->text_position,transform);
+                dimension.text_position = transform_point(original_dimension.dimension->text_position,
+                    operation_for(original_dimension.dimension->boundary_id));
                 copied.insert_or_assign(metadata.id,encode_boundary_dimension_entity(dimension,&metadata));
             } else if (entity.type == kAnnotationEntityType) {
                 auto annotation = entity;
@@ -8874,9 +8966,14 @@ public:
                     }
                     return !identities.contains(target);
                 }),overrides.end());
+                std::map<std::string,std::string,std::less<>> original_targets;
+                for (const auto& [original,mapped] : identities) original_targets.emplace(mapped,original);
                 remap_entity_references(annotation,identities);
-                const PlanarTransform linear{{},transform.rotation_radians,transform.flip_horizontal,transform.flip_vertical,{}};
                 for (auto& record : annotation.properties.at("state").at("overrides")) {
+                    const auto mapped_target=record.at("target_id").get<std::string>();
+                    const auto original_target=original_targets.find(mapped_target);
+                    const auto operation=original_target!=original_targets.end() ? operation_for(original_target->second) : transform;
+                    const PlanarTransform linear{{},operation.rotation_radians,operation.flip_horizontal,operation.flip_vertical,{}};
                     if (record.contains("plan_label_offset_m")) {
                         const auto offset = read_point(record.at("plan_label_offset_m"));
                         if (!offset) throw std::invalid_argument("The copied area label offset is invalid.");
@@ -8908,7 +9005,7 @@ public:
                 revokeCopiedAppraisalObservation(entity,found->second);
             } else throw std::invalid_argument("A required selection copy dependency is unsupported: " + entity.type);
         for (auto& [id,entity] : copied) command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
-        command = std::get<ApplyEntityChanges>(completeAreaCalloutTransform(source,Command{std::move(command)},transform,&identities));
+        command = std::get<ApplyEntityChanges>(completeAreaCalloutTransform(source,Command{std::move(command)},transform,&identities,owner_transform));
         command = validateIndependentAreaCopy(source,std::move(command));
         const auto candidate = Document::preview_command(source,command);
         validate_architectural_geometry_changes(source,candidate);
@@ -11666,6 +11763,8 @@ public:
         QString selection_diagnostic;
         std::optional<Vec2> group_pivot;
         const bool site_group = group && siteCanvas(m_architecturalCanvas);
+        std::map<QString,SitePresentationPlacement> selection_site_frames;
+        std::map<std::string,SitePresentationPlacement,std::less<>> site_owner_frames;
         QStringList geometry_selection;
         std::vector<std::string> architectural_selection;
         std::map<std::string,AssemblyDocumentInstance,std::less<>> embedded_selection;
@@ -11715,6 +11814,7 @@ public:
         std::set<std::pair<std::string,std::string>> model_labels;
         std::optional<BuildingViewFrame> plan_frame;
         std::optional<SnapshotPlanScene> presentation_scene;
+        SiteCanvasPresentationFrames numeric_site_source_frames;
         PlanSceneCaches presentation_caches;
         SnapshotPlanSceneOptions presentation_options;
         presentation_options.metric_units=context.metric_units;
@@ -11725,8 +11825,13 @@ public:
         presentation_options.label_device=selection_canvas;
         if (!site_group)
             presentation_options.active_context=projectOrganization(source)->drawing_context(m_active_layer_id.toStdString());
-        const auto source_position = [&](Vec2 position, bool model_plan) {
-            return !site_group && plan_frame && !model_plan ? unproject_plan_point(position,*plan_frame) : position;
+        const auto source_position = [&](Vec2 position, bool model_plan,const QString& id) {
+            if (site_group) return site_presented_plan_point(position,selection_site_frames.at(id));
+            return plan_frame && !model_plan ? unproject_plan_point(position,*plan_frame) : position;
+        };
+        const auto include_path = [&](Boundary& geometry,const Boundary& path,const QString& id) {
+            const auto presented=site_group ? site_transform_boundary(path,selection_site_frames.at(id).forward) : path;
+            geometry.insert(geometry.end(),presented.begin(),presented.end());
         };
         if (group) {
             try {
@@ -11755,9 +11860,21 @@ public:
                 }
                 if (site_group) {
                     captureSiteEdit(m_architecturalCanvas);
-                    (void)siteEditFrame(selection);
+                    selection_site_frames=admittedSiteSelectionFrames(source,m_site_edit_frames,
+                        m_site_edit_geometry_selection,m_site_edit_annotation_targets,m_site_edit_selected_presentations,selection);
+                    for (const auto& [id,frame] : selection_site_frames) site_owner_frames.emplace(id.toStdString(),frame);
                 }
-                presentation_scene=projectSnapshotPlanScene(source,presentation_options,presentation_caches);
+                presentation_scene=site_group ? sitePlanScene(source,numeric_site_source_frames,false,true) :
+                    projectSnapshotPlanScene(source,presentation_options,presentation_caches);
+                if (site_group) {
+                    // Complete canonical preview frames already share one
+                    // source resolver, including hidden copy dependencies.
+                    for (const auto& [key,frame] : numeric_site_source_frames.geometry)
+                        if (source.entities().contains(key.first.toStdString()))
+                            site_owner_frames.emplace(key.first.toStdString(),frame.placement);
+                    for (const auto& [id,frame] : numeric_site_source_frames.auxiliary)
+                        if (source.entities().contains(id.toStdString())) site_owner_frames.emplace(id.toStdString(),frame);
+                }
                 if (!site_group && selectionNeedsModelPlanFrame(source,selection)) plan_frame=canvasTransformPlanFrame(source);
                 Boundary geometry;
                 const auto visible = visible_project_entities_with_phase(source, m_view_filter);
@@ -11786,7 +11903,7 @@ public:
                             const AssemblyPlacement xy{{},{profile.transform.translation_m.x,profile.transform.translation_m.y},
                                 profile.transform.rotation_radians,profile.transform.scale,profile.transform.mirrored_y};
                             const auto path=assembly_placement_boundary(profile.profile.outer,xy);
-                            geometry.insert(geometry.end(),path.begin(),path.end());
+                            include_path(geometry,path,id);
                         }
                         continue;
                     }
@@ -11818,12 +11935,12 @@ public:
                             const auto width=definition.width_metres*symbol->placement.scale*symbol->width_scale;
                             const auto depth=definition.depth_metres*symbol->placement.scale*symbol->depth_scale;
                             for (const auto x : {-0.5,0.5}) for (const auto y : {-0.5,0.5})
-                                include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},symbol->placement.rotation_radians,false,false,symbol->placement.position}),model_plan));
+                                include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},symbol->placement.rotation_radians,false,false,symbol->placement.position}),model_plan,id));
                         } else {
                             const auto& displayed=site_group ? m_site_edit_local_labels : selection_canvas->labels();
                             if (std::count_if(displayed.begin(),displayed.end(),[&](const auto& item){return item.id==id;})!=1)
                                 throw std::invalid_argument("A selected text label has no unique visible presentation.");
-                            include_point(source_position(label->placement.position,model_plan));
+                            include_point(source_position(label->placement.position,model_plan,id));
                         }
                         continue;
                     }
@@ -11839,7 +11956,7 @@ public:
                         const auto width=reference->image.width()*reference->metres_per_source_unit*reference->scale;
                         const auto depth=reference->image.height()*reference->metres_per_source_unit*reference->scale;
                         for (const auto x : {-0.5,0.5}) for (const auto y : {-0.5,0.5})
-                            include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},reference->rotation_degrees*std::numbers::pi/180.0,false,false,reference->position}),false));
+                            include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},reference->rotation_degrees*std::numbers::pi/180.0,false,false,reference->position}),false,id));
                         continue;
                     }
                     if (found == source.entities().end() || (!geometry_root(found->second) && !architectural_root(found->second)))
@@ -11855,7 +11972,7 @@ public:
                             throw std::invalid_argument("The architectural selection exceeds the 1000-object limit.");
                         const auto path=assemblyHostPlan(source,found->first,presentation_scene->wall_plans);
                         if (path.empty()) throw std::invalid_argument("A selected architectural object has no canonical plan profile.");
-                        geometry.insert(geometry.end(),path.begin(),path.end());
+                        include_path(geometry,path,id);
                         architectural_selection.push_back(found->first);
                         continue;
                     }
@@ -11863,14 +11980,14 @@ public:
                     if (entity.type == "wall") {
                         const auto baseline = read_required_segment(entity.properties, "baseline");
                         if (!baseline) throw std::invalid_argument("A selected wall has no canonical axis geometry.");
-                        geometry.push_back(*baseline);
+                        include_path(geometry,{*baseline},id);
                     } else if (entity.type == "measurement_linework") {
                         for (const auto& edge : resolve_dimension_geometry_owner(entity).segments)
-                            geometry.push_back(edge.segment);
+                            include_path(geometry,{edge.segment},id);
                     } else {
                         const auto boundary = read_boundary(entity.properties);
                         if (boundary.empty()) throw std::invalid_argument("A selected area has no canonical outline geometry.");
-                        geometry.insert(geometry.end(), boundary.begin(), boundary.end());
+                        include_path(geometry,boundary,id);
                     }
                 }
                 if (geometry.empty()) throw std::invalid_argument("The selection has no authoritative plan extents.");
@@ -11912,7 +12029,8 @@ public:
             if (site_group) {
                 try {
                     requireSiteEditCurrent();
-                    (void)siteEditFrame(selection);
+                    (void)admittedSiteSelectionFrames(source,m_site_edit_frames,m_site_edit_geometry_selection,
+                        m_site_edit_annotation_targets,m_site_edit_selected_presentations,selection);
                     if (site_generation != m_site_edit_generation ||
                         site_publication_generation != m_site_publication_generation)
                         throw std::invalid_argument("The Site Plan frame changed. Reopen Transform.");
@@ -11932,8 +12050,9 @@ public:
         dialog.setWindowTitle(QStringLiteral("Transform selection"));
         dialog.resize(520, 330);
         auto* layout = new QVBoxLayout(&dialog);
-        auto* help = new QLabel(group ? QStringLiteral(
-            "Rotate or flip all %1 selected objects around their combined center. X/Y offsets use the project's plan coordinates.").arg(selection.size()) : QStringLiteral(
+        auto* help = new QLabel(group ? (site_group ? QStringLiteral(
+            "Rotate or flip all %1 selected objects around their combined Site center. X/Y offsets use Site coordinates.") : QStringLiteral(
+            "Rotate or flip all %1 selected objects around their combined center. X/Y offsets use the project's plan coordinates.")).arg(selection.size()) : QStringLiteral(
             "Pivot: area or measured-line bounds center, or wall endpoint midpoint. Rotation is in degrees; offsets use the current input units."),
             &dialog);
         help->setWordWrap(true);
@@ -12003,6 +12122,7 @@ public:
                 if (m_boundary_session) throw std::invalid_argument("Finish or cancel the active boundary before transforming the selection.");
                 if (!context_current()) throw std::invalid_argument(lastError().toStdString());
                 std::optional<PlanarTransform> shared_callout_transform;
+                std::function<PlanarTransform(const std::string&)> callout_owner_transform;
                 auto candidate = [&]() -> std::pair<Command, std::string> {
                     if (!group) return makeSelectedTransformCommand(source,*original,rotation->text(),
                         flip_horizontal->isChecked(),flip_vertical->isChecked(),offset_x->text(),offset_y->text(),clone->isChecked());
@@ -12016,8 +12136,8 @@ public:
                         if (!std::isfinite(value)) throw std::invalid_argument("Transform offsets must be finite.");
                         return value;
                     };
-                    // Numeric values already describe source-plan coordinates;
-                    // applying the Site presentation inverse would transform twice.
+                    // Site values describe one displayed world operation. Each
+                    // source owner receives its captured inverse frame once.
                     auto angle = std::remainder(degrees, 360.0);
                     auto horizontal = flip_horizontal->isChecked();
                     auto vertical = flip_vertical->isChecked();
@@ -12029,6 +12149,11 @@ public:
                         horizontal, vertical,
                         {offset(offset_x->text()), offset(offset_y->text())}};
                     shared_callout_transform=transform;
+                    if (site_group) callout_owner_transform=[&,world=transform](const std::string& id) {
+                        if (!site_owner_frames.contains(id))
+                            throw std::invalid_argument("A transformed dependency has no captured canonical Site frame: "+id);
+                        return siteLocalPlanTransform(world,site_owner_frames.at(id));
+                    };
                     const ArchitecturalGroupTransform physical_transform{{group_pivot->x,group_pivot->y,0.0},
                         {transform.offset.x,transform.offset.y,0.0},transform.rotation_radians,1.0,
                         transform.flip_horizontal,transform.flip_vertical};
@@ -12039,7 +12164,15 @@ public:
                     }
                     ApplyEntityChanges presentation{source.revision(),{}, {},"Transform presentation group"};
                     if (!annotation_targets.empty() || !reference_targets.empty()) {
-                        presentation=presentation_group_transform_command(source,annotation_targets,reference_targets,transform,source.revision());
+                        if (site_group) {
+                            std::vector<PresentationAnnotationTransformTarget> annotations;
+                            std::vector<PresentationReferenceTransformTarget> references;
+                            for (const auto& [render,target] : render_targets)
+                                annotations.push_back({target,siteLocalPlanTransform(transform,selection_site_frames.at(render))});
+                            for (const auto& id : reference_targets)
+                                references.push_back({id,siteLocalPlanTransform(transform,selection_site_frames.at(id_from(id)))});
+                            presentation=presentation_group_transform_command(source,annotations,references,source.revision());
+                        } else presentation=presentation_group_transform_command(source,annotation_targets,reference_targets,transform,source.revision());
                         const bool identity=transform.rotation_radians==0.0 && !horizontal && !vertical &&
                             transform.offset.x==0.0 && transform.offset.y==0.0;
                         if (plan_frame && !identity) {
@@ -12144,7 +12277,7 @@ public:
                         for (const auto& id : reference_targets) seeds.push_back(source.entities().at(id));
                         auto copied = seeds.empty() ? ApplyEntityChanges{source.revision(),{}, {},"Copy transformed selection"} :
                             makeIndependentSelectionCloneCommand(source,std::move(seeds),transform,
-                                presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities);
+                                presentation,candidate_copy_ids,candidate_copy_children,kMaximumNumericSelectionGraphEntities,callout_owner_transform);
                         if (!embedded_targets.empty()) {
                             for (auto& target : embedded_targets) {
                                 const auto alias=selection_embedded_ids->at({target.catalog_id,target.instance_id});
@@ -12227,12 +12360,33 @@ public:
                             candidate_copy_children.at({target->second.owner_id,target->second.child_id});
                         return {std::move(copied),primary};
                     }
+                    auto geometry_transform=transform;
+                    if (site_group && !geometry_selection.isEmpty()) {
+                        geometry_transform=callout_owner_transform(geometry_selection.front().toStdString());
+                        std::set<std::string,std::less<>> checked;
+                        for (const auto& root : geometry_selection) {
+                            const auto graph=clipboard_entities_for_selection(source,root.toStdString(),kMaximumNumericSelectionGraphEntities);
+                            if (graph.empty()) throw std::invalid_argument("A selected Site geometry dependency graph is unavailable.");
+                            for (const auto& entity : graph) {
+                                if (!geometry_root(entity) || !checked.insert(entity.id).second) continue;
+                                if (!equivalentPlanOperators(geometry_transform,callout_owner_transform(entity.id)))
+                                    throw std::invalid_argument("These connected measured objects require different Site transforms. Transform a compatible measured group, or use Copy to create independent geometry.");
+                            }
+                        }
+                    }
                     auto command=geometry_selection.isEmpty() ? Command{std::move(presentation)} :
-                        makeSelectionGeometryTransformCommand(source,geometry_selection,transform,std::move(presentation.entity_changes));
+                        makeSelectionGeometryTransformCommand(source,geometry_selection,geometry_transform,std::move(presentation.entity_changes));
                     if (!architectural_selection.empty() || !embedded_targets.empty()) {
-                        auto architectural=architectural_selection.empty() ?
+                        std::vector<ArchitecturalGroupTransformTarget> physical_targets;
+                        for (const auto& id : architectural_selection) {
+                            const auto operation=site_group ? callout_owner_transform(id) : transform;
+                            physical_targets.push_back({id,{{operation.pivot.x,operation.pivot.y,0.0},
+                                {operation.offset.x,operation.offset.y,0.0},operation.rotation_radians,1.0,
+                                operation.flip_horizontal,operation.flip_vertical}});
+                        }
+                        auto architectural=physical_targets.empty() ?
                             ApplyEntityChanges{source.revision(),{}, {},"Transform architectural selection"} :
-                            architectural_group_transform_command(source,architectural_selection,physical_transform,
+                            architectural_group_transform_command(source,physical_targets,
                                 new_id("architectural-group-transform"),source.revision());
                         if (!embedded_targets.empty()) {
                             const auto embedded=embedded_assembly_group_transform_command(source,embedded_targets,physical_transform,source.revision());
@@ -12248,52 +12402,14 @@ public:
                                 } else architectural.entity_changes.push_back(change);
                             }
                         }
-                        if (architectural.expected_revision!=source.revision() || !architectural.asset_changes.empty())
-                            throw std::invalid_argument("An architectural group transform must retain its captured revision and local assets.");
-                        const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
-                        const auto geometry_candidate=ordinary && ordinary->entity_changes.empty() ? source :
-                            Document::preview_command(source,command);
-                        // Both lanes replay the captured source. Never silently
-                        // overwrite a dependency solved by another selected
-                        // owner or transform an architectural child twice.
-                        std::set<std::string,std::less<>> merged;
-                        std::vector<EntityChange> supplements;
-                        for (const auto& change : architectural.entity_changes) {
-                            if (change.kind!=EntityChangeKind::upsert || !merged.insert(change.entity.id).second)
-                                throw std::invalid_argument("The architectural group contains conflicting dependency edits.");
-                            const auto before=source.entities().find(change.entity.id);
-                            const auto current=geometry_candidate.entities().find(change.entity.id);
-                            if (before==source.entities().end() || current==geometry_candidate.entities().end())
-                                throw std::invalid_argument("A group transform lost its captured dependency identity.");
-                            if (current->second!=before->second) {
-                                if (current->second!=change.entity)
-                                    throw std::invalid_argument("Selected objects require differing transforms of the same dependency: "+change.entity.id);
-                                continue;
-                            }
-                            if (change.entity!=before->second) supplements.push_back(change);
-                        }
-                        if (auto* entity_command=std::get_if<ApplyEntityChanges>(&command)) {
-                            entity_command->entity_changes.insert(entity_command->entity_changes.end(),supplements.begin(),supplements.end());
-                            entity_command->message="Transform complete selection";
-                        } else if (auto* boundary_command=std::get_if<TransformBoundaries>(&command)) {
-                            boundary_command->entity_changes.insert(boundary_command->entity_changes.end(),supplements.begin(),supplements.end());
-                            boundary_command->message="Transform complete selection";
-                        } else if (auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command)) {
-                            proof->supplemental_entity_changes.insert(proof->supplemental_entity_changes.end(),supplements.begin(),supplements.end());
-                            proof->supplemental_source_completion=proof->supplemental_source_completion || !supplements.empty();
-                            proof->message="Transform complete selection";
-                        } else throw std::invalid_argument("The geometric group command cannot retain architectural consequences atomically.");
-                        const auto* result=std::get_if<ApplyEntityChanges>(&command);
-                        const auto complete=result && result->entity_changes.empty() ? source : Document::preview_command(source,command);
-                        for (const auto& change : architectural.entity_changes)
-                            if (complete.entities().at(change.entity.id)!=change.entity)
-                                throw std::invalid_argument("The complete group command changed a reviewed architectural consequence: "+change.entity.id);
+                        command=mergeSourceDerivedSelectionChanges(source,std::move(command),architectural,
+                            "Transform complete selection");
                     }
                     return {std::move(command),primary_render_id.toStdString()};
                 }();
                 if (shared_callout_transform)
                     candidate.first=completeAreaCalloutTransform(source,std::move(candidate.first),*shared_callout_transform,
-                        clone->isChecked() ? &candidate_copy_ids : nullptr);
+                        clone->isChecked() ? &candidate_copy_ids : nullptr,callout_owner_transform);
                 const auto copy_intent = group && clone->isChecked() ?
                     std::optional<ApplyEntityChanges>{std::get<ApplyEntityChanges>(candidate.first)} : std::nullopt;
                 candidate.first = augmentAuthoredCommand(candidate.first, source);
@@ -12320,6 +12436,7 @@ public:
                 std::vector<CanvasReference> references;
                 std::array<std::set<std::string, std::less<>>, 2> preview_ids;
                 std::optional<SnapshotPlanScene> proposed_scene;
+                SiteCanvasPresentationFrames numeric_site_candidate_frames;
                 std::array<std::set<std::string,std::less<>>,2> physical_preview_ids;
                 for (const auto& id : architectural_selection) {
                     physical_preview_ids[0].insert(id);
@@ -12332,7 +12449,8 @@ public:
                 }
                 if (group) {
                     PlanSceneCaches caches;
-                    proposed_scene=projectSnapshotPlanScene(proposed,presentation_options,caches);
+                    proposed_scene=site_group ? sitePlanScene(proposed,numeric_site_candidate_frames,false,true) :
+                        projectSnapshotPlanScene(proposed,presentation_options,caches);
                     const auto same_path=[](const Boundary& left,const Boundary& right) {
                         if (left.size()!=right.size()) return false;
                         for (std::size_t index=0;index<left.size();++index) {
@@ -12541,8 +12659,22 @@ public:
                         }
                         project_plan_model_labels(labels,proposed,*plan_frame);
                     }
+                    if (site_group) {
+                        for (auto& entity : geometry) {
+                            const auto& frames=entity.selected ? numeric_site_candidate_frames : numeric_site_source_frames;
+                            const auto found=frames.geometry.find({entity.id,entity.presentation_key});
+                            if (found==frames.geometry.end())
+                                throw std::invalid_argument("A measured Site preview has no exact canonical frame.");
+                            entity=site_presented_canvas_entity(entity,found->second.placement);
+                        }
+                        for (auto& label : labels) {
+                            const auto& frames=label.selected ? numeric_site_candidate_frames : numeric_site_source_frames;
+                            label=site_presented_canvas_label(label,frames.auxiliary.at(label.id));
+                        }
+                    }
                     const auto add_presentations = [&](const DocumentSnapshot& snapshot,bool selected) {
                         const auto& scene=selected ? *proposed_scene : *presentation_scene;
+                        const auto& site_frames=selected ? numeric_site_candidate_frames : numeric_site_source_frames;
                         const auto render_id = [&](const QString& id) -> std::optional<QString> {
                             for (const auto& [render,target] : render_targets) {
                                 const auto copied = selected && clone->isChecked();
@@ -12565,6 +12697,7 @@ public:
                             if (!physical_preview_ids[selected ? 1 : 0].contains(entity.id.toStdString())) continue;
                             if (!admitted_physical.emplace(entity.id,entity.presentation_key).second)
                                 throw std::invalid_argument("A physical consequence has an ambiguous canonical preview profile.");
+                            if (site_group) entity=site_presented_canvas_entity(entity,site_frames.geometryAt(entity));
                             entity.selected=selected;
                             if (plan_frame) {
                                 entity.segments=project_plan_path(std::move(entity.segments),*plan_frame);
@@ -12620,6 +12753,7 @@ public:
                             if (!render || entity.type!=QStringLiteral("symbol")) continue;
                             if (!admitted_artwork.insert(*render).second)
                                 throw std::invalid_argument("A selected component has an ambiguous candidate presentation.");
+                            if (site_group) entity=site_presented_canvas_entity(entity,site_frames.geometryAt(entity));
                             entity.id=*render;
                             entity.selected=selected;
                             if (plan_frame) project_model_plan_symbol(entity,*plan_frame);
@@ -12641,6 +12775,7 @@ public:
                             if (render && !admitted_artwork.insert(*render).second)
                                 throw std::invalid_argument("A selected label has an ambiguous candidate presentation.");
                             if (existing_labels.contains(plan_label_instance_key(label))) continue;
+                            if (site_group) label=site_presented_canvas_label(label,site_frames.auxiliary.at(label.id));
                             if (render) label.id=*render;
                             label.selected=selected;
                             label.color=selected ? QColor(35,115,190) : QColor(140,148,158);
@@ -12657,6 +12792,7 @@ public:
                             })) continue;
                             if (!reference.visible || reference.image.isNull() || !admitted_references.insert(reference.id).second)
                                 throw std::invalid_argument("A selected reference cannot be uniquely displayed from the candidate source.");
+                            if (site_group) reference=site_presented_canvas_reference(reference,site_frames.auxiliary.at(reference.id));
                             reference.selected=selected;
                             if (!selected) reference.intensity*=0.3;
                             references.push_back(std::move(reference));
@@ -24557,14 +24693,13 @@ public:
                             } else result->reset();
                         }
                     } else if (site_wall_move && prepared_move) {
-                        if (!site_input || !site_input->move_frame)
-                            throw std::invalid_argument("The Site move has no captured selection frame.");
+                        if (!site_input || site_input->move_frames.empty())
+                            throw std::invalid_argument("The Site move has no captured target frames.");
                         const bool no_op=site_wall_move->canvas_delta.x==0.0 && site_wall_move->canvas_delta.y==0.0;
                         Command command=no_op
                             ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
                             : augmentAuthoredCommand(prepareDetachedSiteTranslationCommand(*source,
-                                site_wall_move->ids,site_wall_move->local_delta,
-                                site_input->move_annotation_targets),*source);
+                                site_wall_move->ids,site_wall_move->canvas_delta,*site_input),*source);
                         if (!cancellation.is_cancelled()) {
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
                             if (no_op) {
@@ -24634,8 +24769,10 @@ public:
                                             proposed.resize_frame=physicalPlanResizeFrame(owner->second);
                                         else if (physicalPlanRotationFamily(owner->second.type)) {
                                             auto frame=*original->resize_frame;
-                                            frame.center.x+=site_wall_move->local_delta.x;
-                                            frame.center.y+=site_wall_move->local_delta.y;
+                                            const auto local=site_source_plan_delta(site_wall_move->canvas_delta,
+                                                site_input->move_frames.at(proposed.id));
+                                            frame.center.x+=local.x;
+                                            frame.center.y+=local.y;
                                             frame.source_rotation_radians=physicalPlanRotationAngle(owner->second);
                                             frame.source_rotation_direction=1.0;
                                             proposed.resize_frame=frame;
@@ -24869,16 +25006,20 @@ public:
     std::shared_ptr<const SiteEndpointPreviewInput> captureSitePlanPreviewInput(
         PlanCanvas* canvas,const QStringList& ids,bool selection_move=false) {
         if (!canvas) throw std::invalid_argument("The Site preview canvas is unavailable.");
-        (void)siteEditFrame(ids);
+        requireSiteEditCurrent();
         auto input=std::make_shared<SiteEndpointPreviewInput>();
         input->geometry=m_site_edit_local_geometry; input->labels=m_site_edit_local_labels;
         input->frames=m_site_edit_frames; input->appraisal_area_ids=m_plan_appraisal_area_ids;
-        input->edit_frame=siteEditFrame(ids);
+        if (!selection_move) input->edit_frame=siteEditFrame(ids);
         input->label_font=canvas->font();
         if (selection_move) {
             input->move_annotation_targets=m_site_edit_annotation_targets;
             input->move_references=m_site_edit_local_references;
-            input->move_frame=siteEditFrame(ids);
+            input->move_frames=admittedSiteSelectionFrames(*m_site_edit_source,m_site_edit_frames,
+                m_site_edit_geometry_selection,m_site_edit_annotation_targets,m_site_edit_selected_presentations,ids);
+            // The optional remains the single-object transform lane's marker;
+            // group movement uses every target's captured placement below.
+            input->move_frame=input->move_frames.begin()->second;
         }
         for (const auto& label:input->labels) if (label.avoid_components)
             input->label_footprints.emplace(plan_label_instance_key(label),
@@ -25871,8 +26012,7 @@ public:
             m_site_wall_move_preview.reset();
             if (!siteWallMoveCaptureCurrent(capture) || canvas!=m_wall_move_canvas || ids!=m_wall_move_ids ||
                 !std::isfinite(delta.x) || !std::isfinite(delta.y)) return std::vector<CanvasEntity>{};
-            if (!capture->input->move_frame) return std::vector<CanvasEntity>{};
-            const auto local=site_source_plan_delta(delta,*capture->input->move_frame);
+            if (capture->input->move_frames.empty()) return std::vector<CanvasEntity>{};
             if (!canvas->markEntitiesMovePreviewPending(serial)) return std::vector<CanvasEntity>{};
             const auto input=capture->input;
             const auto geometry=std::shared_ptr<const std::vector<CanvasEntity>>(input,&input->geometry);
@@ -25884,7 +26024,7 @@ public:
                 std::nullopt,std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
             request.authority=m_wall_move_authority;
             request.label_font=input->label_font;
-            request.site_wall_move=SelectionMoveIntent{ids,local,delta};
+            request.site_wall_move=SiteSelectionMoveIntent{ids,delta};
             request.site_wall_move_capture=capture;
             request.model_edit_source=m_model_move_edit_source;
             request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
@@ -44801,8 +44941,49 @@ private:
         }
     }
 
+    static std::string siteModelPresentationOwner(const DocumentSnapshot& source,const std::string& id) {
+        const auto found=source.entities().find(id);
+        if (found==source.entities().end()) throw std::invalid_argument("A Site presentation source no longer exists.");
+        if (!can_recognize_boundary_dimension_entity_type(found->second.type)) return id;
+        const auto decoded=decode_boundary_dimension_entity(found->second);
+        if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+        (void)decoded.dimension->resolve(source);
+        // Saved dimension witnesses and text coordinates are authored in the
+        // analytical owner's model basis. Their organizational layer controls
+        // visibility, but cannot give the same callout a second spatial basis.
+        return decoded.dimension->boundary_id;
+    }
+
+    static bool sameSitePresentationPlacement(const SitePresentationPlacement& a,const SitePresentationPlacement& b) {
+        return a.source_frame==b.source_frame && a.forward.rotation_radians==b.forward.rotation_radians &&
+            a.forward.translation_m.x==b.forward.translation_m.x && a.forward.translation_m.y==b.forward.translation_m.y &&
+            a.forward.translation_m.z==b.forward.translation_m.z;
+    }
+
+    static std::map<std::string,SitePresentationPlacement,std::less<>> resolveSiteModelPresentationFrames(
+        const DocumentSnapshot& source,const std::vector<std::string>& ids) {
+        std::map<std::string,std::string,std::less<>> owners;
+        std::set<std::string,std::less<>> requested;
+        for (const auto& id : ids) {
+            const auto owner=siteModelPresentationOwner(source,id);
+            if (!owners.emplace(id,owner).second) throw std::invalid_argument("A Site frame request repeats a source identity.");
+            requested.insert(owner);
+            if (owner!=id && source.entities().at(id).properties.contains("presentation_frame")) requested.insert(id);
+        }
+        const std::vector<std::string> batch(requested.begin(),requested.end());
+        const auto resolved=resolve_site_presentations(source,batch);
+        std::map<std::string,SitePresentationPlacement,std::less<>> result;
+        for (const auto& [id,owner] : owners) {
+            if (owner!=id && source.entities().at(id).properties.contains("presentation_frame") &&
+                !sameSitePresentationPlacement(resolved.at(id),resolved.at(owner)))
+                throw std::invalid_argument("A saved dimension's explicit Site frame conflicts with its measured owner's coordinate basis: "+id);
+            result.emplace(id,resolved.at(owner));
+        }
+        return result;
+    }
+
     SnapshotPlanScene sitePlanScene(const DocumentSnapshot& source,
-        SiteCanvasPresentationFrames& frames,bool presented=true) {
+        SiteCanvasPresentationFrames& frames,bool presented=true,bool include_hidden=false) {
         const auto organization = organize_project(source);
         const auto active = organization.drawing_context(m_active_layer_id.toStdString());
         if (!active || active->property_id.empty())
@@ -44817,6 +44998,15 @@ private:
         options.label_device = m_architecturalCanvas;
         // No floor scope: property membership below admits every visible floor.
         auto scene = projectSnapshotPlanScene(source, options, m_site_plan_scene_caches);
+        auto layout_geometry=include_hidden ? scene.geometry : std::vector<CanvasEntity>{};
+        auto layout_labels=include_hidden ? scene.labels : std::vector<CanvasLabel>{};
+        if (include_hidden) {
+            // Transform previews retain complete physical consequences,
+            // including hidden hosted objects. Ordinary Site publication keeps
+            // its visibility filters and never uses this preview-only lane.
+            scene.geometry=scene.all_geometry;
+            scene.labels=scene.all_labels;
+        }
         std::set<QString> requested;
         for (const auto& item : scene.labels) requested.insert(item.id);
         for (const auto& item : scene.references) requested.insert(item.id);
@@ -44826,6 +45016,7 @@ private:
         std::set<SiteAnnotationTarget> annotation_targets;
         std::map<QString,std::string> owners;
         std::map<SiteCanvasPresentationFrames::GeometryKey,std::string> geometry_owners;
+        std::map<std::string,std::string,std::less<>> explicit_dimension_frames;
         std::set<SiteCanvasPresentationFrames::GeometryKey> embedded_presentations;
         const auto embedded_owner = [&](const QString& id) -> std::string {
             if (const auto catalog=geometric_assembly_for_child(source,id.toStdString()))
@@ -44860,14 +45051,20 @@ private:
                     if (item.type!=QStringLiteral("assembly_instance") || persisted->second.type!="assembly_instance")
                         throw std::invalid_argument("A Site Plan geometry profile has no captured assembly source.");
                 }
-                geometry_owners.emplace(key,persisted->first);
+                const auto owner=siteModelPresentationOwner(source,persisted->first);
+                geometry_owners.emplace(key,owner);
+                if (owner!=persisted->first && persisted->second.properties.contains("presentation_frame"))
+                    explicit_dimension_frames.emplace(persisted->first,owner);
             }
         }
         for (const auto& id : requested) {
             if (const auto child = children.find(id); child != children.end()) {
                 annotation_targets.insert(child->second);
             } else if (source.entities().contains(id.toStdString())) {
-                owners.emplace(id,id.toStdString());
+                const auto owner=siteModelPresentationOwner(source,id.toStdString());
+                owners.emplace(id,owner);
+                if (owner!=id.toStdString() && source.entities().at(id.toStdString()).properties.contains("presentation_frame"))
+                    explicit_dimension_frames.emplace(id.toStdString(),owner);
             } else if (const auto catalog = geometric_assembly_for_child(source,id.toStdString())) {
                 owners.emplace(id,catalog->assembly_catalog_id);
             } else if (const auto host = assembly_host_for_child(source,id.toStdString())) {
@@ -44877,8 +45074,12 @@ private:
         std::set<std::string> unique;
         for (const auto& [id,owner] : owners) { (void)id; unique.insert(owner); }
         for (const auto& [key,owner] : geometry_owners) { (void)key; unique.insert(owner); }
+        for (const auto& [id,owner] : explicit_dimension_frames) { (void)owner;unique.insert(id); }
         model_ids.assign(unique.begin(),unique.end());
         const auto models = resolve_site_presentations(source,model_ids);
+        for (const auto& [id,owner] : explicit_dimension_frames)
+            if (!sameSitePresentationPlacement(models.at(id),models.at(owner)))
+                throw std::invalid_argument("A saved dimension's explicit Site frame conflicts with its measured owner's coordinate basis: "+id);
         const std::vector<SiteAnnotationTarget> annotation_ids(annotation_targets.begin(),annotation_targets.end());
         const auto annotations = resolve_site_annotation_presentations(source,annotation_ids);
         frames.clear();
@@ -44928,7 +45129,30 @@ private:
         for (const auto& item:scene.grids) visible_auxiliary.insert(item.id);
         std::erase_if(frames.geometry,[&](const auto& entry) { return !visible_geometry.contains(entry.first); });
         std::erase_if(frames.auxiliary,[&](const auto& entry) { return !visible_auxiliary.contains(entry.first); });
-        layoutSitePlanAreaLabels(source,scene,frames,options.label_font,options.label_device);
+        if (include_hidden) {
+            auto complete_geometry=std::move(scene.geometry);
+            auto complete_labels=std::move(scene.labels);
+            scene.geometry=std::move(layout_geometry);
+            scene.labels=std::move(layout_labels);
+            std::erase_if(scene.geometry,[&](const auto& item) {
+                return !frames.findGeometry(item);
+            });
+            std::erase_if(scene.labels,[&](const auto& item) {
+                return !frames.auxiliary.contains(item.id);
+            });
+            // Hidden consequences belong to the transform preview, but never
+            // displace a visible label from its ordinary publication layout.
+            layoutSitePlanAreaLabels(source,scene,frames,options.label_font,options.label_device);
+            using LabelIdentity=std::tuple<QString,QString,QString>;
+            std::map<LabelIdentity,CanvasLabel> positioned;
+            for (auto& label : scene.labels)
+                positioned.emplace(LabelIdentity{label.id,label.callout_role,label.selection_type},std::move(label));
+            for (auto& label : complete_labels)
+                if (const auto found=positioned.find({label.id,label.callout_role,label.selection_type});found!=positioned.end())
+                    label=found->second;
+            scene.geometry=std::move(complete_geometry);
+            scene.labels=std::move(complete_labels);
+        } else layoutSitePlanAreaLabels(source,scene,frames,options.label_font,options.label_device);
         for (auto& item : scene.geometry) {
             const auto embedded=item.type==QStringLiteral("assembly_instance") &&
                 (!item.presentation_key.isEmpty() || !source.entities().contains(item.id.toStdString()))
@@ -44976,6 +45200,10 @@ private:
             for (auto& item : scene.labels) item = site_presented_canvas_label(item,frames.auxiliary.at(item.id));
             for (auto& item : scene.references) item = site_presented_canvas_reference(item,frames.auxiliary.at(item.id));
             for (auto& item : scene.grids) item = site_presented_canvas_reference_grid(item,frames.auxiliary.at(item.id));
+        }
+        if (include_hidden) {
+            scene.all_geometry=scene.geometry;
+            scene.all_labels=scene.labels;
         }
         return scene;
     }
@@ -45098,23 +45326,37 @@ private:
             throw std::invalid_argument("The project or Site Plan changed during this gesture. Start the edit again.");
     }
 
-    static const SitePresentationPlacement& admittedSiteSelectionFrame(
+    static std::map<QString,SitePresentationPlacement> admittedSiteSelectionFrames(
         const DocumentSnapshot& source,const SiteCanvasPresentationFrames& frames,
         const std::vector<CanvasEntityPresentationIdentity>& presentations,
         const std::map<QString,SiteAnnotationTarget>& annotation_targets,
         const QStringList& selected_presentations,const QStringList& ids) {
         if (ids.isEmpty()) throw std::invalid_argument("Choose a Site Plan object to edit.");
-        const SitePresentationPlacement* first{};
-        const auto admit=[&](const SitePresentationPlacement& next) {
-            if (!first) { first=&next;return; }
-            const auto& a=first->forward;const auto& b=next.forward;
-            if (next.source_frame!=first->source_frame || a.rotation_radians!=b.rotation_radians ||
-                a.translation_m.x!=b.translation_m.x || a.translation_m.y!=b.translation_m.y || a.translation_m.z!=b.translation_m.z)
-                throw std::invalid_argument("Edit one source frame at a time in Site Plan; the selection spans different building or annotation frames.");
-        };
+        std::set<SiteAnnotationTarget> annotation_ids;
         for (const auto& id : ids) {
             if (!selected_presentations.contains(id))
                 throw std::invalid_argument("The selected Site Plan presentation is not present in the displayed selection.");
+            if (const auto child=annotation_targets.find(id);child!=annotation_targets.end())
+                annotation_ids.insert(child->second);
+        }
+        const std::vector<SiteAnnotationTarget> annotation_batch(annotation_ids.begin(),annotation_ids.end());
+        const auto annotation_frames=resolve_site_annotation_presentations(source,annotation_batch);
+        std::map<QString,std::vector<const CanvasEntityPresentationIdentity*>> selected_geometry;
+        for (const auto& identity : presentations) selected_geometry[identity.id].push_back(&identity);
+        std::set<QString> presented_geometry_ids;
+        for (const auto& [key,frame] : frames.geometry) { (void)frame;presented_geometry_ids.insert(key.first); }
+        std::map<QString,SitePresentationPlacement> admitted;
+        QString current_id;
+        const auto admit=[&](const SitePresentationPlacement& next) {
+            const auto [entry,inserted]=admitted.emplace(current_id,next);
+            if (inserted) return;
+            const auto& a=entry->second.forward;const auto& b=next.forward;
+            if (next.source_frame!=entry->second.source_frame || a.rotation_radians!=b.rotation_radians ||
+                a.translation_m.x!=b.translation_m.x || a.translation_m.y!=b.translation_m.y || a.translation_m.z!=b.translation_m.z)
+                throw std::invalid_argument("The same selected Site Plan object has conflicting presentation frames.");
+        };
+        for (const auto& id : ids) {
+            current_id=id;
             const auto persisted=source.entities().find(id.toStdString());
             const auto assembly_alias=embeddedAssemblyChild(source,id.toStdString());
             // Qualified aliases never claim a persisted body. Keep this guard
@@ -45122,16 +45364,16 @@ private:
             if (assembly_alias && persisted!=source.entities().end())
                 throw std::invalid_argument("The selected Site Plan ID names both an embedded assembly presentation and a persisted object. Select an unambiguous semantic target before editing.");
             bool geometry_selected{};
-            for (const auto& identity:presentations) {
-                if (identity.id!=id) continue;
+            const auto selected=selected_geometry.find(id);
+            if (selected!=selected_geometry.end()) for (const auto* presented_identity : selected->second) {
+                const auto& identity=*presented_identity;
                 const auto& frame=frames.geometryAt(identity);
                 const auto embedded=identity.type==QStringLiteral("assembly_instance") &&
                     (!identity.presentation_key.isEmpty() || persisted==source.entities().end())
                     ? assembly_alias : std::nullopt;
                 if (!embedded) {
                     if (const auto child=annotation_targets.find(id);child!=annotation_targets.end()) {
-                        const std::array<SiteAnnotationTarget,1> targets{child->second};
-                        (void)resolve_site_annotation_presentations(source,targets);
+                        (void)annotation_frames.at(child->second);
                     } else if (persisted==source.entities().end() ||
                         (!identity.presentation_key.isEmpty() &&
                             (identity.type!=QStringLiteral("assembly_instance") || persisted->second.type!="assembly_instance")))
@@ -45141,27 +45383,78 @@ private:
                 admit(frame);
             }
             if (!geometry_selected) {
-                if (std::any_of(frames.geometry.begin(),frames.geometry.end(),[&](const auto& entry) {
-                    return entry.first.first==id;
-                })) throw std::invalid_argument("Select the exact displayed Site Plan geometry before editing; a raw ID does not authorize a presentation.");
+                if (presented_geometry_ids.contains(id))
+                    throw std::invalid_argument("Select the exact displayed Site Plan geometry before editing; a raw ID does not authorize a presentation.");
                 const auto auxiliary=frames.auxiliary.find(id);
                 if (auxiliary==frames.auxiliary.end())
                     throw std::invalid_argument("The selected Site Plan presentation is unavailable.");
                 if (const auto child=annotation_targets.find(id);child!=annotation_targets.end()) {
-                    const std::array<SiteAnnotationTarget,1> targets{child->second};
-                    (void)resolve_site_annotation_presentations(source,targets);
+                    (void)annotation_frames.at(child->second);
                 } else if (!source.entities().contains(id.toStdString()))
                     throw std::invalid_argument("The selected Site Plan auxiliary presentation has no unambiguous source target.");
                 admit(auxiliary->second);
             }
         }
-        return *first;
+        return admitted;
+    }
+
+    static SitePresentationPlacement admittedSiteSelectionFrame(
+        const DocumentSnapshot& source,const SiteCanvasPresentationFrames& frames,
+        const std::vector<CanvasEntityPresentationIdentity>& presentations,
+        const std::map<QString,SiteAnnotationTarget>& annotation_targets,
+        const QStringList& selected_presentations,const QStringList& ids) {
+        const auto admitted=admittedSiteSelectionFrames(source,frames,presentations,
+            annotation_targets,selected_presentations,ids);
+        const auto& first=admitted.begin()->second;
+        for (const auto& [id,next] : admitted) {
+            (void)id;
+            const auto& a=first.forward;const auto& b=next.forward;
+            if (next.source_frame!=first.source_frame || a.rotation_radians!=b.rotation_radians ||
+                a.translation_m.x!=b.translation_m.x || a.translation_m.y!=b.translation_m.y || a.translation_m.z!=b.translation_m.z)
+                throw std::invalid_argument("This geometry edit requires one source frame. Use a compatible selection or edit its source plan.");
+        }
+        return first;
+    }
+
+    static PlanarTransform siteLocalPlanTransform(const PlanarTransform& world,
+        const SitePresentationPlacement& frame) {
+        const auto turn=2.0*std::numbers::pi;
+        const bool reflected=world.flip_horizontal!=world.flip_vertical;
+        auto angle=std::remainder(world.rotation_radians,turn);
+        if (world.flip_horizontal) angle=std::remainder(angle+std::numbers::pi,turn);
+        if (reflected) angle=std::remainder(angle+
+            2.0*std::remainder(frame.forward.rotation_radians,turn),turn);
+        // F^-1 M F retains one world pivot. Reflection is represented by
+        // local-Y parity after rotation; source axes never become new pivots.
+        return {site_source_plan_point(world.pivot,frame),angle,false,reflected,
+            site_source_plan_delta(world.offset,frame)};
+    }
+
+    static bool equivalentPlanOperators(const PlanarTransform& a,const PlanarTransform& b) {
+        const auto coefficients=[](const PlanarTransform& value) {
+            const auto angle=std::remainder(value.rotation_radians,2.0*std::numbers::pi);
+            const auto c=angle==0.0 ? 1.0 : std::abs(angle)==std::numbers::pi ? -1.0 : std::cos(angle);
+            const auto s=angle==0.0 || std::abs(angle)==std::numbers::pi ? 0.0 : std::sin(angle);
+            const auto hx=value.flip_horizontal ? -1.0 : 1.0;
+            const auto hy=value.flip_vertical ? -1.0 : 1.0;
+            const auto xx=hx*c,xy=-hx*s,yx=hy*s,yy=hy*c;
+            return std::array<double,6>{xx,xy,yx,yy,
+                value.offset.x+(1.0-xx)*value.pivot.x-xy*value.pivot.y,
+                value.offset.y-yx*value.pivot.x+(1.0-yy)*value.pivot.y};
+        };
+        const auto left=coefficients(a),right=coefficients(b);
+        for (std::size_t i=0;i<left.size();++i) {
+            if (!std::isfinite(left[i]) || !std::isfinite(right[i])) return false;
+            if (std::abs(left[i]-right[i])>64.0*std::numeric_limits<double>::epsilon()*
+                std::max({1.0,std::abs(left[i]),std::abs(right[i])})) return false;
+        }
+        return true;
     }
 
     void requireSiteSelectionAdmission() const {
         if (!siteCanvas(m_architecturalCanvas) || m_selected_ids.isEmpty()) return;
         requireSitePublicationCurrent();
-        (void)admittedSiteSelectionFrame(*m_site_publication_source,m_site_plan_frames,
+        (void)admittedSiteSelectionFrames(*m_site_publication_source,m_site_plan_frames,
             m_architecturalCanvas->selectedEntityPresentations(),m_site_annotation_targets,
             m_architecturalCanvas->selectedIds(),m_selected_ids);
     }
@@ -45266,11 +45559,11 @@ private:
         }
         if (requested.isEmpty()) return;
         requireSitePublicationCurrent();
-        (void)admittedSiteSelectionFrame(*m_site_publication_source,m_site_plan_frames,
+        (void)admittedSiteSelectionFrames(*m_site_publication_source,m_site_plan_frames,
             m_architecturalCanvas->selectedEntityPresentations(),m_site_annotation_targets,selected_presentations,requested);
     }
 
-    const SitePresentationPlacement& siteEditFrame(const QStringList& ids) const {
+    SitePresentationPlacement siteEditFrame(const QStringList& ids) const {
         requireSiteEditCurrent();
         return admittedSiteSelectionFrame(*m_site_edit_source,m_site_edit_frames,
             m_site_edit_geometry_selection,m_site_edit_annotation_targets,m_site_edit_selected_presentations,ids);
@@ -45390,25 +45683,171 @@ private:
     }
 
     static Command prepareDetachedSiteTranslationCommand(const DocumentSnapshot& source,
-        const QStringList& ids,Vec2 local,const std::map<QString,SiteAnnotationTarget>& targets) {
-        QStringList models;
-        std::map<std::string,Entity> annotation_changes;
+        const QStringList& ids,Vec2 canvas_delta,const SiteEndpointPreviewInput& input) {
+        if (ids.isEmpty() || !std::isfinite(canvas_delta.x) || !std::isfinite(canvas_delta.y))
+            throw std::invalid_argument("A Site move requires selected objects and a finite displayed distance.");
+        std::map<std::string,SitePresentationPlacement,std::less<>> owner_frames;
+        for (const auto& [key,frame] : input.frames.geometry)
+            if (source.entities().contains(key.first.toStdString()))
+                owner_frames.emplace(key.first.toStdString(),frame.placement);
+        for (const auto& [id,frame] : input.frames.auxiliary)
+            if (source.entities().contains(id.toStdString())) owner_frames.emplace(id.toStdString(),frame);
+        const auto selected_operation=[&](const QString& id) {
+            const auto frame=input.move_frames.find(id);
+            if (frame==input.move_frames.end())
+                throw std::invalid_argument("A selected Site object has no captured presentation frame.");
+            return PlanarTransform{{},0.0,false,false,site_source_plan_delta(canvas_delta,frame->second)};
+        };
+        QStringList geometry_ids,dimension_ids;
+        std::vector<PresentationAnnotationTransformTarget> annotation_targets;
+        std::vector<PresentationReferenceTransformTarget> reference_targets;
+        std::vector<ArchitecturalGroupTransformTarget> physical_targets;
+        std::vector<EmbeddedAssemblyGroupTarget> embedded_targets;
+        std::set<QString> selected;
         for (const auto& id : ids) {
-            const auto typed=targets.find(id);
-            if (typed==targets.end()) {models.push_back(id);continue;}
-            const auto& target=typed->second;
-            auto [it,inserted]=annotation_changes.try_emplace(target.owner_entity_id,source.entities().at(target.owner_entity_id));
-            auto& placement=annotation_child_record(it->second,target.child_id).at("placement");
-            placement["x"]=placement.at("x").get<double>()+local.x;
-            placement["y"]=placement.at("y").get<double>()+local.y;
+            if (!selected.insert(id).second) throw std::invalid_argument("A Site move repeats a selected target.");
+            const auto operation=selected_operation(id);
+            if (const auto typed=input.move_annotation_targets.find(id);typed!=input.move_annotation_targets.end()) {
+                annotation_targets.push_back({{typed->second.owner_entity_id,typed->second.child_id},operation});
+                continue;
+            }
+            if (const auto embedded=geometric_assembly_for_child(source,id.toStdString())) {
+                if (source.entities().contains(id.toStdString()))
+                    throw std::invalid_argument("The Site assembly selection has an ambiguous source identity.");
+                embedded_targets.push_back({embedded->assembly_catalog_id,embedded->instance.id,std::nullopt});
+                continue;
+            }
+            const auto found=source.entities().find(id.toStdString());
+            if (found==source.entities().end()) throw std::invalid_argument("A selected Site object no longer exists.");
+            owner_frames.insert_or_assign(found->first,input.move_frames.at(id));
+            const auto& entity=found->second;
+            if (entity.type=="wall" || entity.type=="opening" || is_closed_boundary_entity(entity.type) ||
+                entity.type=="measurement_linework") geometry_ids.push_back(id);
+            else if (entity.type=="reference_asset") reference_targets.push_back({entity.id,operation});
+            else if (can_recognize_boundary_dimension_entity_type(entity.type)) dimension_ids.push_back(id);
+            else if (can_transform_architectural_entity_type(entity.type))
+                physical_targets.push_back({entity.id,{{},{operation.offset.x,operation.offset.y,0.0},0.0,1.0,false,false}});
+            else throw std::invalid_argument("This selected Site object does not support movement.");
         }
-        // Site has already inverted its displayed source frame. Its remaining
-        // IDs are model/reference/assembly owners, even when an annotation
-        // child happens to have the same persisted spelling.
-        auto parts=prepareDetachedSelectionTranslation(source,models,local,local,false,false);
-        for (auto& [owner,entity] : annotation_changes) {(void)owner;validate_annotation_entity(entity);parts.presentation_changes.push_back(EntityChange::upsert(std::move(entity)));}
-        if (parts.model_ids.isEmpty()) return ApplyEntityChanges{source.revision(),std::move(parts.presentation_changes),{},"Move Site Plan annotations"};
-        return makeSelectionGeometryTranslationCommand(source,std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes),local);
+        // Host movement owns opening cuts. A selected opening cannot acquire
+        // a second free-space edit merely by joining this group.
+        geometry_ids=translationModelRoots(source,std::move(geometry_ids));
+        const auto geometry_operation=geometry_ids.isEmpty() ? PlanarTransform{} : selected_operation(geometry_ids.front());
+        for (const auto& id : geometry_ids)
+            if (!equivalentPlanOperators(geometry_operation,selected_operation(id)))
+                throw std::invalid_argument("These connected measured objects require different local moves. Move a compatible measured group together.");
+
+        auto physical=physical_targets.empty()
+            ? ApplyEntityChanges{source.revision(),{}, {},"Move architectural selection"}
+            : architectural_group_transform_command(source,physical_targets,new_id("site-group-move"),source.revision());
+        if (!embedded_targets.empty()) {
+            // Embedded catalog poses are already world-authored; their
+            // organization membership never supplies another inverse pose.
+            const auto embedded=embedded_assembly_group_transform_command(source,embedded_targets,
+                {{},{canvas_delta.x,canvas_delta.y,0.0},0.0,1.0,false,false},source.revision());
+            physical=std::get<ApplyEntityChanges>(mergeSourceDerivedSelectionChanges(source,Command{std::move(physical)},
+                embedded,"Move architectural and assembly selection"));
+        }
+        auto presentation=annotation_targets.empty() && reference_targets.empty()
+            ? ApplyEntityChanges{source.revision(),{}, {},"Move Site presentations"}
+            : presentation_group_transform_command(source,annotation_targets,reference_targets,source.revision());
+        const auto same_point=[](Vec2 a,Vec2 b) {
+            const auto close=[](double x,double y) {
+                return std::isfinite(x) && std::isfinite(y) && std::abs(x-y)<=
+                    64.0*std::numeric_limits<double>::epsilon()*std::max({1.0,std::abs(x),std::abs(y)});
+            };
+            return close(a.x,b.x) && close(a.y,b.y);
+        };
+        for (const auto& id : dimension_ids) {
+            const auto& original=source.entities().at(id.toStdString());
+            const auto decoded=decode_boundary_dimension_entity(original);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            auto dimension=*decoded.dimension;
+            (void)dimension.resolve(source);
+            const auto operation=selected_operation(id);
+            const auto expected=transform_point(dimension.text_position,operation);
+            const auto implicit=std::find_if(physical.entity_changes.begin(),physical.entity_changes.end(),[&](const auto& change) {
+                return change.kind==EntityChangeKind::upsert && change.entity.id==original.id;
+            });
+            if (implicit!=physical.entity_changes.end()) {
+                const auto moved=decode_boundary_dimension_entity(implicit->entity);
+                if (!moved.supported() || !same_point(moved.dimension->text_position,expected))
+                    throw std::invalid_argument("The selected dimension and its architectural owner require different Site moves.");
+                continue; // Retain whole-owner automatic/manual provenance.
+            }
+            if (geometry_ids.contains(id_from(dimension.boundary_id)) &&
+                !equivalentPlanOperators(operation,geometry_operation))
+                throw std::invalid_argument("The selected dimension and its measured owner require different Site moves.");
+            if (expected.x==dimension.text_position.x && expected.y==dimension.text_position.y) continue;
+            dimension.text_position=expected;
+            dimension.placement=BoundaryDimensionPlacement::manual;
+            dimension.automatic_placement_version.reset();
+            presentation.entity_changes.push_back(EntityChange::upsert(encode_boundary_dimension_entity(dimension,&original)));
+        }
+        std::vector<JointAnnotationTranslationIntent> joint_annotation_moves;
+        std::vector<JointReferenceTranslationIntent> joint_reference_moves;
+        for (const auto& target : annotation_targets)
+            joint_annotation_moves.push_back({target.target.owner_id,target.target.child_id,target.transform.offset});
+        for (const auto& target : reference_targets)
+            joint_reference_moves.push_back({target.reference_id,target.transform.offset});
+        Command command=geometry_ids.isEmpty() ? Command{std::move(presentation)} :
+            makeSelectionGeometryTranslationCommand(source,geometry_ids,geometry_operation.offset,
+                std::move(presentation.entity_changes),geometry_operation.offset,joint_annotation_moves,joint_reference_moves);
+        const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
+        const auto geometry_candidate=ordinary && ordinary->entity_changes.empty() ? source :
+            Document::preview_command(source,command);
+        command=mergeSourceDerivedSelectionChanges(source,std::move(command),physical,"Move complete Site selection");
+        const auto* complete_changes=std::get_if<ApplyEntityChanges>(&command);
+        const auto candidate=complete_changes && complete_changes->entity_changes.empty() ? source :
+            Document::preview_command(source,command);
+        // Resolve only missing consequences in one immutable-source batch.
+        // Hidden solved boundaries and room labels use their own source pose,
+        // without rebuilding the frame index separately for every owner.
+        std::vector<std::string> missing_frames;
+        for (const auto& [id,entity] : source.entities()) {
+            const auto after=candidate.entities().find(id);
+            if (after==candidate.entities().end() || after->second==entity) continue;
+            if ((entity.type=="wall" || entity.type=="measurement_linework" ||
+                 is_closed_boundary_entity(entity.type) || entity.type=="room" ||
+                 can_recognize_boundary_dimension_entity_type(entity.type)) && !owner_frames.contains(id))
+                missing_frames.push_back(id);
+        }
+        for (auto& [id,frame] : resolveSiteModelPresentationFrames(source,missing_frames)) owner_frames.emplace(id,std::move(frame));
+        const auto owner_operation=[&](const std::string& id) {
+            const auto frame=owner_frames.find(id);
+            if (frame==owner_frames.end())
+                throw std::invalid_argument("A moved dependency has no captured canonical Site frame: "+id);
+            return PlanarTransform{{},0.0,false,false,site_source_plan_delta(canvas_delta,frame->second)};
+        };
+        if (!geometry_ids.isEmpty()) {
+            for (const auto& [id,entity] : source.entities()) {
+                const auto after=geometry_candidate.entities().find(id);
+                if (after==geometry_candidate.entities().end() || after->second==entity) continue;
+                bool measured_consequence=entity.type=="wall" || entity.type=="measurement_linework" ||
+                    is_closed_boundary_entity(entity.type) || entity.type=="room";
+                if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                    const auto decoded=decode_boundary_dimension_entity(entity);
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                    const auto before_owner=source.entities().find(decoded.dimension->boundary_id);
+                    const auto after_owner=geometry_candidate.entities().find(decoded.dimension->boundary_id);
+                    if (before_owner==source.entities().end() || after_owner==geometry_candidate.entities().end())
+                        throw std::invalid_argument("A saved dimension lost its measured source during the move.");
+                    measured_consequence=before_owner->second!=after_owner->second;
+                }
+                if (!measured_consequence) continue;
+                if (!equivalentPlanOperators(geometry_operation,owner_operation(id)))
+                    throw std::invalid_argument("The connected move reaches geometry or a saved dimension in a different Site coordinate frame.");
+            }
+        }
+        for (const auto& id : dimension_ids) {
+            const auto before=decode_boundary_dimension_entity(source.entities().at(id.toStdString()));
+            const auto after=decode_boundary_dimension_entity(candidate.entities().at(id.toStdString()));
+            if (!before.supported() || !after.supported() ||
+                !same_point(after.dimension->text_position,transform_point(before.dimension->text_position,selected_operation(id))))
+                throw std::invalid_argument("The complete move differs from a selected dimension's displayed displacement.");
+        }
+        return completeAreaCalloutTransform(source,std::move(command),
+            PlanarTransform{{},0.0,false,false,canvas_delta},nullptr,owner_operation);
     }
 
     Entity siteAnnotationCarrier(const DocumentSnapshot& source,const DrawingContext& context) const {

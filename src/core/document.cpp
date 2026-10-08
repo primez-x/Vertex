@@ -1935,6 +1935,42 @@ static void validate_joint_translation_mode(const ApplyBoundaryConstraintChanges
         throw std::invalid_argument("Joint translation requires its selected-source intent");
 }
 
+static bool joint_per_target_presentation(const JointTranslationIntent& intent) {
+    return intent.per_target_presentation_completion || !intent.annotation_translations.empty() ||
+        !intent.reference_translations.empty();
+}
+
+// These complete raw owners are redundant proofs, never an edit authority.
+// Admission compares every byte of their entity payload with source replay.
+static void validate_joint_presentation_proof(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.joint_translation || !joint_per_target_presentation(*command.joint_translation)) return;
+    if (!command.supplemental_asset_changes.empty() || command.supplemental_asset_reference_completion ||
+        command.supplemental_entity_changes.size() > 1000 ||
+        (!command.supplemental_entity_changes.empty() && !command.supplemental_source_completion))
+        throw std::invalid_argument("Joint presentation proof cannot carry assets or unbounded owners");
+    std::map<std::string, std::string, std::less<>> targets;
+    for (const auto& target : command.joint_translation->annotation_translations)
+        targets.emplace(target.owner_id, kAnnotationEntityType);
+    for (const auto& target : command.joint_translation->reference_translations)
+        if (!targets.emplace(target.reference_id, "reference_asset").second)
+            throw std::invalid_argument("Joint reference proof aliases another presentation owner");
+    std::set<std::string, std::less<>> touched;
+    for (const auto& change : command.supplemental_entity_changes) {
+        const auto target = targets.find(change.entity.id);
+        if (change.kind != EntityChangeKind::upsert || target == targets.end() ||
+            change.entity.type != target->second || !touched.insert(change.entity.id).second)
+            throw std::invalid_argument("Joint presentation proof requires unique selected annotation/reference upserts");
+    }
+}
+
+static void remove_joint_presentation_proof(ApplyBoundaryConstraintChanges& command) {
+    command.supplemental_entity_changes.clear();
+    // Presentation rows no longer need ordinary supplemental admission. Retain
+    // the flag if physical metadata still needs that existing geometry lane.
+    command.supplemental_source_completion = command.supplemental_source_completion &&
+        !command.physical_entity_changes.empty();
+}
+
 static void validate_rigid_group_intent(const ApplyBoundaryConstraintChanges& command, bool admission) {
     if (!has_rigid_group_completion(command)) return;
     if (!command.rigid_group_completion)
@@ -3385,6 +3421,24 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             auto reconstructed = reconstruct_joint_translation(source, *command.joint_translation);
             reconstructed.expected_revision = command.expected_revision;
             reconstructed.message = command.message;
+            std::vector<EntityChange> presentation_proof;
+            if (joint_per_target_presentation(*command.joint_translation)) {
+                validate_joint_presentation_proof(command);
+                if (submitted.supplemental_entity_changes.size() != reconstructed.supplemental_entity_changes.size())
+                    throw std::invalid_argument("Joint presentation proof differs from its reconstructed source targets");
+                for (const auto& change : submitted.supplemental_entity_changes) {
+                    const auto generated = std::find_if(reconstructed.supplemental_entity_changes.begin(),
+                        reconstructed.supplemental_entity_changes.end(), [&](const auto& item) {
+                            return item.kind == EntityChangeKind::upsert && item.entity.id == change.entity.id;
+                        });
+                    if (generated == reconstructed.supplemental_entity_changes.end() ||
+                        !exact_entity_payload(generated->entity, change.entity))
+                        throw std::invalid_argument("Joint presentation proof differs from its source-derived position-only consequence");
+                }
+                presentation_proof = reconstructed.supplemental_entity_changes;
+                remove_joint_presentation_proof(submitted);
+                remove_joint_presentation_proof(reconstructed);
+            }
             for (const auto& change : submitted.supplemental_entity_changes) {
                 auto generated = std::find_if(reconstructed.supplemental_entity_changes.begin(),
                     reconstructed.supplemental_entity_changes.end(), [&](const auto& item) {
@@ -3460,6 +3514,14 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 const auto found = actual.find(id);
                 if (found == actual.end() || !exact_entity_payload(entity, found->second))
                     throw std::invalid_argument("Joint translation proof differs from its reconstructed source intent: " + id);
+            }
+            for (const auto& change : presentation_proof) {
+                const auto original = source.find(change.entity.id);
+                const auto baseline = actual.find(change.entity.id);
+                if (original == source.end() || baseline == actual.end() ||
+                    !exact_entity_payload(original->second, baseline->second))
+                    throw std::invalid_argument("Joint presentation proof overlaps an ordinary geometry edit");
+                baseline->second = change.entity;
             }
             retain_joint_callout_placement(source, actual, *command.joint_translation);
             for (const auto& [id, entity] : source) {
@@ -3706,20 +3768,64 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
     if (selected.size() > 4096 || intent.partial_wall_ids.empty() ||
         (intent.rigid_boundary_ids.empty() && intent.rigid_stroke_ids.empty()))
         throw std::invalid_argument("Joint translation requires bounded rigid and partial selections");
-    return {{"version", 1}, {"offset", command_vec2_to_json(intent.offset)},
+    const bool per_target = intent.per_target_presentation_completion ||
+        !intent.annotation_translations.empty() || !intent.reference_translations.empty();
+    if (per_target && intent.presentation_offset)
+        throw std::invalid_argument("Per-target joint presentation cannot combine a legacy shared presentation offset");
+    if (intent.annotation_translations.size() > 1000 ||
+        intent.reference_translations.size() > 1000 - intent.annotation_translations.size())
+        throw std::invalid_argument("Joint presentation targets exceed their aggregate budget");
+    auto annotations = nlohmann::json::array();
+    auto references = nlohmann::json::array();
+    std::set<std::pair<std::string, std::string>> children;
+    for (const auto& target : intent.annotation_translations) {
+        if (!is_valid_identifier(target.owner_id) || target.child_id.empty() || target.child_id.size() > 256 ||
+            !is_valid_utf8_without_nul(target.child_id) || selected.contains(target.owner_id) ||
+            !children.emplace(target.owner_id, target.child_id).second ||
+            !std::isfinite(target.offset.x) || !std::isfinite(target.offset.y))
+            throw std::invalid_argument("Joint annotation targets require unique bounded source identities");
+        annotations.push_back({{"owner_id", target.owner_id}, {"child_id", target.child_id},
+            {"offset", command_vec2_to_json(target.offset)}});
+    }
+    std::set<std::string, std::less<>> reference_ids;
+    for (const auto& target : intent.reference_translations) {
+        if (!is_valid_identifier(target.reference_id) || selected.contains(target.reference_id) ||
+            !reference_ids.insert(target.reference_id).second ||
+            !std::isfinite(target.offset.x) || !std::isfinite(target.offset.y))
+            throw std::invalid_argument("Joint reference targets require unique bounded source identities");
+        if (std::any_of(intent.annotation_translations.begin(), intent.annotation_translations.end(),
+            [&](const auto& child) { return child.owner_id == target.reference_id; }))
+            throw std::invalid_argument("Joint reference target aliases an annotation owner");
+        references.push_back({{"reference_id", target.reference_id}, {"offset", command_vec2_to_json(target.offset)}});
+    }
+    auto encoded = nlohmann::json{{"version", per_target ? 2 : 1}, {"offset", command_vec2_to_json(intent.offset)},
         {"rigid_boundary_ids", intent.rigid_boundary_ids}, {"rigid_stroke_ids", intent.rigid_stroke_ids},
         {"partial_wall_ids", intent.partial_wall_ids}, {"move_connected_objects", intent.move_connected_objects},
         {"dimension_ids", intent.dimension_ids},
         {"presentation_offset", intent.presentation_offset ? command_vec2_to_json(*intent.presentation_offset) : nlohmann::json(nullptr)}};
+    if (per_target) {
+        encoded["annotation_translations"] = std::move(annotations);
+        encoded["reference_translations"] = std::move(references);
+    }
+    return encoded;
 }
 
 JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) {
-    command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
-        "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset"}, DocumentErrorCode::invalid_entity, "joint translation intent");
-    if (!value.at("version").is_number_integer() || value.at("version") != 1 ||
-        !value.at("move_connected_objects").is_boolean())
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2))
+        throw std::invalid_argument("Unsupported joint translation intent version");
+    const bool per_target = value.at("version") == 2;
+    if (per_target)
+        command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
+            "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset",
+            "annotation_translations", "reference_translations"}, DocumentErrorCode::invalid_entity, "joint translation intent");
+    else
+        command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
+            "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset"}, DocumentErrorCode::invalid_entity, "joint translation intent");
+    if (!value.at("move_connected_objects").is_boolean())
         throw std::invalid_argument("Unsupported joint translation intent or movement flag");
     JointTranslationIntent result;
+    result.per_target_presentation_completion = per_target;
     result.offset = command_vec2_from_json(value.at("offset"), "joint translation offset");
     if (!value.at("presentation_offset").is_null())
         result.presentation_offset = command_vec2_from_json(value.at("presentation_offset"), "joint presentation offset");
@@ -3733,6 +3839,26 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
     read_ids("rigid_stroke_ids", result.rigid_stroke_ids);
     read_ids("partial_wall_ids", result.partial_wall_ids);
     read_ids("dimension_ids", result.dimension_ids);
+    if (per_target) {
+        const auto& annotations = value.at("annotation_translations");
+        const auto& references = value.at("reference_translations");
+        if (!annotations.is_array() || !references.is_array() || annotations.size() > 1000 ||
+            references.size() > 1000 - annotations.size())
+            throw std::invalid_argument("Joint presentation targets must be bounded arrays");
+        for (const auto& target : annotations) {
+            command_exact_fields(target, {"owner_id", "child_id", "offset"},
+                DocumentErrorCode::invalid_entity, "joint annotation translation");
+            result.annotation_translations.push_back({command_string(target.at("owner_id"), "joint annotation owner", kMaximumIdBytes),
+                command_string(target.at("child_id"), "joint annotation child", 256),
+                command_vec2_from_json(target.at("offset"), "joint annotation offset")});
+        }
+        for (const auto& target : references) {
+            command_exact_fields(target, {"reference_id", "offset"},
+                DocumentErrorCode::invalid_entity, "joint reference translation");
+            result.reference_translations.push_back({command_string(target.at("reference_id"), "joint reference owner", kMaximumIdBytes),
+                command_vec2_from_json(target.at("offset"), "joint reference offset")});
+        }
+    }
     result.move_connected_objects = value.at("move_connected_objects").get<bool>();
     (void)joint_translation_to_json(result);
     return result;
@@ -4086,14 +4212,20 @@ nlohmann::json command_to_json(const Command& command) {
             if (has_joint_translation_completion(typed)) {
                 try {
                     validate_joint_translation_mode(typed, false);
+                    const bool per_target = typed.joint_translation && joint_per_target_presentation(*typed.joint_translation);
+                    validate_joint_presentation_proof(typed);
                     auto proof = typed;
                     proof.joint_translation.reset();
                     proof.joint_translation_completion = false;
+                    if (per_target) remove_joint_presentation_proof(proof);
                     auto encoded = nlohmann::json{{"version", 17}, {"kind", "apply_boundary_constraint_changes"},
                         {"expected_revision", typed.expected_revision}, {"message", typed.message},
                         {"joint_translation_completion", true},
                         {"joint_translation", typed.joint_translation ? joint_translation_to_json(*typed.joint_translation) : nlohmann::json(nullptr)},
                         {"proof", command_to_json(Command{proof})}};
+                    if (per_target)
+                        encoded["presentation_proof"] = command_to_json(ApplyEntityChanges{
+                            typed.expected_revision, typed.supplemental_entity_changes, {}, typed.message}).at("entity_changes");
                     if (encoded.dump().size() > 1024 * 1024)
                         throw std::invalid_argument("Joint translation exceeds the persisted proof budget");
                     return encoded;
@@ -4499,9 +4631,18 @@ Command command_from_json(const nlohmann::json& value,
                 return result;
             }
             if (value.at("version") == 17) {
-                command_exact_fields(value, {"version", "kind", "expected_revision", "message",
-                    "joint_translation_completion", "joint_translation", "proof"},
-                    DocumentErrorCode::invalid_entity, "serialized joint translation");
+                std::optional<JointTranslationIntent> joint_intent;
+                if (value.contains("joint_translation") && !value.at("joint_translation").is_null())
+                    joint_intent = joint_translation_from_json(value.at("joint_translation"));
+                const bool per_target = joint_intent && joint_per_target_presentation(*joint_intent);
+                if (per_target)
+                    command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+                        "joint_translation_completion", "joint_translation", "proof", "presentation_proof"},
+                        DocumentErrorCode::invalid_entity, "serialized joint translation");
+                else
+                    command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+                        "joint_translation_completion", "joint_translation", "proof"},
+                        DocumentErrorCode::invalid_entity, "serialized joint translation");
                 if (value.dump().size() > 1024 * 1024 || !value.at("joint_translation_completion").is_boolean() ||
                     !value.at("joint_translation_completion").get<bool>())
                     throw std::invalid_argument("Joint translation mode or proof budget is invalid");
@@ -4515,8 +4656,19 @@ Command command_from_json(const nlohmann::json& value,
                     !value.at("message").is_string() || result.message != value.at("message").get<std::string>())
                     throw std::invalid_argument("Joint translation proof has a different revision or message");
                 result.joint_translation_completion = true;
-                if (!value.at("joint_translation").is_null())
-                    result.joint_translation = joint_translation_from_json(value.at("joint_translation"));
+                result.joint_translation = std::move(joint_intent);
+                if (per_target) {
+                    const auto& presentations = value.at("presentation_proof");
+                    if (!presentations.is_array() || presentations.size() > 1000 ||
+                        !result.supplemental_entity_changes.empty())
+                        throw std::invalid_argument("Joint presentation proof must be bounded and separate from ordinary geometry");
+                    result.supplemental_entity_changes = std::get<ApplyEntityChanges>(command_from_json(nlohmann::json{
+                        {"version", 1}, {"kind", "apply_entity_changes"}, {"expected_revision", result.expected_revision},
+                        {"message", result.message}, {"entity_changes", presentations}, {"asset_changes", nlohmann::json::array()}})).entity_changes;
+                    result.supplemental_source_completion = result.supplemental_source_completion ||
+                        !result.supplemental_entity_changes.empty();
+                    validate_joint_presentation_proof(result);
+                }
                 (void)command_to_json(Command{result});
                 return result;
             }

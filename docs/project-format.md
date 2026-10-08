@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v69
+# Vertex project formats v1 through v70
+
+## Per-target connected presentation movement (v70)
+
+Native format 70 and JSON/assets extraction version 68 retain nested joint
+translation intent version 2 in command envelope 17. The geometry selection
+still has one qualified connected solve and local offset. The intent adds
+`annotation_translations` (`owner_id`, `child_id`, `offset`) and
+`reference_translations` (`reference_id`, `offset`), with at most 1,000 unique
+targets combined. Each offset uses its target's saved coordinate frame. The
+legacy `presentation_offset` must be null. An explicit in-memory completion
+marker preserves version 2 even when both arrays are empty.
+
+Envelope 17 adds `presentation_proof` only for nested version 2. Its bounded
+annotation/reference owner upserts are redundant result witnesses, separate
+from the ordinary geometry proof. Replay reconstructs positions from the
+preceding source and requires exact full-payload agreement before admitting
+the geometry and merging those reconstructed consequences. Metadata, child
+order, unselected children, styles, sizes, baselines, calibration and assets
+stay unchanged. No raw entity payload grants extra geometry or placement
+authority. Duplicate targets, conflicting results, unknown source identities,
+asset edits and coordinate overflow are refused. Version-one wire shape and
+replay semantics remain unchanged.
+
+The reader floor includes every retained revision, including undone and
+abandoned commands and an empty version-two target list. Older stored projects
+retain their previous floor until they contain this new intent. Site saved
+dimension presentations derive their spatial basis from the analytical owner;
+this is rebuilt view state, without changing stored measurements or coordinates.
 
 ## Combined live area-callout rotation (v69)
 

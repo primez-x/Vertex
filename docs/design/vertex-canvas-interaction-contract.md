@@ -116,6 +116,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Every new symbol or label stores its owning layer ID and is listed beneath that layer.
 - Selected objects receive a blue contrast outline. A compact `Selected` or `N selected` badge reports selection without opening Properties.
 - Dragging a movable selection shows a transient preview; release creates one undoable command. An unsupported mixed group is rejected as a unit.
+- Site group movement captures each target's exact body/profile or annotation-child frame. One displayed displacement converts separately into those stored frames; numerical Transform uses one displayed group pivot. Embedded catalog roots retain world poses. Selected openings, hosted stair railings and attached dimensions follow their qualified parent once. Equal source-derived consequences merge; contradictory dependency edits refuse the whole command. Connected measured geometry retains its compatible shared local solve.
 - After the first drawing click, the pending edge follows the pointer with its live length.
 - Each click places the next measured-boundary node. Clicking the highlighted first node closes a valid outline.
 - Component placement is a distinct pending state. Escape or the drawing context menu cancels it.

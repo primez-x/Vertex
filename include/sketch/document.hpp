@@ -219,6 +219,18 @@ struct WallMergeIntent {
     std::string second_wall_id;
 };
 
+struct JointAnnotationTranslationIntent {
+    std::string owner_id;
+    // Labels and symbols share the source owner's child identity namespace.
+    std::string child_id;
+    Vec2 offset;
+};
+
+struct JointReferenceTranslationIntent {
+    std::string reference_id;
+    Vec2 offset;
+};
+
 // One translation across selected rigid owners and selected physical walls.
 // All selected points are exact targets in one connected constraint solve;
 // existing fixed anchors never move merely because their owner is selected.
@@ -234,6 +246,13 @@ struct JointTranslationIntent {
     // Optional view-XY displacement for symbols, overlay labels and references.
     // Model-plan labels and analytical geometry retain offset in world XY.
     std::optional<Vec2> presentation_offset;
+    // Nested version two uses explicit source-qualified placement targets.
+    // Each offset is in that target's own saved coordinate frame, including
+    // model-plan children; raw supplements cannot add further selections.
+    std::vector<JointAnnotationTranslationIntent> annotation_translations;
+    std::vector<JointReferenceTranslationIntent> reference_translations;
+    // Retain version two when both target lists are empty (e.g. replay).
+    bool per_target_presentation_completion{};
 };
 
 // One observation of an existing owner's supported field. This carries no

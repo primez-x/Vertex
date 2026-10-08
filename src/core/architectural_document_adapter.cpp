@@ -1643,17 +1643,89 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         throw DocumentError(DocumentErrorCode::read_only,"The architectural group source is read-only.");
     if (entity_ids.empty() || entity_ids.size()>maximum_architectural_group_targets)
         throw std::invalid_argument("An architectural group requires between 1 and 1000 objects.");
+    std::vector<ArchitecturalGroupTransformTarget> targets;
+    targets.reserve(entity_ids.size());
+    for (const auto& id : entity_ids) targets.push_back({id,transform});
+    return architectural_group_transform_command(source, targets, transaction_id, expected_revision);
+}
+
+ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot& source,
+    std::span<const ArchitecturalGroupTransformTarget> requested_targets,
+    const std::string& transaction_id, Revision expected_revision) {
+    if (source.revision()!=expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision,"The architectural group source changed.");
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only,"The architectural group source is read-only.");
+    if (requested_targets.empty() || requested_targets.size()>maximum_architectural_group_targets)
+        throw std::invalid_argument("An architectural group requires between 1 and 1000 objects.");
+    struct Intent {
+        ArchitecturalTransform affine;
+        bool flip_horizontal{};
+        bool flip_vertical{};
+        bool identity{};
+    };
     const auto finite_point=[](Vec3 point) {
         return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
     };
-    if (!finite_point(transform.pivot) || !finite_point(transform.offset) ||
-        !std::isfinite(transform.rotation_z_radians) ||
-        !std::isfinite(transform.scale) || !(transform.scale>0.0))
-        throw std::invalid_argument("Architectural group transforms must be finite with a positive scale.");
+    const auto normalize=[&](const ArchitecturalGroupTransform& transform) {
+        if (!finite_point(transform.pivot) || !finite_point(transform.offset) ||
+            !std::isfinite(transform.rotation_z_radians) ||
+            !std::isfinite(transform.scale) || !(transform.scale>0.0))
+            throw std::invalid_argument("Architectural group transforms must be finite with a positive scale.");
+        // Whole turns and double flips retain the exact proper identity/half-turn
+        // operator, avoiding tiny sine terms multiplied by distant pivots.
+        const bool reflected=transform.flip_horizontal!=transform.flip_vertical;
+        const auto angle=std::remainder(std::remainder(transform.rotation_z_radians,
+            2.0*std::numbers::pi) + (transform.flip_horizontal && transform.flip_vertical
+                ? std::numbers::pi : 0.0), 2.0*std::numbers::pi);
+        const auto [c,s]=planar_rotation(angle);
+        const bool horizontal=reflected && transform.flip_horizontal;
+        const bool vertical=reflected && transform.flip_vertical;
+        const auto hx=horizontal?-1.0:1.0;
+        const auto hy=vertical?-1.0:1.0;
+        ArchitecturalTransform affine;
+        // Difference form retains small offsets during pure translation.
+        affine.x=transform.offset.x+(1.0-transform.scale*hx)*transform.pivot.x+
+            transform.scale*hx*((1.0-c)*transform.pivot.x+s*transform.pivot.y);
+        affine.y=transform.offset.y+(1.0-transform.scale*hy)*transform.pivot.y+
+            transform.scale*hy*((1.0-c)*transform.pivot.y-s*transform.pivot.x);
+        affine.z=transform.offset.z+(1.0-transform.scale)*transform.pivot.z;
+        affine.rotation_z_radians=angle;
+        affine.scale=transform.scale;
+        if (!std::isfinite(affine.x) || !std::isfinite(affine.y) || !std::isfinite(affine.z))
+            throw std::invalid_argument("The architectural group pivot exceeds the supported transform range.");
+        const bool identity=transform.scale==1.0 && transform.offset.x==0.0 && transform.offset.y==0.0 &&
+            transform.offset.z==0.0 && angle==0.0 && !reflected;
+        return Intent{affine,horizontal,vertical,identity};
+    };
+    const auto equivalent=[](const Intent& a, const Intent& b) {
+        if ((a.flip_horizontal!=a.flip_vertical)!=(b.flip_horizontal!=b.flip_vertical)) return false;
+        const auto coefficients=[](const Intent& intent) {
+            const auto& t=intent.affine;
+            const auto [c,s]=planar_rotation(t.rotation_z_radians);
+            const auto hx=intent.flip_horizontal?-1.0:1.0;
+            const auto hy=intent.flip_vertical?-1.0:1.0;
+            return std::array<double,8>{t.scale*hx*c,-t.scale*hx*s,
+                t.scale*hy*s,t.scale*hy*c,t.scale,t.x,t.y,t.z};
+        };
+        const auto left=coefficients(a), right=coefficients(b);
+        for (std::size_t i=0; i<left.size(); ++i) {
+            // Frame conversion can round an otherwise identical operator. Use
+            // only arithmetic roundoff, never geometric/edit snap tolerance.
+            const auto tolerance=64.0*std::numeric_limits<double>::epsilon()*
+                std::max({1.0,std::abs(left[i]),std::abs(right[i])});
+            if (std::abs(left[i]-right[i])>tolerance) return false;
+        }
+        return true;
+    };
     std::set<std::string,std::less<>> selected;
+    std::map<std::string,Intent,std::less<>> intents;
     std::vector<std::string> targets;
-    targets.reserve(entity_ids.size());
-    for (const auto& id : entity_ids) {
+    targets.reserve(requested_targets.size());
+    bool identity=true;
+    for (const auto& target : requested_targets) {
+        const auto& id=target.entity_id;
+        const auto intent=normalize(target.transform);
         const auto found=source.entities().find(id);
         if (!selected.insert(id).second)
             throw std::invalid_argument("An architectural group contains a duplicate target.");
@@ -1664,6 +1736,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         if (found->second.type=="wall")
             throw std::invalid_argument("Planar wall groups require connected-wall transform authority.");
         targets.push_back(id);
+        intents.emplace(id,intent);
+        identity=identity && intent.identity;
     }
     // Validate real descriptors even for identity intent. This group boundary
     // never admits the transaction lane's legacy transport-marker fallback.
@@ -1678,6 +1752,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             const auto& host_id=railing.host?railing.host->stair_id:railing.landing_host->stair_id;
             if (!selected.contains(host_id) || !canonical_stair(source.entities().at(host_id)))
                 throw std::invalid_argument("Hosted railing placement follows its stair; select its persisted host stair too.");
+            if (!equivalent(intents.at(id),intents.at(host_id)))
+                throw std::invalid_argument("Hosted railing placement follows its stair; select the host with affine-equivalent intent.");
             (void)make_building_shape(BuildingObject{railing},source.entities());
             hosted_targets.insert(id);
             continue;
@@ -1715,30 +1791,6 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             level_shifts.emplace(id,shift);
         }
     }
-    // Whole turns use the exact identity operator even when combined with
-    // movement/scale, avoiding a tiny sine term multiplied by distant pivots.
-    const bool reflected = transform.flip_horizontal != transform.flip_vertical;
-    // Two global flips are a proper half-turn and use the existing yaw lane.
-    const auto angle=std::remainder(std::remainder(transform.rotation_z_radians,
-        2.0*std::numbers::pi) + (transform.flip_horizontal && transform.flip_vertical
-            ? std::numbers::pi : 0.0), 2.0*std::numbers::pi);
-    const bool identity=transform.scale==1.0 && transform.offset.x==0.0 && transform.offset.y==0.0 &&
-        transform.offset.z==0.0 && angle==0.0 && !reflected;
-    const auto [c,s]=planar_rotation(angle);
-    const auto hx=reflected && transform.flip_horizontal ? -1.0 : 1.0;
-    const auto hy=reflected && transform.flip_vertical ? -1.0 : 1.0;
-    ArchitecturalTransform affine;
-    // Difference form avoids cancelling pivot+offset against the same pivot
-    // during a pure translation (which could otherwise swallow the offset).
-    affine.x=transform.offset.x+(1.0-transform.scale*hx)*transform.pivot.x+
-        transform.scale*hx*((1.0-c)*transform.pivot.x+s*transform.pivot.y);
-    affine.y=transform.offset.y+(1.0-transform.scale*hy)*transform.pivot.y+
-        transform.scale*hy*((1.0-c)*transform.pivot.y-s*transform.pivot.x);
-    affine.z=transform.offset.z+(1.0-transform.scale)*transform.pivot.z;
-    affine.rotation_z_radians=angle;
-    affine.scale=transform.scale;
-    if (!std::isfinite(affine.x) || !std::isfinite(affine.y) || !std::isfinite(affine.z))
-        throw std::invalid_argument("The architectural group pivot exceeds the supported transform range.");
     std::vector<ArchitecturalOperation> operations;
     operations.reserve(targets.size());
     for (const auto& id : targets) {
@@ -1746,9 +1798,9 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         // the host operation alone updates all visible or hidden dependents.
         if (hosted_targets.contains(id)) continue;
         ArchitecturalOperation operation{ArchitecturalAction::transform,id};
-        operation.transform=affine;
+        operation.transform=intents.at(id).affine;
         if (const auto shift=level_shifts.find(id); shift!=level_shifts.end()) {
-            operation.transform->z+=(transform.scale-1.0)*shift->second;
+            operation.transform->z+=(operation.transform->scale-1.0)*shift->second;
             if (!std::isfinite(operation.transform->z))
                 throw std::invalid_argument("The architectural group level placement exceeds the supported transform range.");
         }
@@ -1759,42 +1811,52 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     // Creating the validated transaction also checks transaction/target lexical
     // identities on the no-op path without re-encoding any source metadata.
     if (identity) return {expected_revision,{}, {},"Transform architectural group"};
-    if (!reflected) {
-        // Keep the established proper-transform and hosted-child consequence
-        // path, but admit every selected native family in the final candidate.
-        return make_candidate_command(source, apply_operations(source, transaction),
-            expected_revision, transaction.undo_label(), targets);
-    }
     // Construct final descriptors directly from the captured source. An
     // intermediate proper move could fail world/level admission even though
     // its reflected final position is valid; it must never be published.
     auto candidate = copy_entities(source);
     for (const auto& operation : transaction.operations()) {
         const auto& id = operation.object_id;
+        const auto& intent=intents.at(id);
+        if (intent.identity) continue;
+        const bool horizontal=intent.flip_horizontal, vertical=intent.flip_vertical;
+        const bool reflected=horizontal!=vertical;
         const auto& before = source.entities().at(id);
         const auto& movement = *operation.transform;
         auto& after = candidate.at(id);
         if (before.type == "slab")
-            after = transform_slab_entity(before, movement, transform.flip_horizontal, transform.flip_vertical);
+            after = transform_slab_entity(before, movement, horizontal, vertical);
         else if (before.type == "room")
-            after = transform_room_entity(before, movement, transform.flip_horizontal, transform.flip_vertical);
+            after = transform_room_entity(before, movement, horizontal, vertical);
         else if (before.type == "assembly_instance") {
             auto value = decode_document_assembly_instance(before);
             auto& root = *value.instance.root_transform;
-            const auto position = transform_point({root.translation_m.x, root.translation_m.y,
-                root.translation_m.z}, movement, transform.flip_horizontal, transform.flip_vertical);
-            const auto u = transform_direction({std::cos(root.rotation_radians),
-                std::sin(root.rotation_radians), 0}, movement, transform.flip_horizontal, transform.flip_vertical);
-            root.translation_m = {position.x, position.y, position.z};
-            root.rotation_radians = std::atan2(u.y, u.x);
-            root.scale *= movement.scale;
-            root.mirrored_y = !root.mirrored_y;
+            if (reflected) {
+                const auto position = transform_point({root.translation_m.x, root.translation_m.y,
+                    root.translation_m.z}, movement, horizontal, vertical);
+                const auto u = transform_direction({std::cos(root.rotation_radians),
+                    std::sin(root.rotation_radians), 0}, movement, horizontal, vertical);
+                root.translation_m = {position.x, position.y, position.z};
+                root.rotation_radians = std::atan2(u.y, u.x);
+                root.scale *= movement.scale;
+                root.mirrored_y = !root.mirrored_y;
+            } else {
+                const AssemblyTransform outer{{movement.x, movement.y, movement.z},
+                    movement.rotation_z_radians,movement.scale};
+                root=compose_assembly_transform(outer,root);
+            }
             after.properties.at("instance")["root_transform"] = encode_assembly_transform(root);
+            (void)decode_document_assembly_instance(after);
         } else {
-            after = transform_building_entity(before, movement, transform.flip_horizontal, transform.flip_vertical);
-            if (canonical_stair(before))
-                reflect_stair_railings(candidate, source.entities(), before, after, movement,
-                    transform.flip_horizontal, transform.flip_vertical);
+            after = transform_building_entity(before, movement, horizontal, vertical);
+            if (canonical_stair(before)) {
+                if (reflected)
+                    reflect_stair_railings(candidate, source.entities(), before, after, movement, horizontal, vertical);
+                else if (movement.scale!=1.0)
+                    for (const auto& rail_id : hosted_railing_ids(source.entities(),id))
+                        for (const auto* field : {"height_m","thickness_m","post_spacing_m"})
+                            scale_property(candidate.at(rail_id).properties,field,nullptr,movement.scale);
+            }
         }
     }
     return make_candidate_command(source, candidate, expected_revision, transaction.undo_label(), targets);

@@ -99,9 +99,10 @@ struct RailingEndpointEdit {
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
     Revision expected_revision);
 
-// A shared model-space pivot for rotation, uniform scaling and XYZ movement.
-// Every object receives the same affine operator; its own position must never
-// become a separate pivot. Hosted railings follow their selected stair once.
+// A captured model-space pivot for rotation, uniform scaling and XYZ movement.
+// The shared-transform overload applies this same operator to every object;
+// object positions must never replace the caller's pivot. Hosted railings
+// follow their selected stair once.
 struct ArchitecturalGroupTransform {
     Vec3 pivot{};
     Vec3 offset{};
@@ -109,6 +110,12 @@ struct ArchitecturalGroupTransform {
     double scale{1.0};
     bool flip_horizontal{false};
     bool flip_vertical{false};
+};
+// One captured local-frame operation per persisted object. Callers convert a
+// common Site/world operation into each target's frame before entering here.
+struct ArchitecturalGroupTransformTarget {
+    std::string entity_id;
+    ArchitecturalGroupTransform transform;
 };
 inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 
@@ -129,6 +136,16 @@ inline constexpr std::size_t maximum_architectural_group_targets = 1000;
     const DocumentSnapshot& source, std::span<const std::string> entity_ids,
     const ArchitecturalGroupTransform& transform, const std::string& transaction_id,
     Revision expected_revision);
+
+// The same atomic admission with individually captured local pivots/operations.
+// Selected hosted railings require affine-equivalent intent to their selected
+// stair (including scale/reflection); the host updates all dependents once.
+// Equivalence allows 64 machine epsilons times each coefficient's magnitude
+// (with a unit floor) for frame-conversion roundoff, with equal reflection parity.
+// Identity targets retain their exact payload even in a mixed operation.
+[[nodiscard]] ApplyEntityChanges architectural_group_transform_command(
+    const DocumentSnapshot& source, std::span<const ArchitecturalGroupTransformTarget> targets,
+    const std::string& transaction_id, Revision expected_revision);
 
 // Admit changed physical wall/opening, slab, room, canonical beam and independent
 // straight-railing descriptors against the complete detached candidate.

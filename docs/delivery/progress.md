@@ -14,6 +14,45 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 per-object Site selection transforms and movement
+
+Numerical Transform and Copy now capture a separate admitted Site placement
+for each selected semantic target. The group center and entered offsets use
+the displayed Site coordinates; physical objects, annotation children and
+reference images receive their own conjugated source operation. Embedded
+catalog poses remain world-authored. The physical core accepts per-target
+operations in one final candidate, retaining levels and moving hosted stair
+railings once. Copy keeps fresh independent identities and source geometry.
+
+Direct group dragging now carries one displayed displacement rather than the
+first selected object's local displacement. It converts each selected target
+through its captured frame, retains exact previews for release, coalesces
+equal dependency consequences and refuses contradictory edits atomically.
+Selected openings follow their wall; selected dimensions owned by a moved
+physical source retain their placement provenance. Missing hidden consequence
+frames resolve in one source batch. Visible objects alone determine automatic
+label collision layout; hidden consequences remain available for admission.
+
+Independent source review corrected an empty presentation-target API call,
+repeated whole-document copy frame resolution and default saved dimensions
+using a different frame from their measured source. Saved dimension geometry
+and text now publish in the analytical owner's basis; conflicting explicit
+dimension frames refuse the edit. Hidden dimension consequences participate
+in movement admission too. Selection admission batch-resolves annotation
+children instead of rebuilding context per child.
+
+The connected translation proof now records explicit per-child/reference
+offsets and source-reconstructs their position-only consequences separately
+from the ordinary geometry proof. Version-one replay remains unchanged;
+native format 70 and extraction version 68 protect the new nested intent
+through retained history. Connected measured geometry still requires one
+compatible local operator; mixed connected physical-object composition and
+independent label-role selection remain unfinished scope.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction, appearance, performance and save/history/reopen are unverified.
+The installed candidate is unchanged; manual checklist results remain Not tested.
+
 ### October 7 direct dragging of generated area callouts
 
 Selected room/area labels now have a dedicated drag path for their exact

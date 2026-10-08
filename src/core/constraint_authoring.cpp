@@ -11,6 +11,7 @@
 #include "sketch/joint_translation_replay.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/measurement_linework_source.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -57,6 +58,61 @@ Vec2 point(const json& value, std::string_view description) {
         invalid(std::string(description) + " must contain exactly two coordinates");
     }
     return {finite_number(value.at(0), description), finite_number(value.at(1), description)};
+}
+
+// Copy the captured raw owners and replace only selected position coordinates.
+// Re-encoding annotation state would discard retained opaque sibling fields.
+Entities joint_presentation_entities(const Entities& source, const JointTranslationIntent& move) {
+    Entities changed;
+    std::map<std::pair<std::string, std::string>, json*> placements;
+    const auto translated = [](double previous, double offset) {
+        const auto next = previous + offset;
+        if (!std::isfinite(next)) invalid("Joint presentation position overflow");
+        return next;
+    };
+    for (const auto& target : move.annotation_translations) {
+        const auto found = source.find(target.owner_id);
+        if (found == source.end() || found->second.type != kAnnotationEntityType)
+            invalid("Joint annotation target does not exist or has the wrong owner type");
+        auto [owner, inserted] = changed.try_emplace(target.owner_id, found->second);
+        if (inserted) {
+            validate_annotation_entity(found->second);
+            for (const auto* kind : {"labels", "symbols"}) {
+                auto& rows = owner->second.properties.at("state").at(kind);
+                for (auto& row : rows) {
+                    if (!placements.emplace(std::make_pair(target.owner_id, row.at("id").get<std::string>()),
+                        &row.at("placement")).second)
+                        invalid("Joint annotation child identity is ambiguous");
+                }
+            }
+        }
+        const auto selected = placements.find({target.owner_id, target.child_id});
+        if (selected == placements.end()) invalid("Joint annotation child does not exist in its source owner");
+        auto* placement = selected->second;
+        const auto x = finite_number(placement->at("x"), "Joint annotation x");
+        const auto y = finite_number(placement->at("y"), "Joint annotation y");
+        const auto next_x = translated(x, target.offset.x), next_y = translated(y, target.offset.y);
+        if (next_x != x) placement->at("x") = next_x;
+        if (next_y != y) placement->at("y") = next_y;
+    }
+    for (const auto& target : move.reference_translations) {
+        const auto found = source.find(target.reference_id);
+        if (found == source.end() || found->second.type != "reference_asset")
+            invalid("Joint reference target does not exist or has the wrong owner type");
+        const auto before = point(found->second.properties.at("position_m"), "Joint reference position");
+        const auto x = translated(before.x, target.offset.x), y = translated(before.y, target.offset.y);
+        if (x == before.x && y == before.y) continue;
+        auto entity = found->second;
+        if (x != before.x) entity.properties.at("position_m").at(0) = x;
+        if (y != before.y) entity.properties.at("position_m").at(1) = y;
+        if (!changed.emplace(target.reference_id, std::move(entity)).second)
+            invalid("Joint presentation target aliases another source owner");
+    }
+    for (auto item = changed.begin(); item != changed.end();) {
+        if (item->second == source.at(item->first)) item = changed.erase(item);
+        else ++item;
+    }
+    return changed;
 }
 
 Segment read_baseline(const Entity& entity) {
@@ -283,6 +339,41 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
                 invalid("Joint translation targets must be unique and nonempty");
         }
         if (selected.size()>4096) invalid("Joint translation targets exceed their aggregate budget");
+        if (!move.annotation_translations.empty() || !move.reference_translations.empty())
+            move.per_target_presentation_completion = true;
+        if (move.per_target_presentation_completion && move.presentation_offset)
+            invalid("Per-target joint presentation cannot combine a legacy shared presentation offset");
+        if (move.annotation_translations.size()>1000 ||
+            move.reference_translations.size()>1000-move.annotation_translations.size())
+            invalid("Joint presentation targets exceed their aggregate budget");
+        std::set<std::pair<std::string,std::string>> children;
+        for (const auto& target : move.annotation_translations) {
+            if (target.owner_id.empty() || target.owner_id.size()>128 || target.child_id.empty() ||
+                target.child_id.size()>256 || target.child_id.find('\0')!=std::string::npos ||
+                selected.contains(target.owner_id) || !children.emplace(target.owner_id,target.child_id).second ||
+                !std::isfinite(target.offset.x) || !std::isfinite(target.offset.y))
+                invalid("Joint annotation targets must have unique source identities and finite offsets");
+        }
+        std::set<std::string,std::less<>> references;
+        for (const auto& target : move.reference_translations) {
+            if (target.reference_id.empty() || target.reference_id.size()>128 ||
+                selected.contains(target.reference_id) || !references.insert(target.reference_id).second ||
+                !std::isfinite(target.offset.x) || !std::isfinite(target.offset.y))
+                invalid("Joint reference targets must have unique source identities and finite offsets");
+        }
+        std::sort(move.annotation_translations.begin(), move.annotation_translations.end(), [](const auto& a, const auto& b) {
+            return a.owner_id != b.owner_id ? a.owner_id < b.owner_id : a.child_id < b.child_id;
+        });
+        std::sort(move.reference_translations.begin(), move.reference_translations.end(), [](const auto& a, const auto& b) {
+            return a.reference_id < b.reference_id;
+        });
+        // Use the command codec's stable-identity validation for the typed lane.
+        if (move.per_target_presentation_completion) {
+            ApplyBoundaryConstraintChanges check;
+            check.joint_translation = move;
+            check.joint_translation_completion = true;
+            (void)command_to_json(Command{check});
+        }
         if (!result.relation_mutations.empty() || result.relation_anchor)
             invalid("Joint translation preserves source relations and cannot author relation changes");
     }
@@ -847,8 +938,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                                                         : snapshot.retained->read_only_reason());
         }
         result.normalized_intent_ = normalize_intent(raw_intent);
+        Entities presentation_changes;
         if (result.normalized_intent_.joint_translation) {
             auto& move=*result.normalized_intent_.joint_translation;
+            presentation_changes = joint_presentation_entities(snapshot.entities(), move);
             std::set<std::string,std::less<>> walls(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
             for (const auto& id:move.rigid_boundary_ids) {
                 const auto found=snapshot.entities().find(id);
@@ -1692,6 +1785,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             }
         }
 
+        for (const auto& [id, entity] : presentation_changes) {
+            if (candidate.at(id) != snapshot.entities().at(id))
+                invalid("Joint presentation placement overlaps another source edit");
+            candidate.at(id) = entity;
+        }
         bool entity_changed = candidate.size() != snapshot.entities().size();
         if (!entity_changed) {
             for (const auto& [id, entity] : candidate) {
@@ -2088,6 +2186,14 @@ Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision
                     command.dimension_placement_moves.push_back({id,move.offset});
             }
             command.dimension_placement_completion=!command.dimension_placement_moves.empty();
+            if (move.per_target_presentation_completion) {
+                for (const auto& change : changes) {
+                    if (change.kind == EntityChangeKind::upsert &&
+                        (change.entity.type == kAnnotationEntityType || change.entity.type == "reference_asset"))
+                        command.supplemental_entity_changes.push_back(change);
+                }
+                command.supplemental_source_completion = !command.supplemental_entity_changes.empty();
+            }
         }
         command.exterior_source_edits = recomputed.exterior_source_edits_;
         command.exterior_source_completion = !recomputed.exterior_source_edits_.empty();
