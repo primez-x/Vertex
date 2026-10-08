@@ -1,4 +1,44 @@
-# Vertex project formats v1 through v96
+# Vertex project formats v1 through v97
+
+## Baseline-preserving roof demolition and surviving joins (v97)
+
+Native format 97 and JSON/assets extraction version 95 retain roof demolition
+under the exclusive, source-bound phase authoring intent four. Roof replacement
+record four has exactly `version`, `registry_id`, `alternative_id`,
+`seed_roof_ids`, `identities`, `demolition` and
+`demolition_additional_identities`. `demolition` is true; profile, opening and
+pose edit payloads cannot accompany this dialect. Earlier roof records retain
+their existing fields and floors.
+
+Only explicitly selected, active shared-baseline roof IDs confer demolition
+authority. Replay derives their complete joined cohort from the actual source
+and named saved active alternative. Every original roof and join remains exact.
+Selected roofs have no proposed copy. Surviving neighbors retain their physical
+geometry and context, with fresh copied child identities and source-derived
+effective material assignments.
+The named alternative marks the original cohort demolished and registers only
+the owners actually created for its proposed state.
+
+Surviving join members are partitioned using the same physical contact semantics
+as native roof joining. Each connected component with at least two members gets
+a join, preserving original authored member order and join material assignment.
+Singletons remain independent roofs and inherit an admitted source join's
+effective material assignment, preserving compatible raw assignment extras.
+The primary mapping covers every original
+owner, child and bound overlay, even when its copy is omitted. Additional join
+and overlay destinations are declared as arrays keyed by their actual original
+identities. Exact required counts are independently derived from source;
+arbitrary keys, missing/extra slots and collisions refuse. Every destination
+remains reserved through retained history, including after Undo.
+
+Qualified coordinated views, appearances, bound overlays and annotation
+overrides are extended for all actual copies while retaining their original
+rows and opaque data. Final resolved roofs and joins are admitted against the
+complete resulting map. Revision, full snapshot/history, saved marker and
+actual phase choices retain their existing authority fences. Cut/Delete clear
+the selection rather than selecting an omitted copy. Unsupported affected
+references remain explicit implementation
+gaps. This source contract has not been compiled or exercised.
 
 ## Atomic proposed roof envelope, opening and placement edits (v96)
 

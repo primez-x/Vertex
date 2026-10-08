@@ -39,6 +39,7 @@
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
+#include "sketch/phase_roof_demolition.hpp"
 #include "sketch/phase_wall_canvas_projection.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
@@ -30197,6 +30198,25 @@ public:
         try {
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto authority = captureSourceEditAuthority(source);
+            std::vector<std::string> selected_ids;
+            selected_ids.reserve(m_selected_ids.size());
+            for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
+            if (const auto demolition = alternativeRoofDemolitionCommand(source, selected_ids, "Cut selected roofs")) {
+                const auto encoded = clipboardSelectionPayload(source);
+                const auto clipboard_text = QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size()));
+                auto* clipboard = QGuiApplication::clipboard();
+                if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+                if (!sourceEditAuthorityUnchanged(authority))
+                    throw std::invalid_argument("The selected roofs or active design changed before Cut.");
+                if (!applyAuthoredCommand(*demolition)) return false;
+                clipboard->setText(clipboard_text, QClipboard::Clipboard);
+                m_selected_id.clear();
+                m_selected_ids.clear();
+                clearError();
+                refresh();
+                return true;
+            }
             if (std::any_of(m_selected_ids.begin(), m_selected_ids.end(), [&](const auto& id) {
                 return geometric_assembly_for_child(source, id.toStdString()).has_value();
             })) {
@@ -30694,6 +30714,16 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
+            if (const auto demolition = alternativeRoofDemolitionCommand(source, selected_ids, "Demolish selected roofs")) {
+                if (!sourceEditAuthorityUnchanged(authority))
+                    throw std::invalid_argument("The selected roofs or active design changed before demolition.");
+                if (!applyAuthoredCommand(*demolition)) return false;
+                m_selected_id.clear();
+                m_selected_ids.clear();
+                clearError();
+                refresh();
+                return true;
+            }
             if (const auto demolition = phase_opening_demolition_command(source, selected_ids)) {
                 if (!sourceEditAuthorityUnchanged(authority))
                     throw std::invalid_argument("The selected opening or active design changed before demolition.");
@@ -41228,6 +41258,59 @@ private:
         return complete_exterior_wall_measurement_command(source, authored_command);
     }
 
+    std::optional<Command> alternativeRoofDemolitionCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& selected_ids, const std::string& message) {
+        std::vector<std::string> roof_ids;
+        for (const auto& id : selected_ids) {
+            const auto found = source.entities().find(id);
+            if (found != source.entities().end() && found->second.type == "roof") roof_ids.push_back(id);
+        }
+        if (roof_ids.empty()) return std::nullopt;
+        const auto request = roof_demolition_request(source.entities(), roof_ids);
+        if (!request) return std::nullopt;
+        if (roof_ids.size() != selected_ids.size())
+            throw std::invalid_argument("Delete shared baseline roofs separately from other selected objects.");
+        const auto plan = inspect_phase_roof_replacement_plan(source.entities(), request->seed_roof_ids,
+            request->registry_id, request->alternative_id);
+        if (!plan.ready()) {
+            QStringList reasons;
+            for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
+                reasons.push_back(id_from(diagnostic.entity_id) + QStringLiteral(": ") + QString::fromStdString(diagnostic.reason));
+            throw std::invalid_argument(reasons.join(QStringLiteral("\n")).toStdString());
+        }
+        PhaseRoofReplacementAuthoring replacement;
+        replacement.registry_id = request->registry_id;
+        replacement.alternative_id = request->alternative_id;
+        replacement.seed_roof_ids = request->seed_roof_ids;
+        replacement.demolition = true;
+        std::set<std::string, std::less<>> occupied;
+        for (const auto& record : source.history())
+            for (const auto& [id, entity] : record.entities) { (void)entity; occupied.insert(id); }
+        for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+        const auto allocate = [&] {
+            auto proposed = new_id("proposed");
+            while (!occupied.insert(proposed).second) proposed = new_id("proposed");
+            return proposed;
+        };
+        for (const auto* ids : {&plan.required_entity_ids, &plan.required_child_ids})
+            for (const auto& original : *ids) replacement.identities.emplace(original, allocate());
+        for (const auto& [original, count] : roof_demolition_additional_identity_counts(source.entities(), *request)) {
+            auto& copies = replacement.demolition_additional_identities[original];
+            for (std::size_t index = 0; index < count; ++index) copies.push_back(allocate());
+        }
+        ConstraintAuthoringIntent semantic;
+        semantic.message = message;
+        auto intent = make_phase_constraint_authoring_intent(source, semantic);
+        intent.roof_replacement = encode_phase_roof_replacement_authoring(replacement);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision = source.revision();
+        command.message = message;
+        command.phase_constraint_authoring_completion = true;
+        command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source, Command{command});
+        return Command{std::move(command)};
+    }
+
     std::optional<Command> reviewAlternativeRoofEdit(const Command& requested, bool* handled = nullptr) {
         if (handled) *handled=false;
         const auto* raw=std::get_if<ApplyEntityChanges>(&requested);
@@ -41334,7 +41417,10 @@ private:
             constrained->phase_constraint_authoring_intent.is_null()) return command;
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
         if (!intent.roof_replacement.is_null()) {
-            proposed_ids=decode_phase_roof_replacement_authoring(intent.roof_replacement).identities;
+            const auto replacement = decode_phase_roof_replacement_authoring(intent.roof_replacement);
+            // Demolished selections have no proposed owner. Their declared
+            // names still reserve identities, but cannot become canvas targets.
+            if (!replacement.demolition) proposed_ids = replacement.identities;
             return command;
         }
         if (!intent.wall_replacement.is_null()) {

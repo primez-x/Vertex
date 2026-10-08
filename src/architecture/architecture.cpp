@@ -1112,24 +1112,45 @@ TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
     }
 }
 
+std::vector<std::vector<std::size_t>> roof_shape_connected_components(
+    std::span<const TopoDS_Shape> roofs) {
+    try {
+        for (const auto& roof : roofs) {
+            if (roof.IsNull() || !BRepCheck_Analyzer(roof).IsValid() ||
+                !std::isfinite(solid_volume(roof)) ||
+                solid_volume(roof) <= tolerance * tolerance * tolerance) {
+                throw std::invalid_argument("Roof join source roof is not a valid solid");
+            }
+        }
+        std::vector<std::vector<std::size_t>> components;
+        std::vector<bool> assigned(roofs.size(), false);
+        for (std::size_t first = 0; first < roofs.size(); ++first) {
+            if (assigned[first]) continue;
+            auto& component = components.emplace_back();
+            component.push_back(first);
+            assigned[first] = true;
+            for (std::size_t cursor = 0; cursor < component.size(); ++cursor) {
+                for (std::size_t next = 0; next < roofs.size(); ++next) {
+                    if (!assigned[next] && shapes_touch(roofs[component[cursor]], roofs[next])) {
+                        assigned[next] = true;
+                        component.push_back(next);
+                    }
+                }
+            }
+            std::sort(component.begin(), component.end());
+        }
+        return components;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Roof connectivity geometry failed: ") + error.what());
+    }
+}
+
 TopoDS_Shape make_roof_join(const RoofJoin& join, std::span<const TopoDS_Shape> roofs) {
     validate_roof_join_semantics(join);
     if (roofs.size() != join.roof_ids.size()) {
         throw std::invalid_argument("Roof join source roof count does not match roof_ids");
     }
-    for (const auto& roof : roofs) {
-        if (roof.IsNull() || !BRepCheck_Analyzer(roof).IsValid() ||
-            !std::isfinite(solid_volume(roof)) ||
-            solid_volume(roof) <= tolerance * tolerance * tolerance) {
-            throw std::invalid_argument("Roof join source roof is not a valid solid");
-        }
-    }
-
-    const bool connected = members_form_connected_component(
-        roofs.size(), [&](std::size_t first, std::size_t second) {
-            return shapes_touch(roofs[first], roofs[second]);
-        });
-    if (!connected) {
+    if (roof_shape_connected_components(roofs).size() != 1) {
         throw std::invalid_argument("Roof join roofs must form one connected component");
     }
 

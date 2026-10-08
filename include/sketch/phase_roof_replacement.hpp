@@ -65,12 +65,19 @@ struct PhaseRoofReplacementAuthoring {
     std::vector<RoofProfileEditIntent> roof_profiles;
     std::vector<RoofOpeningEditIntent> roof_opening_edits{};
     std::vector<RoofEditIntent> roof_edits{};
+    // Version four retains selected baseline roofs as demolition. Joined
+    // survivors receive unchanged proposed owners; no body edit can accompany it.
+    bool demolition{};
+    // Exact additional component/overlay slots keyed by actual original IDs.
+    std::map<std::string, std::vector<std::string>, std::less<>> demolition_additional_identities;
 };
 
 // Version 1 retains exactly its six profile fields. Version 2 adds only
 // roof_opening_edits and requires nonempty opening edits with empty profiles.
 // Version 3 adds roof_edits, requiring nonempty combined edits and empty
 // historical profile/opening arrays. Every dialect has an exact field set.
+// Version 4 contains exactly version, registry_id, alternative_id, seed_roof_ids,
+// identities, demolition:true, demolition_additional_identities.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(

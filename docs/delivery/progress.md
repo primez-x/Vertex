@@ -14,6 +14,40 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 roof demolition and surviving join implementation
+
+Cut/Delete now prepare a source-bound roof demolition command before generic
+removal when selected roofs belong to an active alternative's shared baseline.
+The command retains the original design and derives the complete joined cohort
+from actual source. Selected roofs receive no proposed copy; surviving neighbors
+receive distinct proposed roofs with their source physical properties. Other
+alternatives and original owners remain retained. Clipboard publication follows
+successful Cut, and both commands clear all selected IDs after publication.
+
+Deleting a bridge member now has a source-derived connected-component path.
+Surviving groups of at least two roofs retain separate joins, authored member
+order and join material assignments. Independent singleton survivors inherit
+the actual source join's effective material assignment without changing their
+original roof; compatible raw assignment extras remain. Additional join/overlay destinations are
+explicit and independently checked against source-derived slot counts; the
+complete original mapping also reserves omitted destinations. Qualified view
+and annotation presentation is extended for every actual copy. All fresh names
+remain reserved in retained history after Undo. Native 97/extraction 95 retain
+replacement record four and its strict seven-field demolition wire.
+
+Independent source review approved the bounded integrated demolition slice,
+including current/retained authority fences, survivor components, singleton
+material inheritance, exact split identities, Cut/Delete routing and format
+floors. This approval provides source review only.
+
+This batch remains source implementation only. Compilation, native execution,
+interaction, Undo/Redo and storage round trips are unverified. No tests, builds,
+probes, scripts, native jobs, launches, packages or installations run. The
+installed candidate is unchanged. Form conversion,
+alternative clone, ordinary/proposed roof deletion consequences, exact typed
+transform producers, unsupported affected references and broader non-wall
+phase lifecycle remain implementation work.
+
 ### October 8 atomic roof authoring implementation
 
 Source now composes a roof's size, openings and position in one same-form edit.

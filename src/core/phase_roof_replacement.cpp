@@ -4,6 +4,7 @@
 #include "sketch/architecture.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/phase_roof_demolition.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
@@ -555,6 +556,20 @@ std::optional<PhaseRoofProfileReplacementRequest> phase_roof_edit_replacement_re
 
 nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacementAuthoring& authoring) {
     identity(authoring.registry_id); identity(authoring.alternative_id);
+    if (authoring.demolition) {
+        if (!authoring.roof_profiles.empty() || !authoring.roof_opening_edits.empty() || !authoring.roof_edits.empty())
+            reject("roof demolition cannot borrow body edit authority");
+        auto result=encode_roof_demolition_intent({authoring.registry_id,authoring.alternative_id,
+            authoring.seed_roof_ids,authoring.identities,authoring.demolition_additional_identities});
+        result["demolition_additional_identities"] = std::move(result.at("additional_identities"));
+        result.erase("additional_identities");
+        result["version"]=4;
+        result["demolition"]=true;
+        if (result.dump().size()>maximum_authoring_bytes) reject("roof demolition authoring byte budget exceeded");
+        return result;
+    }
+    if (!authoring.demolition_additional_identities.empty())
+        reject("historical roof edit dialects cannot declare demolition identities");
     if (!authoring.roof_edits.empty()) {
         if (!authoring.roof_profiles.empty() || !authoring.roof_opening_edits.empty())
             reject("combined roof authoring cannot mix historical replacement dialects");
@@ -641,6 +656,23 @@ nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacemen
 
 PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nlohmann::json& value) {
     try {
+        if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version")==4) {
+            if (value.size()!=7 || !value.contains("demolition") || !value.at("demolition").is_boolean() ||
+                !value.contains("demolition_additional_identities") || !value.at("demolition_additional_identities").is_object() ||
+                !value.at("demolition").get<bool>() || value.dump().size()>maximum_authoring_bytes)
+                reject("roof demolition must contain exactly its seven version-four fields");
+            auto wire=value;
+            wire.erase("demolition");wire["version"]=1;
+            wire["additional_identities"] = std::move(wire.at("demolition_additional_identities"));
+            wire.erase("demolition_additional_identities");
+            const auto demolition=decode_roof_demolition_intent(wire);
+            PhaseRoofReplacementAuthoring result;
+            result.registry_id=demolition.registry_id;result.alternative_id=demolition.alternative_id;
+            result.seed_roof_ids=demolition.seed_roof_ids;result.identities=demolition.identities;result.demolition=true;
+            result.demolition_additional_identities=demolition.additional_identities;
+            (void)encode_phase_roof_replacement_authoring(result);
+            return result;
+        }
         if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version") == 3) {
             if (value.size() != 8 || !value.contains("registry_id") || !value.contains("alternative_id") ||
                 !value.contains("seed_roof_ids") || !value.contains("identities") || !value.contains("roof_profiles") ||
@@ -703,6 +735,9 @@ PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nloh
 PhaseRoofReplacementEntities replay_phase_roof_replacement_authoring(
     const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementAuthoring& authoring) {
     (void)encode_phase_roof_replacement_authoring(authoring);
+    if (authoring.demolition)
+        return replay_roof_demolition(source,{authoring.registry_id,authoring.alternative_id,
+            authoring.seed_roof_ids,authoring.identities,authoring.demolition_additional_identities}).entities;
     const auto plan = inspect_phase_roof_replacement_plan(source, authoring.seed_roof_ids, authoring.registry_id, authoring.alternative_id);
     return replay_phase_roof_replacement(source, plan, authoring.identities, authoring.roof_profiles,
         authoring.roof_opening_edits, authoring.roof_edits).entities;

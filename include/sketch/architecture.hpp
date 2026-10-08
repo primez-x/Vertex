@@ -8,6 +8,8 @@
 #include "sketch/door_operation.hpp"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
+#include <cstddef>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <string>
@@ -83,6 +85,11 @@ struct OpeningAssemblyGeometry {
 // coordinated-view union.
 [[nodiscard]] TopoDS_Shape make_roof_join(const RoofJoin& join,
                                           std::span<const TopoDS_Shape> roofs);
+// Validates every actual positive-mass roof solid and uses exactly the join's
+// shape-distance/tolerance contact rule. Components and their member indices
+// retain input authored order, including singletons. Geometry failures throw.
+[[nodiscard]] std::vector<std::vector<std::size_t>> roof_shape_connected_components(
+    std::span<const TopoDS_Shape> roofs);
 // roof_ids and source shapes have the same authored order. Earlier members
 // own shared material. Gross volumes include each source's own openings;
 // net regions subtract all earlier members, with no waste allowance.

@@ -2647,9 +2647,13 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
             complete_roof_envelope_reservation=complete_roof_envelope_reservation ||
-                !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty();
+                !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty() || replacement.demolition;
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);roof_fresh.insert(id);
+            }
+            for (const auto& [original, ids] : replacement.demolition_additional_identities) {
+                (void)original;
+                for (const auto& id : ids) { fresh.insert(id); roof_fresh.insert(id); }
             }
             const auto opening_edits=replacement.roof_edits.empty() ? replacement.roof_opening_edits :
                 roof_edit_opening_intents(replacement.roof_edits);
@@ -2712,6 +2716,11 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 if (!intent.roof_replacement.is_null()) {
                     const auto roof=decode_phase_roof_replacement_authoring(intent.roof_replacement);
                     require_unused(roof.identities);
+                    for (const auto& [original, ids] : roof.demolition_additional_identities) {
+                        (void)original;
+                        for (const auto& id : ids) if (fresh.contains(id))
+                            throw std::invalid_argument("Proposed identity was already reserved by retained roof split intent: " + id);
+                    }
                     const auto opening_edits=roof.roof_edits.empty() ? roof.roof_opening_edits : roof_edit_opening_intents(roof.roof_edits);
                     for (const auto& edit:opening_edits)
                         for (const auto& upsert:edit.upserts)
