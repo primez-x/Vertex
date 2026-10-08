@@ -200,6 +200,15 @@ Wall host_wall(const std::map<std::string, Entity, std::less<>>& entities,
 }
 } // namespace
 
+void validate_hosted_opening_profile_entity(const Entity& source) {
+    (void)identity(source.id);
+    (void)profile(source);
+    std::string host, error;
+    if (!read_document_wall_id(source, host, error))
+        invalid("Hosted opening profile requires its actual host identity");
+    (void)identity(host);
+}
+
 nlohmann::json encode_hosted_opening_profile_edit_intent(const HostedOpeningProfileEditIntent& intent) {
     (void)identity(intent.opening_id);
     (void)identity(intent.wall_id);

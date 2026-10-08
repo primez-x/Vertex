@@ -14,6 +14,83 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 explicit per-root assembly transforms
+
+Embedded assembly group targets now carry an optional per-root operator;
+omission retains the earlier shared operator. Each effective pose receives
+finite/positive admission. Identity handling is per root, and different root
+edits compose into one catalog update while retaining unselected raw rows and
+opaque data. Independent-copy preparation carries the same captured operators
+without publishing its detached source-catalog updates.
+
+The numeric Site Transform/Copy controller supplies each selected embedded
+root's admitted frame. Current embedded geometry uses world-authored poses and
+world presentation frames; that policy is retained explicitly rather than
+changed by a catalog's building membership. This closes the implicit-frame API
+assumption, not a claim of observed mixed-frame malfunction. The root reviewed
+aggregation, identity/copy forwarding and actual controller frame resolution.
+Compilation and runtime behavior remain unverified; no builds or tests run.
+Typed body/profile placement and broader non-wall phase lifecycle remain open.
+
+### October 8 exact wall top-rise editing
+
+The Top rise control now creates a typed signed quantity before any ordinary
+property transaction, native host preview or augmentation. Shared baseline
+walls follow the existing separate-copy path in the actual active alternative.
+Ordinary and proposed height/depth/rise edits retain entered quantities, aliases
+and opaque receipt fields; source-equivalent edits add no event. Source and
+final affected active cuts/assemblies/operations/joins use complete maps.
+Unsupported planes and stale/dangling authority refuse without erasing data.
+
+A shared capture helper replaces the desktop's numeric-only profile inference.
+Ordinary profile commands preserve physical rooms for explicit review and check
+that augmentation equals the independently replayed exterior changes. Room
+receipt deltas require exact typed replay before existing room/redraw guards.
+Native 93/extraction 91 cover nested signed profiles and actual retained parent
+receipt changes through room history/wrappers and Undo. Earlier wire dialects
+and no-receipt-delta room admission retain their earlier meaning.
+
+Independent source review identified a legacy admission regression, incomplete joined/copied
+neighbor checks, and a dangling canonical receipt that could acquire authority
+through an alias. Strict checks now use an explicit new-dialect/current-authoring
+seam; historical version-one replay keeps its earlier policy. Known receipts
+bind their actual scalar or existing layer, with no alias substitution. Every
+affected join member and copied wall is admitted in source, physical and final
+maps. Independent follow-up approved all three source corrections. The root
+reviewed UI routing, capture, copied closure, format linkage and no-op handling.
+
+Compilation, interaction, history/reopen and output remain unverified. No builds, tests,
+probes, scripts, native jobs, launches, packages or installations run. Compound
+multi-registry operations and broader shared object/profile lifecycle remain
+implementation gaps.
+
+### October 8 opening type conversion
+
+The floating opening properties now offer a Type control limited to Door,
+Window and Opening. Changing type supplies an explicit matching assembly and
+removes incompatible operation data. Choosing the current type keeps custom
+frames/glazing/swing and adds no edit. Typed replay preserves the actual host,
+dimensions and quantity receipts, drawing layer and opaque owner data.
+
+Raw family changes are independently compared with entity replay before native
+transactions or previews. Ordinary edits admit complete source/final physical
+host graphs. Shared baseline hosts derive separate proposed openings/walls and
+the complete required closure under the actual saved alternative; original and
+copied closures pass cut, assembly, operation and join admission. Mandatory room
+and copied relationship review completes one event. Original baseline data and
+other alternatives remain unchanged; foreign known ownership refuses. Native
+92/extraction 90 retain record five through direct and composed histories, with
+earlier record dialects intact.
+
+Independent review found malformed bare sibling profiles could bypass assembly
+admission, and current-type no-ops needlessly required an unchanged offset to
+acquire a new quantity representation. Pure profile admission now checks every
+active affected sibling and original/final conversion without manufacturing a
+quantity. Review approved both source corrections. Compilation, interactions,
+save/reopen, Undo and output remain unverified. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations run. Compound
+multi-registry operations and broader object profiles/lifecycle remain gaps.
+
 ### October 8 opening rehosting
 
 The floating opening properties panel adds a host-wall selector with named

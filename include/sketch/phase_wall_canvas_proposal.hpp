@@ -67,4 +67,14 @@ struct PhaseWallCanvasProposal {
     const std::vector<HostedOpeningRehostIntent>& rehosts,
     const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
 
+// Same-host family conversion discovers actual saved-active baseline owners
+// before ordinary physical replay or Document preview. A complete equivalent
+// batch returns nullopt without copying or allocating. Proposed batches require
+// every row's own qualified host in one actual registry. Source bindings,
+// complete fresh closure and mandatory room/relationship review match above.
+[[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_family_proposal(
+    const DocumentSnapshot& source,
+    const std::vector<HostedOpeningFamilyEditIntent>& families,
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
+
 } // namespace sketch

@@ -85,6 +85,17 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
             request->seed_wall_ids!=edit.seed_wall_ids)
             invalid("opening rehost replacement roots do not match the actual original hosts and saved choice");
     }
+    if (!edit.opening_families.empty()) {
+        if (!edit.wall_profiles.empty() || !edit.opening_profiles.empty() || !edit.opening_rehosts.empty() ||
+            has_geometry_or_relation_intent(intent.intent))
+            invalid("opening families require a separate reviewed operation from geometry, relationships, profiles and rehosts");
+        // Re-derive each row's actual shared host. Neither supplied seeds nor
+        // a different edit's closure can lend family-conversion authority.
+        const auto request = phase_hosted_opening_family_replacement_request(source, edit.opening_families);
+        if (!request || request->registry_id != edit.registry_id || request->alternative_id != edit.alternative_id ||
+            request->seed_wall_ids != edit.seed_wall_ids)
+            invalid("opening family replacement roots do not match the actual original hosts and saved choice");
+    }
     Stage stage;
     stage.plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,edit.alternative_id);
     stage.replacement=replay_phase_wall_replacement(source,stage.plan,edit.identities);
@@ -99,6 +110,19 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
     });
     stage.entities=stage.replacement.entities;
     if (!edit.wall_profiles.empty()) {
+        const bool strict_profiles=std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
+            [](const auto& profile) { return profile.top_rise.has_value(); });
+        std::set<std::string,std::less<>> original_walls,copied_walls;
+        if (strict_profiles) {
+            for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
+                const auto found=source.find(original);
+                if (found!=source.end() && found->second.type=="wall") {
+                    original_walls.insert(original);copied_walls.insert(copy);
+                }
+            }
+            validate_active_wall_physical_dependencies(source,original_walls,true);
+            validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
+        }
         auto profiles=edit.wall_profiles;
         for (auto& profile:profiles) {
             if (!std::binary_search(edit.seed_wall_ids.begin(),edit.seed_wall_ids.end(),profile.wall_id))
@@ -110,6 +134,7 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
                 layer.layer_id=stage.replacement.original_to_proposed.at(layer.layer_id);
         }
         stage.entities=replay_wall_profile_entities(stage.entities,profiles,false);
+        if (strict_profiles) validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
     }
     if (!edit.opening_profiles.empty()) {
         if (!edit.wall_profiles.empty() || has_geometry_or_relation_intent(mapped))
@@ -161,9 +186,36 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
         }
         validate_active_wall_physical_dependencies(stage.entities,copied_walls);
     }
+    if (!edit.opening_families.empty()) {
+        auto families = edit.opening_families;
+        std::set<std::string, std::less<>> original_walls, copied_walls;
+        for (const auto& [original, proposed] : stage.replacement.original_to_proposed) {
+            const auto owner = source.find(original);
+            if (owner != source.end() && owner->second.type == "wall") {
+                original_walls.insert(original);
+                copied_walls.insert(proposed);
+            }
+        }
+        // Record five independently admits complete original/copied profiles;
+        // earlier recorded dialects retain their original replay policy.
+        validate_active_wall_physical_dependencies(source, original_walls,true);
+        validate_active_wall_physical_dependencies(stage.entities, copied_walls,true);
+        for (auto& family : families) {
+            const auto opening = stage.replacement.original_to_proposed.find(family.opening_id);
+            const auto host = stage.replacement.original_to_proposed.find(family.wall_id);
+            if (opening == stage.replacement.original_to_proposed.end() ||
+                host == stage.replacement.original_to_proposed.end())
+                invalid("opening family requires its own independently derived proposed opening and host");
+            family.opening_id = opening->second;
+            family.wall_id = host->second;
+        }
+        stage.entities = replay_hosted_opening_family_entities(stage.entities, families, false);
+        validate_active_wall_physical_dependencies(stage.entities, copied_walls,true);
+    }
     if (has_geometry_or_relation_intent(mapped))
         stage.entities=reconstruct_active_phase_constraint_authoring(stage.entities,mapped);
-    else if (edit.wall_profiles.empty() && edit.opening_profiles.empty() && edit.opening_rehosts.empty()) invalid("replacement has no semantic edit");
+    else if (edit.wall_profiles.empty() && edit.opening_profiles.empty() && edit.opening_rehosts.empty() &&
+        edit.opening_families.empty()) invalid("replacement has no semantic edit");
     preserve_baseline(source,stage.entities,stage.plan);
     // Incoming room evidence sees every independently reconstructed new
     // relationship. These copies were withheld from the physical solve; only
@@ -269,6 +321,7 @@ void complete_room_constraints(Stage& stage,const PhaseWallReplacementAuthoring&
 } // namespace
 
 Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring& value) {
+    if (value.opening_families.size() > 2048) invalid("invalid opening family inventory");
     Json decisions=Json::array();
     for (const auto& choice:value.room_constraint_decisions) {
         Json endpoints=Json::array();
@@ -299,6 +352,18 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
         for (const auto& rehost:value.opening_rehosts)
             result["opening_rehosts"].push_back(encode_hosted_opening_rehost_intent(rehost));
     }
+    if (!value.opening_families.empty()) {
+        if (!value.wall_profiles.empty() || !value.opening_profiles.empty() || !value.opening_rehosts.empty())
+            invalid("opening families and other edit dialects require separate reviewed operations");
+        result["version"] = 5; result["opening_families"] = Json::array();
+        std::set<std::string, std::less<>> targets;
+        for (const auto& family : value.opening_families) {
+            if (!targets.insert(family.opening_id).second ||
+                !std::binary_search(value.seed_wall_ids.begin(), value.seed_wall_ids.end(), family.wall_id))
+                invalid("opening family must name a unique original opening and its own seeded host");
+            result["opening_families"].push_back(encode_hosted_opening_family_edit_intent(family));
+        }
+    }
     // The decoder below is the single strict semantic admission path. Encoding
     // never supplies geometry, inferred room mappings or arbitrary clone data.
     if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
@@ -307,7 +372,8 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4)) invalid("unsupported replacement version");
+        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 &&
+         value.at("version")!=5)) invalid("unsupported replacement version");
     const bool profiles=value.at("version")==2;
     if (profiles) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
         "room_review_intent","room_constraint_decisions","wall_profiles"});
@@ -315,6 +381,8 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
         "room_review_intent","room_constraint_decisions","opening_profiles"});
     else if (value.at("version") == 4) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
         "room_review_intent","room_constraint_decisions","opening_rehosts"});
+    else if (value.at("version") == 5) keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities",
+        "room_review_intent","room_constraint_decisions","opening_families"});
     else keys(value,{"version","registry_id","alternative_id","seed_wall_ids","identities","room_review_intent","room_constraint_decisions"});
     PhaseWallReplacementAuthoring result;
     result.registry_id=identity(value.at("registry_id"));result.alternative_id=identity(value.at("alternative_id"));
@@ -358,6 +426,18 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
                  !std::binary_search(result.seed_wall_ids.begin(),result.seed_wall_ids.end(),rehost.target_wall_id)))
                 invalid("opening rehost must name a unique original opening and its own seeded old or target host");
             result.opening_rehosts.push_back(std::move(rehost));
+        }
+    }
+    if (value.at("version") == 5) {
+        const auto& edits = value.at("opening_families");
+        if (!edits.is_array() || edits.empty() || edits.size() > 2048) invalid("invalid opening family inventory");
+        std::set<std::string, std::less<>> targets;
+        for (const auto& edit : edits) {
+            auto family = decode_hosted_opening_family_edit_intent(edit);
+            if (!targets.insert(family.opening_id).second ||
+                !std::binary_search(result.seed_wall_ids.begin(), result.seed_wall_ids.end(), family.wall_id))
+                invalid("opening family must name a unique original opening and its own seeded host");
+            result.opening_families.push_back(std::move(family));
         }
     }
     const auto& identities=value.at("identities");
@@ -430,6 +510,15 @@ Entities replay_phase_wall_replacement_authoring(const Entities& source,const Ph
         stage.entities=replay.entities;
     }
     complete_room_constraints(stage,edit);
+    if (!edit.opening_families.empty() || std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
+            [](const auto& profile) { return profile.top_rise.has_value(); })) {
+        std::set<std::string,std::less<>> copied_walls;
+        for (const auto& [original,copy]:stage.replacement.original_to_proposed) {
+            const auto found=source.find(original);
+            if (found!=source.end() && found->second.type=="wall") copied_walls.insert(copy);
+        }
+        validate_active_wall_physical_dependencies(stage.entities,copied_walls,true);
+    }
     preserve_baseline(source,stage.entities,stage.plan);
     if (const auto error=validate_active_phase_constraint_integrity(stage.entities)) invalid(*error);
     return std::move(stage.entities);

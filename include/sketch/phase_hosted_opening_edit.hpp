@@ -30,6 +30,11 @@ struct HostedOpeningProfileEditIntent {
 [[nodiscard]] HostedOpeningProfileEditIntent decode_hosted_opening_profile_edit_intent(
     const nlohmann::json& value);
 
+// Pure admission of an existing opening and host identity, dimensional scalars,
+// aliases, retained known receipts, assembly family and operation authority.
+// Does not manufacture an edit quantity or change the entity representation.
+void validate_hosted_opening_profile_entity(const Entity& source);
+
 // Detached replay for captured desktop edits. Checks exact target/host, scalar
 // aliases, retained known receipts and assembly family. A same-value edit keeps
 // the exact source record, including its representation and opaque metadata.

@@ -200,4 +200,42 @@ std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_rehost_propo
     return PhaseWallCanvasProposal{std::move(intent),std::move(physical)};
 }
 
+std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_family_proposal(
+    const DocumentSnapshot& source,
+    const std::vector<HostedOpeningFamilyEditIntent>& families,
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity) {
+    const auto request = phase_hosted_opening_family_replacement_request(source.entities(), families);
+    if (!request) return std::nullopt;
+    const auto plan = inspect_phase_wall_replacement_plan(source.entities(), request->seed_wall_ids,
+        request->registry_id, request->alternative_id);
+    if (!plan.ready()) {
+        std::string reason = "The proposed opening family conversion has unsupported replacement dependencies.";
+        for (const auto& diagnostic : plan.diagnostics) {
+            if (!diagnostic.blocking) continue;
+            reason += '\n';
+            if (!diagnostic.entity_id.empty()) reason += diagnostic.entity_id + ": ";
+            reason += diagnostic.reason;
+        }
+        throw std::invalid_argument(reason);
+    }
+    auto intent = make_phase_constraint_authoring_intent(source, ConstraintAuthoringIntent{});
+    if (!allocate_fresh_identity)
+        throw std::invalid_argument("The proposed opening family conversion needs a fresh identity allocator.");
+    PhaseWallReplacementAuthoring replacement;
+    replacement.registry_id = request->registry_id;
+    replacement.alternative_id = request->alternative_id;
+    replacement.seed_wall_ids = request->seed_wall_ids;
+    replacement.opening_families = families;
+    const auto allocate = [&](const std::string& original_id) {
+        if (!replacement.identities.contains(original_id))
+            replacement.identities.emplace(original_id, allocate_fresh_identity(original_id));
+    };
+    for (const auto& id : plan.required_entity_ids) allocate(id);
+    for (const auto& id : plan.required_child_ids) allocate(id);
+    intent.wall_replacement = encode_phase_wall_replacement_authoring(replacement);
+    (void)encode_phase_constraint_authoring_intent(intent);
+    auto physical = inspect_phase_wall_replacement_authoring(source, intent);
+    return PhaseWallCanvasProposal{std::move(intent), std::move(physical)};
+}
+
 } // namespace sketch

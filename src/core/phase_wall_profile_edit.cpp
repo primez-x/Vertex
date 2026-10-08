@@ -8,6 +8,8 @@
 #include "sketch/document_wall.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/phase_hosted_opening_edit.hpp"
+#include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_measurement.hpp"
 
@@ -65,6 +67,38 @@ Json quantity(const Quantity& value) {
     return result;
 }
 
+Quantity rise_quantity(const Json& value) {
+    keys(value, {"version", "original_expression", "entered_unit", "exact_metres"});
+    keys(value.at("exact_metres"), {"numerator", "denominator"});
+    const auto& expression = value.at("original_expression");
+    if (!expression.is_string() || expression.get_ref<const std::string&>().size() > expression_limit)
+        invalid("Wall profile quantity expression budget exceeded");
+    // The shared decoder verifies the known exact rational and expression,
+    // including finite signed/zero values. Its fixed-length encoder has a
+    // positive policy which is deliberately not applicable to top rise.
+    return decode_constraint_quantity_receipt(value);
+}
+
+Json rise_quantity(const Quantity& value) {
+    const char* unit = nullptr;
+    switch (value.entered_unit) {
+    case Unit::metre: unit = "m"; break;
+    case Unit::millimetre: unit = "mm"; break;
+    case Unit::centimetre: unit = "cm"; break;
+    case Unit::foot: unit = "ft"; break;
+    case Unit::inch: unit = "in"; break;
+    default: invalid("Wall profile top rise unit is unsupported");
+    }
+    Json result{{"version", 1}, {"original_expression", value.original_expression},
+        {"entered_unit", unit}, {"exact_metres", {
+            {"numerator", value.exact_metres.numerator}, {"denominator", value.exact_metres.denominator}}}};
+    const auto parsed = rise_quantity(result);
+    if (parsed.metres != value.metres || parsed.exact_metres != value.exact_metres ||
+        parsed.entered_unit != value.entered_unit || parsed.original_expression != value.original_expression)
+        invalid("Wall profile top rise quantity is internally inconsistent");
+    return result;
+}
+
 Wall wall(const Entity& entity, const std::vector<const Entity*>& openings = {}) {
     Wall result;
     std::string diagnostic;
@@ -74,14 +108,15 @@ Wall wall(const Entity& entity, const std::vector<const Entity*>& openings = {})
     return result;
 }
 
-void receipt(Entity& entity, const std::string& pointer, const Quantity& value, double old_value) {
+void receipt(Entity& entity, const std::string& pointer, const Quantity& value, double old_value,
+             bool signed_rise = false) {
     auto entries = entity.properties.find("quantity_entries");
     if (entries == entity.properties.end()) {
         entity.properties["quantity_entries"] = Json::object();
         entries = entity.properties.find("quantity_entries");
     }
     if (!entries->is_object()) invalid("Wall profile quantity_entries must be an object");
-    const auto encoded = quantity(value);
+    const auto encoded = signed_rise ? rise_quantity(value) : quantity(value);
     auto previous = entries->find(pointer);
     if (previous == entries->end()) {
         (*entries)[pointer] = encoded;
@@ -115,7 +150,57 @@ void scalar(Entity& entity, const char* canonical, const char* alias,
     }
 }
 
-void assembly_fit(const Entity& entity, const Wall& host, const HostedOpening& cut) {
+void top_rise(Entity& entity, const Wall& original, const Quantity& value) {
+    const double old_rise = original.slope_rise.value_or(0.0);
+    const auto entries = entity.properties.find("quantity_entries");
+    if (entries != entity.properties.end() && !entries->is_object())
+        invalid("Wall profile quantity_entries must be an object");
+    for (const auto* field : {"slope_rise_m", "slope_rise"}) {
+        const auto retained = entity.properties.find(field);
+        if (retained != entity.properties.end() &&
+            (!retained->is_number() || retained->get<double>() != old_rise))
+            invalid("Wall profile top rise aliases disagree");
+        const auto pointer = "/" + std::string(field);
+        if (entries != entity.properties.end() && entries->contains(pointer)) {
+            if (retained == entity.properties.end() ||
+                decode_constraint_quantity_receipt(entries->at(pointer)).metres != old_rise)
+                invalid("Wall profile source top rise receipt is stale");
+        }
+    }
+    const auto gradient = wall_top_gradient(original);
+    const bool flat = gradient.x == 0.0 && gradient.y == 0.0;
+    // Scalar rises within geometry tolerance have the established flat-top
+    // meaning. Explicit planes retain their full gradient, even across the
+    // baseline, so zero must clear a nonflat plane with zero projected rise.
+    const bool new_flat = std::abs(value.metres) <= tolerance;
+    if ((flat && new_flat) || (value.metres == old_rise && value.metres != 0.0)) return;
+    if (entity.properties.contains("top_plane")) {
+        // Source wall admission has parsed every plane field with the strict
+        // known codec. Do not leave dangling plane receipts or erase opaque
+        // receipt content when replacing that complete supported plane.
+        if (entries != entity.properties.end()) {
+            for (auto entry = entries->begin(); entry != entries->end(); ++entry)
+                if (entry.key() == "/top_plane" || entry.key().starts_with("/top_plane/"))
+                    invalid("Wall profile top rise cannot invalidate retained plane receipts");
+        }
+        entity.properties.erase("top_plane");
+    }
+    // The authoritative scalar-rise semantic derives the plane along the
+    // captured chord, anchored at height_m at baseline.start. Keeping an
+    // authored zero scalar allows its exact receipt to remain well bound.
+    entity.properties["slope_rise_m"] = value.metres;
+    receipt(entity, "/slope_rise_m", value, old_rise, true);
+    if (entity.properties.contains("slope_rise")) {
+        entity.properties["slope_rise"] = value.metres;
+        if (entity.properties.at("quantity_entries").contains("/slope_rise"))
+            receipt(entity, "/slope_rise", value, old_rise, true);
+    }
+}
+
+void assembly_fit(const Entity& entity, const Wall& host, const HostedOpening& cut, bool strict_profiles = false) {
+    // New dialects/current authoring independently admit every sibling,
+    // including bare cuts. Recorded legacy admission remains unchanged.
+    if (strict_profiles) validate_hosted_opening_profile_entity(entity);
     std::optional<OpeningAssembly> assembly;
     if (const auto found = entity.properties.find("opening_assembly"); found != entity.properties.end())
         assembly = parse_opening_assembly(*found);
@@ -152,7 +237,7 @@ Wall hosted_wall(const std::map<std::string, Entity, std::less<>>& entities,
 
 void admit_affected_joins(const std::map<std::string, Entity, std::less<>>& entities,
     const std::set<std::string, std::less<>>& targets, const ConstraintPhaseScope& scope,
-    std::map<std::string, std::vector<const Entity*>, std::less<>>& openings) {
+    std::map<std::string, std::vector<const Entity*>, std::less<>>& openings, bool strict_profiles) {
     std::map<std::string, Wall, std::less<>> members;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "wall_join" || scope.inactive_owner_ids.contains(id)) continue;
@@ -170,7 +255,12 @@ void admit_affected_joins(const std::map<std::string, Entity, std::less<>>& enti
             const auto found = entities.find(member);
             if (found == entities.end() || found->second.type != "wall" || found->second.id != member)
                 invalid("Wall profile active join member is missing or inconsistent");
-            members.emplace(member, hosted_wall(entities, found->second, openings[member]));
+            if (strict_profiles) validate_wall_profile_source_entity(found->second);
+            auto checked=hosted_wall(entities, found->second, openings[member]);
+            if (strict_profiles)
+                for (std::size_t i=0;i<checked.openings.size();++i)
+                    assembly_fit(*openings[member][i],checked,checked.openings[i],true);
+            members.emplace(member,std::move(checked));
         }
         std::vector<Wall> actual_members;
         actual_members.reserve(join.wall_ids.size());
@@ -185,11 +275,12 @@ void admit_affected_joins(const std::map<std::string, Entity, std::less<>>& enti
 
 nlohmann::json encode_wall_profile_edit_intent(const WallProfileEditIntent& intent) {
     (void)identity(intent.wall_id);
-    if (!intent.thickness && !intent.height && !intent.layer_thicknesses)
+    if (!intent.thickness && !intent.height && !intent.layer_thicknesses && !intent.top_rise)
         invalid("Wall profile edit requires an authored dimension");
-    Json result{{"version", 1}, {"wall_id", intent.wall_id},
+    Json result{{"version", intent.top_rise ? 2 : 1}, {"wall_id", intent.wall_id},
         {"thickness", intent.thickness ? quantity(*intent.thickness) : Json(nullptr)},
         {"height", intent.height ? quantity(*intent.height) : Json(nullptr)}, {"layer_thicknesses", nullptr}};
+    if (intent.top_rise) result["top_rise"] = rise_quantity(*intent.top_rise);
     if (intent.layer_thicknesses) {
         if (intent.layer_thicknesses->empty() || intent.layer_thicknesses->size() > collection_limit)
             invalid("Wall profile layer inventory budget is invalid");
@@ -207,11 +298,16 @@ nlohmann::json encode_wall_profile_edit_intent(const WallProfileEditIntent& inte
 }
 
 WallProfileEditIntent decode_wall_profile_edit_intent(const nlohmann::json& value) {
-    keys(value, {"version", "wall_id", "thickness", "height", "layer_thicknesses"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1)
+    if (!value.is_object() || !value.contains("version") ||
+        !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2))
         invalid("Wall profile edit version is unsupported");
+    const bool with_rise = value.at("version") == 2;
+    if (with_rise) keys(value, {"version", "wall_id", "thickness", "height", "layer_thicknesses", "top_rise"});
+    else keys(value, {"version", "wall_id", "thickness", "height", "layer_thicknesses"});
     WallProfileEditIntent result;
     result.wall_id = identity(value.at("wall_id"));
+    if (with_rise) result.top_rise = rise_quantity(value.at("top_rise"));
     if (!value.at("thickness").is_null()) result.thickness = quantity(value.at("thickness"));
     if (!value.at("height").is_null()) result.height = quantity(value.at("height"));
     const auto& layers = value.at("layer_thicknesses");
@@ -232,10 +328,12 @@ Entity replay_wall_profile_entity(const Entity& source, const WallProfileEditInt
     (void)encode_wall_profile_edit_intent(intent);
     if (source.type != "wall" || source.id != intent.wall_id)
         invalid("Wall profile edit requires its actual wall target");
+    if (intent.top_rise) validate_wall_profile_source_entity(source);
     const auto original = wall(source);
     auto result = source;
     if (intent.thickness) scalar(result, "thickness_m", "thickness", *intent.thickness, original.thickness);
     if (intent.height) scalar(result, "height_m", "height", *intent.height, original.height);
+    if (intent.top_rise) top_rise(result, original, *intent.top_rise);
     if (intent.layer_thicknesses) {
         if (intent.layer_thicknesses->size() != original.layers.size())
             invalid("Wall profile layer inventory must include every existing layer");
@@ -257,7 +355,7 @@ Entity replay_wall_profile_entity(const Entity& source, const WallProfileEditInt
 
 void validate_active_wall_physical_dependencies(
     const std::map<std::string, Entity, std::less<>>& entities,
-    const std::set<std::string, std::less<>>& targets) {
+    const std::set<std::string, std::less<>>& targets, bool strict_profiles) {
     if (targets.empty()) return;
     if (targets.size() > collection_limit) invalid("Wall physical dependency target budget exceeded");
     const auto scope = constraint_phase_scope(entities);
@@ -274,17 +372,18 @@ void validate_active_wall_physical_dependencies(
         if (found == entities.end() || found->second.id != target || found->second.type != "wall" ||
             scope.inactive_owner_ids.contains(target))
             invalid("Wall physical dependency target must be an actual saved-active wall");
+        if (strict_profiles) validate_wall_profile_source_entity(found->second);
         const auto checked = hosted_wall(entities, found->second, openings[target]);
         (void)make_wall(checked);
         for (std::size_t i = 0; i < checked.openings.size(); ++i)
-            assembly_fit(*openings[target][i], checked, checked.openings[i]);
+            assembly_fit(*openings[target][i], checked, checked.openings[i],strict_profiles);
     }
-    admit_affected_joins(entities, targets, scope, openings);
+    admit_affected_joins(entities, targets, scope, openings,strict_profiles);
 }
 
 std::map<std::string, Entity, std::less<>> replay_wall_profile_entities(
     const std::map<std::string, Entity, std::less<>>& source,
-    const std::vector<WallProfileEditIntent>& intents, bool validate_final_constraints) {
+    const std::vector<WallProfileEditIntent>& intents, bool validate_final_constraints, bool strict_current_profiles) {
     if (intents.size() > collection_limit) invalid("Wall profile target budget exceeded");
     if (intents.empty()) return source;
     const auto scope = constraint_phase_scope(source);
@@ -305,8 +404,14 @@ std::map<std::string, Entity, std::less<>> replay_wall_profile_entities(
         depth_changed = depth_changed || wall(found->second).thickness != wall(edited).thickness;
         result.at(intent.wall_id) = std::move(edited);
     }
+    // Version 2 admits the captured physical graph independently before the
+    // changed graph (or exact no-op) can be accepted. Version 1 replay retains
+    // its established admission policy and meaning.
+    const bool strict_profiles=strict_current_profiles ||
+        std::any_of(intents.begin(), intents.end(), [](const auto& intent) { return intent.top_rise.has_value(); });
+    if (strict_profiles) validate_active_wall_physical_dependencies(source, targets,true);
     if (result == source) return source;
-    validate_active_wall_physical_dependencies(result, targets);
+    validate_active_wall_physical_dependencies(result, targets,strict_profiles);
     if (depth_changed) {
         const auto edits = exterior_wall_measurement_source_updates_active_phase(source, result, false);
         result = edited_boundary_entities_batch(result, edits);

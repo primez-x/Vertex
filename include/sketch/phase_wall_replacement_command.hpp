@@ -4,6 +4,7 @@
 #include "sketch/phase_wall_profile_edit.hpp"
 #include "sketch/phase_hosted_opening_edit.hpp"
 #include "sketch/phase_hosted_opening_rehost.hpp"
+#include "sketch/phase_hosted_opening_family_edit.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
 
@@ -38,6 +39,9 @@ struct PhaseWallReplacementAuthoring {
     // replacement authority. All three identities are mapped only if copied.
     // Exclusive from geometry, relationships and either profile dialect.
     std::vector<HostedOpeningRehostIntent> opening_rehosts;
+    // Record dialect five: same-host conversion with explicit final family,
+    // assembly and optional operation. Exclusive from all other edit authority.
+    std::vector<HostedOpeningFamilyEditIntent> opening_families;
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

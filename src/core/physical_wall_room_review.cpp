@@ -1,5 +1,6 @@
 #include "sketch/physical_wall_room_review.hpp"
 #include "sketch/physical_wall_spaces.hpp"
+#include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -1231,10 +1232,23 @@ void validate_physical_wall_room_profile_review_source(const Entities& source,co
         proposed.extensions.dump()!=previous->second.extensions.dump())
         invalid("profile change requires one existing physical source wall with exact retained identity and extensions");
     if (!previous->second.properties.is_object() || !proposed.properties.is_object()) invalid("malformed wall profile properties");
+    const auto old_receipts=previous->second.properties.find("quantity_entries");
+    const auto new_receipts=proposed.properties.find("quantity_entries");
+    const bool receipt_delta=(old_receipts==previous->second.properties.end())!=(new_receipts==proposed.properties.end()) ||
+        (old_receipts!=previous->second.properties.end() && new_receipts!=proposed.properties.end() &&
+            old_receipts->dump()!=new_receipts->dump());
+    if (receipt_delta) {
+        const auto captured=capture_wall_profile_edit(previous->second,proposed);
+        if (!captured || !exact_entity(proposed,replay_wall_profile_entity(previous->second,*captured)))
+            invalid("profile quantity changes must equal independent typed replay with retained opaque receipts");
+    }
     auto old_properties=previous->second.properties,new_properties=proposed.properties;
     for (const auto* field:{"height_m","height","thickness_m","thickness","layers",
         "top_plane","slope_rise_m","slope_rise"}) {
         old_properties.erase(field);new_properties.erase(field);
+    }
+    if (receipt_delta) {
+        old_properties.erase("quantity_entries");new_properties.erase("quantity_entries");
     }
     if (old_properties.dump()!=new_properties.dump()) invalid("profile change cannot borrow geometry, context or other wall properties");
     if (previous->second.properties.dump()==proposed.properties.dump()) invalid("wall profile command must change a declared profile field");

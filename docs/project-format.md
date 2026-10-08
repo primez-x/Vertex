@@ -1,4 +1,73 @@
-# Vertex project formats v1 through v91
+# Vertex project formats v1 through v93
+
+## Exact wall top-rise and reviewed profile quantities (v93)
+
+Native format 93 and JSON/assets extraction version 91 retain signed wall
+top-rise edits and exact quantity changes inside an ordinary reviewed wall
+profile. The wall replacement envelope retains record two's fields. A nested
+wall profile with `top_rise` uses strict version two: the five version-one
+fields plus a nonnull exact `top_rise` quantity. Profiles without top rise
+retain their version-one encoding. Positive and negative rises are supported;
+zero clears a supported nonflat plane. Equal effective profiles keep exact
+source data and add no event. Unknown planes or dangling plane receipts refuse.
+
+Replay retains baseline, elevation, context, layer identities/order/materials
+and opaque data. An entered rise derives the top along the captured chord,
+anchored at the resulting start height. Source and final active cuts,
+assemblies, operations and joins pass full physical admission. Shared baseline
+walls receive separate proposed copies before ordinary transactions or preview;
+rooms and copied relationships still require the combined review.
+
+Raw profile capture independently replays dimensions, complete layer thickness
+inventories and top rise. It preserves entered expressions and retained opaque
+receipt fields, rejects unsupported accompanying changes, and normalizes only
+admitted source-equivalent encodings. Ordinary room review accepts a receipt
+delta only when its wall is exactly the independently replayed typed result.
+Existing no-delta proofs retain their earlier meaning and guards.
+Recorded version-one physical replay keeps its earlier admission policy.
+Version two and current authoring opt into complete known receipt-to-field
+binding checks for every affected join member and copied wall, including
+unchanged profiles. Alias fields cannot legitimize dangling canonical receipts.
+
+Reader floors inspect nested profile versions and actual retained parent/child
+wall receipts in reviewed profile history, including wrapped records and Undo.
+Old proposed copies are not upgraded merely for carrying their earlier exact
+quantities. Source integration has not been compiled or run in the installed app.
+
+## Proposed opening type conversion (v92)
+
+Native format 92 and JSON/assets extraction version 90 add wall replacement
+record five inside source-bound phase intent two/envelope 34. Records one
+through four retain their exact keys and replay. Record five adds only nonempty
+`opening_families` to the seven common fields. Each strict version-one row names
+`opening_id`, `wall_id`, `target_family`, explicit final `assembly` and final
+`door_operation`. The target is `door`, `window` or `opening`. Door/window need
+a matching assembly; a bare opening has none. A door operation is permitted
+only for Door, and absence remains distinct from an authored default operation.
+
+Conversion retains the actual host, scalar and exact dimension representations,
+quantities, context, layer and opaque owner data. Only recognized family,
+assembly and operation fields change. Both source and final profiles pass the
+existing complete profile admission. Source-equivalent profiles preserve the
+exact original; other same-family profile changes use the earlier profile API.
+Unknown or inconsistent source definitions refuse rather than lose content.
+
+Actual shared baseline hosts independently determine exact replacement seeds
+before native editing, allocation or Document preview. Each proposed row needs
+its own qualified host and actual registry membership. Opening and host map to
+separate derived copies. Original and copied physical closures pass complete
+cut/assembly/operation/join admission; final rooms and copied relationships still
+require combined review. Baseline owners, other alternatives and unrelated
+registries remain intact. Foreign known ownership and unsupported baseline-host
+arrangements refuse, including through ordinary replay.
+
+Desktop capture compares raw edits with independent entity replay and rejects
+accompanying geometry, host, dimension, layer or other property changes. The
+floating Type control supplies an explicit default profile for a newly chosen
+family and retains the complete current profile when its type is unchanged.
+Source/selection/workspace/recovery fences protect final review and publication.
+Reader floors cover retained direct/wrapped records after Undo. This source has
+not been compiled or qualified in the installed app.
 
 ## Proposed door and window rehosting (v91)
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "sketch/architectural_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/document.hpp"
 #include <span>
@@ -6,7 +7,6 @@
 #include <utility>
 
 namespace sketch {
-struct ArchitecturalGroupTransform;
 using AssemblyDocumentEntities = std::map<std::string, Entity, std::less<>>;
 struct AssemblyDocumentInstance {
     std::string assembly_catalog_id;
@@ -97,12 +97,18 @@ struct EmbeddedAssemblyGroupTarget {
     // A fresh identity in this catalog's embedded instance namespace. The
     // source record remains unchanged when this is present.
     std::optional<std::string> copy_instance_id;
+    // Optional independently captured operator for this presentation's frame.
+    // Absence retains the command's shared operator meaning.
+    std::optional<ArchitecturalGroupTransform> transform{};
 };
-// Qualified embedded geometric roots receive one shared world-pivot operator:
+// Qualified embedded geometric roots receive the shared operator unless their
+// target supplies an independently captured operator in its authored frame:
 // positive uniform scale and yaw, global X/Y flips, then XYZ offset. Each
 // catalog is upserted once, retaining raw model/instance data and metadata.
 // Nonidentity poses become explicit world root transforms; identity Copy
-// retains the source pose representation. Metadata-only instances are refused.
+// retains the source pose representation. Identity targets retain their exact
+// raw pose even when other selected roots change. Metadata-only instances
+// are refused.
 // Full canonical document admission precedes return; no snapshot is mutated.
 [[nodiscard]] ApplyEntityChanges embedded_assembly_group_transform_command(
     const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,
@@ -112,7 +118,8 @@ struct EmbeddedAssemblyGroupTarget {
 // is required and names a fresh document entity, not an appended catalog row.
 // Source catalogs/instances stay unchanged; the new root inherits catalog
 // context and non-model metadata, with an explicit world presentation frame
-// for its already world-authored pose. Callers register phase/page membership and
+// for its already world-authored pose. Per-target operators have the same
+// fallback meaning as transform. Callers register phase/page membership and
 // clone selected presentation through their complete authored command.
 [[nodiscard]] ApplyEntityChanges embedded_assembly_group_copy_command(
     const DocumentSnapshot& source, std::span<const EmbeddedAssemblyGroupTarget> targets,

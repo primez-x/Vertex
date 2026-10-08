@@ -52,6 +52,17 @@ void revision(const DocumentSnapshot& source, Revision expected) {
     if (!source.is_editable())
         throw DocumentError(DocumentErrorCode::read_only, "assembly command source is read only");
 }
+const ArchitecturalGroupTransform& embedded_group_transform(const EmbeddedAssemblyGroupTarget& target,
+    const ArchitecturalGroupTransform& shared) {
+    const auto& transform = target.transform ? *target.transform : shared;
+    const auto finite_point = [](const auto& point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    };
+    require(finite_point(transform.pivot) && finite_point(transform.offset) &&
+        std::isfinite(transform.rotation_z_radians) && std::isfinite(transform.scale) &&
+        transform.scale > 0.0, "assembly group transform must be finite with a positive scale");
+    return transform;
+}
 ApplyEntityChanges upsert(const DocumentSnapshot& source, Entity entity,
     Revision expected, const char* label) {
     auto candidate = source.entities();
@@ -397,14 +408,11 @@ ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnaps
     const auto finite_point = [](const auto& point) {
         return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
     };
-    require(finite_point(transform.pivot) && finite_point(transform.offset) &&
-        std::isfinite(transform.rotation_z_radians) && std::isfinite(transform.scale) &&
-        transform.scale > 0.0, "assembly group transform must be finite with a positive scale");
-
     using Identity = std::pair<std::string, std::string>;
     std::set<Identity> selected, copies;
     std::map<std::string, AssemblyModel, std::less<>> models;
     for (const auto& target : targets) {
+        (void)embedded_group_transform(target, transform);
         identifier(target.catalog_id);
         identifier(target.instance_id);
         require(selected.emplace(target.catalog_id, target.instance_id).second,
@@ -452,49 +460,50 @@ ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnaps
     }
 
     const auto whole_turn = 2.0 * std::numbers::pi;
-    const bool reflected = transform.flip_horizontal != transform.flip_vertical;
-    // Two flips are a proper half-turn. Normalize before addition so even a
-    // finite, very large angle cannot overflow, and exact whole turns vanish.
-    const auto angle = std::remainder(std::remainder(transform.rotation_z_radians, whole_turn) +
-        (transform.flip_horizontal && transform.flip_vertical ? std::numbers::pi : 0.0), whole_turn);
-    const bool identity = angle == 0.0 && !reflected && transform.scale == 1.0 &&
-        transform.offset.x == 0.0 && transform.offset.y == 0.0 && transform.offset.z == 0.0;
-    const auto cosine = std::abs(angle) == std::numbers::pi ? -1.0 : std::cos(angle);
-    const auto sine = std::abs(angle) == std::numbers::pi ? 0.0 : std::sin(angle);
-    const auto hx = reflected && transform.flip_horizontal ? -1.0 : 1.0;
-    const auto hy = reflected && transform.flip_vertical ? -1.0 : 1.0;
-    const auto moved_pose = [&](AssemblyTransform root) {
-        if (angle == 0.0 && !reflected && transform.scale == 1.0) {
-            root.translation_m.x += transform.offset.x;
-            root.translation_m.y += transform.offset.y;
-            root.translation_m.z += transform.offset.z;
-        } else {
-            // Subtract the common pivot before scale/rotation. In particular,
-            // no enormous affine translation is subtracted from source pose.
-            const auto dx = root.translation_m.x - transform.pivot.x;
-            const auto dy = root.translation_m.y - transform.pivot.y;
-            const auto dz = root.translation_m.z - transform.pivot.z;
-            root.translation_m = {
-                transform.pivot.x + hx * transform.scale * (cosine * dx - sine * dy) + transform.offset.x,
-                transform.pivot.y + hy * transform.scale * (sine * dx + cosine * dy) + transform.offset.y,
-                transform.pivot.z + transform.scale * dz + transform.offset.z};
-        }
-        if (angle != 0.0 || reflected) {
-            auto heading = std::remainder(std::remainder(root.rotation_radians, whole_turn) + angle, whole_turn);
-            if (reflected) heading = transform.flip_horizontal ? std::numbers::pi - heading : -heading;
-            root.rotation_radians = std::remainder(heading, whole_turn);
-        }
-        root.scale *= transform.scale;
-        root.mirrored_y = root.mirrored_y != reflected;
-        require(finite_point(root.translation_m) && std::isfinite(root.rotation_radians) &&
-            std::isfinite(root.scale) && root.scale > 0.0,
-            "embedded assembly group pose exceeds the supported transform range");
-        return root;
-    };
-
     std::map<std::string, Entity, std::less<>> changed;
     for (std::size_t i = 0; i < targets.size(); ++i) {
         const auto& target = targets[i];
+        const auto& operation = embedded_group_transform(target, transform);
+        const bool reflected = operation.flip_horizontal != operation.flip_vertical;
+        // Two flips are a proper half-turn. Normalize before addition so even a
+        // finite, very large angle cannot overflow, and exact whole turns vanish.
+        const auto angle = std::remainder(std::remainder(operation.rotation_z_radians, whole_turn) +
+            (operation.flip_horizontal && operation.flip_vertical ? std::numbers::pi : 0.0), whole_turn);
+        const bool identity = angle == 0.0 && !reflected && operation.scale == 1.0 &&
+            operation.offset.x == 0.0 && operation.offset.y == 0.0 && operation.offset.z == 0.0;
+        const auto cosine = std::abs(angle) == std::numbers::pi ? -1.0 : std::cos(angle);
+        const auto sine = std::abs(angle) == std::numbers::pi ? 0.0 : std::sin(angle);
+        const auto hx = reflected && operation.flip_horizontal ? -1.0 : 1.0;
+        const auto hy = reflected && operation.flip_vertical ? -1.0 : 1.0;
+        const auto moved_pose = [&](AssemblyTransform root) {
+            if (angle == 0.0 && !reflected && operation.scale == 1.0) {
+                root.translation_m.x += operation.offset.x;
+                root.translation_m.y += operation.offset.y;
+                root.translation_m.z += operation.offset.z;
+            } else {
+                // Subtract this root's captured pivot before scale/rotation;
+                // no enormous affine translation is subtracted from source pose.
+                const auto dx = root.translation_m.x - operation.pivot.x;
+                const auto dy = root.translation_m.y - operation.pivot.y;
+                const auto dz = root.translation_m.z - operation.pivot.z;
+                root.translation_m = {
+                    operation.pivot.x + hx * operation.scale * (cosine * dx - sine * dy) + operation.offset.x,
+                    operation.pivot.y + hy * operation.scale * (sine * dx + cosine * dy) + operation.offset.y,
+                    operation.pivot.z + operation.scale * dz + operation.offset.z};
+            }
+            if (angle != 0.0 || reflected) {
+                auto heading = std::remainder(std::remainder(root.rotation_radians, whole_turn) + angle, whole_turn);
+                if (reflected) heading = operation.flip_horizontal ? std::numbers::pi - heading : -heading;
+                root.rotation_radians = std::remainder(heading, whole_turn);
+            }
+            root.scale *= operation.scale;
+            root.mirrored_y = root.mirrored_y != reflected;
+            require(finite_point(root.translation_m) && std::isfinite(root.rotation_radians) &&
+                std::isfinite(root.scale) && root.scale > 0.0,
+                "embedded assembly group pose exceeds the supported transform range");
+            return root;
+        };
+
         if (identity && !target.copy_instance_id) continue;
         const auto& before = source.entities().at(target.catalog_id);
         auto [entry, inserted] = changed.try_emplace(target.catalog_id, before);
@@ -543,9 +552,9 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
         identifier(*target.copy_instance_id);
         require(!source.entities().contains(*target.copy_instance_id) && fresh_ids.insert(*target.copy_instance_id).second,
             "embedded assembly copy document identity already exists");
-        moving.push_back({target.catalog_id, target.instance_id, std::nullopt});
+        moving.push_back({target.catalog_id, target.instance_id, std::nullopt, target.transform});
     }
-    // Derive exact poses through the same qualified shared-pivot command. Its
+    // Derive exact poses through the same qualified per-root command. Its
     // existing-catalog upserts are detached input only, never published here.
     const auto movement = embedded_assembly_group_transform_command(source, moving, transform, expected_revision);
     std::map<std::string, const Entity*, std::less<>> moved_catalogs;

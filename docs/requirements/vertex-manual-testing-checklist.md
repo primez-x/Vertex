@@ -1044,6 +1044,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U159 — Create a sloped wall**
+  - Alternative check: Select a baseline wall in a design alternative and change Top rise to a positive or negative measurement. Cancel its room review once, then accept. The baseline and other alternatives should stay unchanged. Use a wall with doors/windows, try zero to flatten it, and compare the entered rise after Undo/Redo and save/reopen. Entering its current rise again should add no edit.
   - Steps: In a horizontal architectural plan, begin a sloped wall and cancel its uncommitted start with Undo. Repeat, place the second endpoint and enter its rise. Inspect plan and 3D, then Undo and Redo the completed wall. In Properties, try positive and negative Top rise on one straight and one curved wall, save and reopen, then set Top rise to zero.
   - Room check: Define named rooms using the sloped wall, then change its Top rise. Review the proposed room/source changes before Apply. Cancel once, then apply a valid change. One Undo should restore both the top profile and rooms; Redo and save/reopen should retain your accepted choices and measurements.
   - Expected: The entered height/rise is visible in the correct direction. On a curved wall, Top rise follows the start-to-end chord and the top remains one plane across the curve. Setting it to zero flattens the wall.
@@ -1118,6 +1119,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U168 — Add an opening without a door or window**
+  - Change type: Double-click an existing door and change **Type** to Window, then Opening, then Door. Compare the plan, elevation and 3D after each change. The host, cut dimensions, position, sill and drawing layer should stay the same. Door swing and window glazing must appear only for their selected type. Edit the frame or swing, choose the current type again and confirm those settings remain. Undo, Redo and save/reopen each conversion; check door/window schedules and PDF, DXF and IFC output.
+  - Alternative check: Repeat on an existing baseline opening while a proposed alternative is active. Review the rooms; Cancel once before applying. Return to baseline and confirm the original type and physical opening remain unchanged, then switch back to the alternative. One Undo should reverse the conversion and reviewed room changes together.
   - Steps: Choose Doorway in Library, set width and height, then click its preview on an existing wall. Repeat in a horizontal Architectural plan. Start another placement and right-click without dragging, then repeat with Escape.
   - Expected: The intended wall opening is visible.
   - Also check: Cancellation adds no object and preserves earlier walls. A cut that exceeds the host, overlaps another opening or cannot form a valid wall join is rejected without changing the project. Undo restores the wall after a valid placement.

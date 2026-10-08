@@ -267,6 +267,33 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     const auto typed_receipt=[](const nlohmann::json& value) { return value.is_object() && value.contains("version") &&
         value.at("version").is_number_integer() && value.at("version")==2 && value.contains("chord_input"); };
+    std::map<Revision,const RevisionRecord*> retained_revisions;
+    for (const auto& revision:snapshot.history()) retained_revisions.emplace(revision.revision,&revision);
+    const auto profile_receipt_update=[&](const RevisionRecord& revision) {
+        if (!revision.parent_revision) return false;
+        const auto parent=retained_revisions.find(*revision.parent_revision);
+        if (parent==retained_revisions.end()) return false;
+        for (const auto& [id,entity]:revision.entities) {
+            if (entity.type!="wall" || !entity.properties.is_object()) continue;
+            const auto before=parent->second->entities.find(id);
+            if (before==parent->second->entities.end() || before->second.type!="wall" ||
+                !before->second.properties.is_object()) continue;
+            const auto old_receipts=before->second.properties.find("quantity_entries");
+            const auto new_receipts=entity.properties.find("quantity_entries");
+            if ((old_receipts==before->second.properties.end())!=(new_receipts==entity.properties.end()) ||
+                (old_receipts!=before->second.properties.end() && new_receipts!=entity.properties.end() &&
+                    old_receipts->dump()!=new_receipts->dump())) {
+                auto old_properties=before->second.properties,new_properties=entity.properties;
+                for (const auto* field:{"height_m","height","thickness_m","thickness","layers",
+                    "top_plane","slope_rise_m","slope_rise","quantity_entries"}) {
+                    old_properties.erase(field);new_properties.erase(field);
+                }
+                if (old_properties.dump()==new_properties.dump() && before->second.required==entity.required &&
+                    before->second.extensions.dump()==entity.extensions.dump()) return true;
+            }
+        }
+        return false;
+    };
     for (const auto& revision : snapshot.history()) {
         if (revision.boundary_geometry_edit && typed_edit(*revision.boundary_geometry_edit)) required=std::max(required,31U);
         if (revision.boundary_geometry_edit && revision.boundary_geometry_edit->wall_source_translation)
@@ -332,7 +359,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!intent.is_object() || intent.value("version",0)!=2 || replacement==intent.end() ||
                     !replacement->is_object()) return 0;
                 const auto version=replacement->value("version",0);
-                return version==4 ? 91U : version==3 ? 89U : version==2 ? 88U : 0U;
+                if (version==2 && replacement->contains("wall_profiles") && replacement->at("wall_profiles").is_array() &&
+                    std::any_of(replacement->at("wall_profiles").begin(),replacement->at("wall_profiles").end(),[](const auto& profile) {
+                        return profile.is_object() && profile.value("version",0)==2;
+                    })) return 93U;
+                return version==5 ? 92U : version==4 ? 91U : version==3 ? 89U : version==2 ? 88U : 0U;
             };
             const auto profile_proof=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->std::uint32_t {
                 if (depth>2 || !proof.is_object() || proof.value("kind",std::string{})!="apply_boundary_constraint_changes") return 0;
@@ -369,6 +400,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (command.room_review_batch_completion || !command.room_review_additional_intents.empty())
                 required = std::max(required,79U);
             if (command.room_review_geometry_completion || !command.room_review_geometry_proof.is_null()) {
+                // Earlier room-profile readers required unchanged receipts.
+                // Inspect actual retained parent/child owners even under a
+                // selection/device wrapper or after Undo. Geometry transforms
+                // and newly created proposed identities do not borrow this floor.
+                if (profile_receipt_update(revision)) required=std::max(required,93U);
                 const auto& proof=command.room_review_geometry_proof;
                 if (proof.is_object() && proof.contains("kind") && proof.at("kind")=="physical_wall_deletion" &&
                     proof.contains("version") && proof.at("version")==31)
@@ -2107,6 +2143,8 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 93 &&
+         sqlite3_column_int(user_version.get(), 0) != 92 &&
          sqlite3_column_int(user_version.get(), 0) != 91 &&
          sqlite3_column_int(user_version.get(), 0) != 90 &&
          sqlite3_column_int(user_version.get(), 0) != 89 &&
@@ -2653,6 +2691,10 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=93)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 93 for exact wall top-rise and reviewed profile quantities");
+        if (required_format>=92)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 92 for proposed opening type conversion");
         if (required_format>=91)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 91 for proposed door and window rehosting");
         if (required_format>=90)
