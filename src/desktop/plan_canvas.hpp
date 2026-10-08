@@ -791,6 +791,7 @@ private:
     [[nodiscard]] QByteArray retainedSelectionKey(const QRectF& viewport, bool model_axes = false) const;
     [[nodiscard]] bool hasInteractivePresentation() const;
     void invalidateRetainedPresentation();
+    void invalidateRetainedSelection();
     void ensureRetainedSelection() const;
     enum class SelectionHandle { none, resize, rotate, left, right, top, bottom };
     [[nodiscard]] std::optional<CanvasSelectionFrame> entitySelectionAxes(

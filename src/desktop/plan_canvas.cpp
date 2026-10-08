@@ -435,8 +435,8 @@ double point_segment_distance(QPointF point, QPointF start, QPointF end) {
                       point.y() - (start.y() + projection * dy));
 }
 
-QColor color_for(const CanvasEntity& entity, bool light_surface) {
-    if (entity.selected) {
+QColor color_for(const CanvasEntity& entity, bool light_surface, bool selection_color = true) {
+    if (selection_color && entity.selected) {
         return light_surface ? QColor(37, 99, 235) : QColor(75, 210, 255);
     }
     if (entity.type == QStringLiteral("wall")) {
@@ -968,20 +968,28 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 }
 
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
-    if ((m_gesture_button != Qt::NoButton || m_opening_width_handle || m_vertex_move_handle || m_opening_move_active ||
+    bool changed = false;
+    const auto assign_selected = [&](bool& selected, bool value) {
+        changed = changed || selected != value;
+        selected = value;
+    };
+    const bool cancel_gesture = (m_gesture_button != Qt::NoButton || m_move_release_pending ||
+         m_opening_width_handle || m_vertex_move_handle || m_opening_move_active ||
          m_transform_frame_start) &&
-        selectedIds() != entity_ids)
-        resetGesture();
+        selectedIds() != entity_ids;
+    if (cancel_gesture) resetGesture();
     for (auto& entity : m_entities) {
-        entity.selected = entity_ids.contains(entity.id);
+        assign_selected(entity.selected, entity_ids.contains(entity.id));
     }
     for (auto& label : m_labels)
-        label.selected = generated_area_callout(label)
+        assign_selected(label.selected, generated_area_callout(label)
             ? std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
                         label_identity(label)) != m_selected_generated_labels.end()
-            : !label.plan_only && entity_ids.contains(label.id);
-    for (auto& reference : m_references) reference.selected = entity_ids.contains(reference.id);
-    invalidateRetainedPresentation();
+            : !label.plan_only && entity_ids.contains(label.id));
+    for (auto& reference : m_references)
+        assign_selected(reference.selected, entity_ids.contains(reference.id));
+    if (!changed && !cancel_gesture) return;
+    invalidateRetainedSelection();
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
@@ -1006,7 +1014,7 @@ void PlanCanvas::setSelectedGeneratedLabelPresentations(
     for (auto& label : m_labels) if (generated_area_callout(label))
         label.selected = std::find(m_selected_generated_labels.begin(), m_selected_generated_labels.end(),
                                    label_identity(label)) != m_selected_generated_labels.end();
-    invalidateRetainedPresentation();
+    invalidateRetainedSelection();
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
@@ -2246,9 +2254,9 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     };
     const auto draw_committed = [&](QPainter& target) {
         for (const auto& entity : m_entities) {
-            auto pen_color = color_for(entity, light);
+            auto pen_color = color_for(entity, light, false);
             pen_color.setAlpha(light ? 235 : 220);
-            QPen pen(pen_color, entity.selected ? 2.0 : 1.0,
+            QPen pen(pen_color, 1.0,
                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
             pen.setCosmetic(true);
             target.setPen(pen);
@@ -2307,6 +2315,18 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
         }
     }
     if (!reused_geometry) draw_committed(painter);
+    // Selection changes leave committed ink warm. Paint current selection
+    // separately with this same map transform, before the draft overlays.
+    for (const auto& entity : m_entities) {
+        if (!entity.selected) continue;
+        auto pen_color = color_for(entity, light);
+        pen_color.setAlpha(light ? 235 : 220);
+        QPen pen(pen_color, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        pen.setCosmetic(true);
+        painter.setPen(pen);
+        draw_boundary(painter, entity.stroke_segments ? *entity.stroke_segments : entity.segments);
+        for (const auto& hole : entity.holes) draw_boundary(painter, hole);
+    }
     const auto draft_pen = [&](QColor color, Qt::PenStyle style = Qt::SolidLine) {
         QPen pen(color, 1.5, style, Qt::RoundCap, Qt::RoundJoin);
         pen.setCosmetic(true);
@@ -7519,6 +7539,31 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered, QStringList* overlappi
         overlapping->push_front(result);
     }
     return result;
+}
+
+void PlanCanvas::invalidateRetainedSelection() {
+    if (m_generated_label_move_identity) resetGesture();
+    clearSymbolDragPreview();
+    clearComponentPlacementPreview();
+    m_retained_selection_ready = false;
+    m_selection_bounds_cache = {};
+    m_selection_frame_cache = {};
+    m_selection_axes_key.clear();
+    m_selection_axes_cache.reset();
+    const auto selected = retained_label_presentation_selection(m_labels);
+    for (std::size_t lane = 0; lane < 3; ++lane) {
+        auto& cache = m_label_placement_cache[lane];
+        // Only settled publications can retain their placed anchors. A preview
+        // has no retained key and must be rebuilt from committed content.
+        if (cache.retained_key.isEmpty()) {
+            cache = {};
+            continue;
+        }
+        for (auto& label : cache.labels)
+            label.selected = selected.value(label_presentation_key(label), false);
+        // Painting reads selected directly; hit geometry and identity have not
+        // changed, so their derivatives remain paired with these same anchors.
+    }
 }
 
 void PlanCanvas::invalidateRetainedPresentation() {

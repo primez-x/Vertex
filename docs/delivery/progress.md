@@ -14,6 +14,24 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 retained selection presentation
+
+Click, Ctrl selection, window selection and deselection now update selection
+overlays and controls without rebuilding unchanged plan geometry or navigator
+rows. The fast path retains the exact original source and publication pointers;
+changes to layer, visibility, view, workspace or recovery authority use the
+normal refresh. Site aliases, local preview flags and native selection remain
+coordinated. The renewed authority changes only transient selection fields.
+
+Canvas selection updates retain settled label anchors, hit geometry, content
+bounds and neutral overview ink. Current selected overview ink paints separately.
+Source review corrected released-move cancellation so changed selection retires
+pending drag completion instead of leaving an old preview alive.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction, appearance and latency remain unverified; the installed candidate
+is unchanged. Separate per-owner connected translation source work is underway.
+
 ### October 8 mixed connected selection edits and direct label selection
 
 Connected geometric moves can now retain independent architectural object edits

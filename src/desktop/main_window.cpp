@@ -177,6 +177,7 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QScrollArea>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSvgGenerator>
@@ -6309,6 +6310,7 @@ public:
             if (canvas!=active || hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
                 return false;
             const auto source=captureCanvasGeometrySource(canvas,std::nullopt,false);
+            const auto publication=captureRetainedSelectionPublication(*source);
             const auto label=canvas->labelPresentation(identity);
             const auto owner=source->entities().find(identity.id.toStdString());
             if (!label || !label->avoid_components ||
@@ -6325,7 +6327,8 @@ public:
             if (m_selected_generated_labels.size()>1000)
                 throw std::invalid_argument("Select up to 1,000 callouts for one edit.");
             m_generated_label_selection_document=m_document;
-            refresh();clearError();return true;
+            if (!refreshRetainedSelection(publication)) refresh();
+            clearError();return true;
         } catch (const std::exception& error) {
             m_selected_id=previous_id;m_selected_ids=previous_ids;m_selected_generated_labels=previous_labels;
             m_generated_label_selection_document=previous_document;
@@ -22392,12 +22395,16 @@ public:
             // Resolve every identity/layer against one authoritative source
             // before publishing selection; source failure keeps prior state.
             const auto snapshot = authoringSnapshot();
+            const auto publication=captureRetainedSelectionPublication(snapshot);
+            const auto refresh_selection=[&] {
+                if (!refreshRetainedSelection(publication)) refresh();
+            };
             if (entity_id.isEmpty()) {
                 if (toggle) return true;
                 m_selected_id.clear();
                 m_selected_ids.clear();
                 m_selected_generated_labels.clear();
-                refresh();
+                refresh_selection();
                 return true;
             }
 
@@ -22414,7 +22421,7 @@ public:
                     else m_selected_ids.push_back(entity_id);
                     m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
                     if (!layer.empty()) m_active_layer_id=id_from(layer);
-                    refresh(); return true;
+                    refresh_selection(); return true;
                 }
             }
             QString selection_id = entity_id;
@@ -22446,7 +22453,7 @@ public:
             if (toggle && m_selected_ids.contains(selection_id)) {
                 m_selected_ids.removeAll(selection_id);
                 m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
-                refresh();
+                refresh_selection();
                 return true;
             }
             m_selected_ids.push_back(selection_id);
@@ -22455,13 +22462,13 @@ public:
             if (assembly_catalog) {
                 if (const auto context = organization.drawing_context(*assembly_catalog))
                     m_active_layer_id = id_from(context->layer_id);
-                refresh();
+                refresh_selection();
                 return true;
             }
             if (annotation_child) {
                 if (!annotation_layer.empty() && organization.drawing_context(annotation_layer))
                     m_active_layer_id = id_from(annotation_layer);
-                refresh();
+                refresh_selection();
                 return true;
             }
             if (const auto context = organization.drawing_context(selection_id.toStdString())) {
@@ -22484,7 +22491,7 @@ public:
                     }
                 }
             }
-            refresh();
+            refresh_selection();
             return true;
         } catch (const std::exception& error) {
             m_selected_id=previous_id;
@@ -22503,6 +22510,7 @@ public:
         const auto previous_layer=m_active_layer_id;
         try {
             const auto snapshot=authoringSnapshot();
+            const auto publication=captureRetainedSelectionPublication(snapshot);
             m_selected_generated_labels.clear();
             if (!additive) m_selected_ids.clear();
             for (auto id : ids) {
@@ -22519,7 +22527,7 @@ public:
                     !m_selected_ids.contains(id)) m_selected_ids.push_back(id);
             }
             m_selected_id=m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
-            refresh();
+            if (!refreshRetainedSelection(publication)) refresh();
             return true;
         } catch (const std::exception& error) {
             m_selected_id=previous_id;
@@ -52269,6 +52277,16 @@ private:
         bool recovery_authority;
     };
 
+    struct RetainedSelectionPublication {
+        PlanCanvas* canvas{};
+        std::shared_ptr<const DocumentSnapshot> plan_source;
+        std::shared_ptr<const DocumentSnapshot> site_source;
+        std::shared_ptr<const DocumentSnapshot> native_source;
+        SourceEditAuthority authority;
+        bool site{};
+        std::uint64_t site_generation{};
+    };
+
     struct GeneratedLabelMoveCapture {
         struct Target {
             CanvasLabelPresentationIdentity identity;
@@ -52332,6 +52350,100 @@ private:
             return false;
         }
         return true;
+    }
+
+    std::optional<RetainedSelectionPublication> captureRetainedSelectionPublication(
+        const DocumentSnapshot& source) const {
+        // Selection has no geometric effect. Reuse only an already admitted
+        // publication; a new layer, source, view or recovery head still takes
+        // the normal refresh path and cannot inherit the old scene's authority.
+        if (m_refreshing || hasPendingPlacementEdit() || m_text_placement_context ||
+            m_plan_label_context || m_armed_area_class || !m_plan_publication_source ||
+            !m_plan_publication_authority ||
+            !sourceEditAuthorityContextCurrent(*m_plan_publication_authority,false)) return std::nullopt;
+        const auto digest=fullSnapshotDigest(source);
+        if (m_plan_publication_authority->source_digest!=digest ||
+            fullSnapshotDigest(*m_plan_publication_source)!=digest) return std::nullopt;
+        const bool site=siteCanvas(m_architecturalCanvas);
+        if (site && (!m_site_publication_source || !m_site_publication_authority ||
+            !sourceEditAuthorityContextCurrent(*m_site_publication_authority,false) ||
+            m_site_publication_authority->source_digest!=digest ||
+            fullSnapshotDigest(*m_site_publication_source)!=digest)) return std::nullopt;
+        const auto native_source=m_nativeModelView ? m_nativeModelView->preparationSourceSnapshot() : nullptr;
+        if (m_nativeModelView && (!native_source || fullSnapshotDigest(*native_source)!=digest)) return std::nullopt;
+        return RetainedSelectionPublication{
+            m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas,
+            m_plan_publication_source,m_site_publication_source,native_source,
+            site ? *m_site_publication_authority : *m_plan_publication_authority,
+            site,m_site_publication_generation};
+    }
+
+    bool refreshRetainedSelection(const std::optional<RetainedSelectionPublication>& publication) {
+        if (!publication || m_refreshing || hasPendingPlacementEdit() || m_text_placement_context ||
+            m_plan_label_context || m_armed_area_class) return false;
+        const auto& retained=*publication;
+        const auto publication_current=[&] {
+            return retained.canvas==(m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) &&
+                retained.plan_source==m_plan_publication_source && retained.site_source==m_site_publication_source &&
+                retained.site==siteCanvas(m_architecturalCanvas) &&
+                (!retained.site || retained.site_generation==m_site_publication_generation) &&
+                (!m_nativeModelView || retained.native_source==m_nativeModelView->preparationSourceSnapshot());
+        };
+        // Only these three transient selection values may change. Keep the
+        // exact original source, layer, filter, view and workspace token.
+        auto authority=retained.authority;
+        authority.context.selected_id=m_selected_id;
+        authority.context.generated_label_selection=m_selected_generated_labels;
+        authority.selection=m_selected_ids;
+        if (!publication_current() || !sourceEditAuthorityCurrent(authority,false)) return false;
+        const auto renewed=std::make_shared<const SourceEditAuthority>(authority);
+        const QScopedValueRollback<bool> refreshing(m_refreshing,true);
+        try {
+            m_measurementCanvas->setSelectedIds(m_selected_ids);
+            m_architecturalCanvas->setSelectedIds(m_selected_ids);
+            m_measurementCanvas->setSelectedGeneratedLabelPresentations(m_selected_generated_labels);
+            m_architecturalCanvas->setSelectedGeneratedLabelPresentations(m_selected_generated_labels);
+            if (retained.site) {
+                // Later gesture previews take local ink from this publication,
+                // so its transient selection flags must match the visible ink.
+                for (auto& item:m_site_publication_local_geometry) item.selected=m_selected_ids.contains(item.id);
+                for (auto& item:m_site_publication_local_references) item.selected=m_selected_ids.contains(item.id);
+                for (auto& item:m_site_publication_local_labels)
+                    item.selected=item.avoid_components
+                        ? std::find(m_selected_generated_labels.begin(),m_selected_generated_labels.end(),
+                            CanvasLabelPresentationIdentity{item.id,item.callout_role,item.selection_type})!=m_selected_generated_labels.end()
+                        : !item.plan_only && m_selected_ids.contains(item.id);
+            }
+            {
+                const QSignalBlocker tree_blocker(m_navigator);
+                m_navigator->clearSelection();
+                QTreeWidgetItem* selected=nullptr;
+                if (!m_selected_id.isEmpty()) {
+                    if (const auto item=m_navigator_items.find(m_selected_id.toStdString());item!=m_navigator_items.end())
+                        selected=item->second;
+                    else for (QTreeWidgetItemIterator item(m_navigator);*item;++item)
+                        if ((*item)->data(0,Qt::UserRole).toString()==m_selected_id) {selected=*item;break;}
+                }
+                m_navigator->setCurrentItem(selected);
+                if (selected) selected->setSelected(true);
+                m_navigator_primary_selection=m_selected_id;
+            }
+            if (m_nativeModelView) m_nativeModelView->setSelectedEntities(m_selected_ids);
+            refreshInspector();
+            refreshActions();
+            refreshTitle();
+            updateDrawingInput();
+            if (!publication_current() || !sourceEditAuthorityCurrent(authority,false))
+                throw std::invalid_argument("The displayed source changed during selection. Select the current object again.");
+            m_plan_publication_authority=renewed;
+            if (retained.site) m_site_publication_authority=authority;
+            return true;
+        } catch (...) {
+            // Partially refreshed controls never grant a new edit authority.
+            m_plan_publication_authority.reset();
+            if (retained.site) m_site_publication_authority.reset();
+            throw;
+        }
     }
 
     bool hasPendingPlacementEdit() const {
