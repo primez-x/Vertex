@@ -36,9 +36,7 @@
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
 #include "sketch/physical_wall_room_review.hpp"
 #endif
-#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
 #include "sketch/joint_translation_replay.hpp"
-#endif
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -2035,7 +2033,8 @@ static void validate_joint_translation_mode(const ApplyBoundaryConstraintChanges
 }
 
 static bool joint_per_target_presentation(const JointTranslationIntent& intent) {
-    return intent.per_target_presentation_completion || !intent.annotation_translations.empty() ||
+    return intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
+        !intent.dimension_translations.empty() || intent.per_target_presentation_completion || !intent.annotation_translations.empty() ||
         !intent.reference_translations.empty();
 }
 
@@ -2163,19 +2162,30 @@ static void complete_dimension_placements(const std::map<std::string, Entity, st
 
 static void retain_joint_callout_placement(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
+    const auto offsets = resolve_joint_translation_offsets(source, intent);
+    const bool per_owner = intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
+        !intent.dimension_translations.empty();
     std::set<std::string, std::less<>> rigid(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end());
     rigid.insert(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end());
+    if (per_owner)
+        rigid.insert(intent.partial_wall_ids.begin(), intent.partial_wall_ids.end());
     for (const auto& [id, entity] : source) {
         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
         const auto decoded = decode_boundary_dimension_entity(entity);
         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-        if (!rigid.contains(decoded.dimension->boundary_id)) continue;
+        const bool rigid_owner = rigid.contains(decoded.dimension->boundary_id);
+        if (!rigid_owner && !(per_owner && offsets.dimension_offsets.contains(id))) continue;
         const auto found = candidate.find(id);
         if (found == candidate.end()) throw std::invalid_argument("Joint translation retired a rigid-owner callout");
         auto placed = *decoded.dimension;
-        placed.text_position = {placed.text_position.x + intent.offset.x, placed.text_position.y + intent.offset.y};
+        const auto offset = rigid_owner ? offsets.owner_offsets.at(placed.boundary_id) : offsets.dimension_offsets.at(id);
+        placed.text_position = {placed.text_position.x + offset.x, placed.text_position.y + offset.y};
         if (!std::isfinite(placed.text_position.x) || !std::isfinite(placed.text_position.y))
             throw std::invalid_argument("Joint translation callout position overflows");
+        if (!rigid_owner) {
+            placed.placement = BoundaryDimensionPlacement::manual;
+            placed.automatic_placement_version.reset();
+        }
         // A whole-owner move keeps automatic/manual placement provenance. The
         // ordinary placement lane's manual conversion applies to independent
         // callout drags, not this source-reconstructed rigid movement.
@@ -3900,16 +3910,42 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
     validate_ids(intent.rigid_stroke_ids);
     validate_ids(intent.partial_wall_ids);
     validate_ids(intent.dimension_ids);
-    if (selected.size() > 4096 || intent.partial_wall_ids.empty() ||
-        (intent.rigid_boundary_ids.empty() && intent.rigid_stroke_ids.empty()))
-        throw std::invalid_argument("Joint translation requires bounded rigid and partial selections");
-    const bool per_target = intent.per_target_presentation_completion ||
-        !intent.annotation_translations.empty() || !intent.reference_translations.empty();
+    const bool per_owner = intent.per_owner_translation_completion ||
+        !intent.owner_translations.empty() || !intent.dimension_translations.empty();
+    const bool empty_geometry = intent.partial_wall_ids.empty() &&
+        intent.rigid_boundary_ids.empty() && intent.rigid_stroke_ids.empty();
+    if (selected.size() > 4096 || (per_owner ? empty_geometry :
+        intent.partial_wall_ids.empty() || (intent.rigid_boundary_ids.empty() && intent.rigid_stroke_ids.empty())))
+        throw std::invalid_argument("Joint translation requires a bounded supported geometry selection");
+    const bool per_target = joint_per_target_presentation(intent);
     if (per_target && intent.presentation_offset)
         throw std::invalid_argument("Per-target joint presentation cannot combine a legacy shared presentation offset");
     if (intent.annotation_translations.size() > 1000 ||
         intent.reference_translations.size() > 1000 - intent.annotation_translations.size())
         throw std::invalid_argument("Joint presentation targets exceed their aggregate budget");
+    const auto encode_offsets = [&](const std::vector<JointOwnerTranslationIntent>& targets,
+        const std::set<std::string, std::less<>>& expected) {
+        if (targets.size() != expected.size() || targets.size() > 4096)
+            throw std::invalid_argument("Joint owner offsets require exact selected target coverage");
+        auto encoded_targets = nlohmann::json::array();
+        std::set<std::string, std::less<>> seen;
+        for (const auto& target : targets) {
+            if (!is_valid_identifier(target.owner_id) || !expected.contains(target.owner_id) ||
+                !seen.insert(target.owner_id).second || !std::isfinite(target.offset.x) || !std::isfinite(target.offset.y))
+                throw std::invalid_argument("Joint owner offsets require unique selected identities and finite translations");
+            encoded_targets.push_back({{"owner_id", target.owner_id}, {"offset", command_vec2_to_json(target.offset)}});
+        }
+        return encoded_targets;
+    };
+    auto owners = nlohmann::json::array(), dimensions = nlohmann::json::array();
+    if (per_owner) {
+        std::set<std::string, std::less<>> geometry(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end());
+        geometry.insert(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end());
+        geometry.insert(intent.partial_wall_ids.begin(), intent.partial_wall_ids.end());
+        owners = encode_offsets(intent.owner_translations, geometry);
+        dimensions = encode_offsets(intent.dimension_translations,
+            std::set<std::string, std::less<>>(intent.dimension_ids.begin(), intent.dimension_ids.end()));
+    }
     auto annotations = nlohmann::json::array();
     auto references = nlohmann::json::array();
     std::set<std::pair<std::string, std::string>> children;
@@ -3933,7 +3969,7 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
             throw std::invalid_argument("Joint reference target aliases an annotation owner");
         references.push_back({{"reference_id", target.reference_id}, {"offset", command_vec2_to_json(target.offset)}});
     }
-    auto encoded = nlohmann::json{{"version", per_target ? 2 : 1}, {"offset", command_vec2_to_json(intent.offset)},
+    auto encoded = nlohmann::json{{"version", per_owner ? 3 : per_target ? 2 : 1}, {"offset", command_vec2_to_json(intent.offset)},
         {"rigid_boundary_ids", intent.rigid_boundary_ids}, {"rigid_stroke_ids", intent.rigid_stroke_ids},
         {"partial_wall_ids", intent.partial_wall_ids}, {"move_connected_objects", intent.move_connected_objects},
         {"dimension_ids", intent.dimension_ids},
@@ -3942,15 +3978,25 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
         encoded["annotation_translations"] = std::move(annotations);
         encoded["reference_translations"] = std::move(references);
     }
+    if (per_owner) {
+        encoded["owner_translations"] = std::move(owners);
+        encoded["dimension_translations"] = std::move(dimensions);
+    }
     return encoded;
 }
 
 JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2))
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
         throw std::invalid_argument("Unsupported joint translation intent version");
-    const bool per_target = value.at("version") == 2;
-    if (per_target)
+    const bool per_owner = value.at("version") == 3;
+    const bool per_target = per_owner || value.at("version") == 2;
+    if (per_owner)
+        command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
+            "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset",
+            "annotation_translations", "reference_translations", "owner_translations", "dimension_translations"},
+            DocumentErrorCode::invalid_entity, "joint translation intent");
+    else if (per_target)
         command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
             "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset",
             "annotation_translations", "reference_translations"}, DocumentErrorCode::invalid_entity, "joint translation intent");
@@ -3961,6 +4007,7 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
         throw std::invalid_argument("Unsupported joint translation intent or movement flag");
     JointTranslationIntent result;
     result.per_target_presentation_completion = per_target;
+    result.per_owner_translation_completion = per_owner;
     result.offset = command_vec2_from_json(value.at("offset"), "joint translation offset");
     if (!value.at("presentation_offset").is_null())
         result.presentation_offset = command_vec2_from_json(value.at("presentation_offset"), "joint presentation offset");
@@ -3974,6 +4021,20 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
     read_ids("rigid_stroke_ids", result.rigid_stroke_ids);
     read_ids("partial_wall_ids", result.partial_wall_ids);
     read_ids("dimension_ids", result.dimension_ids);
+    if (per_owner) {
+        const auto read_offsets = [&](const char* key, std::vector<JointOwnerTranslationIntent>& targets) {
+            const auto& values = value.at(key);
+            if (!values.is_array() || values.size() > 4096)
+                throw std::invalid_argument("Joint owner offsets must be bounded arrays");
+            for (const auto& target : values) {
+                command_exact_fields(target, {"owner_id", "offset"}, DocumentErrorCode::invalid_entity, "joint owner translation");
+                targets.push_back({command_string(target.at("owner_id"), "joint translation owner", kMaximumIdBytes),
+                    command_vec2_from_json(target.at("offset"), "joint owner offset")});
+            }
+        };
+        read_offsets("owner_translations", result.owner_translations);
+        read_offsets("dimension_translations", result.dimension_translations);
+    }
     if (per_target) {
         const auto& annotations = value.at("annotation_translations");
         const auto& references = value.at("reference_translations");
@@ -4210,6 +4271,64 @@ std::vector<AssetChange> command_asset_references_from_json(const nlohmann::json
 }
 
 }  // namespace
+
+JointTranslationOffsets resolve_joint_translation_offsets(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
+    (void)joint_translation_to_json(intent);
+    const bool per_owner = intent.per_owner_translation_completion ||
+        !intent.owner_translations.empty() || !intent.dimension_translations.empty();
+    JointTranslationOffsets result;
+    if (per_owner) {
+        for (const auto& target : intent.owner_translations) result.owner_offsets.emplace(target.owner_id, target.offset);
+        for (const auto& target : intent.dimension_translations) result.dimension_offsets.emplace(target.owner_id, target.offset);
+    }
+    const auto require = [&](const std::string& id) -> const Entity& {
+        const auto found = source.find(id);
+        if (found == source.end()) throw std::invalid_argument("Joint translation source target does not exist: " + id);
+        return found->second;
+    };
+    for (const auto& id : intent.rigid_boundary_ids) {
+        const auto& entity = require(id);
+        if (!can_recognize_boundary_entity_type(entity.type))
+            throw std::invalid_argument("Joint translation boundary source has the wrong owner type");
+        (void)decode_identified_boundary_entity(entity);
+        if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
+    }
+    for (const auto& id : intent.rigid_stroke_ids) {
+        const auto& entity = require(id);
+        if (entity.type != "measurement_linework")
+            throw std::invalid_argument("Joint translation stroke source has the wrong owner type");
+        const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
+    }
+    for (const auto& id : intent.partial_wall_ids) {
+        const auto& entity = require(id);
+        if (entity.type != "wall") throw std::invalid_argument("Joint translation wall source has the wrong owner type");
+        validate_entity(entity);
+        if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
+    }
+    for (const auto& id : intent.dimension_ids) {
+        const auto& entity = require(id);
+        if (!can_recognize_boundary_dimension_entity_type(entity.type))
+            throw std::invalid_argument("Joint translation dimension source has the wrong owner type");
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+        (void)decoded.dimension->resolve(require(decoded.dimension->boundary_id));
+        if (!per_owner) result.dimension_offsets.emplace(id, intent.offset);
+        if (per_owner) {
+            const auto owner = result.owner_offsets.find(decoded.dimension->boundary_id);
+            const bool rigid = std::find(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end(), decoded.dimension->boundary_id) != intent.rigid_boundary_ids.end() ||
+                std::find(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end(), decoded.dimension->boundary_id) != intent.rigid_stroke_ids.end() ||
+                std::find(intent.partial_wall_ids.begin(), intent.partial_wall_ids.end(), decoded.dimension->boundary_id) != intent.partial_wall_ids.end();
+            const auto selected = result.dimension_offsets.at(id);
+            if (rigid && owner != result.owner_offsets.end() &&
+                (owner->second.x != selected.x || owner->second.y != selected.y))
+                throw std::invalid_argument("Joint selected callout contradicts its selected rigid owner's translation");
+        }
+    }
+    return result;
+}
 
 nlohmann::json command_to_json(const Command& command) {
     return std::visit([](const auto& typed) -> nlohmann::json {

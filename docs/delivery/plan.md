@@ -36,11 +36,13 @@ Project-format migration is separately tested with historical/recovery files,
 unknown content, failure/rollback, and preserved originals.
 
 The latest instruction requires continuous execution until the full product
-exit. A goal tracks that terminal condition while [progress.md](progress.md)
-remains the durable resumption record. Reconcile it with Git and actual evidence,
-and continue the next unfinished task. Never restart
-completed work after compaction. Build affected targets after a meaningful
-source batch; package only a coherent human-test candidate or release.
+exit. Use [progress.md](progress.md) as the durable resumption record without a
+goal loop. Reconcile it with Git and actual evidence, and continue the next
+unfinished task. Never restart completed work after compaction. Current steering
+is source implementation only: do not run builds, tests, probes, native jobs,
+launches, packages or installations. When the user resumes qualification, build
+affected targets after a meaningful source batch and package only a coherent
+human-test candidate or release.
 Documentation, status requests and unchanged source do not trigger builds.
 
 Root owns integration, shared controller/commands, format floors, CMake,

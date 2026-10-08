@@ -1,4 +1,39 @@
-# Vertex project formats v1 through v71
+# Vertex project formats v1 through v72
+
+## Per-owner connected translations (v72)
+
+Native format 72 and JSON/assets extraction version 70 retain nested joint
+translation intent version 3 in command envelope 17, optionally inside selection
+completion envelope 22. Version 3 keeps the geometry selection ID arrays and
+adds `owner_translations` and `dimension_translations`. Each target contains
+`owner_id` and a finite saved-coordinate `offset`. Owner targets cover exactly
+the union of selected rigid boundaries, measured strokes and physical walls;
+dimension targets cover exactly `dimension_ids`. The aggregate geometry and
+dimension identity budget remains 4,096. A nonempty geometry selection is
+required. The common `offset` records the finite nonzero displayed displacement;
+it never substitutes for a missing owner offset. `presentation_offset` is null.
+Version-two explicit annotation/reference targets remain available.
+
+Each selected geometric point is pinned to its own translated source position
+in one connected solve. Current source-derived boundaries retain their required
+wall/stroke cohort and inherited offsets; conflicting selections refuse. Their
+final redraw occurs before relation and topology admission. Curves, segment and
+vertex identities, fixed anchors and persisted relations retain their existing
+typed rules. Selected geometry must match exact translation replay.
+
+Saved dimensions owned by rigidly moved geometry follow once and preserve
+automatic/manual provenance. Independently selected dimension positions use
+their explicit offsets and become manual. Without changed walls, version-three
+callouts reconstruct through the joint intent rather than the lower wall-only
+placement lane. Area label offsets and angles retain their relative source
+values during translation.
+
+Strict field, source-type, duplicate, alias and target-coverage validation applies
+before reconstruction. The in-memory version-three marker retains this reader
+floor even if target arrays are removed; malformed coverage refuses rather than
+downgrading. Every retained revision, including undone and abandoned history,
+contributes to the reader floor. Versions one and two keep their original wire
+shape, mixed-selection requirement and replay order.
 
 ## Atomic geometric and architectural selection edits (v71)
 
@@ -35,7 +70,7 @@ targets combined. Each offset uses its target's saved coordinate frame. The
 legacy `presentation_offset` must be null. An explicit in-memory completion
 marker preserves version 2 even when both arrays are empty.
 
-Envelope 17 adds `presentation_proof` only for nested version 2. Its bounded
+Envelope 17 adds `presentation_proof` for nested versions 2 and 3. Its bounded
 annotation/reference owner upserts are redundant result witnesses, separate
 from the ordinary geometry proof. Replay reconstructs positions from the
 preceding source and requires exact full-payload agreement before admitting

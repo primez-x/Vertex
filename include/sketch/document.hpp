@@ -231,10 +231,17 @@ struct JointReferenceTranslationIntent {
     Vec2 offset;
 };
 
+struct JointOwnerTranslationIntent {
+    std::string owner_id;
+    Vec2 offset;
+};
+
 // One translation across selected rigid owners and selected physical walls.
 // All selected points are exact targets in one connected constraint solve;
 // existing fixed anchors never move merely because their owner is selected.
 struct JointTranslationIntent {
+    // Legacy versions use one saved-plan offset. Version three retains the
+    // common displayed displacement here; explicit targets own saved offsets.
     Vec2 offset;
     std::vector<std::string> rigid_boundary_ids;
     std::vector<std::string> rigid_stroke_ids;
@@ -253,6 +260,13 @@ struct JointTranslationIntent {
     std::vector<JointReferenceTranslationIntent> reference_translations;
     // Retain version two when both target lists are empty (e.g. replay).
     bool per_target_presentation_completion{};
+    // Nested version three converts one displayed displacement into each
+    // selected owner's saved frame. Coverage is exact: no implicit shared
+    // geometry or independent-callout offset is admitted in this version.
+    std::vector<JointOwnerTranslationIntent> owner_translations;
+    std::vector<JointOwnerTranslationIntent> dimension_translations;
+    // Keep version three even when malformed target lists are empty.
+    bool per_owner_translation_completion{};
 };
 
 // One observation of an existing owner's supported field. This carries no

@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 per-owner connected Site translation
+
+Site dragging now carries different owner-local translations in one typed
+connected solve. Walls, measured strokes and closed areas use their own captured
+frames; selected saved dimensions use their analytical owner's basis. Deduction
+boundaries stay with their area, source wall/stroke cohorts remain linked, and
+ordinary architectural objects still join the complete event atomically.
+Contradictory source targets, fixed locks and incompatible connected consequence
+bases refuse the complete move. Consequence frame checks follow actual source
+components instead of borrowing the first selected object's operation.
+
+Joint intent version 3 records exact owner and independent dimension targets.
+Native format 72 and extraction version 70 retain it across all history. Rigid
+owned dimensions preserve automatic/manual provenance and move once. Source
+review corrected measured-source redraw ordering before relation admission and
+restricted room movement links to the directed outer/hole wall uses; shared
+inventories no longer connect unrelated walls. Legacy intent versions keep their
+previous behavior.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction, persistence and appearance remain unverified; the installed
+candidate is unchanged.
+
 ### October 8 retained selection presentation
 
 Click, Ctrl selection, window selection and deselection now update selection

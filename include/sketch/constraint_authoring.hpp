@@ -7,6 +7,7 @@
 #include "sketch/geometry.hpp"
 #include "sketch/quantity.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/joint_translation_replay.hpp"
 
 #include <map>
 #include <cstddef>

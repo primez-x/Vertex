@@ -60,6 +60,26 @@ Vec2 point(const json& value, std::string_view description) {
     return {finite_number(value.at(0), description), finite_number(value.at(1), description)};
 }
 
+Vec2 joint_owner_offset(const JointTranslationIntent& move, const std::string& owner_id) {
+    if (!move.per_owner_translation_completion) return move.offset;
+    const auto found = std::lower_bound(move.owner_translations.begin(), move.owner_translations.end(), owner_id,
+        [](const auto& target, const auto& id) { return target.owner_id < id; });
+    if (found == move.owner_translations.end() || found->owner_id != owner_id)
+        invalid("Joint owner translation has no explicit selected target");
+    return found->offset;
+}
+
+Vec2 joint_dimension_offset(const JointTranslationIntent& move, const std::string& dimension_id,
+    const std::string& owner_id, bool rigid_owner) {
+    if (rigid_owner) return joint_owner_offset(move, owner_id);
+    if (!move.per_owner_translation_completion) return move.offset;
+    const auto found = std::lower_bound(move.dimension_translations.begin(), move.dimension_translations.end(), dimension_id,
+        [](const auto& target, const auto& id) { return target.owner_id < id; });
+    if (found == move.dimension_translations.end() || found->owner_id != dimension_id)
+        invalid("Joint independent callout translation has no explicit selected target");
+    return found->offset;
+}
+
 // Copy the captured raw owners and replace only selected position coordinates.
 // Re-encoding annotation state would discard retained opaque sibling fields.
 Entities joint_presentation_entities(const Entities& source, const JointTranslationIntent& move) {
@@ -325,11 +345,19 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
     }
     if (result.joint_translation) {
         auto& move=*result.joint_translation;
+        if (!move.owner_translations.empty() || !move.dimension_translations.empty())
+            move.per_owner_translation_completion = true;
+        if (move.per_owner_translation_completion) move.per_target_presentation_completion = true;
+        if (move.owner_translations.size() > 4096 || move.dimension_translations.size() > 4096)
+            invalid("Joint owner translation targets exceed their budget");
         if (!std::isfinite(move.offset.x) || !std::isfinite(move.offset.y) || (move.offset.x==0 && move.offset.y==0))
             invalid("Joint translation requires a finite nonzero offset");
         if (move.presentation_offset && (!std::isfinite(move.presentation_offset->x) || !std::isfinite(move.presentation_offset->y)))
             invalid("Joint translation presentation offset must be finite");
-        if (move.partial_wall_ids.empty() || (move.rigid_boundary_ids.empty() && move.rigid_stroke_ids.empty()))
+        if (move.per_owner_translation_completion) {
+            if (move.partial_wall_ids.empty() && move.rigid_boundary_ids.empty() && move.rigid_stroke_ids.empty())
+                invalid("Joint owner translation requires selected geometry");
+        } else if (move.partial_wall_ids.empty() || (move.rigid_boundary_ids.empty() && move.rigid_stroke_ids.empty()))
             invalid("Joint translation requires rigid owners and selected physical walls");
         std::set<std::string,std::less<>> selected;
         for (auto* ids:{&move.rigid_boundary_ids,&move.rigid_stroke_ids,&move.partial_wall_ids,&move.dimension_ids}) {
@@ -367,6 +395,8 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         std::sort(move.reference_translations.begin(), move.reference_translations.end(), [](const auto& a, const auto& b) {
             return a.reference_id < b.reference_id;
         });
+        for (auto* targets : {&move.owner_translations, &move.dimension_translations})
+            std::sort(targets->begin(), targets->end(), [](const auto& a, const auto& b) { return a.owner_id < b.owner_id; });
         // Use the command codec's stable-identity validation for the typed lane.
         if (move.per_target_presentation_completion) {
             ApplyBoundaryConstraintChanges check;
@@ -743,7 +773,7 @@ std::optional<PlanarTransform> selected_wall_rigid_transform(
     const ConstraintAuthoringIntent& intent, const std::string& wall_id) {
     if (intent.joint_translation && std::binary_search(intent.joint_translation->partial_wall_ids.begin(),
         intent.joint_translation->partial_wall_ids.end(),wall_id))
-        return PlanarTransform{{},0,false,false,intent.joint_translation->offset};
+        return PlanarTransform{{},0,false,false,joint_owner_offset(*intent.joint_translation,wall_id)};
     if (intent.wall_geometry_move)
         for (const auto& target : intent.wall_geometry_move->targets)
             if (target.wall_id==wall_id) return target.rigid_transform;
@@ -941,8 +971,17 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         Entities presentation_changes;
         if (result.normalized_intent_.joint_translation) {
             auto& move=*result.normalized_intent_.joint_translation;
+            const auto requested_offsets = resolve_joint_translation_offsets(snapshot.entities(), move);
+            auto expanded_offsets = requested_offsets.owner_offsets;
+            const auto inherit_source_offset = [&](const std::string& source_id, Vec2 offset) {
+                const auto [found, inserted] = expanded_offsets.emplace(source_id, offset);
+                if (!inserted && !points_exact(found->second, offset))
+                    invalid("Joint selected source operations have contradictory owner translations");
+            };
             presentation_changes = joint_presentation_entities(snapshot.entities(), move);
             std::set<std::string,std::less<>> walls(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
+            std::set<std::string,std::less<>> strokes(move.rigid_stroke_ids.begin(),move.rigid_stroke_ids.end());
+            std::optional<std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>> measured_checks;
             for (const auto& id:move.rigid_boundary_ids) {
                 const auto found=snapshot.entities().find(id);
                 if (found==snapshot.entities().end() || !can_recognize_boundary_entity_type(found->second.type))
@@ -954,9 +993,44 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (!wall_measurement_source_current(snapshot.entities(),found->second)) invalid("Selected physical measured boundary is stale");
                     const auto perimeter=exterior_corner_perimeter_ids(snapshot.entities(),found->second);
                     walls.insert(perimeter.begin(),perimeter.end());
+                    if (move.per_owner_translation_completion)
+                        for (const auto& wall : perimeter) inherit_source_offset(wall, requested_offsets.owner_offsets.at(id));
+                }
+                if (move.per_owner_translation_completion &&
+                    (found->second.extensions.contains("measurement_linework_sources") ||
+                     found->second.extensions.contains("measurement_linework_group"))) {
+                    if (!measured_checks) measured_checks = measurement_linework_source_checks(snapshot.entities());
+                    if (!measurement_linework_source_current(*measured_checks, found->second))
+                        invalid("Joint selected measured boundary is stale and requires explicit source repair");
+                    const auto inherit_uses = [&](const auto& self, const json& value) -> void {
+                        if (value.is_object()) {
+                            if (value.contains("owner_id")) {
+                                const auto source_id = value.at("owner_id").get<std::string>();
+                                const auto source = snapshot.entities().find(source_id);
+                                if (source == snapshot.entities().end() || source->second.type != "measurement_linework")
+                                    invalid("Joint measured boundary source has the wrong owner type");
+                                strokes.insert(source_id);
+                                inherit_source_offset(source_id, requested_offsets.owner_offsets.at(id));
+                            }
+                            for (const auto& item : value.items()) self(self, item.value());
+                        } else if (value.is_array()) for (const auto& item : value) self(self, item);
+                    };
+                    for (const auto* key : {"measurement_linework_sources", "measurement_linework_group"})
+                        if (found->second.extensions.contains(key)) inherit_uses(inherit_uses, found->second.extensions.at(key));
                 }
             }
             move.partial_wall_ids.assign(walls.begin(),walls.end());
+            move.rigid_stroke_ids.assign(strokes.begin(),strokes.end());
+            if (move.per_owner_translation_completion) {
+                move.owner_translations.clear();
+                for (const auto& [id, offset] : expanded_offsets) move.owner_translations.push_back({id, offset});
+            }
+            // Expanded dependencies are part of the retained intent. Validate
+            // exact coverage again, including aliases with presentation/callouts.
+            if (move.per_owner_translation_completion) {
+                move = *normalize_intent(result.normalized_intent_).joint_translation;
+                (void)resolve_joint_translation_offsets(snapshot.entities(), move);
+            }
             for (const auto& id:move.partial_wall_ids) (void)require_wall(snapshot.entities(),id);
             if (move.partial_wall_ids.size()+move.rigid_boundary_ids.size()+move.rigid_stroke_ids.size()+move.dimension_ids.size()>4096)
                 invalid("Expanded joint translation targets exceed their aggregate budget");
@@ -1126,7 +1200,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 admit_stroke({target.stroke_id,std::nullopt,std::nullopt,target.transform,{}});
         if (intent.joint_translation)
             for (const auto& id:intent.joint_translation->rigid_stroke_ids)
-                admit_stroke({id,std::nullopt,std::nullopt,PlanarTransform{{},0,false,false,intent.joint_translation->offset},{}});
+                admit_stroke({id,std::nullopt,std::nullopt,PlanarTransform{{},0,false,false,joint_owner_offset(*intent.joint_translation,id)},{}});
         const auto constraints = decode_supported_constraints(candidate);
         std::map<std::string, std::set<std::string, std::less<>>, std::less<>> adjacency;
         for (const auto& [id, value] : constraints) {
@@ -1350,10 +1424,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             std::set<std::string,std::less<>> selected(move.rigid_boundary_ids.begin(),move.rigid_boundary_ids.end());
             selected.insert(move.rigid_stroke_ids.begin(),move.rigid_stroke_ids.end());
             selected.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
-            const PlanarTransform translation{{},0,false,false,move.offset};
             for (const auto& [id,position]:positions) {
                 const auto& binding=point_bindings.at(id);
-                if (selected.contains(binding.owner_id)) add_fixed(binding,transform_point(position,translation));
+                if (selected.contains(binding.owner_id)) add_fixed(binding,transform_point(position,
+                    PlanarTransform{{},0,false,false,joint_owner_offset(move,binding.owner_id)}));
                 else if (!move.move_connected_objects || snapshot.entities().at(binding.owner_id).extensions.contains("physical_wall_room"))
                     add_fixed(binding,position);
             }
@@ -1605,6 +1679,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         }
 
         const auto coincident_points = canonicalize_coincident_points(request, positions, solved_points);
+        if (intent.joint_translation && intent.joint_translation->per_owner_translation_completion)
+            for (const auto& [id, position] : fixed_points)
+                if (!points_exact(solved_points.at(id), position))
+                    invalid("Joint translation did not preserve every exact owner target");
         if (intent.wall_resize && intent.wall_resize->proposed_endpoint) {
             const auto& resize = *intent.wall_resize;
             const auto& old = old_baselines.at(resize.wall_id);
@@ -1691,6 +1769,10 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 continue;
             if (exterior_owner_ids.contains(binding.owner_id)) continue;
             if (joint_source_boundaries.contains(binding.owner_id)) continue;
+            if (selected_joint_boundary && intent.joint_translation->per_owner_translation_completion &&
+                (snapshot.entities().at(binding.owner_id).extensions.contains("measurement_linework_sources") ||
+                 snapshot.entities().at(binding.owner_id).extensions.contains("measurement_linework_group")))
+                continue; // The owned stroke operation reconstructs this consumer once.
             BoundaryGeometryEdit edit;
             edit.boundary_id = binding.owner_id;
             edit.target_id = binding.vertex_id;
@@ -1734,7 +1816,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
         for (const auto& id : exterior_owner_ids) candidate.at(id) = snapshot.entities().at(id);
         std::map<std::string,Vec2,std::less<>> rigid_source_offsets;
         if (intent.joint_translation) for (const auto& id:intent.joint_translation->rigid_boundary_ids)
-            if (joint_source_boundaries.contains(id)) rigid_source_offsets.emplace(id,intent.joint_translation->offset);
+            if (joint_source_boundaries.contains(id)) rigid_source_offsets.emplace(id,joint_owner_offset(*intent.joint_translation,id));
         result.exterior_source_edits_ = exterior_wall_measurement_source_updates(
             snapshot.entities(), candidate,true,rigid_source_offsets);
         for (const auto& edit : result.exterior_source_edits_) {
@@ -1750,6 +1832,14 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 wall_measurement_source_current(snapshot.entities(), owner) &&
                 (!candidate.contains(id) || !wall_measurement_source_current(candidate, candidate.at(id))))
                 invalid("Constraint authoring would stale the current source walls: " + id);
+        const bool joint_measured_sources_completed = result.measured_source_completion_ &&
+            intent.joint_translation && intent.joint_translation->per_owner_translation_completion;
+        if (joint_measured_sources_completed) {
+            // Selected source-bound consumers are reconstructed from the final
+            // solved strokes, after physical source transitions. Validate their
+            // persisted contacts at that final geometry, not at the old face.
+            candidate = complete_measurement_linework_sources(snapshot.entities(), candidate);
+        }
         for (const auto& [id, before] : boundaries) {
             const auto after = decode_identified_boundary_entity(candidate.at(id));
             if (after != before) result.changed_boundaries_.push_back({before, after});
@@ -1818,12 +1908,13 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
             if (snapshot.retained && !intent.joint_translation) {
                 const auto completed=Document::preview_command(*snapshot.retained,command_for(*snapshot.retained,result));
                 result.candidate_entities_=completed.entities();
-            } else if (result.measured_source_completion_)
+            } else if (result.measured_source_completion_ && !joint_measured_sources_completed)
                 result.candidate_entities_=complete_measurement_linework_sources(snapshot.entities(),result.candidate_entities_);
             if (intent.joint_translation) {
                 const auto& move=*intent.joint_translation;
                 std::set<std::string,std::less<>> rigid(move.rigid_boundary_ids.begin(),move.rigid_boundary_ids.end());
                 rigid.insert(move.rigid_stroke_ids.begin(),move.rigid_stroke_ids.end());
+                if (move.per_owner_translation_completion) rigid.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
                 for (const auto& [id,entity]:snapshot.entities()) {
                     if (entity.type!="dimension") continue;
                     const auto decoded=decode_boundary_dimension_entity(entity);
@@ -1831,7 +1922,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     const bool rigid_owner=rigid.contains(decoded.dimension->boundary_id);
                     if (!rigid_owner && !std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)) continue;
                     auto placed=*decoded.dimension;
-                    placed.text_position=transform_point(placed.text_position,PlanarTransform{{},0,false,false,move.offset});
+                    placed.text_position=transform_point(placed.text_position,PlanarTransform{{},0,false,false,
+                        joint_dimension_offset(move,id,placed.boundary_id,rigid_owner)});
                     if (!rigid_owner) { placed.placement=BoundaryDimensionPlacement::manual; placed.automatic_placement_version.reset(); }
                     result.candidate_entities_.at(id)=encode_boundary_dimension_entity(placed,&entity);
                 }
@@ -1841,10 +1933,34 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (before.segments.size()!=after.segments.size()) invalid("Joint translation changed selected boundary topology");
                     for (std::size_t i=0;i<before.segments.size();++i) {
                         const auto& a=before.segments[i]; const auto& b=after.segments[i];
-                        const auto expected=transform_segment(a.segment,PlanarTransform{{},0,false,false,move.offset});
+                        const auto expected=transform_segment(a.segment,PlanarTransform{{},0,false,false,joint_owner_offset(move,id)});
                         if (a.segment_id!=b.segment_id || a.start_vertex_id!=b.start_vertex_id || a.end_vertex_id!=b.end_vertex_id ||
                             !points_exact(expected.start,b.segment.start) || !points_exact(expected.end,b.segment.end) ||
                             expected.sweep_radians!=b.segment.sweep_radians) invalid("Joint translation did not preserve exact selected boundary targets");
+                    }
+                }
+                if (move.per_owner_translation_completion) {
+                    for (const auto& id : move.partial_wall_ids) {
+                        const auto before = read_baseline(snapshot.entities().at(id));
+                        const auto after = read_baseline(result.candidate_entities_.at(id));
+                        const auto expected = transform_segment(before, PlanarTransform{{},0,false,false,joint_owner_offset(move,id)});
+                        if (!points_exact(expected.start,after.start) || !points_exact(expected.end,after.end) ||
+                            expected.sweep_radians != after.sweep_radians)
+                            invalid("Joint translation did not preserve exact selected wall targets");
+                    }
+                    for (const auto& id : move.rigid_stroke_ids) {
+                        const auto before = resolve_constraint_segment_owner(snapshot.entities().at(id));
+                        const auto after = resolve_constraint_segment_owner(result.candidate_entities_.at(id));
+                        if (before.segments.size() != after.segments.size())
+                            invalid("Joint translation changed selected measured stroke topology");
+                        for (std::size_t i=0; i<before.segments.size(); ++i) {
+                            const auto& a = before.segments[i]; const auto& b = after.segments[i];
+                            const auto expected = transform_segment(a.segment, PlanarTransform{{},0,false,false,joint_owner_offset(move,id)});
+                            if (a.segment_id != b.segment_id || a.start_vertex_id != b.start_vertex_id || a.end_vertex_id != b.end_vertex_id ||
+                                !points_exact(expected.start,b.segment.start) || !points_exact(expected.end,b.segment.end) ||
+                                expected.sweep_radians != b.segment.sweep_radians)
+                                invalid("Joint translation did not preserve exact selected measured stroke targets");
+                        }
                     }
                 }
             }
@@ -2178,12 +2294,18 @@ Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision
             if (retain_joint) { command.joint_translation=move; command.joint_translation_completion=true; }
             std::set<std::string,std::less<>> rigid(move.rigid_boundary_ids.begin(),move.rigid_boundary_ids.end());
             rigid.insert(move.rigid_stroke_ids.begin(),move.rigid_stroke_ids.end());
+            if (move.per_owner_translation_completion) rigid.insert(move.partial_wall_ids.begin(),move.partial_wall_ids.end());
             for (const auto& [id,entity]:current) {
                 if (entity.type!="dimension") continue;
                 const auto decoded=decode_boundary_dimension_entity(entity);
                 if (!decoded.supported()) invalid(decoded.unsupported_reason);
-                if (rigid.contains(decoded.dimension->boundary_id) || std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id))
-                    command.dimension_placement_moves.push_back({id,move.offset});
+                // A geometry-only v3 proof without changed walls has no
+                // historical wall placement lane. The joint wrapper retains
+                // its source-qualified callouts directly after proof replay.
+                if ((!move.per_owner_translation_completion || !recomputed.changed_walls_.empty()) &&
+                    (rigid.contains(decoded.dimension->boundary_id) || std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)))
+                    command.dimension_placement_moves.push_back({id,
+                        joint_dimension_offset(move,id,decoded.dimension->boundary_id,rigid.contains(decoded.dimension->boundary_id))});
             }
             command.dimension_placement_completion=!command.dimension_placement_moves.empty();
             if (move.per_target_presentation_completion) {

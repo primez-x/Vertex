@@ -45861,6 +45861,84 @@ private:
         return result;
     }
 
+    static std::map<std::string,std::optional<Vec2>,std::less<>> siteConnectedTranslationOffsets(
+        const DocumentSnapshot& source,const JointTranslationOffsets& translations) {
+        // This index only checks the displayed basis of solved consequences.
+        // The typed command remains the sole authority for their geometry.
+        std::map<std::string,std::string,std::less<>> parents;
+        const auto component=[&](const std::string& id) {
+            parents.try_emplace(id,id);
+            auto root=id;
+            while (parents.at(root)!=root) root=parents.at(root);
+            auto current=id;
+            while (parents.at(current)!=root) {
+                const auto next=parents.at(current);
+                parents.at(current)=root;current=next;
+            }
+            return root;
+        };
+        const auto link=[&](const std::string& first,const std::string& second) {
+            if (!source.entities().contains(first) || !source.entities().contains(second)) return;
+            const auto a=component(first),b=component(second);
+            if (a<b) parents.at(b)=a;
+            else if (b<a) parents.at(a)=b;
+        };
+        const auto source_uses=[&](const auto& self,const std::string& owner,const json& value)->void {
+            if (value.is_object()) {
+                if (const auto id=value.find("owner_id");id!=value.end() && id->is_string())
+                    link(owner,id->get<std::string>());
+                for (const auto& field:value.items()) self(self,owner,field.value());
+            } else if (value.is_array()) for (const auto& child:value) self(self,owner,child);
+        };
+        for (const auto& [id,entity]:source.entities()) {
+            if (entity.type=="constraint") {
+                const auto decoded=decode_constraint_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                const auto& bindings=decoded.constraint->bindings;
+                for (std::size_t index=1;index<bindings.size();++index)
+                    link(bindings.front().owner_id,bindings[index].owner_id);
+            }
+            if (is_closed_boundary_entity(entity.type)) {
+                if (entity.properties.contains("wall_measurement_source"))
+                    for (const auto& wall:exterior_wall_measurement_source_ids(entity)) link(id,wall);
+                for (const auto& deduction:read_deduction_ids(entity.properties)) link(id,deduction);
+                for (const auto* key:{"measurement_linework_sources","measurement_linework_group"})
+                    if (entity.extensions.contains(key)) source_uses(source_uses,id,entity.extensions.at(key));
+            }
+            if (is_physical_wall_room(entity)) {
+                const auto lineage=decode_physical_wall_room_descriptor(entity).source_lineage;
+                const auto connect_ring=[&](const json& ring) {
+                    for (const auto& edge:ring.at("edges"))
+                        for (const auto& use:edge.at("source_uses"))
+                            link(id,use.at("owner_id").get<std::string>());
+                };
+                // The common physical_sources/semantic_phases inventory also
+                // records unrelated walls. Only directed boundary uses connect
+                // this room to geometry that can actually move its perimeter.
+                connect_ring(lineage.at("outer"));
+                for (const auto& hole:lineage.at("holes")) connect_ring(hole);
+            }
+            if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                link(id,decoded.dimension->boundary_id);
+            }
+        }
+        std::map<std::string,std::optional<Vec2>,std::less<>> offsets;
+        for (const auto& [id,offset]:translations.owner_offsets) {
+            const auto [entry,inserted]=offsets.emplace(component(id),offset);
+            if (!inserted && entry->second && !equivalentPlanOperators(
+                PlanarTransform{{},0.0,false,false,*entry->second},PlanarTransform{{},0.0,false,false,offset}))
+                entry->second.reset();
+        }
+        std::map<std::string,std::optional<Vec2>,std::less<>> result;
+        for (const auto& [id,parent]:parents) {
+            (void)parent;
+            if (const auto offset=offsets.find(component(id));offset!=offsets.end()) result.emplace(id,offset->second);
+        }
+        return result;
+    }
+
     static Command prepareDetachedSiteTranslationCommand(const DocumentSnapshot& source,
         const QStringList& ids,Vec2 canvas_delta,const SiteEndpointPreviewInput& input) {
         if (ids.isEmpty() || !std::isfinite(canvas_delta.x) || !std::isfinite(canvas_delta.y))
@@ -45912,9 +45990,9 @@ private:
         // a second free-space edit merely by joining this group.
         geometry_ids=translationModelRoots(source,std::move(geometry_ids));
         const auto geometry_operation=geometry_ids.isEmpty() ? PlanarTransform{} : selected_operation(geometry_ids.front());
-        for (const auto& id : geometry_ids)
-            if (!equivalentPlanOperators(geometry_operation,selected_operation(id)))
-                throw std::invalid_argument("These connected measured objects require different local moves. Move a compatible measured group together.");
+        bool per_owner_geometry=!geometry_ids.isEmpty() && std::any_of(geometry_ids.begin(),geometry_ids.end(),[&](const auto& id) {
+            return !equivalentPlanOperators(geometry_operation,selected_operation(id));
+        });
 
         auto physical=physical_targets.empty()
             ? ApplyEntityChanges{source.revision(),{}, {},"Move architectural selection"}
@@ -45937,6 +46015,7 @@ private:
             };
             return close(a.x,b.x) && close(a.y,b.y);
         };
+        std::vector<JointOwnerTranslationIntent> joint_dimension_moves;
         for (const auto& id : dimension_ids) {
             const auto& original=source.entities().at(id.toStdString());
             const auto decoded=decode_boundary_dimension_entity(original);
@@ -45955,8 +46034,10 @@ private:
                 continue; // Retain whole-owner automatic/manual provenance.
             }
             if (geometry_ids.contains(id_from(dimension.boundary_id)) &&
-                !equivalentPlanOperators(operation,geometry_operation))
+                !equivalentPlanOperators(operation,selected_operation(id_from(dimension.boundary_id))))
                 throw std::invalid_argument("The selected dimension and its measured owner require different Site moves.");
+            joint_dimension_moves.push_back({original.id,operation.offset});
+            if (!geometry_ids.isEmpty() && !equivalentPlanOperators(operation,geometry_operation)) per_owner_geometry=true;
             if (expected.x==dimension.text_position.x && expected.y==dimension.text_position.y) continue;
             dimension.text_position=expected;
             dimension.placement=BoundaryDimensionPlacement::manual;
@@ -45969,9 +46050,70 @@ private:
             joint_annotation_moves.push_back({target.target.owner_id,target.target.child_id,target.transform.offset});
         for (const auto& target : reference_targets)
             joint_reference_moves.push_back({target.reference_id,target.transform.offset});
-        Command command=geometry_ids.isEmpty() ? Command{std::move(presentation)} :
-            makeSelectionGeometryTranslationCommand(source,geometry_ids,geometry_operation.offset,
+        Command command;
+        if (geometry_ids.isEmpty()) command=std::move(presentation);
+        else if (!per_owner_geometry)
+            command=makeSelectionGeometryTranslationCommand(source,geometry_ids,geometry_operation.offset,
                 std::move(presentation.entity_changes),geometry_operation.offset,joint_annotation_moves,joint_reference_moves);
+        else {
+            JointTranslationIntent joint;
+            joint.offset=canvas_delta;
+            joint.per_owner_translation_completion=true;
+            joint.per_target_presentation_completion=true;
+            joint.annotation_translations=std::move(joint_annotation_moves);
+            joint.reference_translations=std::move(joint_reference_moves);
+            joint.dimension_translations=std::move(joint_dimension_moves);
+            for (const auto& target:joint.dimension_translations) joint.dimension_ids.push_back(target.owner_id);
+            std::map<std::string,Vec2,std::less<>> geometric_targets;
+            std::vector<std::string> pending;
+            for (const auto& id:geometry_ids) {
+                geometric_targets.emplace(id.toStdString(),selected_operation(id).offset);
+                pending.push_back(id.toStdString());
+            }
+            // A measured owner carries its deduction boundaries with it. Their
+            // typed targets retain source identities and compatible saved bases;
+            // no raw payload acquires geometric movement authority here.
+            for (std::size_t index=0;index<pending.size();++index) {
+                const auto id=pending[index];
+                const auto& entity=source.entities().at(id);
+                if (!is_closed_boundary_entity(entity.type)) continue;
+                for (const auto& deduction_id:read_deduction_ids(entity.properties)) {
+                    const auto deduction=source.entities().find(deduction_id);
+                    if (deduction==source.entities().end() || !is_closed_boundary_entity(deduction->second.type))
+                        throw std::invalid_argument("A moved area's deduction boundary is unavailable.");
+                    const auto offset=geometric_targets.at(id);
+                    const auto [entry,inserted]=geometric_targets.emplace(deduction_id,offset);
+                    if (!inserted && !same_point(entry->second,offset))
+                        throw std::invalid_argument("The selected area and its deduction require contradictory source moves.");
+                    if (inserted) pending.push_back(deduction_id);
+                    if (pending.size()>kMaximumNumericSelectionGraphEntities)
+                        throw std::invalid_argument("The complete Site movement exceeds the supported geometry limit.");
+                }
+            }
+            for (const auto& [id,offset]:geometric_targets) {
+                const auto& entity=source.entities().at(id);
+                if (entity.type=="wall") joint.partial_wall_ids.push_back(id);
+                else if (entity.type=="measurement_linework") joint.rigid_stroke_ids.push_back(id);
+                else if (is_closed_boundary_entity(entity.type)) joint.rigid_boundary_ids.push_back(id);
+                else throw std::invalid_argument("This Site selection has no typed geometry translation.");
+                joint.owner_translations.push_back({id,offset});
+            }
+            ConstraintAuthoringIntent intent;
+            intent.joint_translation=std::move(joint);
+            intent.message="Move Site selection through each source frame";
+            const auto preview=preview_constraint_authoring(source,intent);
+            requireAcceptedConstraintPreview(preview);
+            command=constraint_authoring_verified_command(source,preview,nullptr);
+            // Selected presentation payloads independently replay the same
+            // source. Equal reconstructed consequences join once.
+            // The joint intent owns saved callouts itself, including retaining
+            // automatic placement when the measured owner also moves.
+            std::erase_if(presentation.entity_changes,[](const auto& change) {
+                return change.kind==EntityChangeKind::upsert && can_recognize_boundary_dimension_entity_type(change.entity.type);
+            });
+            command=mergeSourceDerivedSelectionChanges(source,std::move(command),presentation,
+                "Move complete Site selection");
+        }
         const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
         const auto geometry_candidate=ordinary && ordinary->entity_changes.empty() ? source :
             Document::preview_command(source,command);
@@ -45998,6 +46140,13 @@ private:
                 throw std::invalid_argument("A moved dependency has no captured canonical Site frame: "+id);
             return PlanarTransform{{},0.0,false,false,site_source_plan_delta(canvas_delta,frame->second)};
         };
+        std::optional<JointTranslationOffsets> joint_offsets;
+        std::map<std::string,std::optional<Vec2>,std::less<>> connected_offsets;
+        if (const auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+            proof && proof->joint_translation && proof->joint_translation->per_owner_translation_completion) {
+            joint_offsets=resolve_joint_translation_offsets(source.entities(),*proof->joint_translation);
+            connected_offsets=siteConnectedTranslationOffsets(source,*joint_offsets);
+        }
         if (!geometry_ids.isEmpty()) {
             for (const auto& [id,entity] : source.entities()) {
                 const auto after=geometry_candidate.entities().find(id);
@@ -46014,7 +46163,23 @@ private:
                     measured_consequence=before_owner->second!=after_owner->second;
                 }
                 if (!measured_consequence) continue;
-                if (!equivalentPlanOperators(geometry_operation,owner_operation(id)))
+                auto authorized_operation=geometry_operation;
+                if (joint_offsets) {
+                    if (const auto selected=joint_offsets->owner_offsets.find(id);selected!=joint_offsets->owner_offsets.end())
+                        authorized_operation=PlanarTransform{{},0.0,false,false,selected->second};
+                    else if (const auto dimension=joint_offsets->dimension_offsets.find(id);dimension!=joint_offsets->dimension_offsets.end())
+                        authorized_operation=PlanarTransform{{},0.0,false,false,dimension->second};
+                    else {
+                        // An unselected connected consequence may stretch, but
+                        // its saved basis must agree with the operation of its
+                        // actual source component, not an unrelated selection.
+                        const auto connected=connected_offsets.find(id);
+                        if (connected==connected_offsets.end() || !connected->second)
+                            throw std::invalid_argument("A connected Site consequence has incompatible source movements. Review its relationships before moving this group.");
+                        authorized_operation=PlanarTransform{{},0.0,false,false,*connected->second};
+                    }
+                }
+                if (!equivalentPlanOperators(authorized_operation,owner_operation(id)))
                     throw std::invalid_argument("The connected move reaches geometry or a saved dimension in a different Site coordinate frame.");
             }
         }
@@ -46025,6 +46190,10 @@ private:
                 !same_point(after.dimension->text_position,transform_point(before.dimension->text_position,selected_operation(id))))
                 throw std::invalid_argument("The complete move differs from a selected dimension's displayed displacement.");
         }
+        // Version three already reconstructs source-owned placement from the
+        // original source. Pure translation retains relative area-label offsets
+        // and angles; a second placement pass must not re-encode its proof.
+        if (joint_offsets) return command;
         return completeAreaCalloutTransform(source,std::move(command),
             PlanarTransform{{},0.0,false,false,canvas_delta},nullptr,owner_operation);
     }
