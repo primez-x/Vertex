@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 numeric Site moves and selected hosted openings
+
+Transform selection now uses the same per-owner typed translation as canvas
+dragging for X/Y-only Site moves. Its immutable input captures every selected
+presentation frame before the dialog opens. Walls and measured areas from
+differently rotated buildings can join furniture, architecture, text and images
+in the same move without borrowing the first geometry owner's local offset.
+The dialog retains its source/selection fences and complete before/after preview;
+owned callout movement is completed once by that shared command.
+
+A selected door or window can accompany its selected visible host wall in the
+numeric transform/copy workflow. The host's dependency command owns the opening
+once, preserving cuts and fresh copy identities. An independently selected
+opening still uses its wall-relative canvas edit.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction and persistence remain unverified; the installed candidate is
+unchanged. General rigid transforms across differing measured Site frames remain
+separate from the implemented per-owner translation path.
+
 ### October 8 per-owner connected Site translation
 
 Site dragging now carries different owner-local translations in one typed

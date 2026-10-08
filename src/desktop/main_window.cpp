@@ -11892,6 +11892,7 @@ public:
         std::optional<Vec2> group_pivot;
         const bool site_group = group && siteCanvas(m_architecturalCanvas);
         std::map<QString,SitePresentationPlacement> selection_site_frames;
+        std::shared_ptr<const SiteEndpointPreviewInput> numeric_site_translation_input;
         std::map<std::string,SitePresentationPlacement,std::less<>> site_owner_frames;
         QStringList geometry_selection;
         std::vector<std::string> architectural_selection;
@@ -11990,6 +11991,7 @@ public:
                     captureSiteEdit(m_architecturalCanvas);
                     selection_site_frames=admittedSiteSelectionFrames(source,m_site_edit_frames,
                         m_site_edit_geometry_selection,m_site_edit_annotation_targets,m_site_edit_selected_presentations,selection);
+                    numeric_site_translation_input=captureSitePlanPreviewInput(selection_canvas,selection,true);
                     for (const auto& [id,frame] : selection_site_frames) site_owner_frames.emplace(id.toStdString(),frame);
                 }
                 presentation_scene=site_group ? sitePlanScene(source,numeric_site_source_frames,false,true) :
@@ -12085,6 +12087,15 @@ public:
                         const auto depth=reference->image.height()*reference->metres_per_source_unit*reference->scale;
                         for (const auto x : {-0.5,0.5}) for (const auto y : {-0.5,0.5})
                             include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},reference->rotation_degrees*std::numbers::pi/180.0,false,false,reference->position}),false,id));
+                        continue;
+                    }
+                    if (found!=source.entities().end() && found->second.type=="opening") {
+                        std::string host,error;
+                        if (!read_document_wall_id(found->second,host,error)) throw std::invalid_argument(error);
+                        if (!selection.contains(id_from(host)) || !visible.contains(found->first))
+                            throw std::invalid_argument("Select the opening's visible host wall to transform them together, or move the opening along its wall on the canvas.");
+                        // The host's dependency command already transforms its
+                        // cuts and openings once, including copy identities.
                         continue;
                     }
                     if (found == source.entities().end() || (!geometry_root(found->second) && !architectural_root(found->second)))
@@ -12276,6 +12287,17 @@ public:
                     const PlanarTransform transform{*group_pivot, angle * std::numbers::pi / 180.0,
                         horizontal, vertical,
                         {offset(offset_x->text()), offset(offset_y->text())}};
+                    if (site_group && !clone->isChecked() && transform.rotation_radians==0.0 &&
+                        !horizontal && !vertical && (transform.offset.x!=0.0 || transform.offset.y!=0.0)) {
+                        if (!numeric_site_translation_input)
+                            throw std::invalid_argument("The Site translation has no captured selection frames. Reopen Transform.");
+                        // Numeric movement and direct dragging share one typed
+                        // per-owner solve, including presentation/physical edits
+                        // and exact source-owned dimension placement. Do not run
+                        // a second generic area-callout transform afterwards.
+                        return {prepareDetachedSiteTranslationCommand(source,selection,transform.offset,
+                            *numeric_site_translation_input),primary_render_id.toStdString()};
+                    }
                     shared_callout_transform=transform;
                     if (site_group) callout_owner_transform=[&,world=transform](const std::string& id) {
                         if (!site_owner_frames.contains(id))
