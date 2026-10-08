@@ -100,8 +100,8 @@ from explicit curve reconstruction. The ordinary child keeps its existing
 admission and source-bound-room guard; the review cannot add raw geometry or
 asset authority. Wall editing routes use the verified original proposal before
 any commit and require room review for affected retained consumers. Cancellation
-leaves the original wall and rooms unchanged. The current review covers one
-resolved drawing context and plane; affected consumers outside it refuse.
+leaves the original wall and rooms unchanged. Each affected resolved drawing
+context and physical plane receives its own explicit review.
 
 Wall height, thickness, sloped-top and assembly-layer edits use a profile-only completion
 instead of an artificial endpoint edit. The exact authored wall upsert retains
@@ -110,6 +110,16 @@ source completion. Room review happens on this detached candidate before any
 publication. Envelope 26, native format 78 and extraction version 76 preserve
 the profile and reviewed rooms as one event. Missing exterior completion,
 unrelated payloads and mixed profile/geometry changes cannot borrow this lane.
+
+When several context/plane groups are affected, the interface presents them in
+sequence with floor, layer and elevation labels. Every dialog uses the exact
+cumulative detached candidate, while actual source, selection, workspace and
+pending-placement authority remain fenced to the original project. Cancelling
+any dialog discards all decisions. Envelope 27, native format 79 and extraction
+version 77 preserve up to thirty-two explicit groups as one event. The core
+rederives each stage, requires complete affected-room coverage and reserves
+fresh identities across history and all stages. A missing representative source
+or a moved/stale plane still refuses; the interface never guesses a room context.
 
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent

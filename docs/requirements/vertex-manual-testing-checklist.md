@@ -1025,6 +1025,7 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U157 — Change wall thickness and height**
   - Steps: Draw a wall and place a door and a window on it. Double-click the wall and change its thickness and height. Check the plan and 3D, Undo, Redo, and save/reopen. Try reducing the height below the top of its window, then apply a valid height.
   - Room check: Define named rooms inside joined walls and record their clear dimensions and areas. Change one wall's thickness or height. Review the proposed room outlines, names, inside points and affected dimensions before accepting. Cancel once; the wall and rooms should remain unchanged. Apply, then Undo once and Redo; the wall profile, rooms and any linked exterior measurement should return together. Save and reopen and compare the accepted values in plan, 3D and Details.
+  - Several floors or layers: For a connected wall edit affecting rooms on several floors or layers, inspect the floor, layer and elevation shown for each review. Accept the first review, then cancel a later one; all walls and rooms should stay unchanged. Repeat and accept every group. One Undo should restore the entire edit, and save/reopen should retain all accepted room choices.
   - Expected: Valid edits update plan and 3D together and retain the hosted objects. An invalid height gives an explanation and changes nothing; the subsequent valid edit still works. Undo restores the previous wall and openings in one step.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -2806,8 +2807,8 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U437 — See when a physical room's source has changed**
-  - Steps: Create a physical room, record its area, then change a source wall's thickness. Select the retained room in Layers, open Details, and inspect its canvas label and schedule. Undo the wall change.
-  - Expected: The changed room is marked stale; its previous numeric area is withheld from the canvas, Details and schedule. Undo restores the current room and its original area. Use U439 to test explicit source repair.
+  - Steps: Create a physical room and record its area. Change a source wall's thickness. Inspect the proposed rooms and affected dimensions in the review, then cancel. Repeat and accept the intended inside space. Check the room label, Details and schedule, then Undo. If an older project contains a stale room, inspect those same views before repairing it.
+  - Expected: Cancel leaves the original wall, room and area unchanged. Accept updates the wall and reviewed room together; every displayed current area agrees. Undo restores both. A pre-existing stale room withholds its old numeric area until explicit repair.
   - Result: Not tested
   - Notes: ______________________________
 
@@ -2818,8 +2819,8 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U439 — Repair a room after changing wall thickness**
-  - Steps: Start with the metric room and interior obstacle in U434. Change the bottom exterior wall thickness from 0.2 m to 0.4 m. Select the stale room in Layers and use **Tools > Repair room from walls**. Try clicking inside the obstacle, then inside clear room space. Cancel once; reopen the review, choose the clear space and use **Review and apply**. Undo/Redo, save and reopen.
-  - Expected: The obstacle cannot be chosen. Cancel changes nothing. Apply retains the room's name and classification, rederives its hole and reports 9.86 m² clear area. Undo restores the prior stale room; Redo restores the repaired one. Reopening retains the repaired room and history. Independent exterior appraisal GLA stays unchanged.
+  - Steps: Start with the metric room and interior obstacle in U434. Change the bottom exterior wall thickness from 0.2 m to 0.4 m. In the room review, try clicking inside the obstacle, then inside clear room space. Cancel once; repeat the thickness edit, choose the clear space and use **Review and apply**. Undo/Redo, save and reopen. For a pre-existing stale room, select it in Layers and use **Tools > Repair room from walls** to make the same explicit choice.
+  - Expected: The obstacle cannot be chosen. Cancel changes nothing. Apply retains the room's name and classification, rederives its hole and reports 9.86 m² clear area. One Undo restores the original wall thickness and room together; Redo restores the accepted change. Reopening retains the repaired room and history. Room clear area does not add a second contribution to exterior appraisal GLA.
   - Result: Not tested
   - Notes: ______________________________
 

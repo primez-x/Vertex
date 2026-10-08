@@ -91,6 +91,12 @@ void validate_physical_wall_room_profile_review_source(
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_after_geometry(
     const DocumentSnapshot& source,const Command& geometry_command,
     const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent);
+// Each plain envelope-eighteen command belongs to the preceding detached
+// snapshot, starting with the geometry preview. Two to thirty-two disjoint
+// context/plane reviews become one original-source-bound atomic command.
+[[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_batch_after_geometry(
+    const DocumentSnapshot& source,const Command& geometry_command,
+    const std::vector<ApplyBoundaryConstraintChanges>& staged_room_commands);
 // Narrow compatibility helpers retain the direct curve-construction contract.
 [[nodiscard]] DocumentSnapshot preview_physical_wall_room_review_curve(
     const DocumentSnapshot& source,const Command& curve_command);
@@ -107,4 +113,11 @@ void validate_physical_wall_room_profile_review_source(
 // Typed transitions are reconstructed from decisions, never accepted as proof.
 [[nodiscard]] ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(
     const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent);
+// Sequential pure replay keeps every preceding entity-map digest exact and
+// prevents fresh identity reuse across the entire batch, including retired
+// owners, boundary children and replaced dimensions. No intermediate state is
+// published and no classification or correspondence is inferred.
+[[nodiscard]] ReplayedPhysicalWallRoomReview replay_physical_wall_room_review_batch(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::vector<nlohmann::json>& intents);
 } // namespace sketch

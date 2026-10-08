@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v78
+# Vertex project formats v1 through v79
+
+## Reviewed rooms across contexts and planes (v79)
+
+Native format 79 and JSON/assets extraction version 77 retain
+boundary-constraint envelope 27. One admitted original physical-wall geometry
+or profile proof follows the same bounded child contracts as envelopes 24/25/26.
+The first explicit `room_review_intent` is followed by
+`room_review_additional_intents`, with a true `room_review_batch_completion`
+marker and two to thirty-two total decisions. Raw top-level edit lanes,
+recursive wrappers, stripped markers and missing or oversized batches refuse.
+The complete event remains bounded to 1 MiB.
+
+Each context/effective-plane group is reviewed against the cumulative detached
+entity map produced by the previous accepted group. Its entity-map digest stays
+bound to that actual stage. Every full snapshot, authoring-history and save fence
+binds the same original document. Replay derives the child once, then sequentially
+reconstructs every explicit room decision. Every affected retained room must be
+covered. Duplicate contexts/planes, overlapping retained identities and fresh
+identity reuse across original history or intermediate stages refuse, including
+retired room, boundary-child and replaced dimension identities.
+
+No intermediate geometry or room event is published. Cancelling any group
+discards every detached decision; accepting publishes one event and one Undo
+restores the complete original state. Native history, including undone and
+abandoned branches, retains the new reader floor. Single-review envelopes
+18/24/25/26 preserve their previous meanings and wire shape.
 
 ## Reviewed wall-profile and room changes (v78)
 

@@ -404,6 +404,11 @@ struct ApplyBoundaryConstraintChanges {
     // binds the independently replayed wall candidate, with one final event.
     bool room_review_geometry_completion{};
     nlohmann::json room_review_geometry_proof=nullptr;
+    // Envelope twenty-seven follows that same original geometry with explicit
+    // decisions for distinct context/plane groups. Each entity digest binds
+    // the cumulative detached room state; full authority stays original.
+    bool room_review_batch_completion{};
+    std::vector<nlohmann::json> room_review_additional_intents;
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 reviewed rooms across floors, layers and physical planes
+
+Wall geometry/profile proposals now collect every affected retained-room group
+by resolved context and effective plane. Each review identifies its floor, layer
+and elevation. Several groups are reviewed sequentially against detached
+cumulative snapshots; the actual project and original selection remain fenced.
+Cancelling any dialog discards the entire proposal. Accepting commits the wall,
+qualified measurement consequences and every explicit room decision together.
+
+Envelope 27 retains two to thirty-two distinct reviews with one original child
+proof. Each room entity digest binds its exact staged map, while all full
+snapshot/history/save fences bind the original project. Core admission and
+retained history independently reconstruct every stage, require complete
+affected-room coverage and reject duplicate contexts/planes, overlapping
+retained rooms and fresh identity reuse across original history and all stages.
+Native format 79/extraction 77 preserve this event. Existing single-review
+envelopes keep their previous wire shape.
+
+This extends the previous one-context completion; source groups without a valid
+representative or moved/stale source plane still refuse. Other physical-wall
+mutation routes remain open. No builds, tests, probes, launches, packages or
+installations ran. Compilation, interaction, persistence, atomic Undo and
+performance remain unverified; the installed candidate is unchanged.
+
 ### October 8 reviewed wall height, thickness, slope and layers
 
 Direct wall height/thickness, sloped-top and assembly-layer edits now preview their exact
@@ -2389,12 +2413,13 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Finish reviewed room consequences across affected contexts/planes and
-   remaining physical-wall mutation routes. Preserve the original snapshot
+1. Finish reviewed room consequences for remaining physical-wall mutation
+   routes. Preserve the original snapshot
    fence and one complete geometry/room event. No intermediate wall or room
    commit, guessed classification, silent identity reassignment or reference
    loss is permitted. Wall profiles/sloped tops/layers, ordinary length/endpoint editing,
-   explicit connected curve construction and their atomic room reviews are
+   explicit connected curve construction and their atomic room reviews, including
+   multi-context/plane completion, are
    recorded above; do not restart them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent
