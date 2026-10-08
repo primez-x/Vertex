@@ -273,12 +273,15 @@
   refused without changing either area. Releasing while the final preview is
   pending waits for that proposal; it cannot apply an earlier angle. Returning
   to the original angle adds no edit.</p>
-  <p>Ctrl-select walls, completed areas or measured lines and use
+  <p>Ctrl-select walls, completed areas, measured lines, components, ordinary text
+  or reference images and use
   <strong>Transform selection</strong> to rotate, flip or offset that group
   around its combined center. X/Y offsets use the project's plan coordinates.
   Review all changed geometry before Apply; the complete operation is one
   Undo step. An unsupported item in the group blocks the whole numerical
-  operation rather than editing one selected object.</p>
+  operation rather than editing one selected object. Components, text and
+  images retain their sizes, styles, artwork and calibration. Presentation
+  groups require a horizontal plan or compatible Site frame.</p>
   <p>Area, measured-line and geometric assembly controls also work in Site Plan.
   The building's Site placement stays fixed while the selected source geometry
   changes; related callouts and calibrated reference images retain their own

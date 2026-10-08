@@ -1,5 +1,7 @@
 #include "site_canvas_presentation.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
@@ -66,6 +68,42 @@ double radians_to_degrees(double radians) {
 
 } // namespace
 
+void SiteCanvasPresentationFrames::clear() {
+    geometry.clear();
+    auxiliary.clear();
+}
+
+void SiteCanvasPresentationFrames::insertGeometry(
+    const CanvasEntity& entity, SitePresentationPlacement placement) {
+    if (!geometry.emplace(GeometryKey{entity.id, entity.presentation_key},
+            GeometryFrame{entity.type, std::move(placement)}).second)
+        throw std::invalid_argument("Duplicate Site Plan geometry presentation identity.");
+}
+
+const SitePresentationPlacement* SiteCanvasPresentationFrames::findGeometry(
+    const CanvasEntity& entity) const {
+    return findGeometry(CanvasEntityPresentationIdentity{entity.id, entity.presentation_key, entity.type});
+}
+
+const SitePresentationPlacement* SiteCanvasPresentationFrames::findGeometry(
+    const CanvasEntityPresentationIdentity& identity) const {
+    const auto found = geometry.find({identity.id, identity.presentation_key});
+    return found != geometry.end() && found->second.type == identity.type
+        ? &found->second.placement : nullptr;
+}
+
+const SitePresentationPlacement& SiteCanvasPresentationFrames::geometryAt(
+    const CanvasEntity& entity) const {
+    return geometryAt(CanvasEntityPresentationIdentity{entity.id, entity.presentation_key, entity.type});
+}
+
+const SitePresentationPlacement& SiteCanvasPresentationFrames::geometryAt(
+    const CanvasEntityPresentationIdentity& identity) const {
+    const auto* placement = findGeometry(identity);
+    if (!placement) throw std::invalid_argument("The exact Site Plan geometry presentation is unavailable or changed type.");
+    return *placement;
+}
+
 Vec2 site_presented_plan_point(Vec2 point, const SitePresentationPlacement& placement) {
     const auto result = site_transform_point({point.x, point.y, 0.0}, placement.forward);
     return {result.x, result.y};
@@ -84,6 +122,30 @@ Vec2 site_source_plan_point(Vec2 point, const SitePresentationPlacement& placeme
 Vec2 site_source_plan_delta(Vec2 delta, const SitePresentationPlacement& placement) {
     const auto result = site_transform_delta({delta.x, delta.y, 0.0}, placement.inverse);
     return {result.x, result.y};
+}
+
+Bounds2 site_reframed_plan_bounds(const Bounds2& bounds,
+    const SitePresentationPlacement& source, const SitePresentationPlacement& destination) {
+    if (!std::isfinite(bounds.minimum.x) || !std::isfinite(bounds.minimum.y) ||
+        !std::isfinite(bounds.maximum.x) || !std::isfinite(bounds.maximum.y) ||
+        bounds.minimum.x > bounds.maximum.x || bounds.minimum.y > bounds.maximum.y)
+        throw std::invalid_argument("Site Plan obstacle bounds must be finite and ordered.");
+    const std::array<Vec2, 4> corners{{bounds.minimum,
+        {bounds.maximum.x, bounds.minimum.y}, bounds.maximum,
+        {bounds.minimum.x, bounds.maximum.y}}};
+    const auto reframe = [&](Vec2 point) {
+        return site_source_plan_point(site_presented_plan_point(point, source), destination);
+    };
+    const auto first = reframe(corners.front());
+    Bounds2 result{first, first};
+    for (std::size_t index = 1; index < corners.size(); ++index) {
+        const auto point = reframe(corners[index]);
+        result.minimum.x = std::min(result.minimum.x, point.x);
+        result.minimum.y = std::min(result.minimum.y, point.y);
+        result.maximum.x = std::max(result.maximum.x, point.x);
+        result.maximum.y = std::max(result.maximum.y, point.y);
+    }
+    return result;
 }
 
 CanvasEntity site_presented_canvas_entity(

@@ -412,6 +412,9 @@ public:
     void setCanvasBackground(QColor background);
     void setSelectedId(const QString& entity_id);
     void setSelectedIds(const QStringList& entity_ids);
+    // Includes selected labels/references as well as geometry. The cached
+    // list is valid until the next scene or selection update.
+    [[nodiscard]] const QStringList& selectedIds() const;
     [[nodiscard]] std::vector<CanvasEntityPresentationIdentity> selectedEntityPresentations() const;
     // Screen-only retained selection caption. It is painted inside the canvas
     // and is intentionally excluded from print/export rendering.
@@ -838,7 +841,6 @@ private:
     [[nodiscard]] bool matchesSelectionType(const QString& type) const;
     [[nodiscard]] bool selectionInteractionEnabled() const;
     [[nodiscard]] QString contextTarget(QPointF point) const;
-    [[nodiscard]] const QStringList& selectedIds() const;
     [[nodiscard]] Vec2 dragDelta(QPointF position) const;
     [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle, bool crossing) const;
     [[nodiscard]] std::optional<Vec2> closingAnchor(QPointF point) const;

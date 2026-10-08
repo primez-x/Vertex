@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 7 numerical presentation groups and typed Site placements
+
+Numerical Transform selection now includes explicit symbols, authored text and
+calibrated reference images, alone or with supported measured geometry. One
+source-plan pivot drives the whole selection. Horizontal plan overlays use the
+captured view basis, while model text keeps its source anchor and readable
+baseline. Same-owner edits merge once with geometry consequences. The preview
+retains artwork and references; Apply uses that exact command and keeps the
+selection. Ordinary annotation/body ID collisions cannot enter a single-owner
+editor. Generated labels, other architectural groups, nonhorizontal
+presentation groups and numerical group copying remain required gaps.
+
+Site geometry placements now retain the exact render ID, profile key and type.
+Embedded world-authored profiles and a separate same-ID persisted body retain
+their own placements. Annotation aliases keep typed owner/child identities.
+Constraint and room-review publication also checks the actual affected owners,
+including relation-only commands and old/proposed constraint bindings. Current
+raw-ID edit dispatch refuses ambiguous body/profile targets rather than editing
+the wrong body; complete typed collision editing remains required work.
+
+Site label placement now considers visible components and prior labels across
+all captured frames, both on initial display and in candidate previews. Current
+architectural and physical-room holes and deduction bounds remain excluded.
+The layout uses bounded shared indexes; stale physical rooms retain no numeric
+label. Body-only wall enrichment no longer attaches to a keyed assembly profile.
+
+Independent source reviews accepted these corrected scopes. Source diff checks
+passed. No build, test, probe, native job, launch, package or installation ran;
+the installed candidate is unchanged. Compilation, interaction, history/reopen,
+performance and output remain unverified. Manual results remain Not tested.
+
 ### October 7 numerical group transforms and horizontal navigation
 
 The numerical Transform selection editor now captures the whole selected

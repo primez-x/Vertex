@@ -4,6 +4,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/floor_reference.hpp"
 #include "sketch/physical_wall_room.hpp"
+#include "sketch/physical_wall_room_review.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/area_type_presets.hpp"
 
@@ -1977,6 +1978,60 @@ private:
     std::vector<std::optional<Tree>> m_labels;
     std::vector<Bounds2> m_unindexed;
     double m_right{-std::numeric_limits<double>::infinity()};
+};
+
+// All visible Site components and already placed labels are obstacles in
+// presentation world. Cache their conservative bounds in each label's own
+// source frame, rather than excluding objects from another building/frame.
+// Captured placement references outlive this call-local index.
+class SitePlanLabelBoundsIndex {
+    using FrameKey = std::tuple<double, double, double, double>;
+    struct Obstacle {
+        Bounds2 bounds;
+        const SitePresentationPlacement* frame;
+    };
+    struct FrameIndex {
+        const SitePresentationPlacement* frame;
+        std::unique_ptr<PlanLabelBoundsIndex> bounds;
+    };
+    static constexpr std::size_t maximum_entries = 1000000;
+    std::vector<Obstacle> m_obstacles;
+    std::map<FrameKey, FrameIndex> m_frames;
+    std::size_t m_cached_entries{};
+
+    void reserveEntries(std::size_t amount) {
+        if (amount > maximum_entries || m_cached_entries > maximum_entries - amount)
+            throw std::invalid_argument("Site Plan label layout exceeds its obstacle budget.");
+        m_cached_entries += amount;
+    }
+
+public:
+    PlanLabelBoundsIndex& forFrame(const SitePresentationPlacement& frame) {
+        const FrameKey key{frame.forward.rotation_radians, frame.forward.translation_m.x,
+            frame.forward.translation_m.y, frame.forward.translation_m.z};
+        if (const auto found = m_frames.find(key); found != m_frames.end())
+            return *found->second.bounds;
+        reserveEntries(m_obstacles.size());
+        std::vector<Bounds2> obstacles;
+        obstacles.reserve(m_obstacles.size());
+        for (const auto& obstacle : m_obstacles)
+            obstacles.push_back(site_reframed_plan_bounds(obstacle.bounds, *obstacle.frame, frame));
+        auto index = std::make_unique<PlanLabelBoundsIndex>(obstacles);
+        return *m_frames.emplace(key, FrameIndex{&frame, std::move(index)}).first->second.bounds;
+    }
+
+    void insert(const Bounds2& bounds, const SitePresentationPlacement& frame) {
+        if (m_obstacles.size() >= maximum_entries)
+            throw std::invalid_argument("Site Plan label layout exceeds its obstacle budget.");
+        // Validate even when no frame index has been requested yet.
+        (void)site_reframed_plan_bounds(bounds, frame, frame);
+        reserveEntries(m_frames.size());
+        for (auto& [key, index] : m_frames) {
+            (void)key;
+            index.bounds->insert(site_reframed_plan_bounds(bounds, frame, *index.frame));
+        }
+        m_obstacles.push_back({bounds, &frame});
+    }
 };
 
 CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
@@ -5188,7 +5243,8 @@ class MainWindow::Impl {
     struct SiteEndpointPreviewInput {
         std::vector<CanvasEntity> geometry;
         std::vector<CanvasLabel> labels;
-        std::map<QString, SitePresentationPlacement> frames;
+        SiteCanvasPresentationFrames frames;
+        std::optional<SitePresentationPlacement> edit_frame;
         std::set<std::string, std::less<>> appraisal_area_ids;
         std::map<QString, QRectF> label_footprints;
         std::vector<Bounds2> component_bounds;
@@ -5312,7 +5368,7 @@ class MainWindow::Impl {
         std::string layer_id;
         std::optional<DrawingContext> architectural_context;
         std::optional<BuildingViewFrame> plan_frame;
-        std::optional<std::map<QString,SitePresentationPlacement>> site_frames;
+        std::optional<SiteCanvasPresentationFrames> site_frames;
         double width{};
         double sill{};
         double height{};
@@ -6450,6 +6506,7 @@ public:
             const bool wall=selected && selected->type=="wall";
             if (m_selected_ids.size()!=1 || (!wall && label==canvas->labels().end()))
                 throw std::invalid_argument("Select one area or room with a plan label.");
+            if (siteCanvas(canvas)) requireSiteSelectionAdmission();
             cancelTextPlacement();
             cancelPlanLabelPlacement();
             m_plan_label_context=captureModalContext();
@@ -6458,7 +6515,7 @@ public:
             const auto named_owner=m_active_named_view_owner;
             const auto kind=m_architectural_view_kind;
             const auto site_digest=document_snapshot_digest(authoringSnapshot());
-            const auto site_frame=siteCanvas(canvas) ? std::optional{m_site_plan_frames.at(m_selected_id)} : std::nullopt;
+            const auto site_frame=siteCanvas(canvas) ? std::optional{m_site_plan_frames.auxiliary.at(m_selected_id)} : std::nullopt;
             canvas->setPointPlacementRequested([this,workspace,view,named_view,named_owner,kind,role,site_digest,site_frame](Vec2 point){
                 const auto context=m_plan_label_context;
                 cancelPlanLabelPlacement();
@@ -10830,8 +10887,12 @@ public:
 
     void showBoundaryTransformEditor() {
         const auto selection = m_selected_ids;
+        const auto primary_render_id = m_selected_id;
         auto* selection_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
         const auto selection_presentations = selection_canvas->selectedEntityPresentations();
+        const auto selection_font=selection_canvas->font();
+        const auto selection_dpi_x=selection_canvas->logicalDpiX();
+        const auto selection_dpi_y=selection_canvas->logicalDpiY();
         const auto original = selectedEntity();
         const auto source = authoringSnapshot();
         std::map<QString,std::set<QString>> retained_body_types;
@@ -10848,7 +10909,9 @@ public:
         });
         // Several profiles can describe one assembly. Count semantic roots,
         // while refusing a distinct persisted body hidden behind the same ID.
-        const bool group = selection.size() > 1 || presentation_collision;
+        const bool presentation_primary = !original || original->type == "reference_asset" ||
+            (!siteCanvas(selection_canvas) && annotation_child_exists(source,primary_render_id.toStdString()));
+        const bool group = selection.size() > 1 || presentation_collision || presentation_primary;
         if (!group && original && (can_recognize_building_entity_type(original->type) ||
                          original->type == "slab" || original->type == "room")) {
             showArchitecturalObjectTransformEditor();
@@ -10864,21 +10927,100 @@ public:
         QString selection_diagnostic;
         std::optional<Vec2> group_pivot;
         const bool site_group = group && siteCanvas(m_architecturalCanvas);
+        QStringList geometry_selection;
+        std::vector<PresentationAnnotationTarget> annotation_targets, overlay_targets;
+        std::vector<std::string> reference_targets;
+        std::map<QString,PresentationAnnotationTarget> render_targets;
+        std::set<std::pair<std::string,std::string>> model_labels;
+        std::optional<BuildingViewFrame> plan_frame;
+        std::optional<SnapshotPlanScene> presentation_scene;
+        PlanSceneCaches presentation_caches;
+        SnapshotPlanSceneOptions presentation_options;
+        presentation_options.metric_units=context.metric_units;
+        presentation_options.visibility=m_view_filter;
+        presentation_options.interactive=true;
+        presentation_options.site_plan=site_group;
+        presentation_options.label_font=selection_canvas->font();
+        presentation_options.label_device=selection_canvas;
+        if (!site_group)
+            presentation_options.active_context=projectOrganization(source)->drawing_context(m_active_layer_id.toStdString());
+        const auto source_position = [&](Vec2 position, bool model_plan) {
+            return !site_group && plan_frame && !model_plan ? unproject_plan_point(position,*plan_frame) : position;
+        };
         if (group) {
             try {
+                if (selection.isEmpty() || !selection.contains(primary_render_id))
+                    throw std::invalid_argument("The primary presentation is unavailable in the complete selection. Select the group again.");
                 if (std::any_of(selection_presentations.begin(),selection_presentations.end(),[](const auto& identity) {
                     return !identity.presentation_key.isEmpty();
-                })) throw std::invalid_argument("The entire selection includes an embedded presentation. Numeric group Transform supports persisted walls, closed areas and measured lines only.");
-                if (!original || !selection.contains(id_from(original->id)))
-                    throw std::invalid_argument("The primary object is unavailable in the complete selection. Select the group again before transforming it.");
+                })) throw std::invalid_argument("The selection includes an assembly profile or an ambiguous body/profile identity. Numeric group Transform does not support this architectural group.");
+                if (site_group) {
+                    captureSiteEdit(m_architecturalCanvas);
+                    (void)siteEditFrame(selection);
+                }
+                presentation_scene=projectSnapshotPlanScene(source,presentation_options,presentation_caches);
                 Boundary geometry;
                 const auto visible = visible_project_entities_with_phase(source, m_view_filter);
+                const auto include_point = [&](Vec2 point) { geometry.push_back({point,point,0.0}); };
                 for (const auto& id : selection) {
                     const auto found = source.entities().find(id.toStdString());
+                    std::optional<PresentationAnnotationTarget> target;
+                    if (site_group) {
+                        const auto typed=m_site_edit_annotation_targets.find(id);
+                        if (typed!=m_site_edit_annotation_targets.end())
+                            target=PresentationAnnotationTarget{typed->second.owner_entity_id,typed->second.child_id};
+                    } else if (const auto parent=annotation_parent_for_child(source,id.toStdString()))
+                        target=PresentationAnnotationTarget{*parent,id.toStdString()};
+                    if (target) {
+                        if (!site_group && !plan_frame) plan_frame=canvasTransformPlanFrame(source);
+                        const auto state=decode_annotation_entity(source.entities().at(target->owner_id));
+                        const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),[&](const auto& value){return value.id==target->child_id;});
+                        const auto label=std::find_if(state.labels.begin(),state.labels.end(),[&](const auto& value){return value.id==target->child_id;});
+                        if ((symbol!=state.symbols.end()) == (label!=state.labels.end()))
+                            throw std::invalid_argument("A selected annotation child is missing or ambiguous.");
+                        const bool model_plan=symbol!=state.symbols.end() ? symbol->model_plan : label->model_plan;
+                        if (!site_group && !model_plan) overlay_targets.push_back(*target);
+                        if (!site_group && model_plan && label!=state.labels.end())
+                            model_labels.emplace(target->owner_id,target->child_id);
+                        render_targets.emplace(id,*target);
+                        annotation_targets.push_back(*target);
+                        if (symbol!=state.symbols.end()) {
+                            const auto& displayed=site_group ? m_site_edit_local_geometry : selection_canvas->entities();
+                            if (std::count_if(displayed.begin(),displayed.end(),[&](const auto& item){return item.id==id && item.type==QStringLiteral("symbol") && item.presentation_key.isEmpty();})!=1)
+                                throw std::invalid_argument("A selected component has no unique visible presentation.");
+                            const auto definition=resolved_symbol_definition(*symbol,desktop_symbol_catalog());
+                            const auto width=definition.width_metres*symbol->placement.scale*symbol->width_scale;
+                            const auto depth=definition.depth_metres*symbol->placement.scale*symbol->depth_scale;
+                            for (const auto x : {-0.5,0.5}) for (const auto y : {-0.5,0.5})
+                                include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},symbol->placement.rotation_radians,false,false,symbol->placement.position}),model_plan));
+                        } else {
+                            const auto& displayed=site_group ? m_site_edit_local_labels : selection_canvas->labels();
+                            if (std::count_if(displayed.begin(),displayed.end(),[&](const auto& item){return item.id==id;})!=1)
+                                throw std::invalid_argument("A selected text label has no unique visible presentation.");
+                            include_point(source_position(label->placement.position,model_plan));
+                        }
+                        continue;
+                    }
+                    if (found!=source.entities().end() && found->second.type=="reference_asset") {
+                        if (!site_group && !plan_frame) plan_frame=canvasTransformPlanFrame(source);
+                        const auto& references=site_group ? m_site_edit_local_references : selection_canvas->references();
+                        if (std::count_if(references.begin(),references.end(),[&](const auto& item){return item.id==id && item.visible && !item.image.isNull();})!=1)
+                            throw std::invalid_argument("A selected reference has no unique decoded visible presentation.");
+                        const auto reference=std::find_if(presentation_scene->references.begin(),presentation_scene->references.end(),[&](const auto& item){return item.id==id;});
+                        if (reference==presentation_scene->references.end() || !reference->visible || reference->image.isNull())
+                            throw std::invalid_argument("A selected reference cannot be decoded from the captured source.");
+                        reference_targets.push_back(found->first);
+                        const auto width=reference->image.width()*reference->metres_per_source_unit*reference->scale;
+                        const auto depth=reference->image.height()*reference->metres_per_source_unit*reference->scale;
+                        for (const auto x : {-0.5,0.5}) for (const auto y : {-0.5,0.5})
+                            include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},reference->rotation_degrees*std::numbers::pi/180.0,false,false,reference->position}),false));
+                        continue;
+                    }
                     if (found == source.entities().end() || !geometry_root(found->second))
-                        throw std::invalid_argument("The entire selection is not supported by numeric Transform. Select only persisted walls, closed areas and measured lines. Architectural and presentation groups are not supported here.");
+                        throw std::invalid_argument("Numeric group Transform supports walls, closed areas, measured lines, explicit symbol/text children and reference images. This selection includes another architectural family or a generated label/dimension.");
                     if (!visible.contains(found->first))
                         throw std::invalid_argument("A selected object is outside the current visible source. Reopen Transform with a visible selection.");
+                    geometry_selection.push_back(id);
                     const auto& entity = found->second;
                     if (entity.type == "wall") {
                         const auto baseline = read_required_segment(entity.properties, "baseline");
@@ -10893,14 +11035,10 @@ public:
                         geometry.insert(geometry.end(), boundary.begin(), boundary.end());
                     }
                 }
-                if (geometry.empty()) throw std::invalid_argument("The selection has no canonical plan geometry.");
+                if (geometry.empty()) throw std::invalid_argument("The selection has no authoritative plan extents.");
                 const auto bounds = boundary_bounds(geometry);
                 group_pivot = Vec2{std::midpoint(bounds.minimum.x, bounds.maximum.x),
                     std::midpoint(bounds.minimum.y, bounds.maximum.y)};
-                if (site_group) {
-                    captureSiteEdit(m_architecturalCanvas);
-                    (void)siteEditFrame(selection);
-                }
                 supported_selection = true;
             } catch (const std::exception& error) {
                 supported_selection = false;
@@ -10913,6 +11051,11 @@ public:
             if (!sourceEditAuthorityUnchanged(authority)) return false;
             if (group && selection_canvas->selectedEntityPresentations() != selection_presentations) {
                 setError(QStringLiteral("The selected presentations changed. Reopen Transform to review the complete selection."));
+                return false;
+            }
+            if (group && (selection_canvas->font()!=selection_font ||
+                selection_canvas->logicalDpiX()!=selection_dpi_x || selection_canvas->logicalDpiY()!=selection_dpi_y)) {
+                setError(QStringLiteral("The presentation font or display scale changed. Reopen Transform."));
                 return false;
             }
             if (group && hasPendingPlacementEdit()) {
@@ -10984,7 +11127,9 @@ public:
             preview->setOverviewMapEnabled(false);
             preview->setGridEnabled(false);
             layout->addWidget(preview, 1);
-            layout->addWidget(new QLabel("Gray: original    Blue: proposed", &dialog));
+            layout->addWidget(new QLabel(group
+                ? QStringLiteral("Gray/blue: original/proposed geometry and text. Artwork keeps its colors; original images are faded.")
+                : QStringLiteral("Gray: original    Blue: proposed"), &dialog));
             dialog.resize(520, 520);
         }
         auto* freedom = new QLabel(&dialog);
@@ -11034,7 +11179,87 @@ public:
                     const PlanarTransform transform{*group_pivot, angle * std::numbers::pi / 180.0,
                         horizontal, vertical,
                         {offset(offset_x->text()), offset(offset_y->text())}};
-                    return {makeSelectionGeometryTransformCommand(source, selection, transform), original->id};
+                    ApplyEntityChanges presentation{source.revision(),{}, {},"Transform presentation group"};
+                    if (!annotation_targets.empty() || !reference_targets.empty()) {
+                        presentation=presentation_group_transform_command(source,annotation_targets,reference_targets,transform,source.revision());
+                        const bool identity=transform.rotation_radians==0.0 && !horizontal && !vertical &&
+                            transform.offset.x==0.0 && transform.offset.y==0.0;
+                        if (plan_frame && !identity) {
+                            // Overlay anchors and text baselines use the displayed
+                            // horizontal-plan basis. Conjugate the entire rigid
+                            // operator, including reflection axes and offset.
+                            const auto right=plan_view_right(*plan_frame),up=plan_view_up(*plan_frame);
+                            const PlanarTransform linear{{},transform.rotation_radians,horizontal,vertical,{}};
+                            const auto x=transform_point(right,linear);
+                            const Vec2 view_x{x.x*right.x+x.y*right.y,x.x*up.x+x.y*up.y};
+                            const bool reflected=horizontal!=vertical;
+                            const bool oriented=transform.rotation_radians!=0.0 || horizontal || vertical;
+                            const PlanarTransform overlay{project_plan_point(*group_pivot,*plan_frame),
+                                oriented ? std::atan2(reflected ? -view_x.y : view_x.y,view_x.x) : 0.0,false,reflected,
+                                {transform.offset.x*right.x+transform.offset.y*right.y,
+                                 transform.offset.x*up.x+transform.offset.y*up.y}};
+                            std::map<std::string,Entity,std::less<>> owners;
+                            for (const auto& change : presentation.entity_changes) owners.emplace(change.entity.id,change.entity);
+                            if (!overlay_targets.empty() || !reference_targets.empty()) {
+                                const auto adapted=presentation_group_transform_command(source,overlay_targets,reference_targets,overlay,source.revision());
+                                for (const auto& change : adapted.entity_changes) {
+                                    if (change.entity.type=="reference_asset") {
+                                        owners.insert_or_assign(change.entity.id,change.entity);
+                                        continue;
+                                    }
+                                    auto [owner,inserted]=owners.try_emplace(change.entity.id,change.entity);
+                                    (void)inserted;
+                                    for (const auto& target : overlay_targets) {
+                                        if (target.owner_id!=change.entity.id) continue;
+                                        for (const auto collection : {"labels","symbols"}) {
+                                            const auto& raw=change.entity.properties.at("state").at(collection);
+                                            for (std::size_t index=0;index<raw.size();++index)
+                                                if (raw.at(index).at("id").get<std::string>()==target.child_id)
+                                                    owner->second.properties.at("state").at(collection).at(index)=raw.at(index);
+                                        }
+                                    }
+                                }
+                                // An overlay target can be invariant even while
+                                // the source-frame replay changed it. Restore its
+                                // exact source record when no adapted owner exists.
+                                std::set<std::string> adapted_owners;
+                                for (const auto& change : adapted.entity_changes) adapted_owners.insert(change.entity.id);
+                                for (const auto& target : overlay_targets) {
+                                    if (adapted_owners.contains(target.owner_id) || !owners.contains(target.owner_id)) continue;
+                                    for (const auto collection : {"labels","symbols"}) {
+                                        const auto& raw=source.entities().at(target.owner_id).properties.at("state").at(collection);
+                                        for (std::size_t index=0;index<raw.size();++index)
+                                            if (raw.at(index).at("id").get<std::string>()==target.child_id)
+                                                owners.at(target.owner_id).properties.at("state").at(collection).at(index)=raw.at(index);
+                                    }
+                                }
+                                for (const auto& id : reference_targets)
+                                    if (!adapted_owners.contains(id)) owners.erase(id);
+                            }
+                            const PlanarTransform overlay_linear{{},overlay.rotation_radians,overlay.flip_horizontal,overlay.flip_vertical,{}};
+                            for (const auto& [owner_id,child_id] : model_labels) {
+                                if (!oriented) continue;
+                                const auto state=decode_annotation_entity(source.entities().at(owner_id));
+                                for (std::size_t index=0;index<state.labels.size();++index) {
+                                    const auto& label=state.labels[index];
+                                    if (label.id!=child_id) continue;
+                                    const auto direction=transform_point({std::cos(label.placement.rotation_radians),std::sin(label.placement.rotation_radians)},overlay_linear);
+                                    const auto baseline=std::atan2(direction.y,direction.x);
+                                    auto [owner,inserted]=owners.try_emplace(owner_id,source.entities().at(owner_id));
+                                    (void)inserted;
+                                    auto& placement=owner->second.properties.at("state").at("labels").at(index).at("placement");
+                                    placement["rotation_radians"]=baseline;
+                                }
+                            }
+                            presentation.entity_changes.clear();
+                            for (auto& [id,entity] : owners) {
+                                if (entity.type==kAnnotationEntityType) validate_annotation_entity(entity);
+                                if (entity!=source.entities().at(id)) presentation.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+                            }
+                        }
+                    }
+                    return {geometry_selection.isEmpty() ? Command{std::move(presentation)} :
+                        makeSelectionGeometryTransformCommand(source,geometry_selection,transform,std::move(presentation.entity_changes)),primary_render_id.toStdString()};
                 }();
                 candidate.first = augmentAuthoredCommand(candidate.first, source);
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
@@ -11042,6 +11267,7 @@ public:
                     Document::preview_command(source, candidate.first);
                 std::vector<CanvasEntity> geometry;
                 std::vector<CanvasLabel> labels;
+                std::vector<CanvasReference> references;
                 std::array<std::set<std::string, std::less<>>, 2> preview_ids;
                 const auto add_owner = [&](const DocumentSnapshot& snapshot, const std::string& root, bool selected) {
                     auto& ids = preview_ids[selected ? 1 : 0];
@@ -11142,10 +11368,81 @@ public:
                         labels.push_back(std::move(projection.label));
                     }
                 };
-                add_graph(source, group ? selection : QStringList{id_from(original->id)}, false);
-                add_graph(proposed, group ? selection : QStringList{id_from(candidate.second)}, true);
+                add_graph(source, group ? geometry_selection : QStringList{id_from(original->id)}, false);
+                add_graph(proposed, group ? geometry_selection : QStringList{id_from(candidate.second)}, true);
+                if (group) {
+                    // Geometry commands supply their full solved consequence
+                    // graph above. Add authored artwork and its canonical
+                    // labels/references from the same admitted candidate head.
+                    if (plan_frame) {
+                        for (auto& entity : geometry) {
+                            entity.segments=project_plan_path(std::move(entity.segments),*plan_frame);
+                            if (entity.stroke_segments) *entity.stroke_segments=project_plan_path(std::move(*entity.stroke_segments),*plan_frame);
+                        }
+                        project_plan_model_labels(labels,proposed,*plan_frame);
+                    }
+                    const auto add_presentations = [&](const DocumentSnapshot& snapshot,bool selected) {
+                        PlanSceneCaches caches;
+                        const auto scene=selected ? projectSnapshotPlanScene(snapshot,presentation_options,caches) : *presentation_scene;
+                        const auto render_id = [&](const QString& id) -> std::optional<QString> {
+                            if (!site_group) return render_targets.contains(id) ? std::optional{id} : std::nullopt;
+                            const auto child=scene.annotation_targets.find(id);
+                            if (child==scene.annotation_targets.end()) return std::nullopt;
+                            for (const auto& [render,target] : render_targets)
+                                if (target.owner_id==child->second.owner_entity_id && target.child_id==child->second.child_id) return render;
+                            return std::nullopt;
+                        };
+                        std::set<QString> admitted_artwork,admitted_references;
+                        for (auto entity : scene.geometry) {
+                            const auto render=render_id(entity.id);
+                            if (!render || entity.type!=QStringLiteral("symbol")) continue;
+                            if (!admitted_artwork.insert(*render).second)
+                                throw std::invalid_argument("A selected component has an ambiguous candidate presentation.");
+                            entity.id=*render;
+                            entity.selected=selected;
+                            if (plan_frame) project_model_plan_symbol(entity,*plan_frame);
+                            if (!selected) {
+                                entity.stroke_color=QColor(140,148,158);
+                                entity.dark_stroke_color=QColor{};
+                            }
+                            geometry.push_back(std::move(entity));
+                        }
+                        std::set<QString> existing_labels;
+                        for (const auto& label : labels)
+                            if (label.selected==selected) existing_labels.insert(plan_label_instance_key(label));
+                        for (auto label : scene.labels) {
+                            const auto render=render_id(label.id);
+                            if (!render && !preview_ids[selected ? 1 : 0].contains(label.id.toStdString())) continue;
+                            if (render && !admitted_artwork.insert(*render).second)
+                                throw std::invalid_argument("A selected label has an ambiguous candidate presentation.");
+                            if (existing_labels.contains(plan_label_instance_key(label))) continue;
+                            if (render) label.id=*render;
+                            label.selected=selected;
+                            label.color=selected ? QColor(35,115,190) : QColor(140,148,158);
+                            if (plan_frame) {
+                                std::vector<CanvasLabel> projected{std::move(label)};
+                                project_plan_model_labels(projected,snapshot,*plan_frame);
+                                label=std::move(projected.front());
+                            }
+                            labels.push_back(std::move(label));
+                        }
+                        for (auto reference : scene.references) {
+                            if (std::find(reference_targets.begin(),reference_targets.end(),reference.id.toStdString())==reference_targets.end()) continue;
+                            if (!reference.visible || reference.image.isNull() || !admitted_references.insert(reference.id).second)
+                                throw std::invalid_argument("A selected reference cannot be uniquely displayed from the candidate source.");
+                            reference.selected=selected;
+                            if (!selected) reference.intensity*=0.3;
+                            references.push_back(std::move(reference));
+                        }
+                        if (admitted_artwork.size()!=render_targets.size() || admitted_references.size()!=reference_targets.size())
+                            throw std::invalid_argument("A selected presentation is unavailable in the complete source or candidate preview.");
+                    };
+                    add_presentations(source,false);
+                    add_presentations(proposed,true);
+                }
                 preview->setEntities(std::move(geometry));
                 preview->setLabels(std::move(labels));
+                preview->setReferences(std::move(references));
                 preview->fitView();
                 if (!group) freedom->setText(persistentFreedomSummary(source, proposed, original->id, candidate.second));
                 candidate_command = std::move(candidate);
@@ -11154,6 +11451,7 @@ public:
             } catch (const std::exception& error) {
                 preview->setEntities({});
                 preview->setLabels({});
+                preview->setReferences({});
                 status->setText(QString::fromUtf8(error.what()));
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             }
@@ -11175,6 +11473,7 @@ public:
                     freedom->clear();
                     preview->setEntities({});
                     preview->setLabels({});
+                    preview->setReferences({});
                     buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                 }
                 return;
@@ -11199,7 +11498,7 @@ public:
         });
         if (!supported_selection) {
             status->setText(selection_diagnostic.isEmpty()
-                ? QStringLiteral("Select a wall, measured line or an identified closed boundary first.")
+                ? QStringLiteral("Select walls, closed areas, measured lines, explicit symbols/text or reference images first.")
                 : selection_diagnostic);
             buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
         }
@@ -11211,6 +11510,7 @@ public:
                 freedom->clear();
                 preview->setEntities({});
                 preview->setLabels({});
+                preview->setReferences({});
                 status->setText(lastError());
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             }
@@ -22163,36 +22463,35 @@ public:
                 }
             }
             PlanLabelBoundsIndex candidate_label_obstacles(ordinary_component_bounds);
-            using SiteLabelLayoutKey=std::tuple<SiteFrameMode,std::string,std::string,std::string,
-                double,double,double,double>;
-            const auto layout_key=[](const SitePresentationPlacement& frame) {
-                return SiteLabelLayoutKey{frame.source_frame.mode,frame.source_frame.property_id,
-                    frame.source_frame.building_id,frame.drawing_context.floor_id,
-                    frame.forward.rotation_radians,frame.forward.translation_m.x,
-                    frame.forward.translation_m.y,frame.forward.translation_m.z};
-            };
-            std::map<SiteLabelLayoutKey,std::vector<Bounds2>> frame_components;
-            std::map<SiteLabelLayoutKey,std::unique_ptr<PlanLabelBoundsIndex>> frame_obstacles;
+            SitePlanLabelBoundsIndex site_label_obstacles;
+            std::map<std::string,SitePresentationPlacement,std::less<>> site_deduction_frames;
             if (site_input) {
                 std::map<PresentationIdentity,const CanvasEntity*> proposed_components;
                 for (const auto& proposed:result.entities)
                     proposed_components.emplace(presentation_identity(proposed),&proposed);
                 for (const auto& [identity,captured_bounds]:site_input->component_presentations) {
-                    const auto frame=site_input->frames.find(identity.first);
-                    if (frame==site_input->frames.end()) continue;
+                    const auto frame=site_input->frames.geometry.find(identity);
+                    if (frame==site_input->frames.geometry.end()) continue;
                     auto bounds=captured_bounds;
                     if (const auto proposed=proposed_components.find(identity);proposed!=proposed_components.end()) {
+                        if (proposed->second->type!=frame->second.type)
+                            throw std::invalid_argument("The Site Plan component presentation changed type.");
                         if (proposed->second->segments.empty()) continue;
                         bounds=boundary_bounds(proposed->second->segments);
                     } else {
-                        const auto before=source.entities().find(identity.first.toStdString());
-                        const auto after=candidate.find(identity.first.toStdString());
+                        auto owner_id=identity.first.toStdString();
+                        if (frame->second.type==QStringLiteral("assembly_instance") &&
+                            (!identity.second.isEmpty() || !source.entities().contains(owner_id)))
+                            if (const auto embedded=embeddedAssemblyChild(source,owner_id))
+                                owner_id=embedded->assembly_catalog_id;
+                        const auto before=source.entities().find(owner_id);
+                        const auto after=candidate.find(owner_id);
                         // A changed/retired component absent from the candidate
                         // projection cannot keep its old footprint as an obstacle.
                         if (before!=source.entities().end() &&
                             (after==candidate.end() || before->second!=after->second)) continue;
                     }
-                    frame_components[layout_key(frame->second)].push_back(bounds);
+                    site_label_obstacles.insert(bounds,frame->second.placement);
                 }
             }
             auto candidate_labels=labels;
@@ -22381,23 +22680,48 @@ public:
                     if (label.avoid_components) {
                         auto* label_obstacles=&candidate_label_obstacles;
                         if (site_input) {
-                            const auto frame=site_input->frames.find(label.id);
-                            if (frame==site_input->frames.end()) { withhold_label(label); continue; }
-                            const auto key=layout_key(frame->second);
-                            auto& index=frame_obstacles[key];
-                            if (!index) index=std::make_unique<PlanLabelBoundsIndex>(frame_components[key]);
-                            label_obstacles=index.get();
+                            const auto frame=site_input->frames.auxiliary.find(label.id);
+                            if (frame==site_input->frames.auxiliary.end()) { withhold_label(label); continue; }
+                            label_obstacles=&site_label_obstacles.forFrame(frame->second);
                         }
                         const auto footprint=label_footprints.find(plan_label_instance_key(label));
                         if (!appraisal_label && footprint==label_footprints.end()) return std::nullopt;
                         const auto text_size = appraisal_label
                             ? plan_area_label_footprint(proposed,label_font,&label_device) : footprint->second;
                         std::vector<Bounds2> obstacles;
+                        auto label_boundary=read_boundary(entity.properties);
+                        if (is_physical_wall_room(entity)) {
+                            const auto room=candidate_physical_rooms.find(entity.id);
+                            if (room==candidate_physical_rooms.end() || !room->second.current) {
+                                withhold_label(label);
+                                continue;
+                            }
+                            label_boundary=room->second.boundary;
+                            for (const auto& hole : room->second.holes)
+                                obstacles.push_back(boundary_bounds(hole));
+                        } else if (entity.type=="room") {
+                            // Use the same authoritative room voids as settled
+                            // layout; captured pre-edit holes may have moved.
+                            const auto room=architectural_footprint(entity);
+                            label_boundary=room.boundary;
+                            for (const auto& hole : room.holes)
+                                obstacles.push_back(boundary_bounds(hole));
+                        }
                         if (area_values.contains(entity.id)) {
                             for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
                                 const auto deduction=candidate.find(deduction_id);
-                                if (deduction!=candidate.end())
-                                    obstacles.push_back(boundary_bounds(read_boundary(deduction->second.properties)));
+                                if (deduction!=candidate.end()) {
+                                    auto bounds=boundary_bounds(read_boundary(deduction->second.properties));
+                                    if (site_input) {
+                                        auto frame=site_deduction_frames.find(deduction_id);
+                                        if (frame==site_deduction_frames.end())
+                                            frame=site_deduction_frames.emplace(deduction_id,
+                                                resolve_site_presentation(candidate_snapshot,deduction_id)).first;
+                                        bounds=site_reframed_plan_bounds(bounds,frame->second,
+                                            site_input->frames.auxiliary.at(label.id));
+                                    }
+                                    obstacles.push_back(bounds);
+                                }
                             }
                         }
                         auto world_label = proposed;
@@ -22405,11 +22729,14 @@ public:
                             world_label.position = unproject_plan_point(world_label.position,view_context->frame);
                             if (world_label.leader_start) world_label.leader_start=unproject_plan_point(*world_label.leader_start,view_context->frame);
                         }
-                        proposed=place_plan_area_label(world_label,read_boundary(entity.properties),
+                        proposed=place_plan_area_label(world_label,label_boundary,
                             *label_obstacles,obstacles,text_size);
-                        label_obstacles->insert({
+                        const Bounds2 placed_bounds{
                             {proposed.position.x+text_size.left(),proposed.position.y+text_size.top()},
-                            {proposed.position.x+text_size.right(),proposed.position.y+text_size.bottom()}});
+                            {proposed.position.x+text_size.right(),proposed.position.y+text_size.bottom()}};
+                        if (site_input)
+                            site_label_obstacles.insert(placed_bounds,site_input->frames.auxiliary.at(label.id));
+                        else label_obstacles->insert(placed_bounds);
                         if (view_context) {
                             proposed.position = project_plan_point(proposed.position,view_context->frame);
                             if (proposed.leader_start) proposed.leader_start=project_plan_point(*proposed.leader_start,view_context->frame);
@@ -22460,7 +22787,7 @@ public:
         const auto& owner=candidate.entities().at(id.toStdString());
         std::optional<CanvasSelectionFrame> frame;
         for (auto& item : proposed) {
-            if (item.id!=id) continue;
+            if (item.id!=id || !item.presentation_key.isEmpty()) continue;
             if (item.segments.empty()) { item.resize_frame.reset();continue; }
             if (!frame) frame=physicalPlanResizeFrame(owner,projection);
             item.resize_frame=*frame;
@@ -22851,7 +23178,7 @@ public:
                                     auto proposed=reference;
                                     if (no_op) {
                                         (**result).references.push_back(site_presented_canvas_reference(
-                                            proposed,site_input->frames.at(reference.id)));
+                                            proposed,site_input->frames.auxiliary.at(reference.id)));
                                         continue;
                                     }
                                     const auto position=read_point(owner.properties.at("position_m"));
@@ -22860,7 +23187,7 @@ public:
                                     proposed.scale=read_number(owner.properties,"scale",1.0);
                                     proposed.rotation_degrees=read_number(owner.properties,"rotation_degrees",0.0);
                                     (**result).references.push_back(site_presented_canvas_reference(
-                                        proposed,site_input->frames.at(reference.id)));
+                                        proposed,site_input->frames.auxiliary.at(reference.id)));
                                 }
                                 auto& entities=(**result).entities;
                                 // A drag back to its origin remains an exact
@@ -22879,6 +23206,7 @@ public:
                                 for (auto& proposed:entities) {
                                     if (site_input->move_annotation_targets.contains(proposed.id)) continue;
                                     if (no_op) continue;
+                                    if (!proposed.presentation_key.isEmpty()) continue;
                                     const auto owner=candidate.entities().find(proposed.id.toStdString());
                                     if (owner==candidate.entities().end()) continue;
                                     if (owner->second.type=="wall") {
@@ -22982,7 +23310,9 @@ public:
                             retainNoOpMovePresentations(**result,*source,*entities_move_candidate,*retained,*labels,move_selection_ids);
                         if (*result && rigid_transform) {
                             for (auto& proposed : (**result).entities) {
-                                const auto original=std::find_if(retained->begin(),retained->end(),[&](const auto& item){return item.id==proposed.id;});
+                                const auto original=std::find_if(retained->begin(),retained->end(),[&](const auto& item){
+                                    return item.id==proposed.id && item.presentation_key==proposed.presentation_key && item.type==proposed.type;
+                                });
                                 if (original==retained->end() || !original->resize_frame ||
                                     (!id.isEmpty() && proposed.id!=id)) continue;
                                 auto frame=*original->resize_frame;
@@ -23029,11 +23359,11 @@ public:
                         // frame after projection. Rebind genuine roof corners
                         // to that final frame before Site presentation applies.
                         for (auto& item : (**result).entities) {
+                            if (!item.presentation_key.isEmpty()) continue;
                             if (site_input && site_input->move_frame &&
                                 site_input->move_annotation_targets.contains(item.id)) continue;
                             const auto owner=source->entities().find(item.id.toStdString());
-                            if (owner!=source->entities().end() && owner->second.type=="roof" &&
-                                !geometric_assembly_for_child(*source,owner->first))
+                            if (item.type==QStringLiteral("roof") && owner!=source->entities().end() && owner->second.type=="roof")
                                 retain_roof_plan_corner_handles(item,source->revision(),source->is_editable());
                         }
                     }
@@ -23042,25 +23372,25 @@ public:
                         // The worker owns immutable local geometry and frame
                         // values only; no canvas/controller state is accessed.
                         std::erase_if(projection.entities, [&](const auto& item) {
-                            return !site_input->frames.contains(item.id);
+                            return !site_input->frames.geometry.contains({item.id,item.presentation_key});
                         });
                         for (auto& item : projection.entities) {
                             if (cancellation.is_cancelled()) break;
-                            item = site_presented_canvas_entity(item, site_input->frames.at(item.id));
+                            item = site_presented_canvas_entity(item, site_input->frames.geometryAt(item));
                         }
                         std::erase_if(projection.labels, [&](const auto& item) {
-                            return !site_input->frames.contains(item.id);
+                            return !site_input->frames.auxiliary.contains(item.id);
                         });
                         for (auto& item : projection.labels) {
                             if (cancellation.is_cancelled()) break;
-                            item = site_presented_canvas_label(item, site_input->frames.at(item.id));
+                            item = site_presented_canvas_label(item, site_input->frames.auxiliary.at(item.id));
                         }
                         if (ordinary_capture) {
                             std::erase_if(projection.references,[&](const auto& item) {
-                                return !site_input->frames.contains(item.id);
+                                return !site_input->frames.auxiliary.contains(item.id);
                             });
                             for (auto& reference:projection.references)
-                                reference=site_presented_canvas_reference(reference,site_input->frames.at(reference.id));
+                                reference=site_presented_canvas_reference(reference,site_input->frames.auxiliary.at(reference.id));
                         }
                     }
                 }
@@ -23136,6 +23466,7 @@ public:
         auto input=std::make_shared<SiteEndpointPreviewInput>();
         input->geometry=m_site_edit_local_geometry; input->labels=m_site_edit_local_labels;
         input->frames=m_site_edit_frames; input->appraisal_area_ids=m_plan_appraisal_area_ids;
+        input->edit_frame=siteEditFrame(ids);
         input->label_font=canvas->font();
         if (selection_move) {
             input->move_annotation_targets=m_site_edit_annotation_targets;
@@ -23148,8 +23479,7 @@ public:
         for (const auto& item:input->geometry) {
             if ((item.type!=QStringLiteral("symbol") && item.type!=QStringLiteral("assembly_instance")) ||
                 item.segments.empty()) continue;
-            const auto placement=input->frames.find(item.id);
-            if (placement==input->frames.end()) continue;
+            if (!input->frames.findGeometry(item)) continue;
             input->component_presentations.emplace(std::pair{item.id,item.presentation_key},
                 boundary_bounds(item.segments));
         }
@@ -23210,6 +23540,7 @@ public:
             authority=std::make_shared<const SourceEditAuthority>(*m_site_edit_authority);
             auto input=std::make_shared<SiteEndpointPreviewInput>();
             input->frames=m_site_edit_frames;
+            input->edit_frame=siteEditFrame({id});
             m_opening_preview_site_input=std::move(input);
             m_opening_preview_site_generation=m_site_edit_generation;
         }
@@ -23695,7 +24026,7 @@ public:
                 if (!capture || !capture->input || !sitePreviewContextCurrent())
                     throw std::invalid_argument("The Site Plan resize source changed. Start again.");
                 const auto& input=capture->input;
-                const auto anchor=site_source_plan_point(canvas_anchor,input->frames.at(id));
+                const auto anchor=site_source_plan_point(canvas_anchor,input->edit_frame.value());
                 if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
                 const auto geometry=std::shared_ptr<const std::vector<CanvasEntity>>(input,&input->geometry);
                 PendingVertexPreview request{canvas,serial,m_document,m_entity_transform_source,geometry,geometry,
@@ -24010,6 +24341,7 @@ public:
     void publishPreparedCanvasEdit(const std::shared_ptr<PreparedCanvasEdit>& prepared,
         const std::shared_ptr<const CanvasEditSourceCapture>& capture) {
         if (!prepared || !capture) throw std::invalid_argument("The canvas edit has no admitted publication.");
+        requireSiteSelectionAdmission();
         if (m_recovery_ledger.empty()) {
             if (capture->workspace || capture->mirror || !prepared->document || prepared->workspace || prepared->mirror)
                 throw std::invalid_argument("The canvas edit's document authority changed.");
@@ -24255,7 +24587,7 @@ public:
                 const auto serial = canvas->boundaryVertexPreviewSerial();
                 if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
                 const auto& input = endpoint_capture->site_input;
-                const auto local = site_source_plan_point(position, input->frames.at(id));
+                const auto local = site_source_plan_point(position, input->edit_frame.value());
                 const auto geometry = std::shared_ptr<const std::vector<CanvasEntity>>(input, &input->geometry);
                 PendingVertexPreview request{canvas, serial, m_document, endpoint_capture->source, geometry, geometry,
                     std::shared_ptr<const std::vector<CanvasLabel>>(input, &input->labels),
@@ -24617,15 +24949,17 @@ public:
                 } else *result = computeOpeningWidthPreview(*source, *retained, id, scale, keep_start,
                     view_context.get(), command.get(), metric_units, labels.get(),edit_source,prepared.get());
                 if (*result && site_input && !cancellation.is_cancelled()) {
-                    std::erase_if(**result,[&](const auto& item){return !site_input->frames.contains(item.id);});
+                    std::erase_if(**result,[&](const auto& item){
+                        return !site_input->frames.geometry.contains({item.id,item.presentation_key});
+                    });
                     for (auto& item:**result) {
                         if (cancellation.is_cancelled()) break;
-                        item=site_presented_canvas_entity(item,site_input->frames.at(item.id));
+                        item=site_presented_canvas_entity(item,site_input->frames.geometryAt(item));
                     }
-                    std::erase_if(*labels,[&](const auto& item){return !site_input->frames.contains(item.id);});
+                    std::erase_if(*labels,[&](const auto& item){return !site_input->frames.auxiliary.contains(item.id);});
                     for (auto& item:*labels) {
                         if (cancellation.is_cancelled()) break;
-                        item=site_presented_canvas_label(item,site_input->frames.at(item.id));
+                        item=site_presented_canvas_label(item,site_input->frames.auxiliary.at(item.id));
                     }
                 }
                 return RegenerationReceipt{source->revision(), {}};
@@ -34345,7 +34679,7 @@ public:
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& visible_entities,
         Vec2 model_point,Vec2 displayed_point,double width,const std::string& layer_id,
         const std::optional<DrawingContext>& architectural_context,
-        const std::map<QString,SitePresentationPlacement>* site_frames=nullptr,
+        const SiteCanvasPresentationFrames* site_frames=nullptr,
         double station_increment=0.0) {
         if (!std::isfinite(station_increment) || station_increment<0.0)
             throw std::invalid_argument("The opening placement increment must be finite and nonnegative.");
@@ -34358,6 +34692,7 @@ public:
         std::optional<VisibleOpeningHost> result;
         auto nearest=std::numeric_limits<double>::infinity();
         for (const auto& visible:visible_entities) {
+            if (!visible.presentation_key.isEmpty() || visible.type!=QStringLiteral("wall")) continue;
             const auto owner=source.entities().find(visible.id.toStdString());
             if (owner==source.entities().end() || owner->second.type!="wall" ||
                 read_string(owner->second.properties,"layer_id")!=std::optional{layer_id} ||
@@ -34382,9 +34717,9 @@ public:
             auto point=model_point;
             std::optional<SitePresentationPlacement> frame;
             if (site_frames) {
-                const auto found=site_frames->find(visible.id);
-                if (found==site_frames->end()) continue;
-                frame=found->second;point=site_source_plan_point(displayed_point,*frame);
+                const auto* found=site_frames->findGeometry(visible);
+                if (!found) continue;
+                frame=*found;point=site_source_plan_point(displayed_point,*frame);
             }
             const auto& baseline=candidate.baseline;
             double station{},separation{};
@@ -37435,6 +37770,7 @@ private:
     }
 
     void applyAuthoredCommand(const Command& command) {
+        requireSiteCommandAdmission(command);
         if (m_recovery_ledger.empty()) {
             measureDocumentEdit([&] { m_document->apply(command); });
             return;
@@ -37457,6 +37793,10 @@ private:
     }
 
     void applyConstraintPreview(const ConstraintAuthoringPreview& preview) {
+        if (siteCanvas(m_architecturalCanvas)) {
+            const auto command=constraint_authoring_verified_command(authoringSnapshot(),preview,nullptr);
+            requireSiteCommandAdmission(command);
+        }
         if (m_recovery_ledger.empty()) {
             measureDocumentEdit([&] { apply_constraint_authoring(*m_document, preview); });
             return;
@@ -42643,7 +42983,9 @@ private:
         area_label_owners.reserve(static_cast<qsizetype>(all_geometry.size()));
         for (const auto& entity : all_geometry)
             if (!area_label_owners.contains(entity.id)) area_label_owners.insert(entity.id,&entity);
-        for (auto& label : all_labels) {
+        // Site labels must wait for the exact per-presentation placements.
+        // Comparing raw local coordinates here misses objects in other frames.
+        if (!options.site_plan) for (auto& label : all_labels) {
             if (!label.avoid_components || !visible_ids.contains(label.id.toStdString()) ||
                 presentation_hidden_ids.contains(label.id.toStdString())) continue;
             const auto label_owner = area_label_owners.value(label.id,nullptr);
@@ -42717,7 +43059,8 @@ private:
             if (visible_ids.contains(entity.id.toStdString()) &&
                 !presentation_hidden_ids.contains(entity.id.toStdString())) {
                 const auto source = snapshot.entities().find(entity.id.toStdString());
-                if (source != snapshot.entities().end() && source->second.type == "wall") {
+                if (source != snapshot.entities().end() && source->second.type == "wall" &&
+                    entity.type==QStringLiteral("wall") && entity.presentation_key.isEmpty()) {
                     const auto baseline = read_required_segment(source->second.properties, "baseline");
                     if (baseline) entity.drawing_alignment_segments = {*baseline};
                 }
@@ -42868,7 +43211,7 @@ private:
     }
 
     std::map<QString,SiteAnnotationTarget> preparedSiteAnnotationTargets(const DocumentSnapshot& source) {
-        std::map<QString,SitePresentationPlacement> frames;
+        SiteCanvasPresentationFrames frames;
         return sitePlanScene(source,frames,false).annotation_targets;
     }
 
@@ -42911,8 +43254,67 @@ private:
         return m_site_plan_active && m_workspace == Workspace::architectural && canvas == m_architecturalCanvas;
     }
 
+    static void layoutSitePlanAreaLabels(const DocumentSnapshot& source,
+        SnapshotPlanScene& scene,const SiteCanvasPresentationFrames& frames,
+        const QFont& font,const QPaintDevice* device) {
+        SitePlanLabelBoundsIndex obstacles;
+        std::map<SiteCanvasPresentationFrames::GeometryKey,const CanvasEntity*> owners;
+        for (const auto& item : scene.geometry) {
+            owners.emplace(SiteCanvasPresentationFrames::GeometryKey{item.id,item.presentation_key},&item);
+            if ((item.type==QStringLiteral("symbol") || item.type==QStringLiteral("assembly_instance")) &&
+                !item.segments.empty())
+                obstacles.insert(boundary_bounds(item.segments),frames.geometryAt(item));
+        }
+        std::vector<std::size_t> order;
+        for (std::size_t index=0;index<scene.labels.size();++index)
+            if (scene.labels[index].avoid_components) order.push_back(index);
+        std::stable_sort(order.begin(),order.end(),[&](auto first,auto second) {
+            return plan_label_instance_key(scene.labels[first])<plan_label_instance_key(scene.labels[second]);
+        });
+        std::map<std::string,SitePresentationPlacement,std::less<>> deduction_frames;
+        for (const auto index : order) {
+            auto& label=scene.labels[index];
+            const auto owner=owners.find({label.id,QString{}});
+            if (owner==owners.end() || owner->second->segments.empty()) continue;
+            const auto& label_frame=frames.auxiliary.at(label.id);
+            const auto& owner_frame=frames.geometryAt(*owner->second);
+            // Derived area labels use their boundary's frame. Refuse a broken
+            // projection instead of placing text against unrelated coordinates.
+            if (label_frame.forward.rotation_radians!=owner_frame.forward.rotation_radians ||
+                label_frame.forward.translation_m.x!=owner_frame.forward.translation_m.x ||
+                label_frame.forward.translation_m.y!=owner_frame.forward.translation_m.y)
+                throw std::invalid_argument("The Site Plan area label and its boundary have different frames.");
+            const auto footprint=plan_area_label_footprint(label,font,device);
+            std::vector<Bounds2> local_obstacles;
+            for (const auto& hole : owner->second->holes)
+                local_obstacles.push_back(boundary_bounds(hole));
+            if (scene.appraisal_area_ids.contains(label.id.toStdString())) {
+                const auto& area=source.entities().at(label.id.toStdString());
+                for (const auto& deduction_id : read_deduction_ids(area.properties)) {
+                    const auto deduction=source.entities().find(deduction_id);
+                    if (deduction==source.entities().end()) continue;
+                    try {
+                        const auto bounds=boundary_bounds(read_boundary(deduction->second.properties));
+                        auto frame=deduction_frames.find(deduction_id);
+                        if (frame==deduction_frames.end())
+                            frame=deduction_frames.emplace(deduction_id,
+                                resolve_site_presentation(source,deduction_id)).first;
+                        local_obstacles.push_back(site_reframed_plan_bounds(bounds,frame->second,label_frame));
+                    } catch (const std::invalid_argument&) {
+                        // Only the qualified report supplies quantities;
+                        // malformed deduction geometry is reported there.
+                    }
+                }
+            }
+            label=place_plan_area_label(label,owner->second->segments,
+                obstacles.forFrame(label_frame),local_obstacles,footprint);
+            obstacles.insert({{label.position.x+footprint.left(),label.position.y+footprint.top()},
+                {label.position.x+footprint.right(),label.position.y+footprint.bottom()}},label_frame);
+        }
+    }
+
     SnapshotPlanScene sitePlanScene(const DocumentSnapshot& source,
-        std::map<QString, SitePresentationPlacement>& frames,bool presented=true) {
+        SiteCanvasPresentationFrames& frames,bool presented=true) {
         const auto organization = organize_project(source);
         const auto active = organization.drawing_context(m_active_layer_id.toStdString());
         if (!active || active->property_id.empty())
@@ -42928,17 +43330,54 @@ private:
         // No floor scope: property membership below admits every visible floor.
         auto scene = projectSnapshotPlanScene(source, options, m_site_plan_scene_caches);
         std::set<QString> requested;
-        for (const auto& item : scene.geometry) requested.insert(item.id);
         for (const auto& item : scene.labels) requested.insert(item.id);
         for (const auto& item : scene.references) requested.insert(item.id);
         for (const auto& item : scene.grids) requested.insert(item.id);
         const auto& children=scene.annotation_targets;
         std::vector<std::string> model_ids;
-        std::vector<SiteAnnotationTarget> annotation_ids;
+        std::set<SiteAnnotationTarget> annotation_targets;
         std::map<QString,std::string> owners;
+        std::map<SiteCanvasPresentationFrames::GeometryKey,std::string> geometry_owners;
+        std::set<SiteCanvasPresentationFrames::GeometryKey> embedded_presentations;
+        const auto embedded_owner = [&](const QString& id) -> std::string {
+            if (const auto catalog=geometric_assembly_for_child(source,id.toStdString()))
+                return catalog->assembly_catalog_id;
+            if (const auto host=assembly_host_for_child(source,id.toStdString())) return *host;
+            throw std::invalid_argument("A Site Plan embedded presentation has no captured assembly owner.");
+        };
+        for (const auto& item : scene.geometry) {
+            const SiteCanvasPresentationFrames::GeometryKey key{item.id,item.presentation_key};
+            if (const auto child=children.find(item.id);child!=children.end()) {
+                if (!item.presentation_key.isEmpty())
+                    throw std::invalid_argument("A Site Plan annotation has an unexpected geometry profile key.");
+                annotation_targets.insert(child->second);
+                continue;
+            }
+            const auto persisted=source.entities().find(item.id.toStdString());
+            const bool potential_embedded=item.type==QStringLiteral("assembly_instance") &&
+                (!item.presentation_key.isEmpty() || persisted==source.entities().end());
+            const auto embedded=potential_embedded ? embeddedAssemblyChild(source,item.id.toStdString()) : std::nullopt;
+            if (embedded) {
+                const auto owner=embedded_owner(item.id);
+                if (!item.presentation_key.isEmpty()) {
+                    const auto catalog=geometric_assembly_for_child(source,item.id.toStdString());
+                    if (!catalog) throw std::invalid_argument("The Site Plan assembly profile owner is unavailable.");
+                }
+                geometry_owners.emplace(key,owner);
+                embedded_presentations.insert(key);
+            } else {
+                if (persisted==source.entities().end())
+                    throw std::invalid_argument("A Site Plan geometry presentation has no captured source owner.");
+                if (!item.presentation_key.isEmpty()) {
+                    if (item.type!=QStringLiteral("assembly_instance") || persisted->second.type!="assembly_instance")
+                        throw std::invalid_argument("A Site Plan geometry profile has no captured assembly source.");
+                }
+                geometry_owners.emplace(key,persisted->first);
+            }
+        }
         for (const auto& id : requested) {
             if (const auto child = children.find(id); child != children.end()) {
-                annotation_ids.push_back(child->second);
+                annotation_targets.insert(child->second);
             } else if (source.entities().contains(id.toStdString())) {
                 owners.emplace(id,id.toStdString());
             } else if (const auto catalog = geometric_assembly_for_child(source,id.toStdString())) {
@@ -42949,34 +43388,64 @@ private:
         }
         std::set<std::string> unique;
         for (const auto& [id,owner] : owners) { (void)id; unique.insert(owner); }
+        for (const auto& [key,owner] : geometry_owners) { (void)key; unique.insert(owner); }
         model_ids.assign(unique.begin(),unique.end());
         const auto models = resolve_site_presentations(source,model_ids);
+        const std::vector<SiteAnnotationTarget> annotation_ids(annotation_targets.begin(),annotation_targets.end());
         const auto annotations = resolve_site_annotation_presentations(source,annotation_ids);
         frames.clear();
+        const auto embedded_frame=[&](const QString& id,SitePresentationPlacement placement) {
+            // Catalog embedded transforms are authored in world coordinates.
+            // Host IDs bind organization membership only, never their pose.
+            auto host=assembly_host_for_child(source,id.toStdString());
+            if (const auto catalog=geometric_assembly_for_child(source,id.toStdString());
+                catalog && catalog->instance.placement) host=catalog->instance.placement->host_entity_id;
+            if (host)
+                if (const auto context=organization.drawing_context(*host)) placement.drawing_context=*context;
+            placement.source_frame={};placement.forward={};placement.inverse={};
+            return placement;
+        };
+        for (const auto& item:scene.geometry) {
+            // Keys and types come from the canonical projector of this exact
+            // snapshot; retaining them admits only those materialized profiles.
+            if (const auto child=children.find(item.id);child!=children.end()) {
+                frames.insertGeometry(item,annotations.at(child->second));
+                continue;
+            }
+            const SiteCanvasPresentationFrames::GeometryKey key{item.id,item.presentation_key};
+            auto placement=models.at(geometry_owners.at(key));
+            if (embedded_presentations.contains(key)) placement=embedded_frame(item.id,std::move(placement));
+            frames.insertGeometry(item,std::move(placement));
+        }
         for (const auto& [id,owner] : owners) {
             auto placement=models.at(owner);
-            if (!source.entities().contains(id.toStdString()) && !children.contains(id)) {
-                // Catalog embedded transforms are authored in world coordinates.
-                // Host IDs bind organization membership only, never their pose.
-                if (const auto host=assembly_host_for_child(source,id.toStdString()))
-                    if (const auto context=organization.drawing_context(*host)) placement.drawing_context=*context;
-                placement.source_frame={};placement.forward={};placement.inverse={};
-            }
-            frames.emplace(id,std::move(placement));
+            if (!source.entities().contains(id.toStdString())) placement=embedded_frame(id,std::move(placement));
+            frames.auxiliary.emplace(id,std::move(placement));
         }
-        for (const auto& [id,child] : children) frames.emplace(id,annotations.at(child));
+        for (const auto& [id,child] : children) frames.auxiliary.emplace(id,annotations.at(child));
         const auto belongs = [&](const auto& item) {
-            return frames.at(item.id).drawing_context.property_id == active->property_id;
+            return frames.auxiliary.at(item.id).drawing_context.property_id == active->property_id;
         };
-        std::erase_if(scene.geometry,[&](const auto& item) { return !belongs(item); });
+        std::erase_if(scene.geometry,[&](const auto& item) {
+            return frames.geometryAt(item).drawing_context.property_id != active->property_id;
+        });
         std::erase_if(scene.labels,[&](const auto& item) { return !belongs(item); });
         std::erase_if(scene.references,[&](const auto& item) { return !belongs(item); });
         std::erase_if(scene.grids,[&](const auto& item) { return !belongs(item); });
+        std::set<SiteCanvasPresentationFrames::GeometryKey> visible_geometry;
+        std::set<QString> visible_auxiliary;
+        for (const auto& item:scene.geometry) visible_geometry.emplace(item.id,item.presentation_key);
+        for (const auto& item:scene.labels) visible_auxiliary.insert(item.id);
+        for (const auto& item:scene.references) visible_auxiliary.insert(item.id);
+        for (const auto& item:scene.grids) visible_auxiliary.insert(item.id);
+        std::erase_if(frames.geometry,[&](const auto& entry) { return !visible_geometry.contains(entry.first); });
+        std::erase_if(frames.auxiliary,[&](const auto& entry) { return !visible_auxiliary.contains(entry.first); });
+        layoutSitePlanAreaLabels(source,scene,frames,options.label_font,options.label_device);
         for (auto& item : scene.geometry) {
-            const auto entity = source.entities().find(item.id.toStdString());
             const auto embedded=item.type==QStringLiteral("assembly_instance") &&
-                (!item.presentation_key.isEmpty() || entity==source.entities().end())
+                (!item.presentation_key.isEmpty() || !source.entities().contains(item.id.toStdString()))
                 ? embeddedAssemblyChild(source,item.id.toStdString()) : std::nullopt;
+            const auto entity = embedded ? source.entities().end() : source.entities().find(item.id.toStdString());
             if (!embedded && entity != source.entities().end() && entity->second.type == "wall") {
                 if (const auto baseline = read_required_segment(entity->second.properties,"baseline")) {
                     item.snap_points = {baseline->start,baseline->end};
@@ -43011,15 +43480,14 @@ private:
                         item.resize_frame->source_rotation_radians=angle;
                 } catch(const std::exception&) { /* Unsupported owners retain normal selection. */ }
             }
-            if (presented) item = site_presented_canvas_entity(item,frames.at(item.id));
-            if (entity!=source.entities().end() && entity->second.type=="roof" &&
-                !geometric_assembly_for_child(source,entity->first))
+            if (presented) item = site_presented_canvas_entity(item,frames.geometryAt(item));
+            if (entity!=source.entities().end() && item.type==QStringLiteral("roof") && entity->second.type=="roof")
                 retain_roof_plan_corner_handles(item,source.revision(),options.interactive && source.is_editable());
         }
         if (presented) {
-            for (auto& item : scene.labels) item = site_presented_canvas_label(item,frames.at(item.id));
-            for (auto& item : scene.references) item = site_presented_canvas_reference(item,frames.at(item.id));
-            for (auto& item : scene.grids) item = site_presented_canvas_reference_grid(item,frames.at(item.id));
+            for (auto& item : scene.labels) item = site_presented_canvas_label(item,frames.auxiliary.at(item.id));
+            for (auto& item : scene.references) item = site_presented_canvas_reference(item,frames.auxiliary.at(item.id));
+            for (auto& item : scene.grids) item = site_presented_canvas_reference_grid(item,frames.auxiliary.at(item.id));
         }
         return scene;
     }
@@ -43052,6 +43520,8 @@ private:
         m_site_publication_local_references.clear();m_site_publication_local_geometry.clear();m_site_publication_local_labels.clear();
         m_site_edit_source.reset();m_site_edit_authority.reset();
         m_site_edit_frames.clear();m_site_edit_annotation_targets.clear();
+        m_site_edit_geometry_selection.clear();
+        m_site_edit_selected_presentations.clear();
         m_site_edit_local_references.clear();m_site_edit_local_geometry.clear();m_site_edit_local_labels.clear();m_site_preview_labels.clear();m_site_preview_references.clear();
         m_site_pending_preview={};
     }
@@ -43111,6 +43581,7 @@ private:
     void captureSiteEdit(PlanCanvas* canvas) {
         if (!siteCanvas(canvas)) return;
         requireSitePublicationCurrent();
+        requireSiteSelectionAdmission();
         ++m_site_edit_generation;
         m_site_edit_source = m_site_publication_source;
         m_site_edit_authority = m_site_publication_authority;
@@ -43121,6 +43592,8 @@ private:
         // Geometry and ownership were resolved with the displayed immutable
         // source at publication; a press never regenerates or rebases them.
         m_site_edit_frames=m_site_plan_frames;
+        m_site_edit_geometry_selection=canvas->selectedEntityPresentations();
+        m_site_edit_selected_presentations=canvas->selectedIds();
         m_site_edit_annotation_targets=m_site_annotation_targets;
         m_site_edit_local_references=m_site_publication_local_references;
         m_site_edit_local_geometry=m_site_publication_local_geometry;
@@ -43131,37 +43604,205 @@ private:
         if (!siteCanvas(m_architecturalCanvas) || !m_site_edit_source || !m_site_edit_authority ||
             m_site_edit_publication_generation!=m_site_publication_generation ||
             m_site_edit_layer!=m_active_layer_id || m_site_edit_document.lock()!=m_document ||
+            m_architecturalCanvas->selectedEntityPresentations()!=m_site_edit_geometry_selection ||
+            m_architecturalCanvas->selectedIds()!=m_site_edit_selected_presentations ||
             !sourceEditAuthorityCurrent(*m_site_edit_authority))
             throw std::invalid_argument("The project or Site Plan changed during this gesture. Start the edit again.");
     }
 
-    const SitePresentationPlacement& siteEditFrame(const QStringList& ids) const {
-        requireSiteEditCurrent();
+    static const SitePresentationPlacement& admittedSiteSelectionFrame(
+        const DocumentSnapshot& source,const SiteCanvasPresentationFrames& frames,
+        const std::vector<CanvasEntityPresentationIdentity>& presentations,
+        const std::map<QString,SiteAnnotationTarget>& annotation_targets,
+        const QStringList& selected_presentations,const QStringList& ids) {
         if (ids.isEmpty()) throw std::invalid_argument("Choose a Site Plan object to edit.");
-        const auto& first = m_site_edit_frames.at(ids.front());
-        for (const auto& id : ids) {
-            const auto& next = m_site_edit_frames.at(id);
-            const auto& a=first.forward; const auto& b=next.forward;
-            if (next.source_frame != first.source_frame || a.rotation_radians!=b.rotation_radians ||
+        const SitePresentationPlacement* first{};
+        const auto admit=[&](const SitePresentationPlacement& next) {
+            if (!first) { first=&next;return; }
+            const auto& a=first->forward;const auto& b=next.forward;
+            if (next.source_frame!=first->source_frame || a.rotation_radians!=b.rotation_radians ||
                 a.translation_m.x!=b.translation_m.x || a.translation_m.y!=b.translation_m.y || a.translation_m.z!=b.translation_m.z)
                 throw std::invalid_argument("Edit one source frame at a time in Site Plan; the selection spans different building or annotation frames.");
+        };
+        for (const auto& id : ids) {
+            if (!selected_presentations.contains(id))
+                throw std::invalid_argument("The selected Site Plan presentation is not present in the displayed selection.");
+            const auto persisted=source.entities().find(id.toStdString());
+            const auto assembly_alias=embeddedAssemblyChild(source,id.toStdString());
+            // Existing commands address persisted bodies and catalog instances
+            // by raw IDs. They cannot choose between these separate owners,
+            // including a typed body selection with an unselected alias.
+            if (assembly_alias && persisted!=source.entities().end())
+                throw std::invalid_argument("The selected Site Plan ID names both an embedded assembly presentation and a persisted object. Select an unambiguous semantic target before editing.");
+            bool geometry_selected{};
+            for (const auto& identity:presentations) {
+                if (identity.id!=id) continue;
+                const auto& frame=frames.geometryAt(identity);
+                const auto embedded=identity.type==QStringLiteral("assembly_instance") &&
+                    (!identity.presentation_key.isEmpty() || persisted==source.entities().end())
+                    ? assembly_alias : std::nullopt;
+                if (!embedded) {
+                    if (const auto child=annotation_targets.find(id);child!=annotation_targets.end()) {
+                        const std::array<SiteAnnotationTarget,1> targets{child->second};
+                        (void)resolve_site_annotation_presentations(source,targets);
+                    } else if (persisted==source.entities().end() ||
+                        (!identity.presentation_key.isEmpty() &&
+                            (identity.type!=QStringLiteral("assembly_instance") || persisted->second.type!="assembly_instance")))
+                        throw std::invalid_argument("The selected Site Plan geometry has no unambiguous source target.");
+                }
+                geometry_selected=true;
+                admit(frame);
+            }
+            if (!geometry_selected) {
+                if (std::any_of(frames.geometry.begin(),frames.geometry.end(),[&](const auto& entry) {
+                    return entry.first.first==id;
+                })) throw std::invalid_argument("Select the exact displayed Site Plan geometry before editing; a raw ID does not authorize a presentation.");
+                const auto auxiliary=frames.auxiliary.find(id);
+                if (auxiliary==frames.auxiliary.end())
+                    throw std::invalid_argument("The selected Site Plan presentation is unavailable.");
+                if (const auto child=annotation_targets.find(id);child!=annotation_targets.end()) {
+                    const std::array<SiteAnnotationTarget,1> targets{child->second};
+                    (void)resolve_site_annotation_presentations(source,targets);
+                } else if (!source.entities().contains(id.toStdString()))
+                    throw std::invalid_argument("The selected Site Plan auxiliary presentation has no unambiguous source target.");
+                admit(auxiliary->second);
+            }
         }
-        return first;
+        return *first;
+    }
+
+    void requireSiteSelectionAdmission() const {
+        if (!siteCanvas(m_architecturalCanvas) || m_selected_ids.isEmpty()) return;
+        requireSitePublicationCurrent();
+        (void)admittedSiteSelectionFrame(*m_site_publication_source,m_site_plan_frames,
+            m_architecturalCanvas->selectedEntityPresentations(),m_site_annotation_targets,
+            m_architecturalCanvas->selectedIds(),m_selected_ids);
+    }
+
+    void requireSiteCommandAdmission(const Command& command) const {
+        if (!siteCanvas(m_architecturalCanvas) || m_selected_ids.isEmpty()) return;
+        // Only edits whose explicit footprint touches a selected semantic
+        // target need its selection authority. Unrelated project/layer edits
+        // and newly authored objects remain available with any selection.
+        std::set<std::string,std::less<>> targets;
+        const auto source=authoringSnapshot();
+        const auto constraint_owners=[&](const Entity& entity) {
+            if (entity.type!="constraint") return;
+            const auto decoded=decode_constraint_entity(entity);
+            if (!decoded.supported()) return;
+            for (const auto& binding : decoded.constraint->bindings) targets.insert(binding.owner_id);
+        };
+        const auto changes=[&](const auto& entries) {
+            for (const auto& change:entries) {
+                const auto& id=change.kind==EntityChangeKind::erase ? change.entity_id : change.entity.id;
+                targets.insert(id);
+                // A relation-only command can leave geometry byte-identical.
+                // Its old and proposed bindings still touch semantic owners.
+                if (const auto before=source.entities().find(id);before!=source.entities().end())
+                    constraint_owners(before->second);
+                if (change.kind==EntityChangeKind::upsert) constraint_owners(change.entity);
+            }
+        };
+        std::visit([&](const auto& value) {
+            if constexpr (requires { value.entity_changes; }) changes(value.entity_changes);
+            if constexpr (requires { value.translation; }) targets.insert(value.translation.boundary_id);
+            if constexpr (requires { value.transformation; }) targets.insert(value.transformation.boundary_id);
+            if constexpr (requires { value.edit; }) targets.insert(value.edit.boundary_id);
+            if constexpr (requires { value.translations; })
+                for (const auto& edit:value.translations) targets.insert(edit.boundary_id);
+            if constexpr (requires { value.transformations; })
+                for (const auto& edit:value.transformations) targets.insert(edit.boundary_id);
+            if constexpr (requires { value.boundary_edits; }) {
+                for (const auto& edit:value.boundary_edits) targets.insert(edit.boundary_id);
+                for (const auto& edit:value.wall_edits) targets.insert(edit.wall_id);
+                for (const auto& edit:value.exterior_source_edits) targets.insert(edit.boundary_id);
+                for (const auto& edit:value.measured_stroke_edits) targets.insert(edit.stroke_id);
+                changes(value.physical_entity_changes);changes(value.supplemental_entity_changes);
+                if (value.rigid_group_transform)
+                    for (const auto& edit:value.rigid_group_transform->transformations) targets.insert(edit.boundary_id);
+                if (value.exterior_corner_move) targets.insert(value.exterior_corner_move->boundary_id);
+                if (value.exterior_segment_resize) targets.insert(value.exterior_segment_resize->boundary_id);
+                if (value.exterior_segment_arc) targets.insert(value.exterior_segment_arc->boundary_id);
+                if (value.disto_measurement) targets.insert(value.disto_measurement->owner_id);
+                if (value.wall_split) targets.insert(value.wall_split->wall_id);
+                if (value.wall_merge) {
+                    targets.insert(value.wall_merge->first_wall_id);targets.insert(value.wall_merge->second_wall_id);
+                }
+                if (value.joint_translation) {
+                    for (const auto& id:value.joint_translation->rigid_boundary_ids) targets.insert(id);
+                    for (const auto& id:value.joint_translation->rigid_stroke_ids) targets.insert(id);
+                    for (const auto& id:value.joint_translation->partial_wall_ids) targets.insert(id);
+                    for (const auto& id:value.joint_translation->dimension_ids) targets.insert(id);
+                }
+                for (const auto& edit:value.dimension_placement_moves) targets.insert(edit.dimension_id);
+                if (!value.room_review_intent.is_null()) {
+                    const auto review=decode_physical_wall_room_review_intent(value.room_review_intent);
+                    targets.insert(review.selected_wall_id);
+                    std::set<std::string,std::less<>> rooms;
+                    for (const auto& decision : review.retained) {
+                        if (!decision.room_id.empty()) rooms.insert(decision.room_id);
+                        targets.insert(decision.replacement_dimension_ids.begin(),decision.replacement_dimension_ids.end());
+                    }
+                    for (const auto& decision : review.fresh)
+                        if (!decision.room_id.empty()) rooms.insert(decision.room_id);
+                    targets.insert(review.removed_reference_ids.begin(),review.removed_reference_ids.end());
+                    targets.insert(review.kept_reference_ids.begin(),review.kept_reference_ids.end());
+                    for (const auto& removal : review.relationship_removals) {
+                        targets.insert(removal.entity_id);
+                        rooms.insert(removal.removed_room_ids.begin(),removal.removed_room_ids.end());
+                    }
+                    targets.insert(rooms.begin(),rooms.end());
+                    for (const auto& [id,entity] : source.entities()) {
+                        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+                        const auto decoded=decode_boundary_dimension_entity(entity);
+                        if (decoded.supported() && rooms.contains(decoded.dimension->boundary_id)) targets.insert(id);
+                    }
+                }
+            }
+        },command);
+        if (targets.empty()) return;
+        QStringList requested;
+        const auto selected_presentations=m_architecturalCanvas->selectedIds();
+        for (const auto& id:m_selected_ids) {
+            // Tree-selected structural owners have no canvas presentation.
+            // This fence concerns presented object editing, not project setup.
+            if (!selected_presentations.contains(id)) continue;
+            bool touched=targets.contains(id.toStdString());
+            if (const auto child=m_site_annotation_targets.find(id);child!=m_site_annotation_targets.end())
+                touched=touched || targets.contains(child->second.owner_entity_id);
+            if (const auto embedded=embeddedAssemblyChild(source,id.toStdString())) {
+                touched=touched || targets.contains(embedded->assembly_catalog_id);
+                if (embedded->instance.placement)
+                    touched=touched || targets.contains(embedded->instance.placement->host_entity_id);
+            }
+            if (touched) requested.push_back(id);
+        }
+        if (requested.isEmpty()) return;
+        requireSitePublicationCurrent();
+        (void)admittedSiteSelectionFrame(*m_site_publication_source,m_site_plan_frames,
+            m_architecturalCanvas->selectedEntityPresentations(),m_site_annotation_targets,selected_presentations,requested);
+    }
+
+    const SitePresentationPlacement& siteEditFrame(const QStringList& ids) const {
+        requireSiteEditCurrent();
+        return admittedSiteSelectionFrame(*m_site_edit_source,m_site_edit_frames,
+            m_site_edit_geometry_selection,m_site_edit_annotation_targets,m_site_edit_selected_presentations,ids);
     }
 
     std::vector<CanvasEntity> sitePreviewGeometry(const DocumentSnapshot& candidate,
         const QStringList& ids,const SiteEditTransform& edit) {
         requireSiteEditCurrent();
-        std::map<QString,CanvasEntity> constraint_updates;
+        std::map<SiteCanvasPresentationFrames::GeometryKey,CanvasEntity> constraint_updates;
         const auto projection=computeConstraintGeometryProjection(*m_site_edit_source,candidate,
             m_site_edit_local_geometry,m_site_edit_local_geometry,m_site_edit_local_labels,m_metric_units,
             m_plan_appraisal_area_ids,{}, {},std::nullopt,m_architecturalCanvas->font());
         if (!projection) throw std::invalid_argument("The exact local Site Plan preview could not be regenerated.");
-        for (const auto& item : projection->entities) constraint_updates.emplace(item.id,item);
+        for (const auto& item : projection->entities) constraint_updates.emplace(
+            SiteCanvasPresentationFrames::GeometryKey{item.id,item.presentation_key},item);
         m_site_preview_labels.clear();m_site_preview_references.clear();
         for (const auto& label : projection->labels) {
             if(ids.contains(label.id) && m_site_edit_annotation_targets.contains(label.id)) continue;
-            if (const auto frame=m_site_edit_frames.find(label.id);frame!=m_site_edit_frames.end())
+            if (const auto frame=m_site_edit_frames.auxiliary.find(label.id);frame!=m_site_edit_frames.auxiliary.end())
                 m_site_preview_labels.push_back(site_presented_canvas_label(label,frame->second));
         }
         for (const auto& label : m_site_edit_local_labels) {
@@ -43172,7 +43813,7 @@ private:
             for(const auto& child:state.labels) if(child.id==target.child_id) {
                 proposed.position=child.placement.position;proposed.rotation_radians=child.placement.rotation_radians;proposed.scale=child.placement.scale;
             }
-            m_site_preview_labels.push_back(site_presented_canvas_label(proposed,m_site_edit_frames.at(label.id)));
+            m_site_preview_labels.push_back(site_presented_canvas_label(proposed,m_site_edit_frames.auxiliary.at(label.id)));
         }
         for (const auto& retained : m_site_edit_local_references) {
             if (!ids.contains(retained.id)) continue;
@@ -43182,14 +43823,17 @@ private:
             proposed.scale = read_number(owner.properties,"scale",1.0);
             proposed.rotation_degrees = read_number(owner.properties,"rotation_degrees",0.0);
             m_site_preview_references.push_back(site_presented_canvas_reference(
-                proposed,m_site_edit_frames.at(retained.id)));
+                proposed,m_site_edit_frames.auxiliary.at(retained.id)));
         }
         std::vector<CanvasEntity> result;
         result.reserve(m_site_edit_local_geometry.size());
         const SitePresentationPlacement rigid{{},SiteRigidTransform{edit.translation_m,edit.rotation_radians},{},{},{},{},{},0};
         for (const auto& item : m_site_edit_local_geometry) {
             auto proposed=item;
-            if (const auto found=constraint_updates.find(item.id);found!=constraint_updates.end()) proposed=found->second;
+            if (const auto found=constraint_updates.find({item.id,item.presentation_key});found!=constraint_updates.end()) {
+                if (found->second.type!=item.type) throw std::invalid_argument("The Site preview geometry changed presentation type.");
+                proposed=found->second;
+            }
             else if (ids.contains(item.id)) {
                 auto actual_edit=edit;
                 if (const auto typed=m_site_edit_annotation_targets.find(item.id);typed!=m_site_edit_annotation_targets.end()) {
@@ -43222,14 +43866,15 @@ private:
                 auto instance_rigid=rigid;instance_rigid.forward={actual_edit.translation_m,actual_edit.rotation_radians};
                 proposed=site_presented_canvas_entity(proposed,instance_rigid);
             }
-            if(const auto owner=candidate.entities().find(item.id.toStdString());owner!=candidate.entities().end() && owner->second.type=="wall") {
+            if(const auto owner=candidate.entities().find(item.id.toStdString());item.presentation_key.isEmpty() &&
+                item.type==QStringLiteral("wall") && owner!=candidate.entities().end() && owner->second.type=="wall") {
                 if(const auto baseline=read_required_segment(owner->second.properties,"baseline")) {
                     if (proposed.endpoint_baseline) proposed.endpoint_baseline=*baseline;
                     proposed.snap_points={baseline->start,baseline->end};proposed.snap_segments={*baseline};
                     proposed.drawing_alignment_segments={*baseline};
                 }
             }
-            if (ids.contains(item.id) && item.resize_frame) {
+            if (ids.contains(item.id) && item.resize_frame && item.presentation_key.isEmpty()) {
                 const auto owner=candidate.entities().find(item.id.toStdString());
                 if (owner!=candidate.entities().end() && physicalPlanAxisResizeFamily(owner->second.type)) {
                     if (proposed.segments.empty()) proposed.resize_frame.reset();
@@ -43251,7 +43896,7 @@ private:
                     proposed.resize_frame=frame;
                 }
             }
-            proposed=site_presented_canvas_entity(proposed,m_site_edit_frames.at(item.id));
+            proposed=site_presented_canvas_entity(proposed,m_site_edit_frames.geometryAt(item));
             result.push_back(std::move(proposed));
         }
         return result;
@@ -44540,7 +45185,7 @@ private:
             try {
                 const auto source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
                 const auto preparation_authority=captureSourceEditAuthority(*source);
-                std::map<QString,SitePresentationPlacement> frames;
+                SiteCanvasPresentationFrames frames;
                 auto local=sitePlanScene(*source,frames,false);
                 if(!sourceEditAuthorityCurrent(preparation_authority,false))
                     throw std::invalid_argument("The Site Plan source changed during scene preparation.");
@@ -44556,10 +45201,10 @@ private:
                 const auto context=local.organization.drawing_context(m_active_layer_id.toStdString());
                 const auto input_frame=context && context->complete()
                     ? std::optional{resolve_site_presentation(*source,context->building_id)} : std::nullopt;
-                for(auto& item:site.geometry)item=site_presented_canvas_entity(item,frames.at(item.id));
-                for(auto& item:site.labels)item=site_presented_canvas_label(item,frames.at(item.id));
-                for(auto& item:site.references)item=site_presented_canvas_reference(item,frames.at(item.id));
-                for(auto& item:site.grids)item=site_presented_canvas_reference_grid(item,frames.at(item.id));
+                for(auto& item:site.geometry)item=site_presented_canvas_entity(item,frames.geometryAt(item));
+                for(auto& item:site.labels)item=site_presented_canvas_label(item,frames.auxiliary.at(item.id));
+                for(auto& item:site.references)item=site_presented_canvas_reference(item,frames.auxiliary.at(item.id));
+                for(auto& item:site.grids)item=site_presented_canvas_reference_grid(item,frames.auxiliary.at(item.id));
                 if(!sourceEditAuthorityCurrent(authority, false))
                     throw std::invalid_argument("The Site Plan source changed during scene preparation.");
                 m_architecturalCanvas->setEntities(std::move(site.geometry));
@@ -51861,7 +52506,7 @@ private:
     std::optional<BuildingViewFrame> m_plan_opening_frame;
     std::shared_ptr<const DocumentSnapshot> m_site_opening_source;
     std::shared_ptr<const SourceEditAuthority> m_site_opening_authority;
-    std::map<QString, SitePresentationPlacement> m_site_opening_frames;
+    SiteCanvasPresentationFrames m_site_opening_frames;
     QString m_pending_opening_symbol_id;
     std::optional<DoorOperation> m_pending_opening_door_operation;
     std::optional<OpeningAssembly> m_pending_opening_profile;
@@ -51898,7 +52543,7 @@ private:
     std::function<void()> m_site_pending_preview;
     bool m_site_preview_posted{};
     bool m_site_preview_dispatching{};
-    std::map<QString, SitePresentationPlacement> m_site_plan_frames;
+    SiteCanvasPresentationFrames m_site_plan_frames;
     std::map<QString, SiteAnnotationTarget> m_site_annotation_targets;
     std::map<QString, SiteAnnotationTarget> m_site_edit_annotation_targets;
     std::vector<CanvasReference> m_site_edit_local_references;
@@ -51911,7 +52556,9 @@ private:
     std::weak_ptr<Document> m_site_edit_document;
     std::string m_site_edit_digest;
     QString m_site_edit_layer;
-    std::map<QString, SitePresentationPlacement> m_site_edit_frames;
+    SiteCanvasPresentationFrames m_site_edit_frames;
+    std::vector<CanvasEntityPresentationIdentity> m_site_edit_geometry_selection;
+    QStringList m_site_edit_selected_presentations;
     std::optional<SitePresentationPlacement> m_site_drawing_frame;
     std::string m_site_drawing_digest;
     std::string m_site_symbol_digest;
