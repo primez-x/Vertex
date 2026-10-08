@@ -2204,7 +2204,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
         proof.dump().size()>1024*1024)
         throw std::invalid_argument("Room review requires one bounded direct physical-wall proof");
     const auto version=proof.at("version").get<int>();
-    if (version!=1 && version!=23 && !ordinary_room_wall_proof_version(version))
+    if (version!=1 && version!=10 && version!=21 && version!=23 && !ordinary_room_wall_proof_version(version))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=command_from_json(proof);
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
@@ -2217,6 +2217,11 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     if (is_physical_wall_room_profile_review_command(decoded)) {
         if (command_to_json(decoded)!=proof)
             throw std::invalid_argument("Room review physical-wall profile proof must be canonical");
+        return decoded;
+    }
+    if (is_physical_wall_room_rigid_review_command(decoded)) {
+        if (command_to_json(decoded)!=proof)
+            throw std::invalid_argument("Room review rigid physical-wall proof must be canonical");
         return decoded;
     }
 #endif
@@ -2246,6 +2251,9 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
 }
 
 static int room_review_geometry_dialect(const Command& geometry) {
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (is_physical_wall_room_rigid_review_command(geometry)) return 28;
+#endif
     const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&geometry);
     if (!constrained || constrained->wall_edits.empty()) return 26;
     return constrained->curve_construction_completion ? 24 : 25;
@@ -5794,7 +5802,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23 && value.at("version") != 24 && value.at("version") != 25 && value.at("version") != 26 && value.at("version") != 27) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18 && value.at("version") != 19 && value.at("version") != 20 && value.at("version") != 21 && value.at("version") != 22 && value.at("version") != 23 && value.at("version") != 24 && value.at("version") != 25 && value.at("version") != 26 && value.at("version") != 27 && value.at("version") != 28) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -6013,7 +6021,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28) {
                 const bool geometry=value.at("version")!=18;
                 const bool batch=value.at("version")==27;
                 if (batch)

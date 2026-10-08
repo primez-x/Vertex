@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v79
+# Vertex project formats v1 through v80
+
+## Reviewed rigid wall and room changes (v80)
+
+Native format 80 and JSON/assets extraction version 78 retain single-review
+boundary envelope 28, or multi-context envelope 27 containing a qualified rigid
+child. The original full source fences and sequential entity-map fences retain
+their existing meanings. The underlying direct command is rigid envelope 10,
+mixed measured-source envelope 11 with rigid walls, or the narrow wall-callout
+completion 21 wrapping 10/11. At least one curved v4 or straight v5 wall proof
+must carry its genuine rigid operator. Ordinary v1/v2/v3 connected neighbors
+retain their existing authority; measured-only commands cannot enter this lane.
+
+Canonical replay validates the existing rigid geometry, hosted consequences,
+source measurements, constraints and saved callouts before room review receives
+authority. The wall-callout child retains its existing shared-operator contract.
+Room/selection/DISTO/joint/group/split/merge/corner/resize/arc/dimension-placement
+intents, curve construction, asset changes/references and arbitrary wrappers
+cannot borrow this completion. Physical-wall identity inventory remains exact.
+Final room replay and identity checks follow the admitted candidate in one event.
+
+The native reader floor is retained for these child proofs throughout all
+history, including within multi-context review. The ordinary envelope 25 and
+curve/profile envelopes 24/26 keep their original child contracts.
 
 ## Reviewed rooms across contexts and planes (v79)
 

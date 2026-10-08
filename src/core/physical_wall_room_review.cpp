@@ -569,6 +569,7 @@ bool exact_assets(const std::map<std::string,Asset,std::less<>>& left,
 }
 Json room_review_geometry_proof(const Command& geometry_command) {
     if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_rigid_review_command(geometry_command)) return command_to_json(geometry_command);
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if (!geometry || geometry->wall_edits.empty()) invalid("review requires a direct command with explicit wall edits");
     // Inspect typed lanes as well as the serialized discriminator: retained or
@@ -633,6 +634,51 @@ Json plain_room_review_proof(const ApplyBoundaryConstraintChanges& command) {
     return proof;
 }
 } // namespace
+
+bool is_physical_wall_room_rigid_review_command(const Command& command) {
+    try {
+        const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!geometry || geometry->wall_edits.empty()) return false;
+        // Refuse every other typed intent before entering the codec. In
+        // particular, an outer room proof must never recursively use this
+        // predicate while serializing or decoding its geometry child.
+        if (geometry->wall_split || geometry->wall_merge || geometry->exterior_corner_move ||
+            geometry->exterior_segment_resize || geometry->exterior_segment_arc ||
+            geometry->rigid_group_completion || geometry->rigid_group_transform ||
+            geometry->joint_translation_completion || geometry->joint_translation ||
+            geometry->room_review_completion || !geometry->room_review_intent.is_null() ||
+            geometry->room_review_geometry_completion || !geometry->room_review_geometry_proof.is_null() ||
+            geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
+            geometry->selection_completion || !geometry->selection_entity_changes.empty() ||
+            geometry->dimension_placement_completion || !geometry->dimension_placement_moves.empty() ||
+            geometry->disto_measurement_completion || geometry->disto_measurement ||
+            geometry->curve_construction_completion || geometry->supplemental_asset_reference_completion ||
+            !geometry->supplemental_asset_changes.empty()) return false;
+        bool qualified_rigid_wall=false;
+        for (const auto& edit:geometry->wall_edits) {
+            if (edit.version<1 || edit.version>5 || edit.curve_construction || edit.wall_classification) return false;
+            const bool rigid=edit.version==4 || edit.version==5;
+            if (rigid!=edit.rigid_transform.has_value()) return false;
+            qualified_rigid_wall=qualified_rigid_wall || rigid;
+        }
+        // Measured-only commands cannot acquire physical-room authority from
+        // an envelope marker or from unrelated source-completion payloads.
+        if (!qualified_rigid_wall) return false;
+        const auto proof=command_to_json(command);
+        if (proof.dump().size()>1024*1024 || proof.at("kind")!="apply_boundary_constraint_changes") return false;
+        const auto& version=proof.at("version");
+        if (version!=10 && version!=11 && version!=21) return false;
+        if (version==21) {
+            const auto& child=proof.at("proof");
+            if (child.at("kind")!="apply_boundary_constraint_changes" ||
+                (child.at("version")!=10 && child.at("version")!=11)) return false;
+        }
+        // The existing wall-edit codec validates curved/straight rigid proof
+        // meanings, and v21 validates one shared wall/stroke operator. Direct
+        // v10/v11 decoding never consults room-review admission.
+        return command_to_json(command_from_json(proof)).dump()==proof.dump();
+    } catch (const std::exception&) { return false; }
+}
 
 bool is_physical_wall_room_profile_review_command(const Command& command) {
     try {

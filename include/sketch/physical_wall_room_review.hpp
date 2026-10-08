@@ -67,13 +67,21 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 [[nodiscard]] PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomCorrespondenceReport& report,
     const PhysicalWallRoomReviewIntent& intent);
-// A direct ordinary wall-edit, profile change or curve command is admitted on a
+// A direct ordinary/rigid wall-edit, profile change or curve command is admitted on a
 // detached copy. Retained rooms remain available for correspondence review.
-// Only unwrapped ordinary wall-bearing v2/v3/v4/v5/v6/v7/v11 and direct
-// curve v23 proofs qualify. Profile changes require one existing-wall raw v1
+// Ordinary wall-bearing proofs require unwrapped v2/v3/v4/v5/v6/v7/v11;
+// curve proofs require direct v23. Profile changes require one existing-wall raw v1
 // upsert or a completed v6/v7 physical upsert with exterior redraws. Ordinary
 // connected/source consequences retain their existing child command authority.
 [[nodiscard]] bool is_physical_wall_room_profile_review_command(const Command& command);
+// Direct rigid v10 or mixed measured-source v11 requires at least one curved
+// v4/straight v5 wall proof. Connected neighbors keep ordinary v1/v2/v3
+// authority. A v21 wall-callout completion may wrap only that same v10/v11
+// child and retains the core's shared-transform validation. No other wrapper,
+// room intent, asset/reference lane or curve-construction proof qualifies.
+// This source-independent predicate checks the bounded canonical child shape;
+// Document preview still independently admits all geometry and consequences.
+[[nodiscard]] bool is_physical_wall_room_rigid_review_command(const Command& command);
 // Source-dependent profile admission preserves exact identity, extensions and
 // every nonprofile property, including opaque geometry and drawing context.
 // The declared profile includes height, thickness, layers and sloped top fields.

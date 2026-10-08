@@ -121,6 +121,14 @@ rederives each stage, requires complete affected-room coverage and reserves
 fresh identities across history and all stages. A missing representative source
 or a moved/stale plane still refuses; the interface never guesses a room context.
 
+Detached room review also admits the existing qualified rigid physical-wall
+children: direct 10, mixed measured-source 11 with rigid walls, or narrow saved
+wall-callout completion 21. Genuine curved-v4/straight-v5 wall operators retain
+their original core replay; ordinary connected neighbors keep their existing
+proofs. Envelope 28/native 80/extraction 78 protect single reviews, and a batch
+containing these children also requires native 80. This does not admit arbitrary
+transform wrappers or independently moving physical-room boundaries.
+
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
 chord length, but independent integrity validation measures the analytical arc.

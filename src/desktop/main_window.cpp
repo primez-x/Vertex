@@ -22897,6 +22897,22 @@ public:
                 const auto preview = preview_constraint_authoring(source, intent);
                 requireAcceptedConstraintPreview(preview);
                 if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The move source changed.");
+                if (ids.size() == 1 && model_ids.size() == 1 && (!canvas || !siteCanvas(canvas))) {
+                    std::optional<DocumentSnapshot> candidate;
+                    const auto command = constraint_authoring_verified_command(source, preview, &candidate);
+                    if (!candidate) throw std::invalid_argument("The wall move has no admitted geometry candidate.");
+                    if (affectedPhysicalWallRooms(source, candidate->entities(), model_ids.front().toStdString()) != 0) {
+                        if (canvas)
+                            throw std::invalid_argument("This wall drag has no retained horizontal-plan proposal for room review. Start the move again in a horizontal plan.");
+                        const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, *candidate, command,
+                            model_ids.front().toStdString(), authority, owner);
+                        if (!reviewed) { clearError(); refreshInspector(); return false; }
+                        // The review retains the exact admitted child and all
+                        // room decisions; publish one complete command.
+                        applyDocumentCommand(*reviewed);
+                        clearError(); refresh(); return true;
+                    }
+                }
                 applyConstraintPreview(preview);
                 clearError();
                 refresh();
@@ -26284,6 +26300,7 @@ public:
         if (!planMoveCaptureCurrent(capture) || canvas!=capture->canvas || ids!=m_wall_move_ids ||
             !preview || preview->capture!=capture ||
             preview->intent.ids!=ids || preview->edit_source!=m_model_move_edit_source ||
+            !preview->edit_source || !preview->prepared ||
             preview->serial==std::numeric_limits<std::uint64_t>::max() ||
             canvas->entitiesMovePreviewSerial()!=preview->serial+1 ||
             delta.x!=preview->intent.canvas_delta.x || delta.y!=preview->intent.canvas_delta.y)
@@ -26291,6 +26308,82 @@ public:
         const auto prepared=preview->prepared;
         const auto edit_source=preview->edit_source;
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
+        const auto source=m_wall_move_source;
+        const auto authority=m_wall_move_authority;
+        const auto selected=ids.size()==1 ? source->entities().find(ids.front().toStdString()) : source->entities().end();
+        if (selected!=source->entities().end() && selected->second.type=="wall") {
+            const auto candidate=[&] {
+                if (edit_source->workspace) {
+                    if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
+                        throw std::invalid_argument("The wall move's recovery authority changed.");
+                    return prepared->workspace->preview();
+                }
+                if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
+                    throw std::invalid_argument("The wall move's document authority changed.");
+                return prepared->document->preview();
+            }();
+            if (affectedPhysicalWallRooms(*source, candidate.entities(), selected->first) != 0) {
+                if (candidate.revision()==source->revision() || candidate.history().empty() ||
+                    !candidate.history().back().boundary_constraint_changes)
+                    throw std::invalid_argument("The wall move has no retained ordinary geometry command for room review.");
+                const auto& retained=*candidate.history().back().boundary_constraint_changes;
+                if (retained.wall_edits.empty() || retained.rigid_wall_transform_completion ||
+                    retained.rigid_group_completion || retained.rigid_group_transform ||
+                    retained.joint_translation_completion || retained.joint_translation ||
+                    std::any_of(retained.wall_edits.begin(),retained.wall_edits.end(),[](const auto& edit) {
+                        return (edit.version!=1 && edit.version!=2 && edit.version!=3) ||
+                            edit.rigid_transform || edit.curve_construction || edit.wall_classification;
+                    }))
+                    throw std::invalid_argument("The retained wall move is not an ordinary translation eligible for this room review.");
+                const Command command=retained;
+                const auto source_publication=m_plan_publication_source;
+                const auto move_fence=[&, capture, authority, edit_source, source_publication] {
+                    // The release ticket is consumed before the modal. Focus
+                    // and gesture serial may change; original source, recovery
+                    // authority and the displayed view remain binding.
+                    if (!capture->canvas || !capture->canvas->isVisible() || siteCanvas(capture->canvas) ||
+                        capture->canvas->viewCenter().x!=capture->center.x ||
+                        capture->canvas->viewCenter().y!=capture->center.y ||
+                        capture->canvas->viewScale()!=capture->zoom || capture->canvas->size()!=capture->size ||
+                        capture->canvas->devicePixelRatioF()!=capture->dpr ||
+                        capture->canvas->navigationGeneration()!=capture->navigation_generation ||
+                        capture->canvas->entitiesMovePreviewPending() || !capture->canvas->entitiesMovePreview().empty() ||
+                        m_plan_move_capture || m_plan_move_preview || m_plan_endpoint_capture || m_model_move_edit_source ||
+                        m_wall_move_source || m_wall_move_authority || m_vertex_preview_source || m_vertex_preview_authority ||
+                        m_pending_vertex_preview ||
+                        (m_running_vertex_preview && m_running_vertex_preview->plan_move_capture!=capture) ||
+                        source_publication!=m_plan_publication_source || !sourceEditAuthorityCurrent(*authority))
+                        throw std::invalid_argument("The captured wall move view or proposal changed during room review.");
+                    if (edit_source->mirror &&
+                        fullSnapshotDigest(m_document->snapshot())!=fullSnapshotDigest(*edit_source->mirror))
+                        throw std::invalid_argument("The project's save or recovery state changed during room review.");
+                };
+                if (m_pending_vertex_preview) {
+                    if (m_pending_vertex_preview->plan_move_capture!=capture)
+                        throw std::invalid_argument("Another geometry proposal is pending; start the wall move again.");
+                    m_pending_vertex_preview.reset();
+                }
+                if (m_running_vertex_preview) {
+                    if (m_running_vertex_preview->plan_move_capture!=capture)
+                        throw std::invalid_argument("Another geometry preview is running; start the wall move again.");
+                    (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+                }
+                // Discard transient publication authority while retaining the
+                // actual source and exact admitted proof in local copies.
+                m_plan_move_capture.reset(); m_model_move_edit_source.reset();
+                m_wall_move_source.reset(); m_wall_move_authority.reset();
+                m_wall_move_frame.reset(); m_wall_move_ids.clear();
+                m_vertex_preview_source.reset(); m_vertex_preview_authority.reset();
+                const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,candidate,command,
+                    selected->first,*authority,owner,move_fence);
+                if (!reviewed) { clearError(); refreshInspector(); return false; }
+                move_fence();
+                // The old prepared ticket is never published beside the
+                // accepted composite, which retains its complete authored child.
+                applyDocumentCommand(*reviewed);
+                clearError(); refresh(); return true;
+            }
+        }
         publishPreparedCanvasEdit(prepared,edit_source);
         clearError();refresh();return true;
     }

@@ -180,7 +180,7 @@ public:
     // Reviewed curve/physical-room composition requires v76 in all retained history.
     // Ordinary physical-wall/room composition requires v77 in all retained history.
     // Reviewed wall-profile changes require v78 in all retained history.
-    static constexpr std::uint32_t format_version = 79;
+    static constexpr std::uint32_t format_version = 80;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

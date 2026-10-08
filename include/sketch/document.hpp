@@ -400,6 +400,7 @@ struct ApplyBoundaryConstraintChanges {
     // Envelope twenty-four retains explicit curves; twenty-five retains
     // ordinary wall endpoint/length edits and their existing source redraws.
     // Twenty-six retains profile-only changes and qualified exterior refresh.
+    // Twenty-eight retains qualified rigid wall and saved-callout completion.
     // Full snapshot authority binds the original source; room entity lineage
     // binds the independently replayed wall candidate, with one final event.
     bool room_review_geometry_completion{};

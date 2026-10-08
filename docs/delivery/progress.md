@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 single-wall drag and qualified rigid room children
+
+Ordinary single-wall translation now checks retained-room consumers before
+publication. The horizontal canvas release uses the exact already admitted
+prepared candidate and retained ordinary wall proof. It consumes transient
+preview/publication captures before nested review while retaining the original
+source, recovery mirror, selection and viewport fences. Cancel publishes
+nothing; accepting publishes only the complete reviewed event. Unaffected moves
+retain their direct publication path. A nongesture singleton fallback can review
+its admitted command; an uncaptured canvas fallback affecting rooms refuses
+instead of recomputing a substitute gesture or retaining live transient tickets.
+The actual numerical transform entry, Site, mixed/multiselection and other
+mutation routes are not claimed covered by this drag change.
+
+Core room preparation now accepts qualified direct rigid wall children 10/11
+and narrow wall-callout completion 21. Genuine curved-v4/straight-v5 operators
+and ordinary connected neighbors retain their original reconstruction. Unrelated
+intents, wrappers and asset lanes refuse. Envelope 28/native 80/extraction 78
+retain single reviews; multi-context 27 with these children also retains native
+80. UI rotation routes remain to be connected to this core support.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+drag cancellation, persistence, Undo and rotation behavior remain unverified;
+the installed candidate is unchanged.
+
 ### October 8 reviewed rooms across floors, layers and physical planes
 
 Wall geometry/profile proposals now collect every affected retained-room group
@@ -2419,7 +2444,7 @@ passes. No installed ACL, profile or firewall was changed.
    commit, guessed classification, silent identity reassignment or reference
    loss is permitted. Wall profiles/sloped tops/layers, ordinary length/endpoint editing,
    explicit connected curve construction and their atomic room reviews, including
-   multi-context/plane completion, are
+   multi-context/plane completion and ordinary single-wall drag, are
    recorded above; do not restart them. Persisted tangent relations already exist in
    the codec, solver and dialog; do not reimplement them as a missing enum/UI feature.
    Connected rigid owner completion, per-owner group replay and copied-dependent
