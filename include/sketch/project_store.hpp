@@ -175,7 +175,8 @@ public:
     // Atomic connected geometry/architectural selection completion requires v71.
     // Per-owner connected translations require v72 in all retained history.
     // Per-owner rigid geometry groups require v73 in all retained history.
-    static constexpr std::uint32_t format_version = 73;
+    // Per-owner connected rigid operations require v74 in all retained history.
+    static constexpr std::uint32_t format_version = 74;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

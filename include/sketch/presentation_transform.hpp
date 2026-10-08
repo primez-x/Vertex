@@ -3,8 +3,10 @@
 #include "sketch/document.hpp"
 
 #include <cstddef>
+#include <map>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace sketch {
 
@@ -46,6 +48,18 @@ struct AreaCalloutPlacement {
 [[nodiscard]] ApplyEntityChanges area_callout_placement_command(
     const DocumentSnapshot& source, std::span<const AreaCalloutPlacement> placements,
     std::string_view fresh_annotation_owner_id, Revision expected_revision);
+
+// Reconstructs existing annotation owners from the original source, using only
+// the caller's captured operators for selected rigid closed boundaries. Final
+// geometry supplies independently derived anchors, never annotation authority.
+// Authored combined offsets and effective separated placements follow the
+// operator; automatic combined placement remains automatic. Missing separated
+// counterparts are added only to their existing provider when needed. Returned
+// upserts preserve raw sibling/context fields and create no entity identities.
+[[nodiscard]] std::vector<EntityChange> transformed_area_callout_entities(
+    const std::map<std::string, Entity, std::less<>>& source_entities,
+    const std::map<std::string, Entity, std::less<>>& final_geometry_entities,
+    const std::map<std::string, PlanarTransform, std::less<>>& owner_transforms);
 
 // Atomic rigid edit of selected label/symbol children and reference owners.
 // The caller must qualify one compatible stored position AND orientation frame

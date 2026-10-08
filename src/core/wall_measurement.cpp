@@ -3,8 +3,10 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_tolerances.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/wall_merge.hpp"
@@ -1925,7 +1927,8 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed,
     bool validate_final_constraints,
-    const std::map<std::string,Vec2,std::less<>>& rigid_offsets) {
+    const std::map<std::string,Vec2,std::less<>>& rigid_offsets,
+    const std::map<std::string,PlanarTransform,std::less<>>& rigid_transforms) {
     for (const auto& [id,offset]:rigid_offsets) {
         const auto owner=original.find(id);
         if (owner==original.end() || owner->second.type!="measurement_boundary" ||
@@ -1933,25 +1936,91 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
             !bounded(offset.x) || !bounded(offset.y) || (offset.x==0 && offset.y==0))
             reject("Rigid exterior translation requires a current retained source and a bounded nonzero offset");
     }
+    for (const auto& [id,transform]:rigid_transforms) {
+        validate_boundary_transform({id,transform});
+        const auto owner=original.find(id), retained=proposed.find(id);
+        if (owner==original.end() || owner->second.id!=id || owner->second.type!="measurement_boundary" ||
+            inspect_boundary_entity_version(owner->second).format!=BoundaryEntityFormat::identified_v1 ||
+            !owner->second.properties.contains("wall_measurement_source") ||
+            !wall_measurement_source_current(original,owner->second) || retained==proposed.end() ||
+            retained->second!=owner->second || rigid_offsets.contains(id))
+            reject("Rigid exterior transform requires a unique unchanged current measured source owner without a translation proof");
+        if (std::abs(transform.pivot.x)>1e12 || std::abs(transform.pivot.y)>1e12 ||
+            std::abs(transform.offset.x)>1e12 || std::abs(transform.offset.y)>1e12 ||
+            std::abs(transform.rotation_radians)>1e6)
+            reject("Rigid exterior transform exceeds the supported parameter range");
+    }
     const auto same_segment = [](const Segment& a, const Segment& b) {
         return a.start.x == b.start.x && a.start.y == b.start.y &&
             a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
     };
     struct Alignment { std::size_t offset{}; bool reversed{}; unsigned matches{}; };
-    const auto align = [&](const Boundary& actual, const Boundary& derived) {
+    const auto align = [&](const Boundary& actual, const Boundary& derived, const PlanarTransform* transform = nullptr) {
         Alignment result;
         if (actual.size() != derived.size()) return result;
+        // Match Document's rigid exterior policy exactly. Physical wall replay
+        // stays exact; only independently derived offset joins absorb roundoff.
+        const auto within_roundoff = [&](double a,double b,bool coordinate) {
+            double scale=std::max({1.0,std::abs(a),std::abs(b)});
+            if (coordinate)
+                scale=std::max({scale,std::abs(transform->pivot.x),std::abs(transform->pivot.y),
+                    std::abs(transform->offset.x),std::abs(transform->offset.y)});
+            return std::abs(a-b)<=128.0*std::numeric_limits<double>::epsilon()*scale;
+        };
+        const auto matches_segment = [&](const Segment& a,const Segment& b) {
+            if (!transform) return same_segment(a,b);
+            return within_roundoff(a.start.x,b.start.x,true) && within_roundoff(a.start.y,b.start.y,true) &&
+                within_roundoff(a.end.x,b.end.x,true) && within_roundoff(a.end.y,b.end.y,true) &&
+                within_roundoff(a.sweep_radians,b.sweep_radians,false);
+        };
         for (std::size_t offset = 0; offset < derived.size(); ++offset)
             for (const bool reverse : {false, true}) {
                 bool matched = true;
                 for (std::size_t i = 0; i < actual.size(); ++i) {
                     auto edge = derived[(offset + (reverse ? derived.size() - i : i)) % derived.size()];
                     if (reverse) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
-                    if (!same_segment(actual[i], edge)) { matched = false; break; }
+                    if (!matches_segment(actual[i], edge)) { matched = false; break; }
                 }
                 if (matched) { ++result.matches; result.offset = offset; result.reversed = reverse; }
             }
         return result;
+    };
+    const auto rigid_wall = [&](const Entity& source,const PlanarTransform& transform) {
+        validate_wall_curve_input(source);
+        validate_wall_length_input(source);
+        const auto old=baseline(source.properties), transformed=transform_segment(old,transform);
+        (void)baseline(Json{{"baseline",segment_record(transformed)}});
+        if (!std::isfinite(segment_length(transformed)) ||
+            std::abs(segment_length(old)-segment_length(transformed))>constraint_linear_tolerance_metres ||
+            std::abs(old.sweep_radians)!=std::abs(transformed.sweep_radians))
+            reject("Rigid exterior source wall must retain its physical length and sweep magnitude");
+        std::optional<Vec2> gradient;
+        bool changed_plane=false;
+        if (const auto plane=source.properties.find("top_plane");plane!=source.properties.end()) {
+            const auto original_gradient=parse_wall_top_plane(*plane);
+            const PlanarTransform basis{{},transform.rotation_radians,transform.flip_horizontal,transform.flip_vertical,{}};
+            gradient=transform_point(original_gradient,basis);
+            changed_plane=gradient->x!=original_gradient.x || gradient->y!=original_gradient.y;
+        }
+        if (same_segment(old,transformed) && !changed_plane) return source;
+        auto expected=source;
+        transform_wall_curve_input(expected,transform);
+        rebase_wall_length_receipt(expected,transformed);
+        if (gradient) {
+            expected.properties["top_plane"]=wall_top_plane_json(*gradient);
+            const auto rise=gradient->x*(transformed.end.x-transformed.start.x)+
+                gradient->y*(transformed.end.y-transformed.start.y);
+            if (!std::isfinite(rise)) reject("Rigid exterior source wall top plane exceeds the supported range");
+            expected.properties["slope_rise_m"]=rise;
+            if (expected.properties.contains("slope_rise")) expected.properties["slope_rise"]=rise;
+        }
+        auto& record=expected.properties.at("baseline");
+        record["start"]={transformed.start.x,transformed.start.y};
+        record["end"]={transformed.end.x,transformed.end.y};
+        record["sweep_radians"]=transformed.sweep_radians;
+        validate_wall_curve_input(expected);
+        validate_wall_length_input(expected);
+        return expected;
     };
     const auto elevation = [](const auto& entities, const Entity& wall) {
         const auto resolved = resolve_vertical_placement(entities, wall);
@@ -1960,6 +2029,7 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
         return value == resolved.properties.end() ? 0.0 : number(*value, "Wall elevation");
     };
     std::map<std::string, BoundaryGeometryEdit, std::less<>> updates;
+    std::set<std::string,std::less<>> qualified_rigid_owners;
     for (const auto& [id, owner] : original) {
         // Generic and anonymous imported boundaries retain their existing
         // explicit-upgrade/source-repair contract.
@@ -1976,7 +2046,8 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
                 affected = true; break;
             }
         }
-        if (!affected) continue;
+        const auto rigid=rigid_transforms.find(id);
+        if (!affected && rigid==rigid_transforms.end()) continue;
         const auto identified = decode_identified_boundary_entity(owner);
         const auto actual = boundary_geometry(identified);
         std::optional<WallMeasurementResult> old;
@@ -2006,9 +2077,17 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
             const auto after = proposed.find(wall_id);
             if (after == proposed.end() || after->second.type != "wall")
                 reject("Automatic exterior update requires every original source wall");
-            if (std::abs(elevation(original, original.at(wall_id)) - elevation(proposed, after->second)) >
-                default_geometry_tolerance_metres)
+            const auto before_elevation=elevation(original,original.at(wall_id));
+            const auto after_elevation=elevation(proposed,after->second);
+            if (std::abs(before_elevation-after_elevation)>default_geometry_tolerance_metres ||
+                (rigid!=rigid_transforms.end() && before_elevation!=after_elevation))
                 reject("Automatic exterior update must retain the original source elevation plane");
+            if (rigid!=rigid_transforms.end()) {
+                const auto& before=original.at(wall_id);
+                if (before.id!=wall_id || after->second.id!=wall_id ||
+                    after->second!=rigid_wall(before,rigid->second))
+                    reject("Rigid exterior source wall does not exactly replay its operator and retained metadata");
+            }
         }
         const auto before_context = organize_project(original).drawing_context(id);
         const auto after_context = organize_project(proposed).drawing_context(id);
@@ -2017,6 +2096,18 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
             before_context->building_id != after_context->building_id || before_context->floor_id != after_context->floor_id ||
             before_context->layer_id != after_context->layer_id)
             reject("Automatic exterior update must retain the measured owner's resolved hierarchy");
+        if (rigid!=rigid_transforms.end() && rigid->second.rotation_radians==0.0 &&
+            !rigid->second.flip_horizontal && !rigid->second.flip_vertical &&
+            rigid->second.offset.x==0.0 && rigid->second.offset.y==0.0) {
+            // Check replacement context/phase/plane admission, but keep the
+            // exact retained lineage, including sequential v2 translations.
+            const auto kernel=owner.properties.at("wall_measurement_source").at("version")==2 &&
+                owner.properties.at("wall_measurement_source").at("kernel")=="legacy_v1"
+                ? OffsetKernel::legacy_v1 : original_kernel;
+            (void)derive_replacement_exterior_wall_measurement_impl(proposed,owner,ids,kernel);
+            qualified_rigid_owners.insert(id);
+            continue;
+        }
         std::optional<Json> translation_proof;
         if (const auto move=rigid_offsets.find(id);move!=rigid_offsets.end()) {
             translation_proof=Json{{"version",1},{"offset",{move->second.x,move->second.y}}};
@@ -2042,12 +2133,29 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
                 reject("Automatic exterior update has duplicate physical edge lineage");
         auto retained = identified;
         const auto count = retained.segments.size();
-        const auto replacement_reversed=replacement_edge_reversed(correspondence.reversed,old->boundary,replacement.boundary);
+        Alignment rigid_correspondence;
+        if (rigid!=rigid_transforms.end()) {
+            Boundary expected;
+            for (const auto& edge:actual) {
+                const auto transformed=transform_segment(edge,rigid->second);
+                (void)baseline(Json{{"baseline",segment_record(transformed)}});
+                expected.push_back(transformed);
+            }
+            rigid_correspondence=align(expected,replacement.boundary,&rigid->second);
+            if (rigid_correspondence.matches!=1)
+                reject("Rigid exterior requires one unique machine-precision analytical correspondence");
+            qualified_rigid_owners.insert(id);
+        }
+        const auto replacement_reversed=rigid!=rigid_transforms.end() ? rigid_correspondence.reversed :
+            replacement_edge_reversed(correspondence.reversed,old->boundary,replacement.boundary);
         std::vector<std::size_t> mapped;
         for (std::size_t i = 0; i < count; ++i) {
             const auto old_index = (correspondence.offset + (correspondence.reversed ? count - i : i)) % count;
             const auto target = new_edges.find(old->ordered_wall_ids.at(old_index));
             if (target == new_edges.end()) reject("Automatic exterior update lost physical wall lineage");
+            if (rigid!=rigid_transforms.end() && target->second!=
+                (rigid_correspondence.offset+(replacement_reversed ? count-i : i))%count)
+                reject("Rigid exterior analytical correspondence changed physical wall lineage");
             mapped.push_back(target->second);
             auto edge = replacement.boundary[target->second];
             if (replacement_reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
@@ -2072,6 +2180,11 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     for (const auto& [id,offset]:rigid_offsets)
         if (!updates.contains(id) || !updates.at(id).wall_source_translation)
             reject("Rigid exterior translation did not produce its required physical source completion");
+    for (const auto& [id,transform]:rigid_transforms) {
+        (void)transform;
+        if (!qualified_rigid_owners.contains(id))
+            reject("Rigid exterior transform did not qualify its retained physical source completion");
+    }
     std::vector<BoundaryGeometryEdit> result;
     std::set<std::string> visiting, visited;
     const auto append = [&](const auto& self, const std::string& id) -> void {
@@ -2090,6 +2203,11 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     };
     for (const auto& [id, edit] : updates) { (void)edit; append(append, id); }
     auto completed = edited_boundary_entities_batch(proposed, result);
+    for (const auto& [id,transform]:rigid_transforms) {
+        (void)transform;
+        if (!wall_measurement_source_current(completed,completed.at(id)))
+            reject("Rigid exterior transform left its measured source owner stale");
+    }
     if (const auto unsupported = validate_boundary_integrity(completed)) reject(*unsupported);
     if (validate_final_constraints)
         if (const auto unsupported = validate_constraint_integrity(completed)) reject(*unsupported);

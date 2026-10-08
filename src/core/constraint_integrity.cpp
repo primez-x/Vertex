@@ -356,8 +356,68 @@ bool topology_same_plane(const Entity& first,const Entity& second,const ProjectO
     return std::max(low_a,low_b)<std::min(high_a,high_b)+linear_tolerance;
 }
 
+using TopologyRigidTransforms = std::map<std::string,PlanarTransform,std::less<>>;
+
+void validate_topology_rigid_transforms(const Entities& before,const Entities& after,
+    const std::set<std::string,std::less<>>& verified_ids,const TopologyRigidTransforms& transforms) {
+    if (transforms.empty()) return;
+    const auto source_organization=organize_project(before);
+    const auto candidate_organization=organize_project(after);
+    for (const auto& [id,transform] : transforms) {
+        if (!std::isfinite(transform.pivot.x) || !std::isfinite(transform.pivot.y) ||
+            !std::isfinite(transform.offset.x) || !std::isfinite(transform.offset.y) ||
+            !std::isfinite(transform.rotation_radians) ||
+            std::abs(transform.pivot.x)>1e12 || std::abs(transform.pivot.y)>1e12 ||
+            std::abs(transform.offset.x)>1e12 || std::abs(transform.offset.y)>1e12 ||
+            std::abs(transform.rotation_radians)>1e6)
+            invalid("Constraint topology rigid operator exceeds the supported parameter range: "+id);
+        const auto source=before.find(id); const auto candidate=after.find(id);
+        if (!verified_ids.contains(id) || source==before.end() || candidate==after.end() ||
+            !topology_physical_wall(source->second) || !topology_physical_wall(candidate->second) ||
+            source->second.id!=id || candidate->second.id!=id ||
+            source->second.required!=candidate->second.required)
+            invalid("Constraint topology rigid operator requires a verified physical wall identity: "+id);
+        const auto& old=source->second; const auto& current=candidate->second;
+        for (const auto* key : {"thickness_m","thickness","height_m","height","elevation_m","elevation",
+                               "property_id","building_id","floor_id","layer_id","phase_id","vertical_placement"}) {
+            if (old.properties.contains(key)!=current.properties.contains(key) ||
+                (old.properties.contains(key) && old.properties.at(key)!=current.properties.at(key)))
+                invalid("Constraint topology rigid operator must preserve physical dimensions and context: "+id);
+        }
+        const auto source_context=source_organization.drawing_context(id);
+        const auto candidate_context=candidate_organization.drawing_context(id);
+        if (source_context!=candidate_context ||
+            ((!source_context || !candidate_context) &&
+             (old.properties.contains("property_id") || old.properties.contains("building_id") ||
+              old.properties.contains("floor_id") || old.properties.contains("layer_id"))))
+            invalid("Constraint topology rigid operator requires the same resolved drawing context: "+id);
+        const auto original=topology_baseline(old);
+        const auto expected=transform_segment(original,transform);
+        const auto actual=topology_baseline(current);
+        const auto transformed_length=segment_length(expected);
+        if (!same_point(expected.start,actual.start) || !same_point(expected.end,actual.end) ||
+            expected.sweep_radians!=actual.sweep_radians || !std::isfinite(transformed_length) ||
+            transformed_length<=default_geometry_tolerance_metres ||
+            std::abs(segment_length(original)-transformed_length)>linear_tolerance)
+            invalid("Constraint topology rigid wall differs from its exact source transform: "+id);
+    }
+}
+
+template<class Range,class OwnerId>
+const PlanarTransform* topology_shared_reflection(const Range& members,
+    const TopologyRigidTransforms& transforms,OwnerId owner_id) {
+    const PlanarTransform* shared=nullptr;
+    for (const auto& member : members) {
+        const auto found=transforms.find(owner_id(member));
+        if (found==transforms.end() || found->second.flip_horizontal==found->second.flip_vertical ||
+            (shared && !(found->second==*shared))) return nullptr;
+        shared=&found->second;
+    }
+    return shared;
+}
+
 void validate_topology_cycle(const std::vector<std::pair<std::string,bool>>& edges,
-    const Entities& before,const Entities& after) {
+    const Entities& before,const Entities& after,const TopologyRigidTransforms& transforms) {
     const auto loop=[&](const Entities& entities) {
         Boundary result;
         for (const auto& [id,forward] : edges) {
@@ -372,14 +432,20 @@ void validate_topology_cycle(const std::vector<std::pair<std::string,bool>>& edg
     // solving. Protect existing valid cycles without inventing old closure.
     if (!validate_boundary(old_loop,linear_tolerance).empty()) return;
     const auto old_area=signed_area(old_loop); const auto area=signed_area(new_loop);
+    const auto reflection=topology_shared_reflection(edges,transforms,[](const auto& edge) -> const std::string& {
+        return edge.first;
+    });
     if (!validate_boundary(new_loop,linear_tolerance).empty() || !std::isfinite(area) ||
-        std::abs(area)<=linear_tolerance*linear_tolerance || (old_area>0)!=(area>0))
+        std::abs(area)<=linear_tolerance*linear_tolerance ||
+        ((old_area>0)!=(area>0))!=(reflection!=nullptr))
         invalid("Constraint edit would change analytical wall-cycle winding or topology");
 }
 }
 
 void validate_constraint_edit_topology(const Entities& before,const Entities& after,
-    const std::set<std::string,std::less<>>& verified_rigid_wall_ids) {
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids,
+    const TopologyRigidTransforms& verified_rigid_wall_transforms) {
+    validate_topology_rigid_transforms(before,after,verified_rigid_wall_ids,verified_rigid_wall_transforms);
     std::set<std::string,std::less<>> changed_walls;
     for (const auto& [id,owner] : after) {
         const auto previous=before.find(id);
@@ -539,6 +605,8 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
         if (block.size()<2 || std::none_of(block.begin(),block.end(),[&](const auto index) {
             return changed_walls.contains(edges[index].id);
         })) return;
+        const auto reflection=topology_shared_reflection(block,verified_rigid_wall_transforms,
+            [&](const auto index) -> const std::string& { return edges[index].id; });
         std::map<std::string,std::vector<std::pair<std::size_t,bool>>,std::less<>> incident;
         for (const auto index : block) {
             incident[edges[index].first].emplace_back(index,true);
@@ -547,7 +615,8 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
         for (const auto& [vertex,branches] : incident) {
             (void)vertex;
             if (branches.size()<3) continue;
-            const auto order=[&](const Entities& entities) -> std::optional<std::vector<std::string>> {
+            const auto order=[&](const Entities& entities,const PlanarTransform* transform=nullptr)
+                -> std::optional<std::vector<std::string>> {
                 struct Ray {
                     double angle,angle_roundoff,curvature,chord_length;
                     std::string identity;
@@ -557,7 +626,8 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
                 std::optional<Vec2> position;
                 const auto pi=std::acos(-1.0);
                 for (const auto& [index,forward] : branches) {
-                    const auto segment=topology_baseline(entities.at(edges[index].id));
+                    auto segment=topology_baseline(entities.at(edges[index].id));
+                    if (transform) segment=transform_segment(segment,*transform);
                     const auto endpoint=forward ? segment.start : segment.end;
                     if (position && !topology_near(*position,endpoint)) return std::nullopt;
                     if (!position) position=endpoint;
@@ -636,8 +706,12 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
             };
             const auto old_order=order(before);
             if (!old_order) continue; // Do not invent a previously closed fan.
+            // Reflect the analytical source rays, including signed curvature
+            // and overlapping ties, only for a wholly qualified cyclic block.
+            // Source entities/contact witnesses remain in their original frame.
+            const auto expected_order=reflection ? order(before,reflection) : old_order;
             const auto current_order=order(after);
-            if (!current_order || *old_order!=*current_order)
+            if (!expected_order || !current_order || *expected_order!=*current_order)
                 invalid("Constraint edit would change analytical wall-cycle branch topology");
         }
     };
@@ -717,7 +791,7 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
             affected=affected || changed_walls.contains(selected.id);
             vertex=previous;
         }
-        if (affected) validate_topology_cycle(loop,before,after);
+        if (affected) validate_topology_cycle(loop,before,after,verified_rigid_wall_transforms);
     }
     };
     for (const auto& group : groups) { validate_cycles(before,group); validate_cycles(after,group); }

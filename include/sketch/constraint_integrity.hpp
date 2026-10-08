@@ -23,10 +23,13 @@ void validate_constraint_transition(
 // Endpoint-authoring and typed replay share this solver-free admission.
 // Only changed geometry is checked against the original drawing topology;
 // ordinary explicit construction/transform commands do not call this policy.
+// A shared reflection may reverse a complete physical cycle/block only after
+// each supplied operator is checked against that wall's retained source.
 void validate_constraint_edit_topology(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
-    const std::set<std::string,std::less<>>& verified_rigid_wall_ids = {});
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids = {},
+    const std::map<std::string,PlanarTransform,std::less<>>& verified_rigid_wall_transforms = {});
 
 // Exterior-corner v8 alone validates active physical phase geometry at its
 // resolved elevations. Historical typed commands keep the original policy.

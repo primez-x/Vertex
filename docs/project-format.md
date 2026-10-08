@@ -1,4 +1,48 @@
-# Vertex project formats v1 through v73
+# Vertex project formats v1 through v74
+
+## Connected rigid owner edits (v74)
+
+Native format 74 and JSON/assets extraction version 72 retain nested joint
+intent version 4 inside boundary-constraint envelope 17 and its optional
+selection-completion envelope 22. The existing selection arrays identify rigid
+boundaries, measured strokes and physical walls; `owner_transformations`
+contains exactly one bounded saved-coordinate operator for every selected
+geometric owner. `per_owner_rigid_completion` is true, even if malformed input
+removes the operators. Geometry never borrows the displayed `offset`, which
+may be zero for a rotation. Version 4 excludes `owner_translations`; independent
+dimension and presentation targets retain their explicit translation semantics.
+The existing aggregate 4,096-target and 1 MiB proof limits apply.
+
+One connected solve pins selected geometric points to their captured operators.
+Unselected hard-related geometry can solve without joining the rigid selection.
+Fixed anchors keep their source coordinates; contradictory targets refuse the
+whole command. Quarter-turn axis locks reconstruct from the source. Selected
+wall/stroke geometry and ordinary boundary receipts retain exact operator
+replay, curve sweep, stable identities and entered measurements. Current source
+cohorts and deductions remain required and compatible.
+
+Source-bound measured areas use independently derived final wall/stroke faces.
+A unique cyclic or reversed correspondence at the established machine-roundoff
+bound retains their original segment/vertex identities and exact current source
+lineage. These derived coordinates, rather than raw transformed coordinate bits,
+are their final geometry. Unrelated or ambiguous matches refuse. A complete
+physical wall cycle or cyclic branch block may invert winding only when every
+member has the same independently verified reflective operator; original
+endpoint/contact evidence and intersection protections remain intact.
+
+Hosted opening reflection, wall top-plane basis and owned measurement placement
+reconstruct from the original source once. Generated area callouts use their
+effective source positions and final analytical anchors, including default
+separated name/value offsets and text directions. Missing separated counterparts
+materialize only in an existing provider. Automatic combined placement stays
+automatic. Saved measurements retain automatic/manual provenance. In version 4 only,
+independent annotation fields in the outer selection lane can join geometry-owned
+fields in the same container. Original row identities/order and competing field
+edits are checked independently. Only the reconstructed callout suffix can extend
+geometry-owned rows; ordinary selection inventories stay fixed. Supported schema
+floors reconcile without a downgrade. This grants no raw boundary or constraint authority.
+All retained history raises the reader floor from marker or operator-list
+presence. Historical joint versions and outer completion behavior stay unchanged.
 
 ## Per-owner rigid geometry groups (v73)
 

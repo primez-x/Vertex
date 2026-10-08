@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 connected rigid geometry and live callouts
+
+The connected geometry lane now carries per-owner rotation/reflection operators
+in one source-derived command. Selected walls, measured strokes and ordinary
+boundaries retain exact targets while compatible unselected neighbors solve.
+Fixed anchors remain fixed. Source-bound measured areas retain their child IDs
+using unique correspondence to independently derived final wall/stroke faces;
+mixed producer deductions reconstruct in dependency order. Complete wall cycles
+and branch blocks admit reflection only with matching qualified operators.
+
+Source review identified and corrected omitted producer coverage and unchanged
+selected-wall rejection. Retained v4 intent must include every expanded source
+wall/stroke and operator. Identity owners and walls on the reflection axis keep
+their original geometry while their openings and other consequences still follow.
+Native format 74/extraction 72 retain the new nested intent through all history.
+
+Area names and values reconstruct their effective positions and directions from
+the original source and final analytical anchors. Automatic combined placement
+stays automatic. A missing separated counterpart materializes in its existing
+provider when required by rotation. Independently selected furniture/text can
+share that annotation container; ordinary rows cannot borrow the source-derived
+append authority. The UI does not repeat the core's callout placement round trip.
+
+These are source changes, not installed or accepted behavior. No builds, tests,
+probes, launches, packages or installations ran. Compilation, interactions,
+persistence and performance remain unverified. Stale/ambiguous source matches,
+incompatible constraints, independently moved physical-room consumers and exact
+fixed-anchor conflicts still refuse; those refusals are not parity certification.
+
 ### October 8 group replay and copied dependent selection
 
 Rigid boundary groups now validate their original source once, copy its entity
@@ -2271,11 +2300,14 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Extend the connected geometry solve to rigid owner operators, so a selected
-   rigid group can rotate or reflect while unselected related geometry solves
-   in the same event. Preserve exact selected geometry and fixed anchors.
-   Per-owner group replay and copied-dependent selection source changes are
-   recorded above; do not restart them.
+1. Route explicit curved-wall construction edits through the connected solve,
+   preserving the new selected sweep/endpoints and construction receipt while
+   tangent-related neighbors solve in the same event. The current curved-wall
+   properties editor commits a raw existing-wall replacement and does not use
+   connected preview. Persisted tangent relations already exist in the codec,
+   solver and dialog; do not reimplement them as a missing enum/UI feature.
+   Connected rigid owner completion, per-owner group replay and copied-dependent
+   selection source changes are recorded above; do not restart them.
    Numerical preview typing already uses a 120 ms debounce and immediately
    retires the previous candidate/Apply authority; preserve that implementation.
    Per-owner Site movement, rotation and reflection source work is recorded

@@ -278,6 +278,11 @@ struct JointTranslationIntent {
     std::vector<JointOwnerTranslationIntent> dimension_translations;
     // Keep version three even when malformed target lists are empty.
     bool per_owner_translation_completion{};
+    // Nested version four pins each selected geometric owner through its
+    // captured rigid operator. The displayed offset is never geometry authority.
+    // The marker survives missing vectors so damaged proofs cannot downgrade.
+    std::vector<RigidOwnerTransformation> owner_transformations;
+    bool per_owner_rigid_completion{};
 };
 
 // One observation of an existing owner's supported field. This carries no
@@ -608,5 +613,15 @@ private:
 [[nodiscard]] Command complete_selection_command(
     const DocumentSnapshot& source, const Command& geometry_command,
     const std::vector<EntityChange>& ordinary_changes, std::string message = {});
+
+// Join independent edits of one saved annotation container from the same
+// original. Preserve identities/order; conflicting source-relative fields refuse.
+// Source modes require independently reconstructed geometry. Only missing
+// separated callout counterparts may extend its override suffix; ordinary
+// selection rows stay fixed. A reconstructed proof may echo that exact suffix.
+enum class AnnotationMergeMode { existing_rows, source_callout_geometry, source_callout_proof };
+[[nodiscard]] Entity merge_selection_annotation_entities(
+    const Entity& original, const Entity& geometry, const Entity& ordinary,
+    AnnotationMergeMode mode = AnnotationMergeMode::existing_rows);
 
 }  // namespace sketch

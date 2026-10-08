@@ -7922,6 +7922,14 @@ public:
         const bool linear_identity=(!transform.flip_horizontal && !transform.flip_vertical && angle==0.0) ||
             (transform.flip_horizontal && transform.flip_vertical && std::abs(angle)==std::numbers::pi);
         if (linear_identity && transform.offset.x==0.0 && transform.offset.y==0.0) return command;
+        if (const auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+            proof && proof->joint_translation &&
+            (proof->joint_translation->per_owner_rigid_completion || !proof->joint_translation->owner_transformations.empty())) {
+            // The typed v4 lane derives callouts once against final source
+            // geometry. Repeating an absolute/relative placement round trip
+            // here can disagree with its machine-precision face alignment.
+            return command;
+        }
         const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
         if (ordinary && ordinary->entity_changes.empty()) return command;
         const auto candidate=Document::preview_command(source,command);
@@ -8034,6 +8042,7 @@ public:
         const auto candidate=ordinary && ordinary->entity_changes.empty() ? source :
             Document::preview_command(source,command);
         std::set<std::string,std::less<>> merged;
+        std::map<std::string,Entity,std::less<>> expected_payloads;
         std::vector<EntityChange> supplements;
         const auto same_payload=[](const Entity& a,const Entity& b) {
             return a==b && a.properties.dump()==b.properties.dump() && a.extensions.dump()==b.extensions.dump();
@@ -8045,12 +8054,27 @@ public:
             const auto current=candidate.entities().find(change.entity.id);
             if (before==source.entities().end() || current==candidate.entities().end())
                 throw std::invalid_argument("A selection edit lost its captured dependency identity.");
+            auto expected=change.entity;
             // Both lanes replay the original source. Equal consequences join
             // once; differing results never overwrite another owner's solve.
             if (!same_payload(current->second,before->second)) {
-                if (!same_payload(current->second,change.entity))
-                    throw std::invalid_argument("Selected objects require differing edits of the same dependency: "+change.entity.id);
-                continue;
+                if (!same_payload(current->second,change.entity)) {
+                    const auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+                    const bool connected_rigid=proof && proof->joint_translation &&
+                        (proof->joint_translation->per_owner_rigid_completion || !proof->joint_translation->owner_transformations.empty());
+                    if (!connected_rigid || before->second.type!=kAnnotationEntityType ||
+                        change.entity.type!=kAnnotationEntityType)
+                        throw std::invalid_argument("Selected objects require differing edits of the same dependency: "+change.entity.id);
+                    // Explicit furniture/text and owned area callouts can share
+                    // one container. Join source-relative fields; core repeats
+                    // this merge independently and refuses competing edits.
+                    expected=merge_selection_annotation_entities(before->second,current->second,change.entity,
+                        AnnotationMergeMode::source_callout_geometry);
+                }
+                expected_payloads.emplace(change.entity.id,expected);
+                if (same_payload(current->second,expected)) continue;
+            } else {
+                expected_payloads.emplace(change.entity.id,expected);
             }
             if (!same_payload(change.entity,before->second)) supplements.push_back(change);
         }
@@ -8071,9 +8095,9 @@ public:
             command=complete_selection_command(source,command,supplements,message);
         } else throw std::invalid_argument("The geometric selection command cannot retain its complete consequences atomically.");
         const auto complete=Document::preview_command(source,command);
-        for (const auto& change : changes.entity_changes)
-            if (!same_payload(complete.entities().at(change.entity.id),change.entity))
-                throw std::invalid_argument("The complete selection edit changed a reviewed consequence: "+change.entity.id);
+        for (const auto& [id,expected] : expected_payloads)
+            if (!same_payload(complete.entities().at(id),expected))
+                throw std::invalid_argument("The complete selection edit changed a reviewed consequence: "+id);
         return command;
     }
 
@@ -8104,11 +8128,63 @@ public:
         if (transform.rotation_radians==0.0 && !transform.flip_horizontal && !transform.flip_vertical &&
             transform.offset.x==0.0 && transform.offset.y==0.0 && supplemental_changes.empty())
             return ApplyEntityChanges{source.revision(),{}, {},"Transform areas with deductions and source walls"};
+        // In-place connected edits may have related owners outside the rigid
+        // selection. Clipboard completeness applies only to the legacy rigid
+        // path below, never to the connected solver's selection.
+        auto graph=independentAreaCopyGraph(source,std::move(selected_roots),false,true,kMaximumNumericSelectionGraphEntities);
+        includeMeasuredAreaSources(source,graph);
+        std::set<std::string,std::less<>> geometry_ids,wall_ids;
+        for (const auto& entity : graph) {
+            if (is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework" || entity.type=="wall")
+                geometry_ids.insert(entity.id);
+            if (entity.type=="wall") wall_ids.insert(entity.id);
+        }
+        bool connected_rigid=false;
+        for (const auto& [id,entity] : source.entities()) {
+            (void)id;
+            if (entity.type!="constraint") continue;
+            const auto decoded=decode_constraint_entity(entity);
+            if (!decoded.supported()) {
+                if (entity.properties.contains("bindings") && entity.properties.at("bindings").is_array())
+                    for (const auto& binding : entity.properties.at("bindings"))
+                        if (binding.is_object() && binding.contains("owner_id") && binding.at("owner_id").is_string() &&
+                            geometry_ids.contains(binding.at("owner_id").get<std::string>()))
+                            throw std::invalid_argument(decoded.unsupported_reason);
+                continue;
+            }
+            if (std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),[&](const auto& binding) {
+                return geometry_ids.contains(binding.owner_id);
+            })) connected_rigid=true;
+        }
+        if (!wall_ids.empty())
+            for (const auto& contact : exterior_corner_physical_contact_graph(source.entities()))
+                if (wall_ids.contains(contact.owner)!=wall_ids.contains(contact.host)) connected_rigid=true;
+        if (connected_rigid) {
+            JointTranslationIntent joint;
+            joint.per_owner_rigid_completion=true;
+            for (const auto& id : geometry_ids) {
+                const auto& entity=source.entities().at(id);
+                if (entity.type=="wall") joint.partial_wall_ids.push_back(id);
+                else if (entity.type=="measurement_linework") joint.rigid_stroke_ids.push_back(id);
+                else joint.rigid_boundary_ids.push_back(id);
+                joint.owner_transformations.push_back({id,owner_transform ? owner_transform(id) : transform});
+            }
+            ConstraintAuthoringIntent intent;
+            intent.joint_translation=std::move(joint);
+            intent.message="Transform selection and connected geometry";
+            const auto preview=preview_constraint_authoring(source,intent);
+            requireAcceptedConstraintPreview(preview);
+            auto command=constraint_authoring_verified_command(source,preview,nullptr);
+            command=completeAreaCalloutTransform(source,std::move(command),transform,nullptr,owner_transform);
+            if (!supplemental_changes.empty())
+                command=mergeSourceDerivedSelectionChanges(source,std::move(command),
+                    ApplyEntityChanges{source.revision(),std::move(supplemental_changes),{},intent.message},intent.message);
+            return command;
+        }
         if(!owner_transform && supplemental_changes.empty() &&
            std::all_of(root_ids.begin(),root_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
             return measuredStrokeTransformCommand(source,root_ids,transform);
-        auto graph=independentAreaCopyGraph(source,std::move(selected_roots),true,true,kMaximumNumericSelectionGraphEntities);
-        includeMeasuredAreaSources(source,graph);
+        graph=independentAreaCopyGraph(source,std::move(graph),true,true,kMaximumNumericSelectionGraphEntities);
         std::vector<BoundaryTransformation> transformations;
         std::vector<RigidOwnerTransformation> source_transformations;
         std::vector<WallGeometryMoveTarget> wall_targets;
@@ -12545,18 +12621,10 @@ public:
                     std::function<PlanarTransform(const std::string&)> geometric_owner_transform;
                     if (site_group && !geometry_selection.isEmpty()) {
                         geometry_transform=callout_owner_transform(geometry_selection.front().toStdString());
-                        std::set<std::string,std::less<>> checked;
-                        bool separately_framed=false;
-                        for (const auto& root : geometry_selection) {
-                            const auto graph=clipboard_entities_for_selection(source,root.toStdString(),kMaximumNumericSelectionGraphEntities);
-                            if (graph.empty()) throw std::invalid_argument("A selected Site geometry dependency graph is unavailable.");
-                            for (const auto& entity : graph) {
-                                if (!geometry_root(entity) || !checked.insert(entity.id).second) continue;
-                                if (!equivalentPlanOperators(geometry_transform,callout_owner_transform(entity.id)))
-                                    separately_framed=true;
-                            }
-                        }
-                        if (separately_framed) geometric_owner_transform=callout_owner_transform;
+                        // Deductions and source cohorts are expanded later.
+                        // Every Site dependency retains its own captured basis;
+                        // a visible-root shortcut cannot choose hidden frames.
+                        geometric_owner_transform=callout_owner_transform;
                     }
                     auto command=geometry_selection.isEmpty() ? Command{std::move(presentation)} :
                         makeSelectionGeometryTransformCommand(source,geometry_selection,geometry_transform,
@@ -12784,7 +12852,10 @@ public:
                         }
                     }
                     auto graph = group && changes && changes->entity_changes.empty()
-                        ? std::move(seeds) : independentAreaCopyGraph(snapshot,std::move(seeds),true,group,
+                        // A connected in-place preview is allowed to leave a
+                        // fixed related owner unchanged. Copy completeness is
+                        // not a prerequisite for displaying that valid solve.
+                        ? std::move(seeds) : independentAreaCopyGraph(snapshot,std::move(seeds),clone->isChecked(),group,
                             group ? kMaximumNumericSelectionGraphEntities : kMaximumClipboardEntities);
                     std::set<std::string, std::less<>> graph_ids;
                     for (const auto& entity : graph) graph_ids.insert(entity.id);

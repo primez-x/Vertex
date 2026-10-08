@@ -75,11 +75,17 @@ struct ExteriorCornerPhysicalContact { std::string owner; bool start; std::strin
 // Initially stale and anonymous sources retain explicit repair behavior.
 // Initially current owners require unchanged cyclic adjacency and valid new
 // context, joins, deductions and constraints; no identities are minted.
+// Explicit rigid operators are keyed by retained measured owner, not source wall.
+// They prove exact physical wall replay and unique machine-precision outline
+// correspondence while retaining stable edge/vertex IDs. Identity targets may
+// remain unchanged in a mixed group. False defers only final constraint checking
+// until other source cohorts are completed; final Document admission is required.
 [[nodiscard]] std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed,
     bool validate_final_constraints = true,
-    const std::map<std::string, Vec2, std::less<>>& rigid_offsets = {});
+    const std::map<std::string, Vec2, std::less<>>& rigid_offsets = {},
+    const std::map<std::string, PlanarTransform, std::less<>>& rigid_transforms = {});
 
 // Intrinsic v2 lineage validation, independent of today's source-wall presence.
 // Retains every sequential add; bounds wall-pairs * (moves + 2) to 8,388,608

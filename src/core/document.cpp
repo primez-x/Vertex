@@ -14,6 +14,7 @@
 #include "sketch/terrain_surface.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/presentation_transform.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_tolerances.hpp"
@@ -52,6 +53,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstddef>
 #include <iomanip>
 #include <initializer_list>
 #include <limits>
@@ -2034,7 +2036,8 @@ static void validate_joint_translation_mode(const ApplyBoundaryConstraintChanges
 }
 
 static bool joint_per_target_presentation(const JointTranslationIntent& intent) {
-    return intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
+    return intent.per_owner_rigid_completion || !intent.owner_transformations.empty() ||
+        intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
         !intent.dimension_translations.empty() || intent.per_target_presentation_completion || !intent.annotation_translations.empty() ||
         !intent.reference_translations.empty();
 }
@@ -2056,8 +2059,11 @@ static void validate_joint_presentation_proof(const ApplyBoundaryConstraintChang
     std::set<std::string, std::less<>> touched;
     for (const auto& change : command.supplemental_entity_changes) {
         const auto target = targets.find(change.entity.id);
-        if (change.kind != EntityChangeKind::upsert || target == targets.end() ||
-            change.entity.type != target->second || !touched.insert(change.entity.id).second)
+        const bool derived_rigid_annotation = (command.joint_translation->per_owner_rigid_completion ||
+            !command.joint_translation->owner_transformations.empty()) &&
+            change.entity.type == kAnnotationEntityType;
+        if (change.kind != EntityChangeKind::upsert || (!derived_rigid_annotation && (target == targets.end() ||
+            change.entity.type != target->second)) || !touched.insert(change.entity.id).second)
             throw std::invalid_argument("Joint presentation proof requires unique selected annotation/reference upserts");
     }
 }
@@ -2164,7 +2170,8 @@ static void complete_dimension_placements(const std::map<std::string, Entity, st
 static void retain_joint_callout_placement(const std::map<std::string, Entity, std::less<>>& source,
     std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
     const auto offsets = resolve_joint_translation_offsets(source, intent);
-    const bool per_owner = intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
+    const bool rigid_transform = intent.per_owner_rigid_completion || !intent.owner_transformations.empty();
+    const bool per_owner = rigid_transform || intent.per_owner_translation_completion || !intent.owner_translations.empty() ||
         !intent.dimension_translations.empty();
     std::set<std::string, std::less<>> rigid(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end());
     rigid.insert(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end());
@@ -2179,8 +2186,12 @@ static void retain_joint_callout_placement(const std::map<std::string, Entity, s
         const auto found = candidate.find(id);
         if (found == candidate.end()) throw std::invalid_argument("Joint translation retired a rigid-owner callout");
         auto placed = *decoded.dimension;
-        const auto offset = rigid_owner ? offsets.owner_offsets.at(placed.boundary_id) : offsets.dimension_offsets.at(id);
-        placed.text_position = {placed.text_position.x + offset.x, placed.text_position.y + offset.y};
+        if (rigid_owner && rigid_transform)
+            placed.text_position = transform_point(placed.text_position, offsets.owner_transforms.at(placed.boundary_id));
+        else {
+            const auto offset = rigid_owner ? offsets.owner_offsets.at(placed.boundary_id) : offsets.dimension_offsets.at(id);
+            placed.text_position = {placed.text_position.x + offset.x, placed.text_position.y + offset.y};
+        }
         if (!std::isfinite(placed.text_position.x) || !std::isfinite(placed.text_position.y))
             throw std::invalid_argument("Joint translation callout position overflows");
         if (!rigid_owner) {
@@ -2774,7 +2785,8 @@ static void validate_room_review_lifetime(const nlohmann::json& encoded,
 
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
-    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false, bool prepared_rigid_geometry = false,
+    const JointTranslationIntent* rigid_joint_intent = nullptr) {
     try { validate_room_aware_wall_split_mode(command); validate_wall_merge_mode(command); validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); validate_wall_dimension_completion(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if(command.wall_merge) {
@@ -2793,7 +2805,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const bool measured_completion=has_measured_source_completion(command);
     if (source_completion || measured_completion || has_dimension_placement_completion(command) || command.wall_dimension_completion)
         (void)command_to_json(Command{command});
-    if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion && !measured_completion)
+    if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion && !measured_completion && !prepared_rigid_geometry)
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
     auto result = source;
@@ -2984,7 +2996,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     }
     try {
         if (command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc) validate_exterior_corner_edit_topology(source,result);
-        else validate_constraint_edit_topology(source,result,rigid_wall_ids);
+        else if (!prepared_rigid_geometry) validate_constraint_edit_topology(source,result,rigid_wall_ids);
     }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if (source_completion) {
@@ -3001,7 +3013,16 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
                 if (!rigid_source_offsets.emplace(edit.boundary_id, offset).second)
                     throw std::invalid_argument("Physical source translation owner is repeated");
             }
-            const auto expected = exterior_wall_measurement_source_updates(source, result, true, rigid_source_offsets);
+            std::map<std::string,PlanarTransform,std::less<>> rigid_source_transforms;
+            if (rigid_joint_intent) {
+                const auto resolved = resolve_joint_translation_offsets(source,*rigid_joint_intent);
+                for (const auto& id : rigid_joint_intent->rigid_boundary_ids)
+                    if (source.at(id).properties.contains("wall_measurement_source"))
+                        rigid_source_transforms.emplace(id,resolved.owner_transforms.at(id));
+                complete_joint_rigid_sources(source,result,*rigid_joint_intent,false);
+            }
+            const auto expected = exterior_wall_measurement_source_updates(source, result, !prepared_rigid_geometry,
+                rigid_source_offsets, rigid_source_transforms);
             if (expected != command.exterior_source_edits)
                 throw std::invalid_argument("Exterior source redraws differ from complete physical-wall lineage reconstruction");
             for (const auto& update : expected)
@@ -3215,8 +3236,9 @@ std::map<std::string, Entity, std::less<>> boundary_translation_entities(
     return result;
 }
 
+struct RigidExteriorAlignment { std::size_t offset{}; bool reversed{}; };
 Boundary uniquely_aligned_rigid_exterior(const Boundary& expected, const Boundary& derived,
-                                        const PlanarTransform& transform) {
+                                        const PlanarTransform& transform, RigidExteriorAlignment* correspondence = nullptr) {
     if (expected.size() != derived.size())
         throw std::invalid_argument("Rigid exterior transform changed analytical topology");
     const auto within_roundoff = [&](double a, double b, bool coordinate) {
@@ -3252,6 +3274,7 @@ Boundary uniquely_aligned_rigid_exterior(const Boundary& expected, const Boundar
             if (match) {
                 ++matches;
                 aligned = std::move(candidate);
+                if (correspondence) *correspondence = {offset,reverse};
             }
         }
     }
@@ -3788,9 +3811,13 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 if (exact_entity_payload(original, admitted)) continue;
                 const auto current = result.find(change.entity.id);
                 if (current == result.end()) throw std::invalid_argument("Selection completion lost a dependency identity");
-                if (!exact_entity_payload(current->second, original) && !exact_entity_payload(current->second, admitted))
-                    throw std::invalid_argument("Selection lanes require conflicting final dependency payloads: " + change.entity.id);
-                current->second = admitted;
+                if (!exact_entity_payload(current->second, original) && !exact_entity_payload(current->second, admitted)) {
+                    if (original.type != kAnnotationEntityType || !geometry.joint_translation ||
+                        (!geometry.joint_translation->per_owner_rigid_completion && geometry.joint_translation->owner_transformations.empty()))
+                        throw std::invalid_argument("Selection lanes require conflicting final dependency payloads: " + change.entity.id);
+                    current->second = merge_selection_annotation_entities(original,current->second,admitted,
+                        AnnotationMergeMode::source_callout_geometry);
+                } else current->second = admitted;
             }
             (void)validate_state(result, geometry_assets);
             (void)validate_constraint_integrity(result);
@@ -3921,8 +3948,12 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 else *generated = change;
                 reconstructed.supplemental_source_completion = true;
             }
-            auto expected = boundary_constraint_entities(source, reconstructed, retained_replay);
-            auto actual = boundary_constraint_entities(source, submitted, retained_replay);
+            const bool rigid_joint = command.joint_translation->per_owner_rigid_completion || !command.joint_translation->owner_transformations.empty();
+            const auto replay_source = rigid_joint ? joint_rigid_replay_source(source, *command.joint_translation) : source;
+            auto expected = boundary_constraint_entities(replay_source, reconstructed, retained_replay, rigid_joint,
+                rigid_joint ? &*command.joint_translation : nullptr);
+            auto actual = boundary_constraint_entities(replay_source, submitted, retained_replay, rigid_joint,
+                rigid_joint ? &*command.joint_translation : nullptr);
             if (actual.size() != expected.size())
                 throw std::invalid_argument("Joint translation proof differs from its reconstructed source intent");
             for (const auto& [id, entity] : expected) {
@@ -3933,16 +3964,27 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             for (const auto& change : presentation_proof) {
                 const auto original = source.find(change.entity.id);
                 const auto baseline = actual.find(change.entity.id);
-                if (original == source.end() || baseline == actual.end() ||
-                    !exact_entity_payload(original->second, baseline->second))
+                if (original == source.end() || baseline == actual.end())
                     throw std::invalid_argument("Joint presentation proof overlaps an ordinary geometry edit");
-                baseline->second = change.entity;
+                if (rigid_joint && change.entity.type == kAnnotationEntityType)
+                    baseline->second = merge_selection_annotation_entities(original->second,change.entity,baseline->second,
+                        AnnotationMergeMode::source_callout_geometry);
+                else {
+                    if (!exact_entity_payload(original->second,baseline->second))
+                        throw std::invalid_argument("Joint presentation proof overlaps an ordinary geometry edit");
+                    baseline->second = change.entity;
+                }
             }
+            if (rigid_joint) complete_joint_rigid_sources(source, actual, *command.joint_translation);
+            if (rigid_joint) complete_joint_rigid_consequences(source, actual, *command.joint_translation);
+            if (rigid_joint) validate_joint_rigid_topology(source, actual, *command.joint_translation);
             retain_joint_callout_placement(source, actual, *command.joint_translation);
+            auto expected_relations = source;
+            if (rigid_joint) complete_joint_rigid_consequences(source, expected_relations, *command.joint_translation,false);
             for (const auto& [id, entity] : source) {
                 if (entity.type != "constraint") continue;
                 const auto found = actual.find(id);
-                if (found == actual.end() || !exact_entity_payload(entity, found->second))
+                if (found == actual.end() || !exact_entity_payload(expected_relations.at(id), found->second))
                     throw std::invalid_argument("Joint translation cannot change a persisted relation: " + id);
             }
             validate_boundary_identity_transition(history, source, actual);
@@ -4164,9 +4206,13 @@ Vec2 command_vec2_from_json(const nlohmann::json& value, std::string_view contex
             command_number(value.at("y"), std::string(context) + ".y")};
 }
 
+nlohmann::json command_transform_to_json(const PlanarTransform& transform);
+PlanarTransform command_transform_from_json(const nlohmann::json& value);
+
 nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
+    const bool rigid = intent.per_owner_rigid_completion || !intent.owner_transformations.empty();
     if (!std::isfinite(intent.offset.x) || !std::isfinite(intent.offset.y) ||
-        (intent.offset.x == 0.0 && intent.offset.y == 0.0))
+        (!rigid && intent.offset.x == 0.0 && intent.offset.y == 0.0))
         throw std::invalid_argument("Joint translation requires a finite nonzero offset");
     if (intent.presentation_offset && (!std::isfinite(intent.presentation_offset->x) || !std::isfinite(intent.presentation_offset->y)))
         throw std::invalid_argument("Joint presentation offset must be finite");
@@ -4180,7 +4226,9 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
     validate_ids(intent.rigid_stroke_ids);
     validate_ids(intent.partial_wall_ids);
     validate_ids(intent.dimension_ids);
-    const bool per_owner = intent.per_owner_translation_completion ||
+    if (rigid && (intent.per_owner_translation_completion || !intent.owner_translations.empty()))
+        throw std::invalid_argument("Rigid joint intent cannot combine translation geometry authority");
+    const bool per_owner = rigid || intent.per_owner_translation_completion ||
         !intent.owner_translations.empty() || !intent.dimension_translations.empty();
     const bool empty_geometry = intent.partial_wall_ids.empty() &&
         intent.rigid_boundary_ids.empty() && intent.rigid_stroke_ids.empty();
@@ -4208,11 +4256,22 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
         return encoded_targets;
     };
     auto owners = nlohmann::json::array(), dimensions = nlohmann::json::array();
+    auto transformations = nlohmann::json::array();
     if (per_owner) {
         std::set<std::string, std::less<>> geometry(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end());
         geometry.insert(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end());
         geometry.insert(intent.partial_wall_ids.begin(), intent.partial_wall_ids.end());
-        owners = encode_offsets(intent.owner_translations, geometry);
+        if (rigid) {
+            if (intent.owner_transformations.size() != geometry.size())
+                throw std::invalid_argument("Rigid joint operators require exact selected target coverage");
+            std::set<std::string, std::less<>> seen;
+            for (const auto& target : intent.owner_transformations) {
+                validate_rigid_owner_transform(target);
+                if (!geometry.contains(target.owner_id) || !seen.insert(target.owner_id).second)
+                    throw std::invalid_argument("Rigid joint operators require unique selected owners");
+                transformations.push_back({{"owner_id", target.owner_id}, {"transform", command_transform_to_json(target.transform)}});
+            }
+        } else owners = encode_offsets(intent.owner_translations, geometry);
         dimensions = encode_offsets(intent.dimension_translations,
             std::set<std::string, std::less<>>(intent.dimension_ids.begin(), intent.dimension_ids.end()));
     }
@@ -4239,7 +4298,7 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
             throw std::invalid_argument("Joint reference target aliases an annotation owner");
         references.push_back({{"reference_id", target.reference_id}, {"offset", command_vec2_to_json(target.offset)}});
     }
-    auto encoded = nlohmann::json{{"version", per_owner ? 3 : per_target ? 2 : 1}, {"offset", command_vec2_to_json(intent.offset)},
+    auto encoded = nlohmann::json{{"version", rigid ? 4 : per_owner ? 3 : per_target ? 2 : 1}, {"offset", command_vec2_to_json(intent.offset)},
         {"rigid_boundary_ids", intent.rigid_boundary_ids}, {"rigid_stroke_ids", intent.rigid_stroke_ids},
         {"partial_wall_ids", intent.partial_wall_ids}, {"move_connected_objects", intent.move_connected_objects},
         {"dimension_ids", intent.dimension_ids},
@@ -4249,19 +4308,33 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
         encoded["reference_translations"] = std::move(references);
     }
     if (per_owner) {
-        encoded["owner_translations"] = std::move(owners);
+        if (rigid) {
+            encoded["per_owner_rigid_completion"] = true;
+            encoded["owner_transformations"] = std::move(transformations);
+        } else encoded["owner_translations"] = std::move(owners);
         encoded["dimension_translations"] = std::move(dimensions);
     }
+    if (rigid && encoded.dump().size() > 1024 * 1024)
+        throw std::invalid_argument("Rigid joint intent exceeds its proof budget");
     return encoded;
 }
 
 JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4))
         throw std::invalid_argument("Unsupported joint translation intent version");
-    const bool per_owner = value.at("version") == 3;
+    const bool rigid = value.at("version") == 4;
+    const bool per_owner = rigid || value.at("version") == 3;
     const bool per_target = per_owner || value.at("version") == 2;
-    if (per_owner)
+    if (rigid) {
+        command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
+            "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset",
+            "annotation_translations", "reference_translations", "owner_transformations", "dimension_translations",
+            "per_owner_rigid_completion"}, DocumentErrorCode::invalid_entity, "rigid joint intent");
+        if (!value.at("per_owner_rigid_completion").is_boolean() ||
+            !value.at("per_owner_rigid_completion").get<bool>() || value.dump().size() > 1024 * 1024)
+            throw std::invalid_argument("Rigid joint completion requires its explicit bounded marker");
+    } else if (per_owner)
         command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
             "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset",
             "annotation_translations", "reference_translations", "owner_translations", "dimension_translations"},
@@ -4277,7 +4350,8 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
         throw std::invalid_argument("Unsupported joint translation intent or movement flag");
     JointTranslationIntent result;
     result.per_target_presentation_completion = per_target;
-    result.per_owner_translation_completion = per_owner;
+    result.per_owner_translation_completion = per_owner && !rigid;
+    result.per_owner_rigid_completion = rigid;
     result.offset = command_vec2_from_json(value.at("offset"), "joint translation offset");
     if (!value.at("presentation_offset").is_null())
         result.presentation_offset = command_vec2_from_json(value.at("presentation_offset"), "joint presentation offset");
@@ -4302,7 +4376,16 @@ JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) 
                     command_vec2_from_json(target.at("offset"), "joint owner offset")});
             }
         };
-        read_offsets("owner_translations", result.owner_translations);
+        if (rigid) {
+            const auto& targets = value.at("owner_transformations");
+            if (!targets.is_array() || targets.size() > 4096)
+                throw std::invalid_argument("Rigid joint operators must be a bounded array");
+            for (const auto& target : targets) {
+                command_exact_fields(target, {"owner_id", "transform"}, DocumentErrorCode::invalid_entity, "rigid joint owner");
+                result.owner_transformations.push_back({command_string(target.at("owner_id"), "rigid joint owner", kMaximumIdBytes),
+                    command_transform_from_json(target.at("transform"))});
+            }
+        } else read_offsets("owner_translations", result.owner_translations);
         read_offsets("dimension_translations", result.dimension_translations);
     }
     if (per_target) {
@@ -4545,23 +4628,61 @@ std::vector<AssetChange> command_asset_references_from_json(const nlohmann::json
 JointTranslationOffsets resolve_joint_translation_offsets(
     const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
     (void)joint_translation_to_json(intent);
-    const bool per_owner = intent.per_owner_translation_completion ||
+    const bool rigid = intent.per_owner_rigid_completion || !intent.owner_transformations.empty();
+    const bool per_owner = rigid || intent.per_owner_translation_completion ||
         !intent.owner_translations.empty() || !intent.dimension_translations.empty();
     JointTranslationOffsets result;
     if (per_owner) {
         for (const auto& target : intent.owner_translations) result.owner_offsets.emplace(target.owner_id, target.offset);
         for (const auto& target : intent.dimension_translations) result.dimension_offsets.emplace(target.owner_id, target.offset);
+        for (const auto& target : intent.owner_transformations) result.owner_transforms.emplace(target.owner_id, target.transform);
     }
     const auto require = [&](const std::string& id) -> const Entity& {
         const auto found = source.find(id);
         if (found == source.end()) throw std::invalid_argument("Joint translation source target does not exist: " + id);
         return found->second;
     };
+    std::set<std::string,std::less<>> semantic_available;
+    std::optional<std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>> source_checks;
+    if (rigid) {
+        for (const auto& [id, entity] : source) { (void)entity; semantic_available.insert(id); }
+        for (const auto& [id, entity] : source) {
+            (void)id;
+            if (entity.type != "model_phases") continue;
+            const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+            const auto active = phases.active_state();
+            for (const auto& member : phases.entity_ids())
+                if (!active.contains(member) || active.at(member) == ModelPhase::demolished) semantic_available.erase(member);
+        }
+    }
     for (const auto& id : intent.rigid_boundary_ids) {
         const auto& entity = require(id);
         if (!can_recognize_boundary_entity_type(entity.type))
             throw std::invalid_argument("Joint translation boundary source has the wrong owner type");
         (void)decode_identified_boundary_entity(entity);
+        if (rigid) {
+            if (!semantic_available.contains(id) || entity.extensions.contains("physical_wall_room"))
+                throw std::invalid_argument("Rigid joint selected boundary is unavailable or requires reviewed physical-room repair");
+            if (entity.properties.contains("wall_measurement_source") && !wall_measurement_source_current(source,entity))
+                throw std::invalid_argument("Rigid joint selected physical measured boundary is stale");
+            if (entity.extensions.contains("measurement_linework_sources") || entity.extensions.contains("measurement_linework_group")) {
+                if (!source_checks) source_checks = measurement_linework_source_checks(source,&semantic_available);
+                if (!measurement_linework_source_current(*source_checks,entity))
+                    throw std::invalid_argument("Rigid joint selected measured boundary requires current semantic source lineage");
+            }
+            if (const auto deductions = entity.properties.find("deduction_ids"); deductions != entity.properties.end()) {
+                if (!deductions->is_array()) throw std::invalid_argument("Rigid joint deductions must be a source ID array");
+                std::set<std::string,std::less<>> seen;
+                for (const auto& child : *deductions) {
+                    if (!child.is_string()) throw std::invalid_argument("Rigid joint deduction ID is malformed");
+                    const auto child_id = child.get<std::string>();
+                    if (child_id == id || !seen.insert(child_id).second ||
+                        std::find(intent.rigid_boundary_ids.begin(),intent.rigid_boundary_ids.end(),child_id) == intent.rigid_boundary_ids.end() ||
+                        !(result.owner_transforms.at(id) == result.owner_transforms.at(child_id)))
+                        throw std::invalid_argument("Rigid joint deductions require complete compatible selected operators");
+                }
+            }
+        }
         if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
     }
     for (const auto& id : intent.rigid_stroke_ids) {
@@ -4570,12 +4691,14 @@ JointTranslationOffsets resolve_joint_translation_offsets(
             throw std::invalid_argument("Joint translation stroke source has the wrong owner type");
         const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
         if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        if (rigid && !semantic_available.contains(id)) throw std::invalid_argument("Rigid joint stroke is unavailable in its semantic phase");
         if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
     }
     for (const auto& id : intent.partial_wall_ids) {
         const auto& entity = require(id);
         if (entity.type != "wall") throw std::invalid_argument("Joint translation wall source has the wrong owner type");
         validate_entity(entity);
+        if (rigid && !semantic_available.contains(id)) throw std::invalid_argument("Rigid joint wall is unavailable in its semantic phase");
         if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
     }
     for (const auto& id : intent.dimension_ids) {
@@ -4588,16 +4711,429 @@ JointTranslationOffsets resolve_joint_translation_offsets(
         if (!per_owner) result.dimension_offsets.emplace(id, intent.offset);
         if (per_owner) {
             const auto owner = result.owner_offsets.find(decoded.dimension->boundary_id);
-            const bool rigid = std::find(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end(), decoded.dimension->boundary_id) != intent.rigid_boundary_ids.end() ||
+            const bool selected_owner = std::find(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end(), decoded.dimension->boundary_id) != intent.rigid_boundary_ids.end() ||
                 std::find(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end(), decoded.dimension->boundary_id) != intent.rigid_stroke_ids.end() ||
                 std::find(intent.partial_wall_ids.begin(), intent.partial_wall_ids.end(), decoded.dimension->boundary_id) != intent.partial_wall_ids.end();
             const auto selected = result.dimension_offsets.at(id);
-            if (rigid && owner != result.owner_offsets.end() &&
+            if (rigid && selected_owner) {
+                const auto before = decoded.dimension->text_position;
+                const auto after = transform_point(before, result.owner_transforms.at(decoded.dimension->boundary_id));
+                if (after.x != before.x + selected.x || after.y != before.y + selected.y)
+                    throw std::invalid_argument("Joint selected callout contradicts its captured rigid owner operator");
+            } else if (selected_owner && owner != result.owner_offsets.end() &&
                 (owner->second.x != selected.x || owner->second.y != selected.y))
                 throw std::invalid_argument("Joint selected callout contradicts its selected rigid owner's translation");
         }
     }
     return result;
+}
+
+Entity merge_selection_annotation_entities(const Entity& original, const Entity& geometry, const Entity& ordinary,
+    AnnotationMergeMode mode) {
+    if (mode != AnnotationMergeMode::existing_rows && mode != AnnotationMergeMode::source_callout_geometry &&
+        mode != AnnotationMergeMode::source_callout_proof)
+        throw std::invalid_argument("Annotation merge mode is unsupported");
+    if (original.type != kAnnotationEntityType || geometry.type != original.type || ordinary.type != original.type ||
+        geometry.id != original.id || ordinary.id != original.id ||
+        geometry.required != original.required || ordinary.required != original.required)
+        throw std::invalid_argument("Annotation merge requires one original owner identity and type");
+    validate_annotation_entity(original);
+    validate_annotation_entity(geometry);
+    validate_annotation_entity(ordinary);
+    auto geometry_prefix = geometry;
+    auto ordinary_prefix = ordinary;
+    auto callout_suffix = nlohmann::json::array();
+    if (mode != AnnotationMergeMode::existing_rows) {
+        const auto& before = original.properties.at("state").at("overrides");
+        auto& first = geometry_prefix.properties.at("state").at("overrides");
+        auto& second = ordinary_prefix.properties.at("state").at("overrides");
+        if (first.size() < before.size() || first.size()-before.size() > 8192 || second.size() < before.size())
+            throw std::invalid_argument("Source callout merge cannot remove or unboundedly extend saved rows");
+        std::set<std::pair<std::string,std::string>> identities;
+        for (const auto& row : before)
+            identities.emplace(row.at("target_id").get<std::string>(),row.at("target_kind").get<std::string>());
+        for (std::size_t index=before.size(); index<first.size(); ++index) {
+            const auto& row = first.at(index);
+            const auto id = row.at("target_id").get<std::string>();
+            const auto kind = row.at("target_kind").get<std::string>();
+            if ((kind != "area_name" && kind != "area_calculation") ||
+                !identities.contains({id,kind == "area_name" ? "area_calculation" : "area_name"}) ||
+                !identities.emplace(id,kind).second)
+                throw std::invalid_argument("Source callout merge requires a missing separated counterpart");
+            callout_suffix.push_back(row);
+        }
+        if (second.size() != before.size()) {
+            if (mode != AnnotationMergeMode::source_callout_proof || second.size() != first.size())
+                throw std::invalid_argument("Ordinary selection cannot add annotation rows");
+            for (std::size_t index=before.size(); index<second.size(); ++index)
+                if (second.at(index).dump() != first.at(index).dump())
+                    throw std::invalid_argument("Callout proof differs from its reconstructed suffix");
+        }
+        first.erase(first.begin()+static_cast<std::ptrdiff_t>(before.size()),first.end());
+        second.erase(second.begin()+static_cast<std::ptrdiff_t>(before.size()),second.end());
+        auto& first_version = geometry_prefix.properties.at("state").at("version");
+        auto& second_version = ordinary_prefix.properties.at("state").at("version");
+        const auto original_version = original.properties.at("state").at("version").get<int>();
+        if (first_version.get<int>() < original_version || second_version.get<int>() < original_version)
+            throw std::invalid_argument("Source callout merge cannot downgrade its annotation schema");
+        // Independent symbol and callout edits may require different known
+        // schema floors. Their payload fields still undergo the ordinary join.
+        const auto version = std::max(first_version.get<int>(),second_version.get<int>());
+        first_version = second_version = version;
+    }
+    for (const auto* table : {"labels", "symbols", "overrides"}) {
+        const auto& before = original.properties.at("state").at(table);
+        const auto& first = geometry_prefix.properties.at("state").at(table);
+        const auto& second = ordinary_prefix.properties.at("state").at(table);
+        if (first.size() != before.size() || second.size() != before.size())
+            throw std::invalid_argument("Annotation merge must preserve saved row inventories");
+        for (std::size_t index=0; index<before.size(); ++index)
+            for (const auto* key : {"id", "target_id", "target_kind"})
+                if (before.at(index).contains(key) && (!first.at(index).contains(key) || !second.at(index).contains(key) ||
+                    first.at(index).at(key) != before.at(index).at(key) || second.at(index).at(key) != before.at(index).at(key)))
+                    throw std::invalid_argument("Annotation merge must preserve saved row identities and order");
+    }
+    // Optional values distinguish missing keys from a present JSON null.
+    const auto merge = [&](const auto& self, const std::optional<nlohmann::json>& before,
+        const std::optional<nlohmann::json>& first, const std::optional<nlohmann::json>& second,
+        std::size_t depth) -> std::optional<nlohmann::json> {
+        if (depth > 64) throw std::invalid_argument("Annotation merge exceeds its nesting budget");
+        if (first == second || second == before) return first;
+        if (first == before) return second;
+        if (!before || !first || !second) throw std::invalid_argument("Annotation lanes change the same saved field");
+        if (before->is_object() && first->is_object() && second->is_object()) {
+            std::set<std::string, std::less<>> keys;
+            for (const auto* value : {&*before, &*first, &*second})
+                for (const auto& item : value->items()) keys.insert(item.key());
+            auto result = nlohmann::json::object();
+            for (const auto& key : keys) {
+                const auto read = [&](const auto& value) -> std::optional<nlohmann::json> {
+                    return value.contains(key) ? std::optional<nlohmann::json>{value.at(key)} : std::nullopt;
+                };
+                const auto next = self(self,read(*before),read(*first),read(*second),depth+1);
+                if (next) result[key] = *next;
+            }
+            return result;
+        }
+        if (before->is_array() && first->is_array() && second->is_array() &&
+            before->size() == first->size() && before->size() == second->size()) {
+            auto result = nlohmann::json::array();
+            for (std::size_t index=0; index<before->size(); ++index) {
+                const auto& row = before->at(index);
+                if (row.is_object()) for (const auto* key : {"id", "target_id", "target_kind"})
+                    if (row.contains(key) && (!first->at(index).is_object() || !second->at(index).is_object() ||
+                        !first->at(index).contains(key) || !second->at(index).contains(key) ||
+                        first->at(index).at(key) != row.at(key) || second->at(index).at(key) != row.at(key)))
+                        throw std::invalid_argument("Annotation merge must preserve saved row identities and order");
+                const auto next = self(self,row,first->at(index),second->at(index),depth+1);
+                if (!next) throw std::invalid_argument("Annotation merge cannot remove an array position");
+                result.push_back(*next);
+            }
+            return result;
+        }
+        throw std::invalid_argument("Annotation lanes change the same saved field");
+    };
+    if (original.properties.dump().size() > 1024*1024 || geometry.properties.dump().size() > 1024*1024 ||
+        ordinary.properties.dump().size() > 1024*1024)
+        throw std::invalid_argument("Annotation merge exceeds its payload budget");
+    auto result = original;
+    result.properties = *merge(merge,original.properties,geometry_prefix.properties,ordinary_prefix.properties,0);
+    result.extensions = *merge(merge,original.extensions,geometry.extensions,ordinary.extensions,0);
+    for (const auto& row : callout_suffix) result.properties.at("state").at("overrides").push_back(row);
+    validate_annotation_entity(result);
+    return result;
+}
+
+std::map<std::string, Entity, std::less<>> joint_rigid_replay_source(
+    const std::map<std::string, Entity, std::less<>>& source, const JointTranslationIntent& intent) {
+    const auto resolved = resolve_joint_translation_offsets(source, intent);
+    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return source;
+    std::vector<BoundaryTransformation> boundaries;
+    for (const auto& id : intent.rigid_boundary_ids) {
+        const auto& entity = source.at(id);
+        if (entity.properties.contains("wall_measurement_source") ||
+            entity.extensions.contains("measurement_linework_sources") || entity.extensions.contains("measurement_linework_group"))
+            continue;
+        boundaries.push_back({id, resolved.owner_transforms.at(id)});
+    }
+    return boundaries.empty() ? source : transformed_boundary_entities_per_owner_batch(source, boundaries);
+}
+
+void complete_joint_rigid_sources(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool physical_sources_ready) {
+    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty())
+        throw std::invalid_argument("Rigid source completion requires a captured v4 owner intent");
+    const auto resolved = resolve_joint_translation_offsets(source,intent);
+    std::set<std::string,std::less<>> semantic_available;
+    for (const auto& [id,entity] : candidate) { (void)entity; semantic_available.insert(id); }
+    for (const auto& [id,entity] : candidate) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+        const auto active = phases.active_state();
+        for (const auto& member : phases.entity_ids())
+            if (!active.contains(member) || active.at(member) == ModelPhase::demolished) semantic_available.erase(member);
+    }
+    const auto checks = measurement_linework_source_checks(candidate,&semantic_available);
+    for (const auto& id : intent.rigid_boundary_ids) {
+        const auto& original = source.at(id);
+        const bool walls = original.properties.contains("wall_measurement_source");
+        const bool strokes = original.extensions.contains("measurement_linework_sources") ||
+            original.extensions.contains("measurement_linework_group");
+        if (!walls && !strokes) continue;
+        if (walls && strokes) throw std::invalid_argument("Rigid joint source owner has conflicting producer dialects");
+        if (walls && !physical_sources_ready) continue;
+        auto boundary = decode_identified_boundary_entity(original);
+        const auto& transform = resolved.owner_transforms.at(id);
+        Boundary expected;
+        for (const auto& edge : boundary.segments) expected.push_back(transform_segment(edge.segment,transform));
+        RigidExteriorAlignment correspondence;
+        Boundary aligned;
+        nlohmann::json lineage;
+        if (walls) {
+            if (identity_rigid_transform(transform)) {
+                // A mixed group may explicitly retain an identity consumer.
+                // Keep its exact existing proof (including sequential v2
+                // lineage); no producer normalization owns a geometry edit.
+                if (decode_identified_boundary_entity(candidate.at(id)) != boundary ||
+                    candidate.at(id).properties.at("wall_measurement_source") != original.properties.at("wall_measurement_source") ||
+                    !wall_measurement_source_current(candidate,candidate.at(id)))
+                    throw std::invalid_argument("Rigid joint identity source owner changed its retained geometry or lineage");
+                continue;
+            }
+            const auto ids = exterior_wall_measurement_source_ids(original);
+            const auto derived = derive_replacement_exterior_wall_measurement(candidate,original,ids);
+            aligned = uniquely_aligned_rigid_exterior(expected,derived.boundary,transform,&correspondence);
+            // The typed physical redraw owns its lineage and child identity.
+            // Recheck it against independent final walls without inventing a
+            // second numerical source dialect or a raw lineage authority.
+            if (candidate.at(id).properties.at("wall_measurement_source") != derived.source)
+                throw std::invalid_argument("Rigid joint physical redraw differs from exact final source lineage");
+        } else {
+            const auto check = checks.find(id);
+            if (check == checks.end() || !check->second.proposed_boundary || !check->second.proposed_lineage.is_array())
+                throw std::invalid_argument("Rigid joint measured redraw has no unique final source face: " +
+                    (check == checks.end() ? std::string("missing lineage") : check->second.diagnostic));
+            aligned = uniquely_aligned_rigid_exterior(expected,*check->second.proposed_boundary,transform,&correspondence);
+            const auto& proposed = check->second.proposed_lineage;
+            if (proposed.size() != aligned.size()) throw std::invalid_argument("Rigid joint measured redraw lost source edge lineage");
+            lineage = nlohmann::json::array();
+            for (std::size_t index=0; index<aligned.size(); ++index) {
+                const auto mapped = (correspondence.offset + (correspondence.reversed ? aligned.size()-index : index)) % aligned.size();
+                auto uses = proposed.at(mapped);
+                if (correspondence.reversed) for (auto& use : uses)
+                    use.at("reversed") = !use.at("reversed").get<bool>();
+                lineage.push_back(std::move(uses));
+            }
+        }
+        for (std::size_t index=0; index<aligned.size(); ++index) boundary.segments[index].segment = aligned[index];
+        const auto current = decode_identified_boundary_entity(candidate.at(id));
+        if (boundary != current) {
+            BoundaryGeometryEdit correction;
+            correction.kind = BoundaryGeometryEditKind::redefine_boundary;
+            correction.boundary_id = correction.target_id = id;
+            correction.replacement_segments = encode_identified_boundary_entity(boundary).properties.at("segments");
+            // Preserve receipt/derivation evidence by appending the precise
+            // independently derived correction, rather than changing its bytes.
+            candidate = edited_boundary_entities(candidate,correction);
+        }
+        if (strokes) {
+            auto& owner = candidate.at(id);
+            owner.extensions["measurement_linework_sources"] = std::move(lineage);
+            if (original.extensions.contains("measurement_linework_group")) {
+                const auto& group = checks.at(id).proposed_group;
+                if (!group.is_object()) throw std::invalid_argument("Rigid joint measured group lacks complete final membership");
+                owner.extensions["measurement_linework_group"] = group;
+            }
+        }
+    }
+    if (!physical_sources_ready) return;
+    const auto verified = measurement_linework_source_checks(candidate,&semantic_available);
+    const auto previous = measurement_linework_source_checks(source,&semantic_available);
+    for (const auto& [id,old] : previous)
+        if (old.current && !measurement_linework_source_current(verified,candidate.at(id)))
+            throw std::invalid_argument("Rigid joint redraw would stale a previously current measured consumer: " + id);
+    for (const auto& id : intent.rigid_boundary_ids)
+        if (source.at(id).properties.contains("wall_measurement_source") && !wall_measurement_source_current(candidate,candidate.at(id)))
+            throw std::invalid_argument("Rigid joint physical redraw did not retain exact current source geometry");
+}
+
+void validate_joint_rigid_topology(const std::map<std::string, Entity, std::less<>>& source,
+    const std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
+    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty())
+        throw std::invalid_argument("Rigid topology admission requires a captured v4 owner intent");
+    const auto resolved = resolve_joint_translation_offsets(source,intent);
+    std::set<std::string,std::less<>> semantic_available;
+    for (const auto& [id,entity] : candidate) { (void)entity; semantic_available.insert(id); }
+    for (const auto& [id,entity] : candidate) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+        const auto active = phases.active_state();
+        for (const auto& member : phases.entity_ids())
+            if (!active.contains(member) || active.at(member) == ModelPhase::demolished) semantic_available.erase(member);
+    }
+    const auto measured_checks = measurement_linework_source_checks(candidate,&semantic_available);
+    auto topology_source = source;
+    for (const auto& id : intent.rigid_boundary_ids) {
+        auto expected = decode_identified_boundary_entity(source.at(id));
+        const auto after = decode_identified_boundary_entity(candidate.at(id));
+        if (expected.segments.size() != after.segments.size())
+            throw std::invalid_argument("Rigid joint redraw changed selected boundary topology");
+        const auto& transform = resolved.owner_transforms.at(id);
+        const bool source_bound = source.at(id).properties.contains("wall_measurement_source") ||
+            source.at(id).extensions.contains("measurement_linework_sources") || source.at(id).extensions.contains("measurement_linework_group");
+        Boundary expected_geometry;
+        for (const auto& edge : expected.segments) expected_geometry.push_back(transform_segment(edge.segment,transform));
+        if (source_bound) {
+            if (source.at(id).properties.contains("wall_measurement_source")) {
+                if (!identity_rigid_transform(transform)) {
+                    const auto derived = derive_replacement_exterior_wall_measurement(candidate,source.at(id),
+                        exterior_wall_measurement_source_ids(source.at(id)));
+                    expected_geometry = uniquely_aligned_rigid_exterior(expected_geometry,derived.boundary,transform);
+                } else if (candidate.at(id).properties.at("wall_measurement_source") != source.at(id).properties.at("wall_measurement_source"))
+                    throw std::invalid_argument("Rigid joint identity source owner changed its retained lineage");
+            } else {
+                const auto check = measured_checks.find(id);
+                if (check == measured_checks.end() || !check->second.proposed_boundary)
+                    throw std::invalid_argument("Rigid joint measured topology has no current source correspondence");
+                expected_geometry = uniquely_aligned_rigid_exterior(expected_geometry,*check->second.proposed_boundary,transform);
+            }
+        }
+        for (std::size_t index=0; index<expected.segments.size(); ++index) {
+            auto& edge = expected.segments[index];
+            const auto& actual = after.segments[index];
+            edge.segment = expected_geometry[index];
+            if (edge.segment_id != actual.segment_id || edge.start_vertex_id != actual.start_vertex_id ||
+                edge.end_vertex_id != actual.end_vertex_id || edge.segment.start.x != actual.segment.start.x ||
+                edge.segment.start.y != actual.segment.start.y || edge.segment.end.x != actual.segment.end.x ||
+                edge.segment.end.y != actual.segment.end.y || edge.segment.sweep_radians != actual.segment.sweep_radians)
+                throw std::invalid_argument("Rigid joint source redraw cannot preserve exact selected boundary targets");
+        }
+        // The source operator explicitly owns reflected winding for this exact
+        // boundary. All unselected analytical winding and physical contacts keep
+        // the ordinary topology admission rules.
+        topology_source.at(id).properties["segments"] = encode_identified_boundary_entity(expected).properties.at("segments");
+        if (source.at(id).properties.contains("wall_measurement_source") && !wall_measurement_source_current(candidate,candidate.at(id)))
+            throw std::invalid_argument("Rigid joint source redraw left a selected physical boundary stale");
+    }
+    for (const auto& id : intent.rigid_boundary_ids)
+        if ((source.at(id).extensions.contains("measurement_linework_sources") || source.at(id).extensions.contains("measurement_linework_group")) &&
+            !measurement_linework_source_current(measured_checks,candidate.at(id)))
+            throw std::invalid_argument("Rigid joint source redraw left a selected measured boundary stale");
+    for (const auto& [id,entity] : source) {
+        (void)id;
+        if (entity.type != "constraint") continue;
+        const auto decoded = decode_constraint_entity(entity);
+        if (!decoded.supported() || decoded.constraint->relation != ConstraintRelationKind::fixed_anchor) continue;
+        const auto& binding = decoded.constraint->bindings.front();
+        Vec2 actual;
+        if (binding.segment_id.empty()) {
+            const auto& baseline = candidate.at(binding.owner_id).properties.at("baseline");
+            const auto& value = baseline.at(binding.role == WallEndpointRole::start ? "start" : "end");
+            actual = {value.at(0).get<double>(),value.at(1).get<double>()};
+        } else {
+            const auto owner = resolve_constraint_segment_owner(candidate.at(binding.owner_id));
+            const auto edge = std::find_if(owner.segments.begin(),owner.segments.end(),[&](const auto& segment) {
+                return segment.segment_id == binding.segment_id &&
+                    (binding.role == WallEndpointRole::start ? segment.start_vertex_id : segment.end_vertex_id) == binding.vertex_id;
+            });
+            if (edge == owner.segments.end()) throw std::invalid_argument("Rigid joint source redraw lost a fixed anchor binding");
+            actual = binding.role == WallEndpointRole::start ? edge->segment.start : edge->segment.end;
+        }
+        if (actual.x != decoded.constraint->anchor->x || actual.y != decoded.constraint->anchor->y)
+            throw std::invalid_argument("Rigid joint final source redraw conflicts with an unchanged exact fixed anchor");
+    }
+    std::map<std::string,PlanarTransform,std::less<>> wall_transforms;
+    for (const auto& id : intent.partial_wall_ids) wall_transforms.emplace(id,resolved.owner_transforms.at(id));
+    validate_constraint_edit_topology(topology_source,candidate,
+        std::set<std::string,std::less<>>(intent.partial_wall_ids.begin(),intent.partial_wall_ids.end()),wall_transforms);
+}
+
+void complete_joint_rigid_consequences(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent,
+    bool complete_area_callouts) {
+    if (!intent.per_owner_rigid_completion && intent.owner_transformations.empty()) return;
+    const auto resolved = resolve_joint_translation_offsets(source, intent);
+    for (const auto& [id, original] : source) {
+        if (original.type == "constraint") {
+            const auto decoded = decode_constraint_entity(original);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            auto expected = *decoded.constraint;
+            if (expected.relation != ConstraintRelationKind::horizontal && expected.relation != ConstraintRelationKind::vertical)
+                continue; // Fixed anchors retain their saved world coordinates.
+            const auto& bindings = expected.bindings;
+            if (bindings.empty() || !std::all_of(bindings.begin(), bindings.end(), [&](const auto& binding) {
+                return resolved.owner_transforms.contains(binding.owner_id);
+            })) continue; // A relation crossing the selected set stays a hard solve constraint.
+            const auto& transform = resolved.owner_transforms.at(bindings.front().owner_id);
+            if (!std::all_of(bindings.begin(), bindings.end(), [&](const auto& binding) {
+                return resolved.owner_transforms.at(binding.owner_id) == transform;
+            })) continue;
+            if (std::abs(std::remainder(transform.rotation_radians, std::numbers::pi / 2)) > 1e-12)
+                throw std::invalid_argument("Axis-locked selected geometry requires a quarter-turn rigid rotation");
+            if (std::llround(transform.rotation_radians / (std::numbers::pi / 2)) % 2 != 0)
+                expected.relation = expected.relation == ConstraintRelationKind::horizontal ?
+                    ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
+            const auto replacement = encode_constraint_entity(expected, &original);
+            if (candidate.at(id) != original && candidate.at(id) != replacement)
+                throw std::invalid_argument("Rigid joint completion overlaps a persisted relation edit");
+            candidate.at(id) = replacement;
+        } else if (original.type == "opening") {
+            std::string host, diagnostic;
+            if (!read_document_wall_id(original, host, diagnostic)) throw std::invalid_argument(diagnostic);
+            const auto found = resolved.owner_transforms.find(host);
+            if (found == resolved.owner_transforms.end()) continue;
+            const auto replacement = replay_rigid_source_opening(original, found->second);
+            if (candidate.at(id) != original && candidate.at(id) != replacement)
+                throw std::invalid_argument("Rigid joint completion overlaps a hosted opening edit");
+            candidate.at(id) = replacement;
+        } else if (original.type == kAnnotationEntityType) {
+            // Wall label offsets have geometry-relative semantics. Area
+            // callouts use their final analytical anchors below, after redraw.
+            // Child placements remain the explicit presentation translation lane.
+            auto& entity = candidate.at(id);
+            validate_annotation_entity(original);
+            auto& rows = entity.properties.at("state").at("overrides");
+            for (const auto& record : original.properties.at("state").at("overrides")) {
+                const auto& kind = record.at("target_kind");
+                if (kind != "wall_dimension") continue;
+                const auto found = resolved.owner_transforms.find(record.at("target_id").get<std::string>());
+                if (found == resolved.owner_transforms.end()) continue;
+                auto expected = record;
+                const auto& transform = found->second;
+                if (transform.rotation_radians == 0.0 && !transform.flip_horizontal && !transform.flip_vertical)
+                    continue; // Translation does not change a relative label basis.
+                const PlanarTransform basis{{}, transform.rotation_radians, transform.flip_horizontal, transform.flip_vertical, {}};
+                if (record.contains("plan_label_offset_m")) {
+                    const auto& offset = record.at("plan_label_offset_m");
+                    const auto next = transform_point({offset.at(0).get<double>(), offset.at(1).get<double>()}, basis);
+                    if (!std::isfinite(next.x) || !std::isfinite(next.y)) throw std::invalid_argument("Rigid joint label offset overflows");
+                    expected["plan_label_offset_m"] = nlohmann::json::array({next.x, next.y});
+                }
+                if (record.contains("plan_label_rotation_radians")) {
+                    const auto angle = record.at("plan_label_rotation_radians").get<double>();
+                    const auto direction = transform_point({std::cos(angle), std::sin(angle)}, basis);
+                    expected["plan_label_rotation_radians"] = std::atan2(direction.y, direction.x);
+                }
+                const auto target = std::find_if(rows.begin(), rows.end(), [&](const auto& row) {
+                    return row.at("target_kind") == kind && row.at("target_id") == record.at("target_id");
+                });
+                if (target == rows.end() || (*target != record && *target != expected))
+                    throw std::invalid_argument("Rigid joint completion overlaps an owned label edit");
+                *target = std::move(expected);
+            }
+            validate_annotation_entity(entity);
+        }
+    }
+    if (complete_area_callouts) {
+        std::map<std::string,PlanarTransform,std::less<>> transforms;
+        for (const auto& id : intent.rigid_boundary_ids) transforms.emplace(id,resolved.owner_transforms.at(id));
+        for (const auto& change : transformed_area_callout_entities(source,candidate,transforms))
+            candidate.at(change.entity.id) = merge_selection_annotation_entities(source.at(change.entity.id),
+                change.entity,candidate.at(change.entity.id),AnnotationMergeMode::source_callout_proof);
+    }
 }
 
 nlohmann::json command_to_json(const Command& command) {
@@ -5278,7 +5814,23 @@ Command command_from_json(const nlohmann::json& value,
                     proof.at("version").get<int>() < 1 || proof.at("version").get<int>() >= 16 ||
                     !proof.contains("kind") || proof.at("kind") != kind)
                     throw std::invalid_argument("Joint translation requires one ordinary geometry proof");
-                auto result = std::get<ApplyBoundaryConstraintChanges>(command_from_json(proof, asset_resolver));
+                ApplyBoundaryConstraintChanges result;
+                if (joint_intent && joint_intent->per_owner_rigid_completion && proof.at("version") == 1 &&
+                    proof.contains("boundary_edits") && proof.at("boundary_edits").is_array() && proof.at("boundary_edits").empty()) {
+                    // v4 ordinary boundary receipts are reconstructed from their
+                    // operators before the lower proof. Empty geometry is legal
+                    // only inside this source-qualified wrapper, never as v1.
+                    command_exact_fields(proof, {"version", "kind", "expected_revision", "message", "entity_changes", "boundary_edits"},
+                        DocumentErrorCode::invalid_entity, "rigid joint prepared boundary proof");
+                    auto ordinary = proof;
+                    ordinary["kind"] = "apply_entity_changes";
+                    ordinary.erase("boundary_edits");
+                    ordinary["asset_changes"] = nlohmann::json::array();
+                    const auto decoded = std::get<ApplyEntityChanges>(command_from_json(ordinary, asset_resolver));
+                    result.expected_revision = decoded.expected_revision;
+                    result.message = decoded.message;
+                    result.entity_changes = decoded.entity_changes;
+                } else result = std::get<ApplyBoundaryConstraintChanges>(command_from_json(proof, asset_resolver));
                 if (result.expected_revision != command_revision(value.at("expected_revision"), "joint translation revision") ||
                     !value.at("message").is_string() || result.message != value.at("message").get<std::string>())
                     throw std::invalid_argument("Joint translation proof has a different revision or message");

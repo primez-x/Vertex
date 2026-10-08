@@ -233,6 +233,145 @@ double rigid_orientation(double rotation, const PlanarTransform& linear) {
 
 }  // namespace
 
+std::vector<EntityChange> transformed_area_callout_entities(
+    const std::map<std::string, Entity, std::less<>>& source_entities,
+    const std::map<std::string, Entity, std::less<>>& final_geometry_entities,
+    const std::map<std::string, PlanarTransform, std::less<>>& owner_transforms) {
+    require(owner_transforms.size() <= maximum_area_callout_placement_targets,
+            "Area callout transformation supports at most 8192 targets.");
+    if (owner_transforms.empty()) return {};
+
+    struct Anchors { Vec2 before; Vec2 after; bool identity{}; };
+    std::map<std::string, Anchors, std::less<>> anchors;
+    for (const auto& [id, transform] : owner_transforms) {
+        require(!id.empty() && id.size() <= 256,
+                "Area callout owner IDs must be bounded and nonempty.");
+        const bool identity = rigid_identity(transform);
+        const auto before = source_entities.find(id);
+        const auto after = final_geometry_entities.find(id);
+        require(before != source_entities.end() && after != final_geometry_entities.end(),
+                "The transformed area callout owner no longer exists.");
+        require(before->second.id == id && after->second.id == id && before->second.type == after->second.type,
+                "The transformed area callout owner identity or type changed.");
+        const auto old_anchor = area_label_anchor(callout_boundary(before->second));
+        const auto new_anchor = area_label_anchor(callout_boundary(after->second));
+        require(std::isfinite(old_anchor.x) && std::isfinite(old_anchor.y) &&
+                    std::isfinite(new_anchor.x) && std::isfinite(new_anchor.y),
+                "The transformed area callout anchors must be finite.");
+        anchors.emplace(id, Anchors{old_anchor, new_anchor, identity});
+    }
+
+    using Target = std::pair<std::string, std::string>;
+    struct Provider { std::string entity_id; std::size_t index{}; };
+    std::map<Target, Provider> providers;
+    std::map<std::string, AnnotationState> states;
+    for (const auto& [id, entity] : source_entities) {
+        if (entity.type != kAnnotationEntityType) continue;
+        auto state = decode_annotation_entity(entity);
+        for (std::size_t index = 0; index < state.overrides.size(); ++index) {
+            const auto& value = state.overrides[index];
+            if (!owner_transforms.contains(value.target_id) ||
+                (value.target_kind != "area" && value.target_kind != "area_name" &&
+                 value.target_kind != "area_calculation")) continue;
+            require(providers.emplace(Target{value.target_id, value.target_kind}, Provider{id, index}).second,
+                    "The transformed area callout has ambiguous override providers.");
+        }
+        states.emplace(id, std::move(state));
+    }
+
+    std::map<std::string, Entity> edits;
+    std::size_t target_count = 0;
+    for (const auto& [id, transform] : owner_transforms) {
+        const auto name = providers.find({id, "area_name"});
+        const auto calculation = providers.find({id, "area_calculation"});
+        const bool separated = name != providers.end() || calculation != providers.end();
+        const std::size_t count = separated ? 2 : 1;
+        require(count <= maximum_area_callout_placement_targets - target_count,
+                "Area callout transformation supports at most 8192 targets.");
+        target_count += count;
+        const auto& anchor = anchors.at(id);
+        // Identity preserves every original wire field, including omitted
+        // defaults and legacy schema, after validating owners and providers.
+        if (anchor.identity) continue;
+        const PlanarTransform linear{{}, transform.rotation_radians,
+                                    transform.flip_horizontal, transform.flip_vertical, {}};
+        const bool oriented = !rigid_identity(linear);
+        const auto transform_role = [&](const std::string& role) {
+            const auto provider = providers.find({id, role});
+            const PresentationOverride* current = provider == providers.end() ? nullptr :
+                &states.at(provider->second.entity_id).overrides.at(provider->second.index);
+            // Combined placement is collision-aware until explicitly authored.
+            // An explicit rotation can follow a rigid direction independently.
+            const bool move_position = separated || (current && current->plan_label_offset.has_value());
+            const bool move_rotation = move_position || (current && current->plan_label_rotation_radians.has_value());
+            if (!move_position && !move_rotation) return;
+            const auto old_offset = current && current->plan_label_offset ?
+                *current->plan_label_offset : default_callout_offset(role);
+            const auto source_rotation = current ? current->plan_label_rotation_radians.value_or(0.0) : 0.0;
+            const auto old_rotation = canonical_callout_rotation(source_rotation);
+            const auto rotation = oriented && move_rotation ?
+                canonical_callout_rotation(rigid_orientation(source_rotation, linear)) : old_rotation;
+            require(std::isfinite(rotation), "The transformed area callout rotation must be finite.");
+            Vec2 offset = old_offset;
+            bool same_position = true;
+            if (move_position) {
+                const Vec2 old_position{anchor.before.x + old_offset.x, anchor.before.y + old_offset.y};
+                require(std::isfinite(old_position.x) && std::isfinite(old_position.y),
+                        "The source area callout position must be finite.");
+                const auto position = transform_point(old_position, transform);
+                offset = {position.x - anchor.after.x, position.y - anchor.after.y};
+                require(std::isfinite(position.x) && std::isfinite(position.y) &&
+                            std::isfinite(offset.x) && std::isfinite(offset.y),
+                        "The transformed area callout position and offset must be finite.");
+                // Retain exact defaults/authored bytes when their final absolute
+                // position already agrees, avoiding large-origin round trips.
+                same_position = (offset.x == old_offset.x && offset.y == old_offset.y) ||
+                    (position.x == anchor.after.x + old_offset.x &&
+                     position.y == anchor.after.y + old_offset.y);
+            }
+            const bool same_rotation = rotation == old_rotation;
+            if (same_position && same_rotation) return;
+            // A missing separated counterpart belongs to the same original
+            // provider as the existing role; no fresh annotation entity exists.
+            const auto& location = provider != providers.end() ? provider->second :
+                name != providers.end() ? name->second : calculation->second;
+            auto [edit, inserted] = edits.try_emplace(location.entity_id, source_entities.at(location.entity_id));
+            (void)inserted;
+            const int required_version = role == "area" ? (!same_rotation ? 11 : 4) : 8;
+            upgrade_callout_schema(edit->second, states.at(location.entity_id), required_version);
+            auto& raw_overrides = edit->second.properties.at("state").at("overrides");
+            if (current) {
+                auto& raw = raw_overrides.at(location.index);
+                if (!same_position) raw["plan_label_offset_m"] = nlohmann::json::array({offset.x, offset.y});
+                if (!same_rotation) raw["plan_label_rotation_radians"] = rotation;
+            } else {
+                PresentationOverride value;
+                value.target_kind = role;
+                value.target_id = id;
+                value.style.text_height_metres = 0.20;
+                value.inherit_appearance = true;
+                if (!same_position) value.plan_label_offset = offset;
+                if (!same_rotation) value.plan_label_rotation_radians = rotation;
+                AnnotationState added;
+                added.overrides.push_back(std::move(value));
+                raw_overrides.push_back(encode_annotation_state(added, default_symbol_catalog()).at("overrides").at(0));
+            }
+        };
+        if (separated) {
+            transform_role("area_name");
+            transform_role("area_calculation");
+        } else transform_role("area");
+    }
+
+    std::vector<EntityChange> result;
+    result.reserve(edits.size());
+    for (auto& [id, entity] : edits) {
+        validate_annotation_entity(entity);
+        if (entity != source_entities.at(id)) result.push_back(EntityChange::upsert(std::move(entity)));
+    }
+    return result;
+}
+
 ApplyEntityChanges area_callout_placement_command(const DocumentSnapshot& source,
     std::span<const AreaCalloutPlacement> placements, std::string_view fresh_annotation_owner_id,
     Revision expected_revision) {
