@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v84
+# Vertex project formats v1 through v85
+
+## Reviewed proposed-room editing (v85)
+
+Native format 85 and JSON/assets extraction version 83 retain version-two
+`phase_room_review_intent` beneath exclusive envelope 33. The required
+`proposed_room_completion: true` marker adds actual target-proposal redefinition
+and retirement while version-one keys and replay remain unchanged.
+
+Redefinition preserves the owner's identity, authored facts and opaque metadata,
+and derives fresh topology and source evidence from the explicitly evaluated
+target design. Retirement removes only actual proposals in that same target.
+Every affected supported dimension or constraint has an explicit Keep/Remove
+decision; retained children use reviewed mappings, automatic edge dimensions
+use fresh replacement identities, and removed relationship rows carry exact
+acknowledgements. Unsupported incoming identity references refuse. Baseline
+room entities and unrelated alternatives remain exact.
+
+Version two additionally requires canonical `presentation_removals` evidence
+for every affected saved sheet or annotation record. Each row binds the original
+and independently derived replacement singleton digests plus its exact removed
+tokens. Reviewing these removals cannot change baseline-only analytical
+dependents or baseline-referencing presentation rows and restrictions. Opaque
+identity mentions in a deleted presentation row are checked before pruning.
+
+Replay independently reconstructs the entire admitted entity map. Source-bound
+room transitions compare that reconstruction with the published result. Fresh
+children and replacement dimension identities cannot reuse any retained-history
+owner or recognized boundary/linework child. The floor applies to every retained
+event, including undone or abandoned edits. Earlier version-one phase reviews
+and ordinary active-phase intent 3 retain their native 84/extraction 82 floor.
+This source has not been compiled or qualified in the installed app.
 
 ## Baseline-preserving room alternatives (v84)
 
@@ -17,7 +48,8 @@ detected outlines/holes/source lineage and explicitly reviewed name,
 classification and factor. Unclassified candidates remain unassigned. Incoming
 saved references, including opaque identity mentions, require complete exact
 baseline-preservation acknowledgements. No reference copy or retargeting is
-implied. Existing changed proposed rooms require a later explicit editing lane.
+implied. Version one cannot redefine or retire existing proposed rooms; version
+two provides the separate explicit editing authority described above.
 
 Competing geometry, raw-entity, asset and ordinary room-review authorities refuse.
 Fresh identities cannot reuse retained-history owners or recognized boundary and

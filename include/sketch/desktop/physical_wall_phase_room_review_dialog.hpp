@@ -11,6 +11,9 @@
 namespace sketch::desktop {
 // Collects explicit decisions against one captured source. The owner retains
 // workspace/edit authority and publishes the accepted command exactly once.
+// Existing proposals require explicit redefinition/retirement, dependent
+// Keep/Remove and topology decisions before a detached typed scene preview.
+// Saved presentation/annotation removals require exact individual confirmation.
 class PhysicalWallPhaseRoomReviewDialog final : public QDialog {
 public:
     PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,ApplyEntityChanges registry_command,

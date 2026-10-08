@@ -1,5 +1,6 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/physical_wall_room_data.hpp"
+#include "sketch/physical_wall_phase.hpp"
 #include "sketch/wall_merge.hpp"
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
 #include "sketch/physical_wall_room_merge.hpp"
@@ -887,7 +888,8 @@ static void validate_replacement_linework_face(
 static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryGeometryEdit& edit, const std::vector<BoundaryGeometryEdit>* batch,
-    bool retained_replay = false, const std::set<std::string>& reviewed_room_owners = {}) {
+    bool retained_replay = false, const std::set<std::string>& reviewed_room_owners = {},
+    const PhysicalWallPhaseSelection* phase_selection = nullptr) {
     validate_boundary_geometry_edit(edit);
     const auto found = source.find(edit.boundary_id);
     if (found == source.end()) throw std::invalid_argument("Edited boundary does not exist");
@@ -902,7 +904,9 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     std::optional<PhysicalWallRoomDescriptor> repaired_room;
     if (edit.physical_wall_room_repair) {
         if (batch) throw std::invalid_argument("Physical room repair cannot be batched with other geometry edits");
-        repaired_room=validate_physical_wall_room_repair(source,edit,reviewed_room_owners);
+        repaired_room=phase_selection
+            ? validate_physical_wall_room_repair(source,edit,reviewed_room_owners,*phase_selection)
+            : validate_physical_wall_room_repair(source,edit,reviewed_room_owners);
         validate_retained_replacement_deductions(source,original,boundary_geometry(edited));
     }
     if (edit.replacement_linework_sources) {
@@ -1004,6 +1008,21 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     auto result = source;
     result.at(edit.boundary_id) = std::move(encoded);
     if (!batch && edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+        std::optional<std::map<std::string, Entity, std::less<>>> dimension_evaluation;
+        const auto resolve_review_dimension = [&](const BoundaryDimension& dimension) {
+            if (!phase_selection) return dimension.resolve(result);
+            if (!dimension_evaluation) {
+                // Numeric qualification uses actual reconstructed owners and
+                // walls, with only this detached registry selection changed.
+                // It cannot replace the source proof or published entity map.
+                dimension_evaluation = result;
+                auto& model = dimension_evaluation->at(phase_selection->registry_id).properties.at("model");
+                (void)ModelPhases::from_json(model).with_active(phase_selection->alternative_id);
+                model.at("active_alternative") = phase_selection->alternative_id
+                    ? nlohmann::json(*phase_selection->alternative_id) : nlohmann::json(nullptr);
+            }
+            return dimension.resolve(*dimension_evaluation);
+        };
         const auto topology_changed = edit.fresh_topology || edited.segments.size() != decode_identified_boundary_entity(original).segments.size();
         const Entity* automatic_template = nullptr;
         std::vector<std::string> retired_dimensions;
@@ -1088,7 +1107,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                         target.at("vertex_id") = mapped_child(dimension.vertex_id, "vertices");
                     }
                     const auto remapped = decode_boundary_dimension_entity(entity);
-                    (void)remapped.dimension->resolve(result);
+                    (void)resolve_review_dimension(*remapped.dimension);
                 }
             } else {
                 (void)dimension.resolve(result);
@@ -1298,6 +1317,14 @@ std::map<std::string, Entity, std::less<>> edited_boundary_entities_for_room_rev
     if (!edit.physical_wall_room_repair || !reviewed_owners.contains(edit.boundary_id))
         throw std::invalid_argument("Complete room-review reconstruction requires its retained ownership scope");
     return edited_boundary_entities_impl(source,edit,nullptr,false,reviewed_owners);
+}
+
+std::map<std::string, Entity, std::less<>> edited_boundary_entities_for_phase_room_review(
+    const std::map<std::string, Entity, std::less<>>& source, const BoundaryGeometryEdit& edit,
+    const std::set<std::string>& reviewed_owners, const PhysicalWallPhaseSelection& selection) {
+    if (!edit.physical_wall_room_repair || !reviewed_owners.contains(edit.boundary_id))
+        throw std::invalid_argument("Complete phase room-review reconstruction requires its retained ownership scope");
+    return edited_boundary_entities_impl(source,edit,nullptr,false,reviewed_owners,&selection);
 }
 
 std::map<std::string, Entity, std::less<>> replayed_boundary_entities(

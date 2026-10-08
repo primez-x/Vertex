@@ -184,7 +184,8 @@ public:
     // Intact joint wall commands composed with room review require v83.
     // Baseline-preserving phase variants and active-phase room review require
     // v84 in all retained history, including terrain phase membership.
-    static constexpr std::uint32_t format_version = 84;
+    // Reviewed proposed-room redefinition/retirement requires v85 throughout history.
+    static constexpr std::uint32_t format_version = 85;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

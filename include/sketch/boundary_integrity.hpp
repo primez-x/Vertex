@@ -3,6 +3,7 @@
 #include <set>
 
 namespace sketch {
+struct PhysicalWallPhaseSelection;
 [[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryTransformation& transformation);
@@ -37,6 +38,13 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities_for_room_review(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryGeometryEdit& edit, const std::set<std::string>& reviewed_owners);
+// Pure reconstruction of a staged room-review assignment in an explicitly
+// evaluated phase. Membership and reference decisions must already be staged;
+// the enclosing typed intent and final Document admission retain authority.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities_for_phase_room_review(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryGeometryEdit& edit, const std::set<std::string>& reviewed_owners,
+    const PhysicalWallPhaseSelection& selection);
 // Applies solved vertex positions together when sequential intermediate geometry
 // would be invalid. Existing sequential derivations remain byte-compatible.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities_batch(

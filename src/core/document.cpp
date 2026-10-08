@@ -1628,6 +1628,26 @@ void validate_physical_room_source_transition(
     const std::map<std::string, Entity, std::less<>>& after,
     const BoundaryGeometryEdit* reviewed_edit=nullptr,
     const ApplyBoundaryConstraintChanges* reviewed_batch=nullptr) {
+    // Explicit phase review is a separate authority. Admit a source-bound
+    // proposal change only when its exclusive, canonical proof independently
+    // reconstructs this complete destination; ordinary payloads cannot borrow it.
+    if (reviewed_batch && (reviewed_batch->phase_room_review_completion ||
+        !reviewed_batch->phase_room_review_intent.is_null())) {
+        try {
+            (void)command_to_json(Command{*reviewed_batch});
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            const auto replay=replay_physical_wall_phase_room_review(before,reviewed_batch->phase_room_review_intent);
+            if (entity_map_digest(replay.entities)!=entity_map_digest(after))
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Phase room changes differ from their independently verified destination");
+            return;
+#else
+            document_error(DocumentErrorCode::invalid_entity,
+                "Phase room changes require the production physical-wall engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     // The dedicated batch replay reconstructs the complete result from its
     // semantic decisions, including all retained owners, before publication.
     if (reviewed_batch && reviewed_batch->room_review_completion && !reviewed_batch->room_review_intent.is_null()) return;
@@ -2986,13 +3006,18 @@ static void validate_phase_room_review_lifetime(const nlohmann::json& encoded,
             throw std::invalid_argument("Phase room review fresh identities are invalid or overlap");
     };
     if (!intent.source_registry_entity_digest) reserve(intent.registry_id);
-    for (const auto& plane:intent.planes)
+    for (const auto& plane:intent.planes) {
         for (const auto& decision:plane.fresh) {
-            if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed) continue;
-            reserve(decision.room_id);
+            if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed &&
+                decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) continue;
+            if (decision.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed)
+                reserve(decision.room_id);
             for (const auto& id:decision.fresh_ids.segment_ids) reserve(id);
             for (const auto& id:decision.fresh_ids.vertex_ids) reserve(id);
         }
+        for (const auto& decision:plane.source_rooms)
+            for (const auto& id:decision.replacement_dimension_ids) reserve(id);
+    }
     for (std::size_t index=0;index<preceding_records;++index)
         for (const auto& [id,entity]:history[index].entities) {
             if (fresh.contains(id))

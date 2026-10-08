@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace sketch {
+struct PhysicalWallPhaseSelection;
 struct PhysicalWallRoomDescriptor {
     std::string selected_wall_id;
     nlohmann::json source_lineage;
@@ -26,4 +27,9 @@ struct PhysicalWallRoomDescriptor {
 [[nodiscard]] PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
     const std::map<std::string,Entity,std::less<>>& source, const BoundaryGeometryEdit& edit,
     const std::set<std::string>& reviewed_owners = {});
+// The same source proof for a staged explicit-phase room review. Evaluated
+// inactive owners do not reserve destinations; active owners still do.
+[[nodiscard]] PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
+    const std::map<std::string,Entity,std::less<>>& source, const BoundaryGeometryEdit& edit,
+    const std::set<std::string>& reviewed_owners, const PhysicalWallPhaseSelection& selection);
 } // namespace sketch

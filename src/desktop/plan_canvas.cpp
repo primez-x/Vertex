@@ -367,10 +367,7 @@ double distance(Vec2 left, Vec2 right) {
 }
 
 QString display_cursor_length(double metres, bool metric) {
-    if (!std::isfinite(metres)) return QStringLiteral("—");
-    if (metric) return QStringLiteral("%1 m").arg(metres, 0, 'f', 3);
-    constexpr double metres_per_foot = 0.3048;
-    return QStringLiteral("%1 ft").arg(metres / metres_per_foot, 0, 'f', 2);
+    return PlanCanvas::drawingLengthText(metres,metric);
 }
 
 Vec2 operator+(Vec2 left, Vec2 right) {

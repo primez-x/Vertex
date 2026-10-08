@@ -14,6 +14,48 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 proposed-room phase completion
+
+Source implementation adds phase review intent 2 for redefinition and retirement
+of actual proposals in the named target alternative. Existing owner facts and
+opaque metadata stay intact; replacement topology, retained-reference mappings,
+fresh automatic dimensions and individual relationship removals are explicit.
+Known presentation memberships are reconstructed; unsupported incoming identity
+references refuse. Baseline rooms and unrelated alternatives retain their data.
+
+Desktop controls now expose same-owner redefinition, retirement, individual
+reference Keep/Remove choices, retained-target mappings, visible fresh automatic
+dimension identities, relationship-row acknowledgements and saved presentation
+changes. Presentation evidence binds original/replacement records; confirmations
+survive only identical complete evidence. Baseline analytical dependents stay
+exact, while reviewed presentation pruning preserves every baseline-referencing
+raw portion. Removed rows are checked for opaque incoming references.
+
+The enclosing Document independently reconstructs phase transitions and compares
+the complete entity result before admitting source-bound room changes. Fresh
+redefinition children and replacement dimensions reserve all retained history.
+Native 85/extraction 83 floors distinguish this dialect from version-one phase
+review and ordinary intent 3, including after Undo. Independent core review
+identified a multi-floor rejection from globally scoped repair owners; the
+repair scope now follows each assignment's admitted context and plane.
+
+The first core review approved the corrected plane-scoped batch. Independent
+integrated review also approved reference-preservation completion and the
+desktop/history/format seams without a required P1/P2 finding or obvious source
+compile inconsistency. Room-review lengths and the canvas edit HUD now reuse practical
+fractional feet/inches or metric presentation, with an explicit approximation
+indicator where required; displayed rounding never edits geometry. No builds,
+tests, probes, launches, packages or installations run. The installed candidate
+is unchanged; compilation, modal interaction, save/reopen and Undo remain
+unverified.
+
+Next source work is active-phase connected constraint authoring. The agreed
+seam separates structural admission from active residuals, adds an explicit
+saved-phase builder/replay policy and an exclusive source-bound command, and
+preserves legacy history reconstruction. Root owns history-derived state policy,
+storage floors and desktop routing; separate integrity and authoring paths can
+be implemented independently once their shared API is fixed.
+
 ### October 8 ordinary room editing in the active design
 
 Ordinary room correspondence and version-three review intent now use the actual

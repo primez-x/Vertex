@@ -32,8 +32,7 @@ QString area(double value,bool metric) {
 QString quantity(const BoundaryDimensionResolution& value,bool metric) {
     if (value.kind==BoundaryDimensionKind::area) return area(value.area_square_metres,metric);
     if (value.kind==BoundaryDimensionKind::angle) return QStringLiteral("%1°").arg(value.angle_radians*180/std::numbers::pi,0,'f',1);
-    return QStringLiteral("%1 %2").arg(metric?value.segment_length_metres:value.segment_length_metres/0.3048,0,'f',2)
-        .arg(metric?QStringLiteral("m"):QStringLiteral("ft"));
+    return PlanCanvas::drawingLengthText(value.segment_length_metres,metric);
 }
 QString kind(PhysicalWallRoomCorrespondenceKind value) {
     switch (value) {

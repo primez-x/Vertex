@@ -1,8 +1,16 @@
 #include "sketch/physical_wall_phase_review.hpp"
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_integrity.hpp"
+#include "sketch/annotation_entity_codec.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/physical_wall_spaces.hpp"
+#include "sketch/wall_split.hpp"
+#include "sketch/wall_merge.hpp"
+#include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -351,15 +359,366 @@ void witness(const PhysicalWallSpace& space,Vec2 point) {
     auto holes=space.holes; holes.push_back(std::move(probe));
     if (const auto error=validate_boundary_holes(space.boundary,holes)) reject("witness is not strictly interior: "+*error);
 }
+Json relation_json(const RoomRelation& r) {
+    std::string kind;
+    if (r.kind==RoomRelationKind::independent) kind="independent";
+    else if (r.kind==RoomRelationKind::follows) kind="follows";
+    else if (r.kind==RoomRelationKind::derived_from) kind="derived_from";
+    else reject("unsupported relationship kind");
+    return {{"source_id",r.source_id},{"target_id",r.target_id},{"kind",kind}};
+}
+RoomRelation relation(const Json& value) {
+    keys(value,{"source_id","target_id","kind"});
+    RoomRelation result{value.at("source_id").get<std::string>(),value.at("target_id").get<std::string>(),RoomRelationKind::independent};
+    identity(result.source_id); identity(result.target_id);
+    const auto kind=value.at("kind").get<std::string>();
+    if (kind=="follows") result.kind=RoomRelationKind::follows;
+    else if (kind=="derived_from") result.kind=RoomRelationKind::derived_from;
+    else if (kind!="independent") reject("unsupported relationship kind");
+    return result;
+}
+bool mentions(const Json& value,const std::set<std::string>& tokens) {
+    std::set<std::string> found; collect_mentions(value,tokens,found); return !found.empty();
+}
+std::set<std::string> original_target_proposals(const Entities& source,const PhysicalWallPhaseSelection& selection) {
+    identity(selection.registry_id);
+    if (!selection.alternative_id) reject("proposed-room editing requires a target alternative");
+    identity(*selection.alternative_id);
+    const auto registry=source.find(selection.registry_id);
+    if (registry==source.end() || registry->second.type!="model_phases") reject("original target registry is missing");
+    const auto model=ModelPhases::from_json(registry->second.properties.at("model"));
+    (void)physical_wall_phase_states(source,selection);
+    std::set<std::string> result;
+    for (const auto& alternative:model.alternatives()) if (alternative.id==*selection.alternative_id)
+        for (const auto& id:alternative.proposed_ids) if (is_physical_wall_room(source.at(id))) result.insert(id);
+    return result;
+}
+PhysicalWallRoomPhaseProposedDependents proposed_dependents(const Entities& source,const std::set<std::string>& changed) {
+    PhysicalWallRoomPhaseProposedDependents result;
+    for (const auto& [id,e]:source) {
+        bool affected=false;
+        if (can_recognize_boundary_dimension_entity_type(e.type)) {
+            const auto decoded=decode_boundary_dimension_entity(e);
+            affected=decoded.supported() && changed.contains(decoded.dimension->boundary_id);
+        } else if (e.type=="constraint") {
+            const auto decoded=decode_constraint_entity(e);
+            affected=decoded.supported() && std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
+                [&](const auto& binding){return changed.contains(binding.owner_id);});
+        } else if (e.type=="room_relationships" && room_relationship_model_version(e.properties.at("model"))<=2) {
+            const auto graph=RoomRelationshipSnapshot::from_json(e.properties.at("model"));
+            PhysicalWallRoomRelationshipRemoval d; d.entity_id=id;
+            for (const auto& ref:graph.references()) if (changed.contains(ref.id)) d.removed_room_ids.push_back(ref.id);
+            if (!d.removed_room_ids.empty()) {
+                const std::set<std::string> removed(d.removed_room_ids.begin(),d.removed_room_ids.end());
+                for (const auto& r:graph.relations()) if (removed.contains(r.source_id) || removed.contains(r.target_id))
+                    d.acknowledged_relations.push_back(r);
+                result.relationship_removals.push_back(std::move(d));
+            }
+        }
+        if (affected) result.reference_ids.push_back(id);
+    }
+    if (result.reference_ids.size()>maximum_rows || result.relationship_removals.size()>maximum_rows)
+        reject("proposed dependent evidence exceeds budget");
+    return result;
+}
+void filter_members(Json& array,const std::set<std::string>& removed) {
+    array.erase(std::remove_if(array.begin(),array.end(),[&](const auto& value) {
+        return removed.contains(value.template get<std::string>());
+    }),array.end());
+}
+std::vector<PhysicalWallRoomPhasePresentationRemoval> derive_presentation_removals(Entities& result,const std::set<std::string>& removed) {
+    std::vector<PhysicalWallRoomPhasePresentationRemoval> evidence;
+    if (removed.empty()) return evidence;
+    for (auto& [id,e]:result) {
+        if (e.type!=kSheetViewEntityType && e.type!=kAnnotationEntityType) continue;
+        identity(id);
+        if (e.id!=id) reject("saved presentation identity differs from its source key");
+        const auto before=e;
+        std::set<std::string> affected;
+        if (e.type==kSheetViewEntityType) {
+            (void)decode_sheet_view_entity(e);
+            bool changed=false;
+            for (auto& view:e.properties.at("model").at("views")) {
+                if (view.contains("object_ids")) {
+                    const auto count=view.at("object_ids").size();
+                    collect_mentions(view.at("object_ids"),removed,affected);
+                    filter_members(view.at("object_ids"),removed);
+                    if (view.at("object_ids").size()!=count) {
+                        // An emptied restriction must remain restricted. Preserve
+                        // the saved model dialect and every untouched raw row.
+                        if (view.at("object_ids").empty()) view["restrict_to_objects"]=true;
+                        changed=true;
+                    }
+                }
+                if (view.contains("overlays")) {
+                    auto& rows=view.at("overlays"); const auto count=rows.size();
+                    rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+                        bool prune=false;
+                        if (row.contains("object_id") && removed.contains(row.at("object_id").template get<std::string>())) {
+                            affected.insert(row.at("object_id").template get<std::string>()); prune=true;
+                        }
+                        if (row.contains("dimension_binding") && row.at("dimension_binding").is_object() &&
+                            removed.contains(row.at("dimension_binding").at("object_id").template get<std::string>())) {
+                            affected.insert(row.at("dimension_binding").at("object_id").template get<std::string>()); prune=true;
+                        }
+                        return prune;
+                    }),rows.end());
+                    changed=changed || count!=rows.size();
+                }
+                auto& presentation=view.at("presentation");
+                if (presentation.contains("appearance") && presentation.at("appearance").is_object() &&
+                    presentation.at("appearance").contains("objects")) {
+                    auto& rows=presentation.at("appearance").at("objects"); const auto count=rows.size();
+                    rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+                        const auto token=row.at("object_id").template get<std::string>();
+                        if (!removed.contains(token)) return false;
+                        affected.insert(token); return true;
+                    }),rows.end());
+                    changed=changed || count!=rows.size();
+                }
+            }
+            if (changed) validate_sheet_view_entity(e);
+        } else if (e.type==kAnnotationEntityType) {
+            validate_annotation_entity(e);
+            auto& state=e.properties.at("state");
+            if (!state.contains("overrides")) continue;
+            auto& rows=state.at("overrides"); const auto count=rows.size();
+            rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+                const auto token=row.at("target_id").template get<std::string>();
+                if (!removed.contains(token)) return false;
+                affected.insert(token); return true;
+            }),rows.end());
+            if (count!=rows.size()) validate_annotation_entity(e);
+        }
+        if (affected.empty()) continue;
+        if (evidence.size()==maximum_rows) reject("presentation removal evidence exceeds budget");
+        evidence.push_back({id,entity_digest(before),entity_digest(e),std::vector<std::string>(affected.begin(),affected.end())});
+    }
+    return evidence;
+}
+bool same_presentation_removal(const PhysicalWallRoomPhasePresentationRemoval& a,const PhysicalWallRoomPhasePresentationRemoval& b) {
+    return a.entity_id==b.entity_id && a.expected_entity_digest==b.expected_entity_digest &&
+        a.expected_replacement_entity_digest==b.expected_replacement_entity_digest && a.removed_entity_ids==b.removed_entity_ids;
+}
+void apply_reviewed_presentation_removals(const Entities& source,Entities& result,const PhysicalWallRoomPhaseReviewIntent& intent,
+    const std::set<std::string>& removed,std::set<std::string>& allowed) {
+    auto replacement=source;
+    const auto expected=derive_presentation_removals(replacement,removed);
+    if (expected.size()!=intent.presentation_removals.size()) reject("every affected saved presentation requires an exact removal acknowledgement");
+    for (std::size_t i=0;i<expected.size();++i) {
+        const auto& d=expected[i];
+        if (!same_presentation_removal(d,intent.presentation_removals[i]))
+            reject("saved presentation removal evidence changed or is incomplete: "+d.entity_id);
+        const auto found=result.find(d.entity_id);
+        if (found==result.end() || !exact_entity(source.at(d.entity_id),found->second))
+            reject("saved presentation changed before its reviewed removal: "+d.entity_id);
+        result.at(d.entity_id)=replacement.at(d.entity_id); allowed.insert(d.entity_id);
+    }
+}
+void refuse_opaque_removed_presentation_rows(const Entities& source,
+    const std::vector<PhysicalWallRoomPhasePresentationRemoval>& decisions,const std::set<std::string>& affected) {
+    for (const auto& d:decisions) {
+        const auto& e=source.at(d.entity_id);
+        const std::set<std::string> removed(d.removed_entity_ids.begin(),d.removed_entity_ids.end());
+        const auto check=[&](const Json& row) {
+            if (mentions(row,affected)) reject("removed saved presentation row contains an unsupported incoming reference: "+d.entity_id);
+        };
+        if (e.type==kSheetViewEntityType) {
+            for (const auto& view:e.properties.at("model").at("views")) {
+                if (view.contains("overlays")) for (auto row:view.at("overlays")) {
+                    const bool owner=row.contains("object_id") && removed.contains(row.at("object_id").get<std::string>());
+                    const bool dimension=row.contains("dimension_binding") && row.at("dimension_binding").is_object() &&
+                        removed.contains(row.at("dimension_binding").at("object_id").get<std::string>());
+                    if (!owner && !dimension) continue;
+                    row.erase("object_id");
+                    if (row.contains("dimension_binding") && row.at("dimension_binding").is_object()) row.at("dimension_binding").erase("object_id");
+                    check(row);
+                }
+                const auto& p=view.at("presentation");
+                if (p.contains("appearance") && p.at("appearance").is_object() && p.at("appearance").contains("objects"))
+                    for (auto row:p.at("appearance").at("objects")) if (removed.contains(row.at("object_id").get<std::string>())) {
+                        row.erase("object_id"); check(row);
+                    }
+            }
+        } else if (e.type==kAnnotationEntityType) {
+            const auto& state=e.properties.at("state");
+            if (state.contains("overrides")) for (auto row:state.at("overrides")) if (removed.contains(row.at("target_id").get<std::string>())) {
+                row.erase("target_id"); check(row);
+            }
+        }
+    }
+}
+Json baseline_referencing_rows(const Json& rows,const std::set<std::string>& baseline_tokens) {
+    auto result=Json::array();
+    for (const auto& row:rows) if (mentions(row,baseline_tokens)) result.push_back(row);
+    return result;
+}
+// Qualified presentation pruning preserves all surviving raw rows and metadata.
+// A row mentioning both a baseline token and a removed proposal/reference must
+// nevertheless survive byte-exact; reviewing its removal does not transfer the
+// independently acknowledged baseline ownership authority.
+void validate_baseline_presentation_preservation(const Entity& before,const Entity& after,const std::set<std::string>& baseline_tokens) {
+    const auto preserve_rows=[&](const Json& old_rows,const Json& next_rows) {
+        if (baseline_referencing_rows(old_rows,baseline_tokens).dump()!=baseline_referencing_rows(next_rows,baseline_tokens).dump())
+            reject("reviewed presentation removal would change a baseline-only referenced row: "+before.id);
+    };
+    if (before.type==kSheetViewEntityType) {
+        const auto& old_views=before.properties.at("model").at("views");
+        const auto& next_views=after.properties.at("model").at("views");
+        if (old_views.size()!=next_views.size()) reject("baseline-only view coverage changed");
+        for (std::size_t i=0;i<old_views.size();++i) {
+            const auto& old=old_views.at(i); const auto& next=next_views.at(i);
+            for (const auto* field:{"object_ids","overlays"}) if (old.contains(field)) preserve_rows(old.at(field),next.at(field));
+            const auto& p=old.at("presentation");
+            if (p.contains("appearance") && p.at("appearance").is_object() && p.at("appearance").contains("objects"))
+                preserve_rows(p.at("appearance").at("objects"),next.at("presentation").at("appearance").at("objects"));
+            if (mentions(old,baseline_tokens) && old.value("restrict_to_objects",false)!=next.value("restrict_to_objects",false))
+                reject("reviewed presentation removal would change a baseline-only view restriction: "+before.id);
+        }
+    } else if (before.type==kAnnotationEntityType) {
+        const auto& state=before.properties.at("state");
+        if (state.contains("overrides")) preserve_rows(state.at("overrides"),after.properties.at("state").at("overrides"));
+    } else reject("baseline presentation exception requires an actual supported presentation entity");
+}
+void validate_baseline_dependent_preservation(const Entities& source,const Entities& result,const std::string& registry_id,
+    const std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement>& baseline,
+    const std::vector<PhysicalWallRoomPhasePresentationRemoval>& presentation) {
+    std::map<std::string,const PhysicalWallRoomPhasePresentationRemoval*,std::less<>> presentation_decisions;
+    for (const auto& d:presentation) presentation_decisions.emplace(d.entity_id,&d);
+    for (const auto& d:baseline) {
+        const auto found=result.find(d.entity_id);
+        if (found==result.end()) reject("baseline-only acknowledged dependent cannot be removed: "+d.entity_id);
+        auto before=source.at(d.entity_id),after=found->second;
+        if (exact_entity(before,after)) continue;
+        if (d.entity_id==registry_id) {
+            // Named registry membership has separate exact child/replay
+            // authority; its acknowledged opaque fields remain unchanged.
+            before.properties.erase("model"); after.properties.erase("model");
+            if (!exact_entity(before,after)) reject("baseline-only registry metadata changed");
+            continue;
+        }
+        const auto reviewed=presentation_decisions.find(d.entity_id);
+        if (reviewed==presentation_decisions.end() ||
+            (before.type!=kSheetViewEntityType && before.type!=kAnnotationEntityType) ||
+            entity_digest(found->second)!=reviewed->second->expected_replacement_entity_digest)
+            reject("baseline-only acknowledged dependent must remain exact; its proposal reference cannot be removed or remapped: "+d.entity_id);
+        validate_baseline_presentation_preservation(before,after,std::set<std::string>(d.referenced_ids.begin(),d.referenced_ids.end()));
+    }
+}
+void prune_relationships(Entities& result,const PhysicalWallRoomPhaseReviewIntent& intent,
+    const std::set<std::string>& retiring,std::set<std::string>& allowed) {
+    for (const auto& d:intent.relationship_removals) {
+        const auto found=result.find(d.entity_id);
+        if (found==result.end() || found->second.type!="room_relationships") reject("relationship removal target is not an actual graph");
+        auto& model=found->second.properties.at("model");
+        if (room_relationship_model_version(model)>2) reject("unknown relationship model cannot be rewritten");
+        const auto graph=RoomRelationshipSnapshot::from_json(model);
+        const std::set<std::string> removed(d.removed_room_ids.begin(),d.removed_room_ids.end());
+        std::set<std::string> present;
+        for (const auto& ref:graph.references()) if (removed.contains(ref.id)) present.insert(ref.id);
+        if (present!=removed || !std::all_of(removed.begin(),removed.end(),[&](const auto& id){return retiring.contains(id);}))
+            reject("relationship removals must name actual retiring proposed owners");
+        std::set<std::string> incident,acknowledged;
+        for (const auto& r:graph.relations()) if (removed.contains(r.source_id) || removed.contains(r.target_id)) incident.insert(relation_json(r).dump());
+        for (const auto& r:d.acknowledged_relations) acknowledged.insert(relation_json(r).dump());
+        if (incident!=acknowledged) reject("every removed relationship row needs exact acknowledgement");
+        auto& references=model.at("references");
+        references.erase(std::remove_if(references.begin(),references.end(),[&](const auto& row) {
+            return removed.contains(row.at("id").template get<std::string>());
+        }),references.end());
+        auto& relations=model.at("relations");
+        relations.erase(std::remove_if(relations.begin(),relations.end(),[&](const auto& row) {
+            return removed.contains(row.at("source_id").template get<std::string>()) || removed.contains(row.at("target_id").template get<std::string>());
+        }),relations.end());
+        (void)RoomRelationshipSnapshot::from_json(model); allowed.insert(d.entity_id);
+    }
+}
+// Before lower repair, known analytical target fields may retain old children
+// only for explicitly kept, supported references. Everything else is scanned,
+// including JSON keys. Historical exemptions require exact source receipts and
+// independent source qualification, never a historical-looking field name.
+void refuse_opaque_proposed_dependents(const Entities& source,const Entities& candidate,
+    const std::string& registry_id,const std::set<std::string>& changed,const std::set<std::string>& retiring,
+    const std::set<std::string>& affected,const std::set<std::string>& kept) {
+    if (const auto error=validate_boundary_integrity(source)) reject(*error);
+    const auto organization=organize_project(source);
+    const auto unchanged=[](const Json& before,const Json& after,const char* field) {
+        return before.is_object() && after.is_object() && before.contains(field) && after.contains(field) &&
+            before.at(field).dump()==after.at(field).dump();
+    };
+    for (const auto& [id,e]:candidate) {
+        auto properties=e.properties,extensions=e.extensions;
+        const auto previous=source.find(id);
+        if (previous!=source.end() && previous->second.type==e.type) {
+            const bool identified=can_recognize_boundary_entity_type(e.type) &&
+                inspect_boundary_entity_version(e).format==BoundaryEntityFormat::identified_v1;
+            if (identified) {
+                if (unchanged(previous->second.properties,properties,"boundary_authoring")) properties.erase("boundary_authoring");
+                if (unchanged(previous->second.extensions,extensions,"boundary_geometry_derivation")) extensions.erase("boundary_geometry_derivation");
+                if (e.type=="measurement_boundary" && unchanged(previous->second.properties,properties,"wall_measurement_source")) {
+                    (void)exterior_wall_measurement_source_ids(e); properties.erase("wall_measurement_source");
+                }
+                if (is_physical_wall_room(e) && unchanged(previous->second.extensions,extensions,"physical_wall_room")) {
+                    const auto c=organization.drawing_context(id);
+                    if (!c || !c->complete()) reject("historical room evidence has unresolved context");
+                    (void)validate_retained_physical_wall_room_lineage(e,*c); extensions.erase("physical_wall_room");
+                }
+            }
+            if (e.type=="wall") {
+                if (unchanged(previous->second.extensions,extensions,"wall_split_archive") && extensions.at("wall_split_archive").value("version",0)==1) {
+                    validate_wall_split_archive(e); extensions.erase("wall_split_archive");
+                }
+                if (unchanged(previous->second.extensions,extensions,"wall_merge_archive") && extensions.at("wall_merge_archive").value("version",0)==1) {
+                    validate_wall_merge_archive(e); extensions.erase("wall_merge_archive");
+                }
+            }
+        }
+        if (id==registry_id) properties.erase("model");
+        if (changed.contains(id)) {
+            for (auto& segment:properties.at("segments"))
+                for (const auto* field:{"segment_id","start_vertex_id","end_vertex_id","start","end","sweep_radians"}) segment.erase(field);
+        }
+        if (can_recognize_boundary_dimension_entity_type(e.type)) {
+            const auto decoded=decode_boundary_dimension_entity(e);
+            if (decoded.supported() && changed.contains(decoded.dimension->boundary_id)) {
+                if (!kept.contains(id) || retiring.contains(decoded.dimension->boundary_id)) reject("retired room dimension needs explicit removal");
+                properties.erase("boundary_id");
+                if (properties.contains("target") && properties.at("target").is_object())
+                    for (const auto* field:{"entity_id","segment_id","segment_ids","second_segment_id","vertex_id"}) properties.at("target").erase(field);
+            }
+        } else if (e.type=="constraint") {
+            const auto decoded=decode_constraint_entity(e);
+            if (decoded.supported()) {
+                const bool touched=std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),[&](const auto& b){return changed.contains(b.owner_id);});
+                if (touched) {
+                    if (!kept.contains(id) || std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),[&](const auto& b){return retiring.contains(b.owner_id);}))
+                        reject("retired room constraint needs explicit removal");
+                    properties.erase("entity_ids"); properties.erase("wall_ids");
+                    for (auto& binding:properties.at("bindings"))
+                        for (const auto* field:{"owner_id","feature","segment_id","vertex_id","role"}) binding.erase(field);
+                }
+            }
+        }
+        if (mentions(properties,affected) || mentions(extensions,affected)) reject("unsupported incoming proposed-room reference in "+id);
+    }
+}
 } // namespace
 
 PhysicalWallRoomPhaseReviewIntent decode_physical_wall_phase_room_review_intent(const Json& value) {
     try {
         if (value.dump().size()>1024*1024) reject("intent exceeds one MiB");
-        keys(value,{"version","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest",
+        if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+            (value.at("version")!=1 && value.at("version")!=2)) reject("unsupported intent version");
+        const bool completion=value.at("version")==2;
+        if (completion) keys(value,{"version","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest",
+            "expected_revision","registry_id","alternative_id","source_registry_entity_digest","registry_command_proof","planes","baseline_only_acknowledgements",
+            "proposed_room_completion","removed_reference_ids","kept_reference_ids","relationship_removals","presentation_removals"});
+        else keys(value,{"version","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest",
             "expected_revision","registry_id","alternative_id","source_registry_entity_digest","registry_command_proof","planes","baseline_only_acknowledgements"});
-        if (!value.at("version").is_number_integer() || value.at("version")!=1) reject("unsupported intent version");
         PhysicalWallRoomPhaseReviewIntent result;
+        result.proposed_room_completion=completion;
+        if (completion && (!value.at("proposed_room_completion").is_boolean() || value.at("proposed_room_completion")!=true))
+            reject("version two requires proposed-room completion authority");
         result.source_snapshot_digest=value.at("source_snapshot_digest").get<std::string>(); digest(result.source_snapshot_digest);
         result.source_authoring_digest=value.at("source_authoring_digest").get<std::string>(); digest(result.source_authoring_digest);
         result.source_entities_digest=value.at("source_entities_digest").get<std::string>(); digest(result.source_entities_digest);
@@ -390,13 +749,38 @@ PhysicalWallRoomPhaseReviewIntent decode_physical_wall_phase_room_review_intent(
             rooms+=row.at("source_rooms").size(); fresh+=row.at("fresh").size();
             if (rooms>maximum_rows || fresh>maximum_rows) reject("room decision budget exceeded");
             for (const auto& old:row.at("source_rooms")) {
-                keys(old,{"room_id","expected_descriptor_digest","disposition"});
+                if (completion) keys(old,{"room_id","expected_descriptor_digest","disposition","child_mapping","replacement_dimension_ids"});
+                else keys(old,{"room_id","expected_descriptor_digest","disposition"});
                 PhysicalWallRoomPhaseSourceDecision d; d.room_id=old.at("room_id").get<std::string>(); identity(d.room_id);
                 if (!source_ids.insert(d.room_id).second) reject("duplicate original room decision");
                 d.expected_descriptor_digest=old.at("expected_descriptor_digest").get<std::string>(); digest(d.expected_descriptor_digest);
                 const auto action=old.at("disposition").get<std::string>();
                 if (action=="supersede_in_target") d.disposition=PhysicalWallRoomPhaseSourceDisposition::supersede_in_target;
+                else if (completion && action=="redefine_proposed") d.disposition=PhysicalWallRoomPhaseSourceDisposition::redefine_proposed;
+                else if (completion && action=="retire_proposed") d.disposition=PhysicalWallRoomPhaseSourceDisposition::retire_proposed;
                 else if (action!="share_unchanged") reject("unsupported source disposition");
+                if (completion) {
+                    d.child_mapping=old.at("child_mapping");
+                    if (!d.child_mapping.is_object()) reject("malformed child mapping");
+                    if (!d.child_mapping.empty()) {
+                        keys(d.child_mapping,{"segments","vertices"});
+                        for (const auto* group:{"segments","vertices"}) {
+                            const auto& mappings=d.child_mapping.at(group);
+                            if (!mappings.is_object() || mappings.size()>65536) reject("malformed child mapping group");
+                            std::set<std::string> targets;
+                            for (const auto& [old_id,target]:mappings.items()) {
+                                identity(old_id); const auto new_id=target.get<std::string>(); identity(new_id);
+                                if (!targets.insert(new_id).second) reject("child mapping cannot merge identities");
+                            }
+                        }
+                    }
+                    d.replacement_dimension_ids=old.at("replacement_dimension_ids").get<std::vector<std::string>>(); identities(d.replacement_dimension_ids);
+                    if (d.disposition!=PhysicalWallRoomPhaseSourceDisposition::redefine_proposed &&
+                        (!d.child_mapping.empty() || !d.replacement_dimension_ids.empty())) reject("only redefinition can map children or regenerate dimensions");
+                    if ((d.disposition==PhysicalWallRoomPhaseSourceDisposition::redefine_proposed ||
+                        d.disposition==PhysicalWallRoomPhaseSourceDisposition::retire_proposed) && !result.alternative_id)
+                        reject("proposed-room editing requires a target alternative");
+                }
                 plane.source_rooms.push_back(std::move(d));
             }
             std::set<std::size_t> candidates;
@@ -408,6 +792,7 @@ PhysicalWallRoomPhaseReviewIntent decode_physical_wall_phase_room_review_intent(
                 d.reviewed_source_lineage=next.at("reviewed_source_lineage"); if (!d.reviewed_source_lineage.is_object()) reject("malformed reviewed lineage");
                 const auto action=next.at("disposition").get<std::string>();
                 if (action=="create_proposed") d.disposition=PhysicalWallRoomPhaseFreshDisposition::create_proposed;
+                else if (completion && action=="redefine_proposed") d.disposition=PhysicalWallRoomPhaseFreshDisposition::redefine_proposed;
                 else if (action=="leave_unclassified") d.disposition=PhysicalWallRoomPhaseFreshDisposition::leave_unclassified;
                 else if (action!="share_unchanged") reject("unsupported fresh disposition");
                 d.room_id=next.at("room_id").get<std::string>();
@@ -431,6 +816,9 @@ PhysicalWallRoomPhaseReviewIntent decode_physical_wall_phase_room_review_intent(
                 }
                 if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) {
                     if (!text(d.name) || !text(d.classification) || !d.factor || !result.alternative_id) reject("creation requires explicit facts and target alternative");
+                } else if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) {
+                    if (!result.alternative_id || !d.name.empty() || !d.classification.empty() || d.factor)
+                        reject("redefinition preserves the original owner facts");
                 } else if (!d.name.empty() || !d.classification.empty() || d.factor || !d.fresh_ids.segment_ids.empty() || !d.fresh_ids.vertex_ids.empty())
                     reject("sharing cannot redefine identity or facts");
                 plane.fresh.push_back(std::move(d));
@@ -449,6 +837,48 @@ PhysicalWallRoomPhaseReviewIntent decode_physical_wall_phase_room_review_intent(
             if (d.referenced_ids.empty() || !std::is_sorted(d.referenced_ids.begin(),d.referenced_ids.end())) reject("acknowledgement needs canonical exact affected tokens");
             result.baseline_only_acknowledgements.push_back(std::move(d));
         }
+        if (completion) {
+            result.removed_reference_ids=value.at("removed_reference_ids").get<std::vector<std::string>>(); identities(result.removed_reference_ids);
+            result.kept_reference_ids=value.at("kept_reference_ids").get<std::vector<std::string>>(); identities(result.kept_reference_ids);
+            const std::set<std::string> removed(result.removed_reference_ids.begin(),result.removed_reference_ids.end());
+            for (const auto& id:result.kept_reference_ids) if (removed.contains(id)) reject("reference cannot be both kept and removed");
+            const auto& rows=value.at("relationship_removals");
+            if (!rows.is_array() || rows.size()>maximum_rows) reject("malformed relationship removal collection");
+            std::set<std::string> graphs;
+            for (const auto& row:rows) {
+                keys(row,{"entity_id","removed_room_ids","acknowledged_relations"});
+                PhysicalWallRoomRelationshipRemoval d;
+                d.entity_id=row.at("entity_id").get<std::string>(); identity(d.entity_id);
+                if (!graphs.insert(d.entity_id).second) reject("duplicate relationship decision");
+                d.removed_room_ids=row.at("removed_room_ids").get<std::vector<std::string>>(); identities(d.removed_room_ids);
+                if (d.removed_room_ids.empty() || !row.at("acknowledged_relations").is_array() || row.at("acknowledged_relations").size()>65536)
+                    reject("malformed relationship removal");
+                std::set<std::string> relations;
+                for (const auto& r:row.at("acknowledged_relations")) {
+                    auto decoded=relation(r);
+                    if (!relations.insert(relation_json(decoded).dump()).second) reject("duplicate relationship acknowledgement");
+                    d.acknowledged_relations.push_back(std::move(decoded));
+                }
+                result.relationship_removals.push_back(std::move(d));
+            }
+            const auto& presentations=value.at("presentation_removals");
+            if (!presentations.is_array() || presentations.size()>maximum_rows) reject("malformed presentation removal collection");
+            std::string previous;
+            for (const auto& row:presentations) {
+                keys(row,{"entity_id","expected_entity_digest","expected_replacement_entity_digest","removed_entity_ids"});
+                PhysicalWallRoomPhasePresentationRemoval d;
+                d.entity_id=row.at("entity_id").get<std::string>(); identity(d.entity_id);
+                if (!previous.empty() && d.entity_id<=previous) reject("presentation removal records must have unique sorted entity identities");
+                previous=d.entity_id;
+                d.expected_entity_digest=row.at("expected_entity_digest").get<std::string>(); digest(d.expected_entity_digest);
+                d.expected_replacement_entity_digest=row.at("expected_replacement_entity_digest").get<std::string>(); digest(d.expected_replacement_entity_digest);
+                if (d.expected_entity_digest==d.expected_replacement_entity_digest) reject("presentation removal must change a known saved membership");
+                d.removed_entity_ids=row.at("removed_entity_ids").get<std::vector<std::string>>(); identities(d.removed_entity_ids);
+                if (d.removed_entity_ids.empty() || !std::is_sorted(d.removed_entity_ids.begin(),d.removed_entity_ids.end()))
+                    reject("presentation removal needs sorted exact affected identities");
+                result.presentation_removals.push_back(std::move(d));
+            }
+        }
         return result;
     } catch (const Json::exception&) { reject("malformed intent value types"); }
 }
@@ -461,14 +891,21 @@ Json encode_physical_wall_phase_room_review_intent(const PhysicalWallRoomPhaseRe
             std::string action;
             if (d.disposition==PhysicalWallRoomPhaseSourceDisposition::share_unchanged) action="share_unchanged";
             else if (d.disposition==PhysicalWallRoomPhaseSourceDisposition::supersede_in_target) action="supersede_in_target";
+            else if (intent.proposed_room_completion && d.disposition==PhysicalWallRoomPhaseSourceDisposition::redefine_proposed) action="redefine_proposed";
+            else if (intent.proposed_room_completion && d.disposition==PhysicalWallRoomPhaseSourceDisposition::retire_proposed) action="retire_proposed";
             else reject("unsupported source disposition");
             source.push_back({{"room_id",d.room_id},{"expected_descriptor_digest",d.expected_descriptor_digest},{"disposition",action}});
+            if (intent.proposed_room_completion) {
+                source.back()["child_mapping"]=d.child_mapping;
+                source.back()["replacement_dimension_ids"]=d.replacement_dimension_ids;
+            } else if (!d.child_mapping.empty() || !d.replacement_dimension_ids.empty()) reject("version one cannot carry redefinition reference decisions");
         }
         for (const auto& d:plane.fresh) {
             std::string action;
             if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::share_unchanged) action="share_unchanged";
             else if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) action="create_proposed";
             else if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::leave_unclassified) action="leave_unclassified";
+            else if (intent.proposed_room_completion && d.disposition==PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) action="redefine_proposed";
             else reject("unsupported fresh disposition");
             fresh.push_back({{"candidate_index",d.candidate_index},{"reviewed_source_lineage",d.reviewed_source_lineage},{"disposition",action},
                 {"room_id",d.room_id},{"interior_witness",{d.interior_witness.x,d.interior_witness.y}},
@@ -480,12 +917,29 @@ Json encode_physical_wall_phase_room_review_intent(const PhysicalWallRoomPhaseRe
     }
     for (const auto& d:intent.baseline_only_acknowledgements)
         references.push_back({{"entity_id",d.entity_id},{"expected_entity_digest",d.expected_entity_digest},{"referenced_ids",d.referenced_ids},{"disposition","preserve_baseline_only"}});
-    Json encoded{{"version",1},{"source_snapshot_digest",intent.source_snapshot_digest},{"source_authoring_digest",intent.source_authoring_digest},
+    Json encoded{{"version",intent.proposed_room_completion ? 2 : 1},{"source_snapshot_digest",intent.source_snapshot_digest},{"source_authoring_digest",intent.source_authoring_digest},
         {"source_saved_revision",intent.source_saved_revision ? Json(*intent.source_saved_revision) : Json(nullptr)},
         {"source_entities_digest",intent.source_entities_digest},{"expected_revision",intent.expected_revision},{"registry_id",intent.registry_id},
         {"alternative_id",intent.alternative_id ? Json(*intent.alternative_id) : Json(nullptr)},
         {"source_registry_entity_digest",intent.source_registry_entity_digest ? Json(*intent.source_registry_entity_digest) : Json(nullptr)},
         {"registry_command_proof",intent.registry_command_proof},{"planes",std::move(planes)},{"baseline_only_acknowledgements",std::move(references)}};
+    if (intent.proposed_room_completion) {
+        encoded["proposed_room_completion"]=true;
+        encoded["removed_reference_ids"]=intent.removed_reference_ids;
+        encoded["kept_reference_ids"]=intent.kept_reference_ids;
+        auto relationships=Json::array();
+        for (const auto& d:intent.relationship_removals) {
+            auto rows=Json::array(); for (const auto& r:d.acknowledged_relations) rows.push_back(relation_json(r));
+            relationships.push_back({{"entity_id",d.entity_id},{"removed_room_ids",d.removed_room_ids},{"acknowledged_relations",std::move(rows)}});
+        }
+        encoded["relationship_removals"]=std::move(relationships);
+        auto presentations=Json::array();
+        for (const auto& d:intent.presentation_removals)
+            presentations.push_back({{"entity_id",d.entity_id},{"expected_entity_digest",d.expected_entity_digest},
+                {"expected_replacement_entity_digest",d.expected_replacement_entity_digest},{"removed_entity_ids",d.removed_entity_ids}});
+        encoded["presentation_removals"]=std::move(presentations);
+    } else if (!intent.removed_reference_ids.empty() || !intent.kept_reference_ids.empty() || !intent.relationship_removals.empty() || !intent.presentation_removals.empty())
+        reject("version one cannot carry proposed-room reference decisions");
     (void)decode_physical_wall_phase_room_review_intent(encoded); return encoded;
 }
 
@@ -508,6 +962,8 @@ PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review(
     // evidence. Empty decision collections are preparation, not acceptance.
     (void)encode_physical_wall_phase_room_review_intent(intent);
     const auto transition=registry_transition(source.entities(),intent);
+    if (!transition.created && intent.alternative_id)
+        intent.proposed_room_completion=!original_target_proposals(source.entities(),destination).empty();
     const auto coverage=phase_review_coverage(source.entities(),intent,transition);
     const auto occupied=source_identity_inventory(source.entities());
     if (transition.created && occupied.contains(intent.registry_id)) reject("fresh identity is already occupied: "+intent.registry_id);
@@ -523,6 +979,42 @@ PhysicalWallRoomPhaseReviewInventory inspect_physical_wall_phase_room_review(
         result.reports.push_back(std::move(report));
     }
     (void)encode_physical_wall_phase_room_review_intent(intent);
+    return result;
+}
+
+PhysicalWallRoomPhaseProposedDependents physical_wall_phase_room_proposed_dependents(
+    const DocumentSnapshot& source,const PhysicalWallPhaseSelection& destination,
+    const std::vector<std::string>& changed_proposed_room_ids) {
+    if (!source.is_editable()) reject("captured document is read-only");
+    identities(changed_proposed_room_ids);
+    if (changed_proposed_room_ids.size()>maximum_rows) reject("proposed room evidence exceeds budget");
+    const auto proposals=original_target_proposals(source.entities(),destination);
+    const std::set<std::string> changed(changed_proposed_room_ids.begin(),changed_proposed_room_ids.end());
+    const auto organization=organize_project(source.entities());
+    for (const auto& id:changed) {
+        if (!proposals.contains(id)) reject("changed owner is not an original proposal of the named target");
+        const auto c=organization.drawing_context(id);
+        if (!c || !c->complete()) reject("proposed room context is unresolved");
+        (void)validate_retained_physical_wall_room_lineage(source.entities().at(id),*c);
+    }
+    return proposed_dependents(source.entities(),changed);
+}
+
+std::vector<PhysicalWallRoomPhasePresentationRemoval> physical_wall_phase_room_presentation_removals(
+    const DocumentSnapshot& source,const std::vector<std::string>& removed_entity_ids) {
+    if (!source.is_editable()) reject("captured document is read-only");
+    identities(removed_entity_ids);
+    const auto& entities=source.entities();
+    for (const auto& id:removed_entity_ids) {
+        const auto found=entities.find(id);
+        if (found==entities.end() || found->second.id!=id) reject("presentation removal evidence requires actual original entity identities");
+    }
+    auto detached=entities;
+    auto result=derive_presentation_removals(detached,std::set<std::string>(removed_entity_ids.begin(),removed_entity_ids.end()));
+    auto budget=Json::array();
+    for (const auto& d:result) budget.push_back({{"entity_id",d.entity_id},{"expected_entity_digest",d.expected_entity_digest},
+        {"expected_replacement_entity_digest",d.expected_replacement_entity_digest},{"removed_entity_ids",d.removed_entity_ids}});
+    if (budget.dump().size()>1024*1024) reject("presentation removal evidence exceeds one MiB");
     return result;
 }
 
@@ -571,11 +1063,278 @@ std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> physical_wall_phase_ro
     return result;
 }
 
+namespace {
+ReplayedPhysicalWallPhaseRoomReview replay_proposed_room_completion(const Entities& source,
+    const PhysicalWallRoomPhaseReviewIntent& intent,const RegistryTransition& transition,const PhaseReviewCoverage& coverage) {
+    const PhysicalWallPhaseSelection destination{intent.registry_id,intent.alternative_id};
+    // A v2 review may also contain only baseline decisions. Editing authority is
+    // independently restricted to the original actual target proposals below.
+    std::set<std::string> proposals;
+    if (!transition.created && intent.alternative_id) proposals=original_target_proposals(source,destination);
+    for (const auto& affected:coverage.affected) {
+        std::size_t matches=0;
+        for (const auto& row:intent.planes) if (same_plane(affected,{row.context,row.effective_elevation_m})) ++matches;
+        if (matches!=1) reject("semantic wall change lacks exact affected context/plane coverage");
+    }
+    ReplayedPhysicalWallPhaseRoomReview result; result.entities=coverage.destination;
+    auto occupied=source_identity_inventory(source);
+    const auto reserve=[&](const std::string& id) {
+        if (!occupied.insert(id).second) reject("fresh identity is already occupied: "+id);
+        result.fresh_identity_ids.push_back(id);
+    };
+    if (transition.created) reserve(intent.registry_id);
+    std::set<std::string> all_reviewed,shared,redefined,retiring,superseded,reviewed_components;
+    std::map<std::string,const PhysicalWallRoomPhaseSourceDecision*,std::less<>> changed_decisions;
+    std::map<std::string,Plane,std::less<>> redefinition_planes;
+    struct Assignment {
+        const PhysicalWallRoomPhaseFreshDecision* decision{};
+        DrawingContext context;
+        double effective_elevation_m{};
+        PhysicalWallSpace space;
+        IdentifiedBoundary boundary;
+        std::string selected_wall_id;
+    };
+    std::vector<Assignment> assignments;
+    for (const auto& plane:intent.planes) {
+        const auto expected_rooms=phase_review_plane_rooms(coverage,{plane.context,plane.effective_elevation_m});
+        std::map<std::string,const PhysicalWallRoomPhaseSourceDecision*,std::less<>> decisions;
+        for (const auto& d:plane.source_rooms) {
+            if (!expected_rooms.contains(d.room_id) || !decisions.emplace(d.room_id,&d).second || !all_reviewed.insert(d.room_id).second)
+                reject("source room roster is duplicate, foreign or incomplete");
+            if (physical_wall_room_descriptor_digest(source.at(d.room_id))!=d.expected_descriptor_digest) reject("original room descriptor changed");
+            if (d.disposition==PhysicalWallRoomPhaseSourceDisposition::supersede_in_target) {
+                if (!intent.alternative_id || !std::binary_search(transition.destination.baseline_ids().begin(),transition.destination.baseline_ids().end(),d.room_id))
+                    reject("only shared baseline rooms can be superseded in a target alternative");
+                superseded.insert(d.room_id);
+            } else if (d.disposition==PhysicalWallRoomPhaseSourceDisposition::redefine_proposed ||
+                d.disposition==PhysicalWallRoomPhaseSourceDisposition::retire_proposed) {
+                if (!proposals.contains(d.room_id)) reject("only an actual original proposal of the named target can be edited");
+                changed_decisions.emplace(d.room_id,&d);
+                if (d.disposition==PhysicalWallRoomPhaseSourceDisposition::redefine_proposed) {
+                    redefined.insert(d.room_id);
+                    redefinition_planes.emplace(d.room_id,Plane{plane.context,plane.effective_elevation_m});
+                    for (const auto& id:d.replacement_dimension_ids) reserve(id);
+                } else retiring.insert(d.room_id);
+            }
+            if (d.disposition!=PhysicalWallRoomPhaseSourceDisposition::retire_proposed) result.preserved_room_ids.push_back(d.room_id);
+        }
+        if (decisions.size()!=expected_rooms.size()) reject("every original source room needs an explicit disposition");
+        const auto report=phase_review_plane_report(source,coverage,destination,{plane.context,plane.effective_elevation_m},expected_rooms);
+        admit_phase_review_components(report,reviewed_components);
+        if (plane.fresh.size()!=report.correspondence.fresh.size()) reject("fresh candidate coverage is incomplete");
+        std::set<std::size_t> candidate_ids;
+        std::set<std::string> assigned_redefinitions;
+        for (const auto& d:plane.fresh) {
+            if (d.candidate_index>=report.correspondence.fresh.size() || !candidate_ids.insert(d.candidate_index).second)
+                reject("unknown or repeated fresh candidate");
+            const auto& candidate=report.correspondence.fresh.at(d.candidate_index);
+            if (candidate.index!=d.candidate_index) reject("fresh correspondence index is inconsistent");
+            const PhysicalWallSpace space{candidate.baseline_face_index,candidate.boundary,candidate.holes,candidate.area_square_metres,candidate.source_lineage};
+            if (d.reviewed_source_lineage.dump()!=space.source_lineage.dump()) reject("fresh source lineage differs from current explicit detection");
+            if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::leave_unclassified) continue;
+            if (!candidate.diagnostic.empty()) reject("fresh clear region has unresolved analytical evidence");
+            witness(space,d.interior_witness);
+            if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::share_unchanged) {
+                const auto found=decisions.find(d.room_id);
+                if (found==decisions.end() || found->second->disposition!=PhysicalWallRoomPhaseSourceDisposition::share_unchanged)
+                    reject("shared owner lacks an unchanged source disposition");
+                if (coverage.after_inactive.contains(d.room_id) || !physical_wall_room_lineage_matches_current_inventory(source.at(d.room_id),plane.context,space))
+                    reject("shared owner changed inventory, lineage or clear geometry");
+                if (!shared.insert(d.room_id).second) reject("shared owner has more than one fresh candidate");
+                continue;
+            }
+            if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) {
+                const auto found=decisions.find(d.room_id);
+                if (found==decisions.end() || found->second->disposition!=PhysicalWallRoomPhaseSourceDisposition::redefine_proposed ||
+                    !proposals.contains(d.room_id) || !assigned_redefinitions.insert(d.room_id).second)
+                    reject("fresh redefinition needs one matching original target proposal");
+            } else reserve(d.room_id);
+            if (d.fresh_ids.segment_ids.size()!=space.boundary.size() || d.fresh_ids.vertex_ids.size()!=space.boundary.size())
+                reject("new topology requires explicit fresh identities for every boundary edge and vertex");
+            IdentifiedBoundary boundary{d.room_id,"room_boundary",{}};
+            for (std::size_t i=0;i<space.boundary.size();++i) {
+                reserve(d.fresh_ids.segment_ids[i]); reserve(d.fresh_ids.vertex_ids[i]);
+                boundary.segments.push_back({d.fresh_ids.segment_ids[i],d.fresh_ids.vertex_ids[i],d.fresh_ids.vertex_ids[(i+1)%space.boundary.size()],space.boundary[i]});
+            }
+            const auto& physical=space.source_lineage.at("physical_sources");
+            if (physical.empty()) reject("fresh room has no actual physical source");
+            const auto selected=physical.front().at("owner_id").get<std::string>();
+            if (!source.contains(selected) || source.at(selected).type!="wall") reject("descriptor source must resolve to an actual wall");
+            assignments.push_back({&d,plane.context,plane.effective_elevation_m,space,std::move(boundary),selected});
+            if (d.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) result.created_room_ids.push_back(d.room_id);
+        }
+        for (const auto& [id,d]:decisions) {
+            if (d->disposition==PhysicalWallRoomPhaseSourceDisposition::share_unchanged && !shared.contains(id))
+                reject("unchanged original owner has no explicitly shared fresh candidate");
+            if (d->disposition==PhysicalWallRoomPhaseSourceDisposition::redefine_proposed && !assigned_redefinitions.contains(id))
+                reject("redefined owner has no explicitly assigned fresh candidate");
+        }
+    }
+    std::map<std::string,const PhysicalWallRoomPhaseBaselineAcknowledgement*,std::less<>> acknowledgements;
+    for (const auto& d:intent.baseline_only_acknowledgements) acknowledgements.emplace(d.entity_id,&d);
+    const auto expected_baseline=baseline_dependents(source,intent.registry_id,superseded);
+    for (const auto& d:expected_baseline) {
+        const auto found=acknowledgements.find(d.entity_id);
+        if (found==acknowledgements.end() || found->second->expected_entity_digest!=d.expected_entity_digest || found->second->referenced_ids!=d.referenced_ids)
+            reject("saved dependent needs an exact baseline-only acknowledgement: "+d.entity_id);
+    }
+    if (acknowledgements.size()!=expected_baseline.size()) reject("acknowledgement set contains unrelated or fabricated dependents");
+
+    std::set<std::string> changed=redefined; changed.insert(retiring.begin(),retiring.end());
+    const auto evidence=proposed_dependents(source,changed);
+    const std::set<std::string> expected_references(evidence.reference_ids.begin(),evidence.reference_ids.end());
+    const std::set<std::string> removed(intent.removed_reference_ids.begin(),intent.removed_reference_ids.end());
+    const std::set<std::string> kept(intent.kept_reference_ids.begin(),intent.kept_reference_ids.end());
+    auto reviewed_references=removed; reviewed_references.insert(kept.begin(),kept.end());
+    if (reviewed_references!=expected_references) reject("every changed proposed-room reference needs an explicit Keep or Remove decision");
+    // Child retirement and regenerated automatic dimensions also participate in
+    // incoming opaque-reference refusal and known membership cleanup.
+    auto affected=superseded_room_tokens(source,changed);
+    for (const auto& id:redefined) affected.erase(id);
+    affected.insert(removed.begin(),removed.end());
+    std::set<std::string> replaced_dimensions;
+    for (const auto& id:kept) {
+        const auto& e=source.at(id);
+        if (!can_recognize_boundary_dimension_entity_type(e.type)) continue;
+        const auto decoded=decode_boundary_dimension_entity(e);
+        if (decoded.supported() && redefined.contains(decoded.dimension->boundary_id) &&
+            decoded.dimension->kind==BoundaryDimensionKind::segment_length && decoded.dimension->placement==BoundaryDimensionPlacement::automatic)
+            replaced_dimensions.insert(id);
+    }
+    affected.insert(replaced_dimensions.begin(),replaced_dimensions.end());
+    std::set<std::string> allowed{intent.registry_id};
+    allowed.insert(changed.begin(),changed.end()); allowed.insert(expected_references.begin(),expected_references.end());
+    for (const auto& id:removed) result.entities.erase(id);
+    prune_relationships(result.entities,intent,retiring,allowed);
+    for (const auto& id:retiring) result.entities.erase(id);
+
+    // Reconstruct canonical membership independently, then change only the raw
+    // named target lists. Baseline and all other alternative bytes/order survive.
+    auto entity_ids=transition.destination.entity_ids(); auto alternatives=transition.destination.alternatives();
+    std::erase_if(entity_ids,[&](const auto& id){return retiring.contains(id);});
+    if (intent.alternative_id) {
+        auto target=std::find_if(alternatives.begin(),alternatives.end(),[&](const auto& row){return row.id==*intent.alternative_id;});
+        if (target==alternatives.end()) reject("target alternative is missing");
+        std::erase_if(target->proposed_ids,[&](const auto& id){return retiring.contains(id);});
+        target->demolished_ids.insert(target->demolished_ids.end(),superseded.begin(),superseded.end());
+        std::sort(target->demolished_ids.begin(),target->demolished_ids.end());
+        target->demolished_ids.erase(std::unique(target->demolished_ids.begin(),target->demolished_ids.end()),target->demolished_ids.end());
+        target->proposed_ids.insert(target->proposed_ids.end(),result.created_room_ids.begin(),result.created_room_ids.end());
+        entity_ids.insert(entity_ids.end(),result.created_room_ids.begin(),result.created_room_ids.end());
+    } else if (!result.created_room_ids.empty() || !superseded.empty() || !changed.empty()) reject("baseline selection cannot redefine room ownership");
+    const auto final_model=ModelPhases::create(std::move(entity_ids),transition.destination.baseline_ids(),std::move(alternatives),transition.destination.active_alternative());
+    auto final_json=transition.registry.properties.at("model"); filter_members(final_json.at("entity_ids"),retiring);
+    for (const auto& id:result.created_room_ids) final_json.at("entity_ids").push_back(id);
+    if (intent.alternative_id) for (auto& alternative:final_json.at("alternatives")) if (alternative.at("id")==*intent.alternative_id) {
+        filter_members(alternative.at("proposed_ids"),retiring);
+        for (const auto& id:superseded)
+            if (std::find(alternative.at("demolished_ids").begin(),alternative.at("demolished_ids").end(),Json(id))==alternative.at("demolished_ids").end())
+                alternative.at("demolished_ids").push_back(id);
+        for (const auto& id:result.created_room_ids) alternative.at("proposed_ids").push_back(id);
+    }
+    if (ModelPhases::from_json(final_json).to_json()!=final_model.to_json()) reject("rederived target registry membership is inconsistent");
+    result.entities.at(intent.registry_id).properties["model"]=std::move(final_json);
+    for (const auto& assignment:assignments) if (assignment.decision->disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) {
+        const auto& d=*assignment.decision; const auto& c=assignment.context;
+        auto room=encode_identified_boundary_entity(assignment.boundary);
+        room.properties.update({{"property_id",c.property_id},{"building_id",c.building_id},{"floor_id",c.floor_id},{"layer_id",c.layer_id},
+            {"name",d.name},{"classification",d.classification},{"measurement_classification",d.classification},{"factor",*d.factor}});
+        room.extensions["physical_wall_room"]=encode_physical_wall_room_descriptor({assignment.selected_wall_id,assignment.space.source_lineage,assignment.space.holes});
+        (void)validate_retained_physical_wall_room_lineage(room,c);
+        if (!result.entities.emplace(d.room_id,std::move(room)).second) reject("fresh proposed owner collides with an existing entity");
+    }
+    (void)physical_wall_phase_states(result.entities,destination);
+    auto removed_members=retiring; removed_members.insert(removed.begin(),removed.end());
+    removed_members.insert(replaced_dimensions.begin(),replaced_dimensions.end());
+    apply_reviewed_presentation_removals(source,result.entities,intent,removed_members,allowed);
+    // Reviewing known membership pruning cannot conceal opaque incoming
+    // references inside a removed row; inspect those original portions too.
+    refuse_opaque_removed_presentation_rows(source,intent.presentation_removals,affected);
+    refuse_opaque_proposed_dependents(source,result.entities,intent.registry_id,changed,retiring,affected,kept);
+    for (const auto& assignment:assignments) if (assignment.decision->disposition==PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) {
+        const auto& d=*assignment.decision; const auto& original=*changed_decisions.at(d.room_id);
+        BoundaryGeometryEdit edit; edit.boundary_id=d.room_id; edit.target_id=d.room_id;
+        edit.kind=BoundaryGeometryEditKind::redefine_boundary; edit.fresh_topology=true;
+        edit.replacement_segments=encode_identified_boundary_entity(assignment.boundary).properties.at("segments");
+        edit.replacement_child_mapping=original.child_mapping; edit.replacement_dimension_ids=original.replacement_dimension_ids;
+        edit.physical_wall_room_repair=PhysicalWallRoomRepairIntent{assignment.selected_wall_id,d.interior_witness,d.reviewed_source_lineage,original.expected_descriptor_digest};
+        // Empty replacement facts preserve every authored owner property. The
+        // lower seam owns descriptor/provenance and explicit reference remap.
+        std::set<std::string> plane_owners;
+        for (const auto& [id,plane]:redefinition_planes)
+            if (same_plane(plane,{assignment.context,assignment.effective_elevation_m})) plane_owners.insert(id);
+        result.entities=edited_boundary_entities_for_phase_room_review(result.entities,edit,plane_owners,destination);
+    }
+    if (const auto error=validate_boundary_integrity(result.entities)) reject(*error);
+    if (const auto error=validate_constraint_integrity(result.entities)) reject(*error);
+    (void)physical_wall_phase_states(result.entities,destination);
+    // Numeric resolution alone evaluates the named target on a detached map.
+    // This saved-choice adjustment never becomes source or published authority.
+    auto numerical=result.entities;
+    numerical.at(intent.registry_id).properties.at("model")["active_alternative"]=intent.alternative_id ? Json(*intent.alternative_id) : Json(nullptr);
+    for (const auto& id:kept) {
+        const auto found=result.entities.find(id);
+        if (found==result.entities.end()) {
+            if (!replaced_dimensions.contains(id)) reject("kept reference disappeared from the reviewed candidate");
+            const auto decoded=decode_boundary_dimension_entity(source.at(id));
+            if (changed_decisions.at(decoded.dimension->boundary_id)->replacement_dimension_ids.empty()) reject("kept automatic dimensions lack reviewed replacements");
+        } else if (can_recognize_boundary_dimension_entity_type(found->second.type)) {
+            const auto decoded=decode_boundary_dimension_entity(found->second);
+            if (!decoded.supported()) reject("kept reference became unsupported");
+            (void)resolve_boundary_dimension(*decoded.dimension,numerical);
+        }
+    }
+    for (const auto& [id,d]:changed_decisions) for (const auto& dimension_id:d->replacement_dimension_ids) {
+        (void)id;
+        const auto found=result.entities.find(dimension_id);
+        if (found==result.entities.end() || !can_recognize_boundary_dimension_entity_type(found->second.type)) reject("reviewed replacement dimension is missing");
+        const auto decoded=decode_boundary_dimension_entity(found->second);
+        if (!decoded.supported()) reject("reviewed replacement dimension is unsupported");
+        (void)resolve_boundary_dimension(*decoded.dimension,numerical);
+    }
+    for (const auto& id:removed) if (result.entities.contains(id)) reject("removed reference survived lower reconstruction");
+    for (const auto& id:retiring) if (result.entities.contains(id)) reject("retired proposal survived lower reconstruction");
+    for (const auto& d:intent.presentation_removals) {
+        const auto found=result.entities.find(d.entity_id);
+        if (found==result.entities.end() || entity_digest(found->second)!=d.expected_replacement_entity_digest)
+            reject("reviewed saved presentation replacement changed during reconstruction: "+d.entity_id);
+    }
+    validate_baseline_dependent_preservation(source,result.entities,intent.registry_id,expected_baseline,intent.presentation_removals);
+    for (const auto& id:redefined) {
+        auto before=source.at(id),after=result.entities.at(id);
+        // These are the only geometry/provenance fields the qualified lower
+        // repair may replace. All authored facts/context and opaque owner fields
+        // retain their original complete values, independently of that helper.
+        for (const auto* field:{"segments","boundary","boundary_authoring"}) {
+            before.properties.erase(field); after.properties.erase(field);
+        }
+        for (const auto* field:{"physical_wall_room","boundary_geometry_derivation"}) {
+            before.extensions.erase(field); after.extensions.erase(field);
+        }
+        if (!exact_entity(before,after)) reject("redefinition changed original authored facts or opaque owner fields");
+    }
+    // Only actual changed owners/references and qualified membership rows may
+    // differ. Every baseline owner and unrelated original entity remains exact.
+    for (const auto& [id,e]:source) if (!allowed.contains(id)) {
+        const auto found=result.entities.find(id);
+        if (found==result.entities.end() || !exact_entity(e,found->second)) reject("unrelated original entity changed: "+id);
+    }
+    const std::set<std::string> fresh(result.fresh_identity_ids.begin(),result.fresh_identity_ids.end());
+    for (const auto& [id,e]:result.entities) { (void)e; if (!source.contains(id) && !fresh.contains(id)) reject("unreviewed fresh entity appeared"); }
+    result.redefined_room_ids.assign(redefined.begin(),redefined.end()); result.retired_room_ids.assign(retiring.begin(),retiring.end());
+    std::sort(result.created_room_ids.begin(),result.created_room_ids.end());
+    std::sort(result.preserved_room_ids.begin(),result.preserved_room_ids.end());
+    std::sort(result.fresh_identity_ids.begin(),result.fresh_identity_ids.end());
+    return result;
+}
+} // namespace
+
 ReplayedPhysicalWallPhaseRoomReview replay_physical_wall_phase_room_review(const Entities& source,const Json& encoded) {
     const auto intent=decode_physical_wall_phase_room_review_intent(encoded);
     if (entity_map_digest(source)!=intent.source_entities_digest) reject("original entity map changed");
     auto transition=registry_transition(source,intent);
     const auto coverage=phase_review_coverage(source,intent,transition);
+    if (intent.proposed_room_completion) return replay_proposed_room_completion(source,intent,transition,coverage);
     const PhysicalWallPhaseSelection destination_selection{intent.registry_id,intent.alternative_id};
     // Extra rows are allowed for explicit review of an unchanged plane, but
     // every semantic inventory/retained-lineage affected plane is mandatory.

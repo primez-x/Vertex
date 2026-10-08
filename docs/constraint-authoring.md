@@ -169,6 +169,16 @@ and other command lanes cannot borrow this authority. Returning to baseline
 retrieves original records; a complete existing alternative can switch display
 without another room-assignment event.
 
+Phase intent 2 adds actual target-proposal redefinition and retirement under
+that same exclusive envelope, with native 85/extraction 83. Redefinition keeps
+the original owner and authored facts while assigning freshly identified clear
+geometry. Supported references require complete Keep/Remove decisions, explicit
+retained-child mappings and fresh automatic dimension identities. Retirement
+uses exact relationship acknowledgements; presentation pruning is separately
+reviewed. Baseline-only dependents retain their original analytical bindings.
+Unsupported incoming references refuse rather than losing saved data. Each
+repair uses its own admitted context/plane scope, including multi-floor reviews.
+
 Ordinary room intent 3 separately binds current saved phase choices and reviews
 only active room owners. It can retain, redefine or retire active proposed rooms
 without consuming preserved inactive baseline owners. New rooms receive the

@@ -1,6 +1,8 @@
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/physical_wall_phase.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/project_organization.hpp"
 
@@ -119,9 +121,9 @@ std::string physical_wall_room_descriptor_digest(const Entity& entity) {
     return sha256_hex(std::as_bytes(std::span<const char>{encoded.data(),encoded.size()}));
 }
 
-PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
+static PhysicalWallRoomDescriptor validate_physical_wall_room_repair_impl(
     const std::map<std::string,Entity,std::less<>>& source,const BoundaryGeometryEdit& edit,
-    const std::set<std::string>& reviewed_owners) {
+    const std::set<std::string>& reviewed_owners, const PhysicalWallPhaseSelection* selection) {
     validate_boundary_geometry_edit(edit);
     if (!edit.physical_wall_room_repair) invalid("repair authority is missing");
     const auto found=source.find(edit.boundary_id);
@@ -131,16 +133,36 @@ PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
     if (physical_wall_room_descriptor_digest(original)!=repair.expected_descriptor_digest)
         invalid("retained descriptor changed after review");
     std::set<std::string,std::less<>> inactive;
-    for (const auto& [id,entity]:source) {
-        (void)id;
-        if (entity.type!="model_phases") continue;
-        const auto phases=ModelPhases::from_json(entity.properties.at("model"));
-        const auto active=phases.active_state();
-        for (const auto& member:phases.entity_ids())
-            if (!active.contains(member) || active.at(member)==ModelPhase::demolished) inactive.insert(member);
+    if (selection) {
+        for (const auto& registry:physical_wall_phase_states(source,*selection))
+            for (const auto& member:registry.registered_entity_ids) {
+                const auto state=registry.states.find(member);
+                if (state==registry.states.end() || state->second==ModelPhase::demolished) inactive.insert(member);
+            }
+    } else {
+        for (const auto& [id,entity]:source) {
+            (void)id;
+            if (entity.type!="model_phases") continue;
+            const auto phases=ModelPhases::from_json(entity.properties.at("model"));
+            const auto active=phases.active_state();
+            for (const auto& member:phases.entity_ids())
+                if (!active.contains(member) || active.at(member)==ModelPhase::demolished) inactive.insert(member);
+        }
     }
     if (inactive.contains(original.id)) invalid("room owner is inactive in the semantic phase");
-    const auto detection=detect_physical_wall_spaces(source,repair.selected_wall_id);
+    const auto detection=[&] {
+        if (!selection) return detect_physical_wall_spaces(source,repair.selected_wall_id);
+        const auto selected=source.find(repair.selected_wall_id);
+        if (selected==source.end() || selected->second.type!="wall") invalid("selected source is not a wall");
+        if (inactive.contains(selected->first)) invalid("selected wall is inactive in the evaluated phase");
+        const auto selected_context=organize_project(source).drawing_context(selected->first);
+        if (!selected_context || !selected_context->complete()) invalid("selected wall needs a complete drawing context");
+        const auto placed=resolve_vertical_placement(source,selected->second);
+        Wall wall; std::string error;
+        if (!read_document_wall(placed,{},wall,error)) invalid(error);
+        validate_wall_semantics(wall);
+        return detect_physical_wall_spaces(source,*selected_context,wall.elevation,*selection);
+    }();
     const auto organization=organize_project(source);
     const auto context=organization.drawing_context(original.id);
     if (!context || !context->complete() || *context!=detection.context)
@@ -186,12 +208,27 @@ PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
         if (organization.drawing_context(id)!=context) continue;
         if (++room_count>2048) invalid("destination ownership check exceeds the room budget");
         const auto descriptor=decode_physical_wall_room_descriptor(entity);
-        if (descriptor.source_lineage!=selected->source_lineage) continue;
+        // Explicit evaluation may change only captured phase evidence while
+        // another active owner still occupies the exact clear destination.
+        // Inactive baseline owners were excluded using the evaluated state.
+        if (!selection && descriptor.source_lineage!=selected->source_lineage) continue;
         if (exact_boundary(boundary_geometry(decode_identified_boundary_entity(entity)),selected->boundary) &&
             descriptor.holes.size()==selected->holes.size() &&
             std::equal(descriptor.holes.begin(),descriptor.holes.end(),selected->holes.begin(),exact_boundary))
             invalid("reviewed clear destination is already assigned to another current room: "+id);
     }
     return {repair.selected_wall_id,selected->source_lineage,selected->holes};
+}
+
+PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
+    const std::map<std::string,Entity,std::less<>>& source,const BoundaryGeometryEdit& edit,
+    const std::set<std::string>& reviewed_owners) {
+    return validate_physical_wall_room_repair_impl(source,edit,reviewed_owners,nullptr);
+}
+
+PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
+    const std::map<std::string,Entity,std::less<>>& source,const BoundaryGeometryEdit& edit,
+    const std::set<std::string>& reviewed_owners,const PhysicalWallPhaseSelection& selection) {
+    return validate_physical_wall_room_repair_impl(source,edit,reviewed_owners,&selection);
 }
 } // namespace sketch
