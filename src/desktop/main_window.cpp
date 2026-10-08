@@ -8079,7 +8079,8 @@ public:
 
     static Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
         const QStringList& root_ids, const PlanarTransform& transform,
-        std::vector<EntityChange> supplemental_changes = {}) {
+        std::vector<EntityChange> supplemental_changes = {},
+        const std::function<PlanarTransform(const std::string&)>& owner_transform = {}) {
         if (root_ids.isEmpty()) throw std::invalid_argument("Select plan geometry before transforming it.");
         std::vector<Entity> selected_roots;
         for (const auto& id : root_ids) {
@@ -8103,12 +8104,13 @@ public:
         if (transform.rotation_radians==0.0 && !transform.flip_horizontal && !transform.flip_vertical &&
             transform.offset.x==0.0 && transform.offset.y==0.0 && supplemental_changes.empty())
             return ApplyEntityChanges{source.revision(),{}, {},"Transform areas with deductions and source walls"};
-        if(supplemental_changes.empty() &&
+        if(!owner_transform && supplemental_changes.empty() &&
            std::all_of(root_ids.begin(),root_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
             return measuredStrokeTransformCommand(source,root_ids,transform);
         auto graph=independentAreaCopyGraph(source,std::move(selected_roots),true,true,kMaximumNumericSelectionGraphEntities);
         includeMeasuredAreaSources(source,graph);
         std::vector<BoundaryTransformation> transformations;
+        std::vector<RigidOwnerTransformation> source_transformations;
         std::vector<WallGeometryMoveTarget> wall_targets;
         MeasuredStrokeTransformIntent stroke_targets;
         std::vector<ConstraintRelationMutation> relation_mutations;
@@ -8118,25 +8120,29 @@ public:
                 throw std::invalid_argument("A group transform cannot remove objects.");
             supplemental.insert_or_assign(change.entity.id,change.entity);
         }
-        const PlanarTransform linear{{},transform.rotation_radians,transform.flip_horizontal,transform.flip_vertical,{}};
         for (const auto& entity : graph) {
             if (is_closed_boundary_entity(entity.type)) {
+                const auto operation=owner_transform ? owner_transform(entity.id) : transform;
                 if (inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1)
                     throw std::invalid_argument("A dependent boundary needs an explicit identity upgrade before transforming.");
-                transformations.push_back({entity.id,transform});
+                transformations.push_back({entity.id,operation});
             } else if (entity.type=="measurement_linework") {
-                stroke_targets.targets.push_back({entity.id,transform});
+                const auto operation=owner_transform ? owner_transform(entity.id) : transform;
+                stroke_targets.targets.push_back({entity.id,operation});
+                if (owner_transform) source_transformations.push_back({entity.id,operation});
                 const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
                 if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
                 auto moved=entity;
-                moved.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
+                moved.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,operation));
                 supplemental.insert_or_assign(entity.id,std::move(moved));
             } else if (entity.type=="wall") {
+                const auto operation=owner_transform ? owner_transform(entity.id) : transform;
+                if (owner_transform) source_transformations.push_back({entity.id,operation});
                 const auto baseline = read_required_segment(entity.properties,"baseline");
                 if (!baseline) throw std::invalid_argument("A selected wall has no canonical baseline.");
-                const auto proposed = transform_segment(*baseline,transform);
-                wall_targets.push_back({entity.id,proposed.start,proposed.end,transform});
-                const auto built=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,transform,nullptr,true,kMaximumNumericSelectionGraphEntities);
+                const auto proposed = transform_segment(*baseline,operation);
+                wall_targets.push_back({entity.id,proposed.start,proposed.end,operation});
+                const auto built=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,operation,nullptr,true,kMaximumNumericSelectionGraphEntities);
                 const auto* changes=std::get_if<ApplyEntityChanges>(&built.first);
                 if (!changes) throw std::invalid_argument("Source walls did not produce a detached transform.");
                 // An unchanged axis can still mirror its saved callout.
@@ -8148,11 +8154,16 @@ public:
                 const auto decoded=decode_constraint_entity(entity);
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                 auto constraint=*decoded.constraint;
-                if (constraint.anchor) constraint.anchor=transform_point(*constraint.anchor,transform);
+                const auto operation=owner_transform ? owner_transform(constraint.bindings.front().owner_id) : transform;
+                if (owner_transform && std::any_of(constraint.bindings.begin(),constraint.bindings.end(),[&](const auto& binding) {
+                    return !equivalentPlanOperators(operation,owner_transform(binding.owner_id));
+                })) throw std::invalid_argument("A hard relationship requires incompatible Site transforms. Review the connected group before rotating or flipping it.");
+                if (constraint.anchor && (!owner_transform || constraint.relation!=ConstraintRelationKind::fixed_anchor))
+                    constraint.anchor=transform_point(*constraint.anchor,operation);
                 if (constraint.relation==ConstraintRelationKind::horizontal || constraint.relation==ConstraintRelationKind::vertical) {
-                    if (std::abs(std::remainder(transform.rotation_radians,std::numbers::pi/2))>1e-12)
+                    if (std::abs(std::remainder(operation.rotation_radians,std::numbers::pi/2))>1e-12)
                         throw std::invalid_argument("Horizontal or vertical locked relationships require a quarter-turn rotation. Review the relationship before using another angle.");
-                    if (std::llround(transform.rotation_radians/(std::numbers::pi/2))%2!=0)
+                    if (std::llround(operation.rotation_radians/(std::numbers::pi/2))%2!=0)
                         constraint.relation=constraint.relation==ConstraintRelationKind::horizontal
                             ? ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
                 }
@@ -8166,6 +8177,9 @@ public:
                 // them into the full owner so its other artwork stays intact.
                 auto annotation=supplemental.contains(entity.id) ? supplemental.at(entity.id) : source.entities().at(entity.id);
                 for (const auto& owned : entity.properties.at("state").at("overrides")) {
+                    if (!owned.contains("plan_label_offset_m") && !owned.contains("plan_label_rotation_radians")) continue;
+                    const auto operation=owner_transform ? owner_transform(owned.at("target_id").get<std::string>()) : transform;
+                    const PlanarTransform linear{{},operation.rotation_radians,operation.flip_horizontal,operation.flip_vertical,{}};
                     std::optional<Vec2> moved;
                     if (owned.contains("plan_label_offset_m")) {
                         const auto offset=read_point(owned.at("plan_label_offset_m"));
@@ -8189,7 +8203,7 @@ public:
                 if (annotation!=source.entities().at(entity.id)) supplemental.insert_or_assign(entity.id,std::move(annotation));
             }
         }
-        if (transformations.empty() && !wall_targets.empty()) {
+        if (!owner_transform && transformations.empty() && !wall_targets.empty()) {
             ConstraintAuthoringIntent intent;
             intent.wall_geometry_move = WallGeometryMoveIntent{std::move(wall_targets),true,true};
             if (!stroke_targets.targets.empty()) intent.measured_stroke_transform = stroke_targets;
@@ -8248,15 +8262,22 @@ public:
         }
         std::vector<EntityChange> changes;
         for (auto& [id,entity] : supplemental) changes.push_back(EntityChange::upsert(std::move(entity)));
-        Command command=completeMeasuredAreaConsequences(source, completeOrdinaryMeasuredDimensionMovement(source,transformations.empty()
-            ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Rotate measured strokes"}}
-            : Command{TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),
-                "Transform areas with deductions and source walls",!wall_targets.empty(),!stroke_targets.targets.empty()}},transform));
+        Command command;
+        if (owner_transform) {
+            TransformBoundaries group{source.revision(),std::move(transformations),std::move(changes),
+                "Transform selected geometry through each source frame",!wall_targets.empty(),!stroke_targets.targets.empty()};
+            group.per_owner_transform_completion=true;
+            group.source_transformations=std::move(source_transformations);
+            command=std::move(group);
+        } else command=completeMeasuredAreaConsequences(source, completeOrdinaryMeasuredDimensionMovement(source,transformations.empty()
+                ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Rotate measured strokes"}}
+                : Command{TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),
+                    "Transform areas with deductions and source walls",!wall_targets.empty(),!stroke_targets.targets.empty()}},transform));
         const auto candidate=Document::preview_command(source,command);
         for (const auto& entity : graph)
             if (is_closed_boundary_entity(entity.type) && !wall_measurement_source_current(candidate,candidate.entities().at(entity.id)))
                 throw std::invalid_argument("The transformed exterior no longer matches its supporting walls. The transform was not applied.");
-        return completeAreaCalloutTransform(source,std::move(command),transform);
+        return completeAreaCalloutTransform(source,std::move(command),transform,nullptr,owner_transform);
     }
 
     static ApplyEntityChanges makeUnownedBoundaryTranslationCommand(
@@ -12089,6 +12110,16 @@ public:
                             include_point(source_position(transform_point({x*width,y*depth},PlanarTransform{{},reference->rotation_degrees*std::numbers::pi/180.0,false,false,reference->position}),false,id));
                         continue;
                     }
+                    if (found!=source.entities().end() && can_recognize_boundary_dimension_entity_type(found->second.type)) {
+                        const auto decoded=decode_boundary_dimension_entity(found->second);
+                        if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                        (void)decoded.dimension->resolve(source);
+                        if (!selection.contains(id_from(decoded.dimension->boundary_id)) || !visible.contains(found->first))
+                            throw std::invalid_argument("Select the dimension's visible measured owner to transform them together, or drag the dimension on the canvas to adjust its placement.");
+                        // Owner replay retains the measurement and automatic/
+                        // manual placement; selected callouts cannot move twice.
+                        continue;
+                    }
                     if (found!=source.entities().end() && found->second.type=="opening") {
                         std::string host,error;
                         if (!read_document_wall_id(found->second,host,error)) throw std::invalid_argument(error);
@@ -12511,21 +12542,25 @@ public:
                         return {std::move(copied),primary};
                     }
                     auto geometry_transform=transform;
+                    std::function<PlanarTransform(const std::string&)> geometric_owner_transform;
                     if (site_group && !geometry_selection.isEmpty()) {
                         geometry_transform=callout_owner_transform(geometry_selection.front().toStdString());
                         std::set<std::string,std::less<>> checked;
+                        bool separately_framed=false;
                         for (const auto& root : geometry_selection) {
                             const auto graph=clipboard_entities_for_selection(source,root.toStdString(),kMaximumNumericSelectionGraphEntities);
                             if (graph.empty()) throw std::invalid_argument("A selected Site geometry dependency graph is unavailable.");
                             for (const auto& entity : graph) {
                                 if (!geometry_root(entity) || !checked.insert(entity.id).second) continue;
                                 if (!equivalentPlanOperators(geometry_transform,callout_owner_transform(entity.id)))
-                                    throw std::invalid_argument("These connected measured objects require different Site transforms. Transform a compatible measured group, or use Copy to create independent geometry.");
+                                    separately_framed=true;
                             }
                         }
+                        if (separately_framed) geometric_owner_transform=callout_owner_transform;
                     }
                     auto command=geometry_selection.isEmpty() ? Command{std::move(presentation)} :
-                        makeSelectionGeometryTransformCommand(source,geometry_selection,geometry_transform,std::move(presentation.entity_changes));
+                        makeSelectionGeometryTransformCommand(source,geometry_selection,geometry_transform,
+                            std::move(presentation.entity_changes),geometric_owner_transform);
                     if (!architectural_selection.empty() || !embedded_targets.empty()) {
                         std::vector<ArchitecturalGroupTransformTarget> physical_targets;
                         for (const auto& id : architectural_selection) {

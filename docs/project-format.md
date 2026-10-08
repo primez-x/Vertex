@@ -1,4 +1,43 @@
-# Vertex project formats v1 through v72
+# Vertex project formats v1 through v73
+
+## Per-owner rigid geometry groups (v73)
+
+Native format 73 and JSON/assets extraction version 71 retain
+`transform_boundaries` command dialect 3. Boundary `transformations` carry their
+own saved-coordinate operators. `source_transformations` contains explicit
+`owner_id` and `transform` records for every supplemental physical wall or
+measured stroke. Their identities are unique and disjoint from boundary targets;
+their set must exactly match the wall/stroke witnesses. The true
+`per_owner_transform_completion` marker retains this dialect even with an empty
+source array. At least one geometric owner is required. Boundary-only, wall-only,
+stroke-only and mixed complete rigid groups use the same atomic command.
+The persisted proof remains limited to 1 MiB. New owner operators bound pivot
+and offset coordinates to an absolute 1e12 metres and rotation to 1e6 radians;
+legacy dialect parameter admission is unchanged.
+
+Geometry reconstructs from the preceding source and each owner's declared
+operator. The first boundary never grants an implicit transform to another
+owner. Deductions and retained wall/stroke source cohorts require compatible
+operators and current lineage. Saved dimensions follow their validated source
+owner once, retaining automatic/manual placement. Raw boundary and dimension
+supplements cannot grant geometric authority. Source-derived boundaries refresh
+from the resulting source geometry; untouched consumers cannot silently become
+stale.
+
+Hard relationships require every bound owner in the complete transformed set
+with compatible operators. Existing fixed anchors keep their source coordinates;
+geometry that leaves a locked point refuses. Other anchors and supported axis
+locks replay from the owner operator. An external or incompatible relationship
+refuses the complete event. Hosted door/window handedness and insets reconstruct
+from the validated host operator even when their supplemental payload is omitted.
+This command does not authorize a partial connected solve. Independently framed
+ordinary architectural and presentation edits may still join through the
+existing complete-candidate admission.
+
+The floor follows the marker or retained source target list throughout all
+history, including a nested rigid-group child in a mixed constraint command.
+Older readers refuse the elevated floor. Dialects 1 and 2 retain their shared
+operator, wire shape and replay semantics.
 
 ## Per-owner connected translations (v72)
 

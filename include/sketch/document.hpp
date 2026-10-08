@@ -125,8 +125,14 @@ struct TransformBoundary {
     BoundaryTransformation transformation;
 };
 
-// One shared rigid transform and its supplemental physical/relationship edits
-// are admitted only after every measured owner has been reconstructed.
+struct RigidOwnerTransformation {
+    std::string owner_id;
+    PlanarTransform transform;
+};
+
+// Rigid geometry and its supplemental physical/relationship edits are admitted
+// only after every measured owner has been reconstructed. Dialects one/two
+// require a shared operator; dialect three captures each owner's operator.
 struct TransformBoundaries {
     Revision expected_revision = 0;
     std::vector<BoundaryTransformation> transformations;
@@ -138,6 +144,11 @@ struct TransformBoundaries {
     // The same dialect qualifies all supplied measured strokes, including
     // those without saved dimensions, for internal constraint admission.
     bool measured_stroke_transform_completion{};
+    // Envelope three binds each complete selected geometric owner to its
+    // captured local operator. Supplemental walls/strokes have explicit intent;
+    // they never borrow a selected boundary's transform.
+    bool per_owner_transform_completion{};
+    std::vector<RigidOwnerTransformation> source_transformations;
 };
 
 struct EditBoundaryGeometry {

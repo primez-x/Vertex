@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 per-owner Site rotation and reflection
+
+Numerical group rotation/reflection now carries each measured area's, wall's and
+stroke's captured source operator when buildings have different Site frames.
+The complete rigid command reconstructs each geometric owner, its dimensions,
+deductions and current source cohort independently before admitting one event.
+Ordinary architecture, components, text and references join the same candidate.
+Selected saved dimensions can accompany their owners without moving twice.
+Compatible groups retain their existing command path.
+
+TransformBoundaries dialect 3 stores explicit wall/stroke operators; native
+format 73 and extraction version 71 retain the marker throughout standalone and
+nested rigid history. Unknown, missing and contradictory witnesses refuse.
+Full rigid groups require all hard-related owners and compatible operators;
+partial connected rotation is not granted by this command.
+
+Independent source review identified and corrected two defects: fixed anchors
+now remain fixed in this new lane, and every hosted door/window reflection
+consequence reconstructs from its validated host even if its payload is omitted.
+The focused recheck approved both corrections. Historical dialects retain their
+previous wire shape and replay behavior. Exact core operator equality remains
+conservative, and singleton boundary replay performance has no measured claim.
+
+No builds, tests, probes, launches, packages or installations ran. Compilation,
+interaction, persistence and performance remain unverified; the installed
+candidate is unchanged.
+
 ### October 8 numeric Site moves and selected hosted openings
 
 Transform selection now uses the same per-owner typed translation as canvas
@@ -2225,12 +2252,12 @@ passes. No installed ACL, profile or firewall was changed.
 
 ## Next actions, in order
 
-1. Continue the distinct typed Site placement gap for embedded profiles and
-   same-ID persisted bodies. Extend numerical group transforms to the remaining
-   architectural/presentation families and group-copy workflow. The implemented
-   wall/area/measured-line groups require later runtime qualification.
-   Keep unsupported combinations visible as gaps;
-   never mutate only part of a selection under a group command.
+1. Debounce heavyweight numerical transform previews. Retire the previous
+   candidate and disable Apply immediately when inputs change; compute after
+   typing settles instead of replaying geometry and the complete scene for
+   every keystroke. Preserve source/selection fences, cancellation and the
+   exact preview-to-Apply contract. Per-owner Site movement, rotation and
+   reflection source work is recorded above and requires later qualification.
 2. Continue concrete source implementation and D01/D02 acquisition from the
    current checkout. Resolve source-review defects in each coherent batch,
    then commit, push and verify the remote ref. Preserve completed canvas,

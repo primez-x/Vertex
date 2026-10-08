@@ -16,6 +16,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_tolerances.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/boundary_integrity.hpp"
@@ -3259,21 +3260,163 @@ Boundary uniquely_aligned_rigid_exterior(const Boundary& expected, const Boundar
     return aligned;
 }
 
+bool per_owner_rigid_transform(const TransformBoundaries& command) {
+    return command.per_owner_transform_completion || !command.source_transformations.empty();
+}
+
+bool identity_rigid_transform(const PlanarTransform& transform) {
+    return transform.rotation_radians == 0.0 && !transform.flip_horizontal && !transform.flip_vertical &&
+        transform.offset.x == 0.0 && transform.offset.y == 0.0;
+}
+
+void validate_rigid_owner_transform(const RigidOwnerTransformation& intent) {
+    validate_boundary_transform({intent.owner_id, intent.transform});
+    const auto& t = intent.transform;
+    // Bound persisted operators before trigonometry, integer axis-lock replay,
+    // and source reconstruction. Historical transform dialects are unchanged.
+    if (std::abs(t.pivot.x) > 1e12 || std::abs(t.pivot.y) > 1e12 ||
+        std::abs(t.offset.x) > 1e12 || std::abs(t.offset.y) > 1e12 ||
+        std::abs(t.rotation_radians) > 1e6)
+        throw std::invalid_argument("Rigid owner transform exceeds the supported parameter range");
+}
+
+std::map<std::string, Entity, std::less<>> rigid_boundary_targets(
+    const std::map<std::string, Entity, std::less<>>& source, const TransformBoundaries& command) {
+    if (!per_owner_rigid_transform(command))
+        return transformed_boundary_entities_batch(source, command.transformations);
+    auto result = source;
+    // Replay each target against the same captured source. Intermediate moved
+    // deductions must never become the source proof for the next target.
+    for (const auto& transformation : command.transformations) {
+        const auto replay = transformed_boundary_entities_batch(source, {transformation});
+        result.at(transformation.boundary_id) = replay.at(transformation.boundary_id);
+        for (const auto& [id, entity] : source) {
+            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (decoded.dimension && decoded.dimension->boundary_id == transformation.boundary_id)
+                result.at(id) = replay.at(id);
+        }
+    }
+    return result;
+}
+
+Entity replay_rigid_source_wall(const Entity& original, const PlanarTransform& transform) {
+    const auto& value = original.properties.at("baseline");
+    const Segment old{{value.at("start")[0].get<double>(), value.at("start")[1].get<double>()},
+        {value.at("end")[0].get<double>(), value.at("end")[1].get<double>()}, value.value("sweep_radians", 0.0)};
+    validate_wall_curve_input(original);
+    validate_wall_length_input(original);
+    if (identity_rigid_transform(transform)) return original;
+    const auto baseline = transform_segment(old, transform);
+    if (!std::isfinite(segment_length(baseline)) ||
+        std::abs(segment_length(old) - segment_length(baseline)) > constraint_linear_tolerance_metres ||
+        std::abs(old.sweep_radians) != std::abs(baseline.sweep_radians))
+        throw std::invalid_argument("Rigid source wall must preserve its physical length and sweep magnitude");
+    auto expected = original;
+    transform_wall_curve_input(expected, transform);
+    rebase_wall_length_receipt(expected, baseline);
+    if (const auto plane = original.properties.find("top_plane"); plane != original.properties.end()) {
+        const PlanarTransform basis{{}, transform.rotation_radians, transform.flip_horizontal, transform.flip_vertical, {}};
+        const auto gradient = transform_point(parse_wall_top_plane(*plane), basis);
+        expected.properties["top_plane"] = wall_top_plane_json(gradient);
+        const double rise = gradient.x * (baseline.end.x - baseline.start.x) +
+            gradient.y * (baseline.end.y - baseline.start.y);
+        if (!std::isfinite(rise)) throw std::invalid_argument("Rigid wall top plane exceeds the supported range");
+        expected.properties["slope_rise_m"] = rise;
+        if (expected.properties.contains("slope_rise")) expected.properties["slope_rise"] = rise;
+    }
+    expected.properties["baseline"]["start"] = {baseline.start.x, baseline.start.y};
+    expected.properties["baseline"]["end"] = {baseline.end.x, baseline.end.y};
+    expected.properties["baseline"]["sweep_radians"] = baseline.sweep_radians;
+    validate_wall_curve_input(expected);
+    validate_wall_length_input(expected);
+    return expected;
+}
+
+Entity replay_rigid_source_opening(const Entity& original, const PlanarTransform& transform) {
+    auto expected=original;
+    if (transform.flip_horizontal==transform.flip_vertical) return expected;
+    if (expected.properties.contains("door_operation")) {
+        auto operation=decode_door_operation(expected.properties.at("door_operation"));
+        operation.swing_left=!operation.swing_left;
+        expected.properties["door_operation"]=encode_door_operation(operation);
+    }
+    if (expected.properties.contains("opening_assembly")) {
+        auto assembly=parse_opening_assembly(expected.properties.at("opening_assembly"));
+        assembly.inset_m=-assembly.inset_m;
+        if (assembly.window_layout==WindowLayoutKind::casement ||
+            assembly.window_layout==WindowLayoutKind::sliding || assembly.window_layout==WindowLayoutKind::bay)
+            assembly.window_open_left=!assembly.window_open_left;
+        expected.properties["opening_assembly"]=opening_assembly_json(assembly);
+    }
+    return expected;
+}
+
 std::map<std::string, Entity, std::less<>> boundary_transform_entities(
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
     const TransformBoundaries& command) {
-    if (command.transformations.empty())
+    const bool per_owner = per_owner_rigid_transform(command);
+    if (command.transformations.empty() && (!per_owner || command.source_transformations.empty()))
         document_error(DocumentErrorCode::invalid_entity,"Boundary transform group is empty");
     (void)command_to_json(command); // The retained proof must be persistable too.
-    const auto& shared = command.transformations.front().transform;
+    const PlanarTransform shared = command.transformations.empty() ? PlanarTransform{} : command.transformations.front().transform;
     std::set<std::string> owners, protected_ids, source_walls, moved_walls;
+    std::map<std::string, PlanarTransform, std::less<>> owner_transforms, source_transforms;
     for (const auto& transformation : command.transformations) {
         validate_boundary_transform(transformation);
-        if (!(transformation.transform == shared))
+        if (per_owner) validate_rigid_owner_transform({transformation.boundary_id, transformation.transform});
+        if (!per_owner && !(transformation.transform == shared))
             document_error(DocumentErrorCode::invalid_entity,"Boundary transform group requires one shared transform");
         if (!owners.insert(transformation.boundary_id).second)
             document_error(DocumentErrorCode::duplicate_change,"Boundary is transformed more than once");
+        owner_transforms.emplace(transformation.boundary_id, transformation.transform);
+    }
+    for (const auto& intent : command.source_transformations) {
+        validate_rigid_owner_transform(intent);
+        const auto found = source.find(intent.owner_id);
+        if (found == source.end() || (found->second.type != "wall" && found->second.type != "measurement_linework"))
+            throw std::invalid_argument("Rigid source intent requires an existing wall or measured stroke");
+        if (owners.contains(intent.owner_id) || !source_transforms.emplace(intent.owner_id, intent.transform).second)
+            throw std::invalid_argument("Rigid source intents require unique disjoint owners");
+        owner_transforms.emplace(intent.owner_id, intent.transform);
+    }
+    const auto compatible = [&](const std::string& first, const std::string& second) {
+        return owner_transforms.contains(first) && owner_transforms.contains(second) &&
+            owner_transforms.at(first) == owner_transforms.at(second);
+    };
+    const auto linework_owners = [](const Entity& entity) {
+        std::set<std::string> ids;
+        const auto collect = [&](const auto& self, const nlohmann::json& value) -> void {
+            if (value.is_object()) {
+                if (value.contains("owner_id")) {
+                    if (!value.at("owner_id").is_string())
+                        throw std::invalid_argument("Measured source owner identity is malformed");
+                    ids.insert(value.at("owner_id").get<std::string>());
+                }
+                for (const auto& item : value.items()) self(self, item.value());
+            } else if (value.is_array()) for (const auto& item : value) self(self, item);
+        };
+        for (const auto* key : {"measurement_linework_sources", "measurement_linework_group"})
+            if (entity.extensions.contains(key)) collect(collect, entity.extensions.at(key));
+        return ids;
+    };
+    // Use the semantic phase set, never drawing/view visibility, to establish
+    // current source authority for selected measured faces and group cohorts.
+    std::set<std::string, std::less<>> semantic_available;
+    std::map<std::string, MeasurementLineworkSourceCheck, std::less<>> old_linework_checks;
+    if (per_owner) {
+        for (const auto& [id, entity] : source) { (void)entity; semantic_available.insert(id); }
+        for (const auto& [id, entity] : source) {
+            (void)id;
+            if (entity.type != "model_phases") continue;
+            const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+            const auto active = phases.active_state();
+            for (const auto& member : phases.entity_ids())
+                if (!active.contains(member) || active.at(member) == ModelPhase::demolished)
+                    semantic_available.erase(member);
+        }
+        old_linework_checks = measurement_linework_source_checks(source, &semantic_available);
     }
     protected_ids = owners;
     const auto source_current = [&](const auto& entities, const Entity& owner) {
@@ -3288,6 +3431,17 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
     }
     for (const auto& id : owners) {
         const auto& owner = source.at(id);
+        if (per_owner && (owner.extensions.contains("measurement_linework_sources") ||
+                          owner.extensions.contains("measurement_linework_group"))) {
+            if (!semantic_available.contains(id) || !measurement_linework_source_current(old_linework_checks, owner))
+                throw std::invalid_argument("Rigid measured area transform requires current source lineage");
+            const auto cohort = linework_owners(owner);
+            if (cohort.empty()) throw std::invalid_argument("Rigid measured area source cohort is empty");
+            for (const auto& stroke : cohort)
+                if (!source_transforms.contains(stroke) || source.at(stroke).type != "measurement_linework" ||
+                    !compatible(id, stroke))
+                    throw std::invalid_argument("Rigid measured area cohort requires complete compatible captured stroke operators");
+        }
         if (const auto deductions = owner.properties.find("deduction_ids"); deductions != owner.properties.end()) {
             if (!deductions->is_array())
                 throw std::invalid_argument("Measured deductions must be an array");
@@ -3296,6 +3450,8 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
                 if (!value.is_string() || !owners.contains(value.get<std::string>()) || value == id ||
                     !unique.insert(value.get<std::string>()).second)
                     throw std::invalid_argument("Rigid transform must include every retained deduction exactly once");
+                if (per_owner && !compatible(id, value.get<std::string>()))
+                    throw std::invalid_argument("Rigid deductions require compatible captured owner operators");
             }
         }
         if (owner.properties.contains("wall_measurement_source")) {
@@ -3304,9 +3460,43 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             if (!source_current(source,owner))
                 throw std::invalid_argument("Exterior transform requires current recorded source context");
             source_walls.insert(ids.begin(),ids.end());
+            if (per_owner)
+                for (const auto& wall : ids)
+                    if (!compatible(id, wall))
+                        throw std::invalid_argument("Rigid exterior sources require compatible captured owner operators");
         }
     }
-    auto intermediate = transformed_boundary_entities_batch(source,command.transformations);
+    std::map<std::string, Entity, std::less<>> source_witnesses, opening_witnesses;
+    if (per_owner) {
+        // Complete source authority is established before any selected
+        // boundary geometry is replayed. Intent cannot be supplied merely to
+        // lend an operator to an unrelated supplemental payload.
+        for (const auto& change : command.entity_changes) {
+            if (change.kind != EntityChangeKind::upsert || !source_transforms.contains(change.entity.id)) continue;
+            const auto& id = change.entity.id;
+            const auto& original = source.at(id);
+            Entity expected;
+            if (original.type == "wall") expected = replay_rigid_source_wall(original, source_transforms.at(id));
+            else {
+                const auto decoded = decode_measurement_linework_model(original.properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                expected = original;
+                expected.properties["model"] = encode_measurement_linework_model(
+                    transformed_measurement_linework(*decoded.model, source_transforms.at(id)));
+            }
+            if (expected != change.entity || !source_witnesses.emplace(id, std::move(expected)).second)
+                throw std::invalid_argument("Rigid source witness differs from its exact captured-owner reconstruction");
+        }
+        if (source_witnesses.size() != source_transforms.size())
+            throw std::invalid_argument("Rigid source intent is missing its exact supplemental witness");
+        for (const auto& [id,entity]:source) {
+            if (entity.type!="opening") continue;
+            const auto& host=entity.properties.at("wall_id").get_ref<const std::string&>();
+            if (!source_transforms.contains(host) || source.at(host).type!="wall") continue;
+            opening_witnesses.emplace(id,replay_rigid_source_opening(entity,source_transforms.at(host)));
+        }
+    }
+    auto intermediate = rigid_boundary_targets(source,command);
     auto result = intermediate;
     std::set<std::string> touched;
     std::map<std::string,PlanarTransform,std::less<>> measured_transforms;
@@ -3322,13 +3512,20 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             can_recognize_boundary_dimension_entity_type(change.entity.type))
             throw std::invalid_argument("Rigid transform supplements cannot inject raw boundary or dimension geometry");
         validate_entity(change.entity);
+        if (per_owner && (change.entity.type == "wall" || change.entity.type == "measurement_linework") &&
+            !source_transforms.contains(id))
+            throw std::invalid_argument("Rigid supplemental geometry requires its own captured source intent");
         if (change.entity.type == "wall") {
             const auto read = [](const Entity& wall) {
                 const auto& value = wall.properties.at("baseline");
                 return Segment{{value.at("start")[0].get<double>(),value.at("start")[1].get<double>()},
                     {value.at("end")[0].get<double>(),value.at("end")[1].get<double>()},value.value("sweep_radians",0.0)};
             };
-            const auto expected = transform_segment(read(previous->second), shared);
+            const auto& transform = per_owner ? source_transforms.at(id) : shared;
+            if (per_owner && source_witnesses.at(id) != change.entity)
+                throw std::invalid_argument("Rigid source wall differs from its exact captured-owner reconstruction");
+            const auto expected = per_owner && identity_rigid_transform(transform) ? read(previous->second) :
+                transform_segment(read(previous->second), transform);
             const auto actual = read(change.entity);
             if (expected.start.x != actual.start.x || expected.start.y != actual.start.y ||
                 expected.end.x != actual.end.x || expected.end.y != actual.end.y || expected.sweep_radians != actual.sweep_radians)
@@ -3341,14 +3538,22 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             }
             moved_walls.insert(id);
         } else if(change.entity.type=="measurement_linework" &&
-            (command.measured_stroke_transform_completion || has_measured_stroke_dimensions(source,id))) {
+            (per_owner || command.measured_stroke_transform_completion || has_measured_stroke_dimensions(source,id))) {
             const auto decoded=decode_measurement_linework_model(previous->second.properties.at("model"));
             if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
             auto expected=previous->second;
-            expected.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,shared));
+            const auto& transform = per_owner ? source_transforms.at(id) : shared;
+            expected.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
             if(expected!=change.entity)throw std::invalid_argument("Measured stroke differs from the shared rigid transform");
-            measured_transforms.emplace(id,shared);
+            measured_transforms.emplace(id,transform);
         } else if (change.entity.type == "opening") {
+            if (per_owner) {
+                const auto& host = previous->second.properties.at("wall_id").get_ref<const std::string&>();
+                if (!source_transforms.contains(host) || source.at(host).type != "wall")
+                    throw std::invalid_argument("Rigid opening supplement requires its captured source wall");
+                if (opening_witnesses.at(id) != change.entity)
+                    throw std::invalid_argument("Rigid opening supplement differs from its exact host reflection consequence");
+            }
             // Hosting distances do not change when the host endpoint identities are retained.
             for (const auto* key : {"wall_id", "opening_kind", "offset_m", "offset", "width_m", "width",
                                    "height_m", "height", "sill_m", "sill_height_m", "sill_height",
@@ -3361,15 +3566,24 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
         }
         result.insert_or_assign(id,change.entity);
     }
-    const bool identity = shared.rotation_radians == 0.0 && !shared.flip_horizontal && !shared.flip_vertical &&
-        shared.offset.x == 0.0 && shared.offset.y == 0.0;
+    // A wall intent owns every hosted cut. Reconstruct omitted reflection
+    // consequences as well as validating supplied witnesses, once from source.
+    // Removing an opening payload cannot retain the wrong handedness or inset.
+    for (const auto& [id,opening]:opening_witnesses) result.insert_or_assign(id,opening);
+    for (const auto& [id, transform] : source_transforms) {
+        (void)transform;
+        if (!moved_walls.contains(id) && !measured_transforms.contains(id))
+            throw std::invalid_argument("Rigid source intent is missing its exact supplemental witness");
+    }
+    const bool identity = per_owner ? std::all_of(owner_transforms.begin(), owner_transforms.end(),
+        [](const auto& item) { return identity_rigid_transform(item.second); }) : identity_rigid_transform(shared);
     for (const auto& id : source_walls)
         if (!moved_walls.contains(id) && !identity)
             throw std::invalid_argument("Rigid exterior transform must include every source wall");
     std::set<std::string> transformed_ids = owners;
-    if (command.wall_dimension_completion && moved_walls.empty())
+    if (!per_owner && command.wall_dimension_completion && moved_walls.empty())
         throw std::invalid_argument("Rigid wall callout completion requires a validated wall witness");
-    if (command.measured_stroke_transform_completion && measured_transforms.empty())
+    if (!per_owner && command.measured_stroke_transform_completion && measured_transforms.empty())
         throw std::invalid_argument("Rigid measured completion requires a validated stroke witness");
     transformed_ids.insert(moved_walls.begin(),moved_walls.end());
     for(const auto& [id,transform]:measured_transforms){(void)transform;transformed_ids.insert(id);}
@@ -3388,13 +3602,18 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
         }
         if (!std::all_of(bindings.begin(),bindings.end(),[&](const auto& value){return transformed_ids.contains(value.owner_id);}))
             throw std::invalid_argument("Rigid transform cannot move only one owner of an external hard relation");
+        const auto& transform = per_owner ? owner_transforms.at(bindings.front().owner_id) : shared;
+        if (per_owner && !std::all_of(bindings.begin(), bindings.end(), [&](const auto& value) {
+                return owner_transforms.at(value.owner_id) == transform;
+            }))
+            throw std::invalid_argument("Rigid hard relations require compatible captured owner operators");
         auto expected = *decoded.constraint;
-        if (expected.anchor)
-            expected.anchor = transform_point(*expected.anchor, shared);
+        if (expected.anchor && (!per_owner || expected.relation!=ConstraintRelationKind::fixed_anchor))
+            expected.anchor = transform_point(*expected.anchor, transform);
         if (expected.relation == ConstraintRelationKind::horizontal || expected.relation == ConstraintRelationKind::vertical) {
-            if (std::abs(std::remainder(shared.rotation_radians,std::numbers::pi/2)) > 1e-12)
+            if (std::abs(std::remainder(transform.rotation_radians,std::numbers::pi/2)) > 1e-12)
                 throw std::invalid_argument("Axis-locked relations require a quarter-turn rigid rotation");
-            if (std::llround(shared.rotation_radians/(std::numbers::pi/2)) % 2 != 0)
+            if (std::llround(transform.rotation_radians/(std::numbers::pi/2)) % 2 != 0)
                 expected.relation = expected.relation == ConstraintRelationKind::horizontal ? ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
         }
         if (result.at(id) != encode_constraint_entity(expected,&entity))
@@ -3403,10 +3622,10 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
     // Reject ordinary receipt edits before any canonical source reconciliation.
     complete_rigid_geometry_dimensions(source,result,measured_transforms);
     std::map<std::string,PlanarTransform,std::less<>> wall_transforms;
-    for (const auto& id : moved_walls) wall_transforms.emplace(id,shared);
-    // Only independently validated shared wall baselines lend placement
+    for (const auto& id : moved_walls) wall_transforms.emplace(id,per_owner ? source_transforms.at(id) : shared);
+    // Only independently validated wall baselines lend placement
     // authority. Raw dimension supplements remain forbidden above.
-    if (command.wall_dimension_completion)
+    if (per_owner || command.wall_dimension_completion)
         complete_rigid_geometry_dimensions(source,result,wall_transforms,true);
     validate_boundary_change(history,intermediate,result);
     if (identity) {
@@ -3420,7 +3639,7 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
         const auto ids = exterior_wall_measurement_source_ids(result.at(id));
         const auto exterior = derive_replacement_exterior_wall_measurement(result,result.at(id),ids);
         auto boundary = decode_identified_boundary_entity(result.at(id));
-        const auto aligned = uniquely_aligned_rigid_exterior(boundary_geometry(boundary),exterior.boundary,shared);
+        const auto aligned = uniquely_aligned_rigid_exterior(boundary_geometry(boundary),exterior.boundary,owner_transforms.at(id));
         bool exact = true;
         for (std::size_t i = 0; i < aligned.size(); ++i) {
             const auto& a = boundary.segments[i].segment;
@@ -3437,6 +3656,53 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             edit.replacement_segments = encode_identified_boundary_entity(boundary).properties.at("segments");
             edit.replacement_wall_source_ids = ids;
             result = edited_boundary_entities(result, edit);
+        }
+    }
+    if (per_owner && !old_linework_checks.empty()) {
+        const auto checks = measurement_linework_source_checks(result, &semantic_available);
+        for (const auto& id : owners) {
+            const auto found = checks.find(id);
+            if (found == checks.end()) continue;
+            const auto& check = found->second;
+            if (!check.proposed_boundary || !check.proposed_lineage.is_array())
+                throw std::invalid_argument("Rigid measured source has no unique final face correspondence: " + check.diagnostic);
+            auto boundary = decode_identified_boundary_entity(result.at(id));
+            const auto aligned = uniquely_aligned_rigid_exterior(
+                boundary_geometry(boundary), *check.proposed_boundary, owner_transforms.at(id));
+            bool exact = true;
+            for (std::size_t index = 0; index < aligned.size(); ++index) {
+                const auto& a = boundary.segments[index].segment;
+                const auto& b = aligned[index];
+                exact = exact && a.start.x == b.start.x && a.start.y == b.start.y &&
+                    a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+                boundary.segments[index].segment = b;
+            }
+            // Retain the rigid proof, then archive only the uniquely matched
+            // machine-roundoff correction needed by exact source-face replay.
+            if (!exact) {
+                BoundaryGeometryEdit edit;
+                edit.boundary_id = id; edit.target_id = id;
+                edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+                edit.replacement_segments = encode_identified_boundary_entity(boundary).properties.at("segments");
+                result = edited_boundary_entities(result, edit);
+            }
+            auto& owner = result.at(id);
+            owner.extensions["measurement_linework_sources"] = check.proposed_lineage;
+            if (owner.extensions.contains("measurement_linework_group")) {
+                if (!check.proposed_group.is_object())
+                    throw std::invalid_argument("Rigid measured group requires complete reconstructed member lineage");
+                owner.extensions["measurement_linework_group"] = check.proposed_group;
+            }
+        }
+        const auto verified = measurement_linework_source_checks(result, &semantic_available);
+        for (const auto& [id, old] : old_linework_checks) {
+            const auto referenced = linework_owners(source.at(id));
+            const bool affected = owners.contains(id) || std::any_of(referenced.begin(), referenced.end(),
+                [&](const auto& stroke) { return measured_transforms.contains(stroke); });
+            if (!affected || !old.current) continue;
+            const auto found = verified.find(id);
+            if (found == verified.end() || !found->second.current)
+                throw std::invalid_argument("Rigid transform would stale a measured source consumer: " + id);
         }
     }
     const auto organization = organize_project(result);
@@ -3487,6 +3753,20 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
         }
         if (const auto invalid = validate_boundary_holes(boundary_geometry(decode_identified_boundary_entity(owner)), holes))
             throw std::invalid_argument(*invalid);
+    }
+    if (per_owner) {
+        // Canonical source reconciliation may reflow an automatic callout.
+        // Its v3 placement remains owned by the captured boundary operator.
+        for (const auto& [id, entity] : intermediate) {
+            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!decoded.supported() || !owners.contains(decoded.dimension->boundary_id)) continue;
+            const auto current = result.find(id);
+            if (current == result.end() || !decode_boundary_dimension_entity(current->second).supported())
+                throw std::invalid_argument("Rigid source reconciliation lost an attached analytical callout");
+            (void)decoded.dimension->resolve(result.at(decoded.dimension->boundary_id));
+            current->second = entity;
+        }
     }
     validate_boundary_identity_transition(history,source,result);
     return result;
@@ -3776,7 +4056,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
         // Older standalone transform replay keeps its historical semantics.
         std::set<std::string,std::less<>> rigid_owners;
         for(const auto& transform:rigid.transformations)rigid_owners.insert(transform.boundary_id);
-        const auto moved_callouts=transformed_boundary_entities_batch(source,rigid.transformations);
+        const auto moved_callouts=rigid_boundary_targets(source,rigid);
         for(const auto& [id,entity]:moved_callouts) {
             if(!can_recognize_boundary_dimension_entity_type(entity.type))continue;
             const auto decoded=decode_boundary_dimension_entity(entity);
@@ -4364,23 +4644,45 @@ nlohmann::json command_to_json(const Command& command) {
                 typed.expected_revision, typed.entity_changes, {}, typed.message});
             encoded["kind"] = "transform_boundaries";
             encoded.erase("asset_changes");
-            if (typed.wall_dimension_completion || typed.measured_stroke_transform_completion) {
-                encoded["version"] = 2;
+            const bool per_owner = per_owner_rigid_transform(typed);
+            if (per_owner || typed.wall_dimension_completion || typed.measured_stroke_transform_completion) {
+                encoded["version"] = per_owner ? 3 : 2;
                 encoded["wall_dimension_completion"] = typed.wall_dimension_completion;
                 encoded["measured_stroke_transform_completion"] = typed.measured_stroke_transform_completion;
             }
             encoded["transformations"] = nlohmann::json::array();
-            if (typed.transformations.empty())
+            if (!per_owner && typed.transformations.empty())
                 document_error(DocumentErrorCode::invalid_entity, "Boundary transform group is empty");
             std::set<std::string> owners;
-            const auto& shared = typed.transformations.front().transform;
+            const PlanarTransform shared = typed.transformations.empty() ? PlanarTransform{} : typed.transformations.front().transform;
             for (const auto& transformation : typed.transformations) {
-                if (!(transformation.transform == shared))
+                if (per_owner) validate_rigid_owner_transform({transformation.boundary_id, transformation.transform});
+                if (!per_owner && !(transformation.transform == shared))
                     document_error(DocumentErrorCode::invalid_entity, "Boundary transform group requires one shared transform");
                 if (!owners.insert(transformation.boundary_id).second)
                     document_error(DocumentErrorCode::duplicate_change, "Boundary is transformed more than once");
                 encoded["transformations"].push_back(command_to_json(
                     TransformBoundary{typed.expected_revision, transformation}).at("transformation"));
+            }
+            if (per_owner) {
+                encoded["per_owner_transform_completion"] = true;
+                encoded["source_transformations"] = nlohmann::json::array();
+                std::set<std::string> source_owners, witnesses;
+                for (const auto& intent : typed.source_transformations) {
+                    validate_rigid_owner_transform(intent);
+                    if (owners.contains(intent.owner_id) || !source_owners.insert(intent.owner_id).second)
+                        throw std::invalid_argument("Rigid source transforms require unique disjoint owners");
+                    encoded["source_transformations"].push_back({{"owner_id", intent.owner_id},
+                        {"transform", command_transform_to_json(intent.transform)}});
+                }
+                for (const auto& change : typed.entity_changes) {
+                    if (change.kind != EntityChangeKind::upsert ||
+                        (change.entity.type != "wall" && change.entity.type != "measurement_linework")) continue;
+                    if (!source_owners.contains(change.entity.id) || !witnesses.insert(change.entity.id).second)
+                        throw std::invalid_argument("Rigid source geometry requires exactly one captured-owner intent");
+                }
+                if (witnesses != source_owners)
+                    throw std::invalid_argument("Rigid source transforms must cover exactly their wall/stroke witnesses");
             }
             if (encoded.dump().size() > 1024 * 1024)
                 document_error(DocumentErrorCode::invalid_entity, "Boundary transform group exceeds the persisted proof budget");
@@ -4760,11 +5062,22 @@ Command command_from_json(const nlohmann::json& value,
         }
         const auto kind = value.at("kind").get<std::string>();
         if (value.at("version") != 1 && kind != "apply_boundary_constraint_changes" &&
-            !(kind == "transform_boundaries" && value.at("version") == 2))
+            !(kind == "transform_boundaries" && (value.at("version") == 2 || value.at("version") == 3)))
             document_error(DocumentErrorCode::invalid_entity,"Unsupported command envelope version");
         if (kind == "transform_boundaries") {
-            const bool qualified_group = value.at("version") == 2;
-            if (qualified_group) {
+            const bool per_owner = value.at("version") == 3;
+            const bool qualified_group = per_owner || value.at("version") == 2;
+            if (per_owner) {
+                command_exact_fields(value, {"version", "kind", "expected_revision", "message", "entity_changes", "transformations",
+                    "wall_dimension_completion", "measured_stroke_transform_completion", "per_owner_transform_completion", "source_transformations"},
+                    DocumentErrorCode::invalid_entity, "serialized per-owner rigid transform group");
+                if (!value.at("per_owner_transform_completion").is_boolean() ||
+                    !value.at("per_owner_transform_completion").get<bool>() ||
+                    !value.at("wall_dimension_completion").is_boolean() ||
+                    !value.at("measured_stroke_transform_completion").is_boolean() ||
+                    !value.at("source_transformations").is_array())
+                    throw std::invalid_argument("Per-owner rigid transform requires its explicit typed envelope");
+            } else if (qualified_group) {
                 command_exact_fields(value, {"version", "kind", "expected_revision", "message", "entity_changes", "transformations", "wall_dimension_completion", "measured_stroke_transform_completion"},
                                      DocumentErrorCode::invalid_entity, "serialized transform group with wall callouts");
                 if (!value.at("wall_dimension_completion").is_boolean() ||
@@ -4776,7 +5089,7 @@ Command command_from_json(const nlohmann::json& value,
                                  DocumentErrorCode::invalid_entity, "serialized transform group");
             if (value.dump().size() > 1024 * 1024)
                 throw std::invalid_argument("Boundary transform group exceeds the persisted proof budget");
-            if (!value.at("transformations").is_array() || value.at("transformations").empty())
+            if (!value.at("transformations").is_array() || (!per_owner && value.at("transformations").empty()))
                 document_error(DocumentErrorCode::invalid_entity, "Transformations must be a nonempty array");
             auto ordinary = value;
             ordinary["version"] = 1;
@@ -4784,11 +5097,14 @@ Command command_from_json(const nlohmann::json& value,
             ordinary.erase("transformations");
             ordinary.erase("wall_dimension_completion");
             ordinary.erase("measured_stroke_transform_completion");
+            ordinary.erase("per_owner_transform_completion");
+            ordinary.erase("source_transformations");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
             TransformBoundaries result{changes.expected_revision, {}, changes.entity_changes, changes.message};
             result.wall_dimension_completion = qualified_group && value.at("wall_dimension_completion").get<bool>();
             result.measured_stroke_transform_completion = qualified_group && value.at("measured_stroke_transform_completion").get<bool>();
+            result.per_owner_transform_completion = per_owner;
             std::set<std::string> owners;
             for (const auto& transformation : value.at("transformations")) {
                 const auto single = std::get<TransformBoundary>(command_from_json(nlohmann::json{
@@ -4796,10 +5112,26 @@ Command command_from_json(const nlohmann::json& value,
                     {"expected_revision", result.expected_revision}, {"transformation", transformation}}));
                 if (!owners.insert(single.transformation.boundary_id).second)
                     document_error(DocumentErrorCode::duplicate_change, "Boundary is transformed more than once");
-                if (!result.transformations.empty() &&
+                if (!per_owner && !result.transformations.empty() &&
                     !(result.transformations.front().transform == single.transformation.transform))
                     document_error(DocumentErrorCode::invalid_entity, "Boundary transform group requires one shared transform");
                 result.transformations.push_back(single.transformation);
+            }
+            if (per_owner) {
+                for (const auto& intent : value.at("source_transformations")) {
+                    command_exact_fields(intent, {"owner_id", "transform"}, DocumentErrorCode::invalid_entity,
+                        "serialized rigid source owner transform");
+                    if (!intent.at("owner_id").is_string())
+                        throw std::invalid_argument("Rigid source owner identity must be a string");
+                    RigidOwnerTransformation decoded{intent.at("owner_id").get<std::string>(),
+                        command_transform_from_json(intent.at("transform"))};
+                    validate_rigid_owner_transform(decoded);
+                    result.source_transformations.push_back(std::move(decoded));
+                }
+                // Reuse encoding's exact source-witness coverage and duplicate
+                // checks. The explicit marker survives empty malformed intent
+                // groups so they cannot downgrade into a historical dialect.
+                (void)command_to_json(Command{result});
             }
             return result;
         }
@@ -5000,10 +5332,10 @@ Command command_from_json(const nlohmann::json& value,
                 if (!child.is_null()) {
                     // Inspect identity before recursive decoding: no arbitrary
                     // commands or nested mixed envelopes. Qualified child
-                    // dialect two retains its own format-66 floor.
+                    // dialects retain their own source-format floors.
                     if (!child.is_object() || !child.contains("kind") || child.at("kind") != "transform_boundaries" ||
                         !child.contains("version") || !child.at("version").is_number_integer() ||
-                        (child.at("version") != 1 && child.at("version") != 2))
+                        (child.at("version") != 1 && child.at("version") != 2 && child.at("version") != 3))
                         throw std::invalid_argument("Mixed rigid child must be a TransformBoundaries proof");
                     result.rigid_group_transform = std::get<TransformBoundaries>(command_from_json(child, asset_resolver));
                 }
