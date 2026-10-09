@@ -13,6 +13,7 @@
 #include "sketch/stair_clone.hpp"
 #include "sketch/site_frame.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "stair_retirement_groups.hpp"
 
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -470,20 +471,36 @@ void admit_joint_dependency_retirement(const Entities& actual,
         return !row.retirement_eligible && std::binary_search(cohort.begin(), cohort.end(), row.rail_id);
     });
     if (!needs_joint_offer || cohort.size() < 2) return;
-    // One more complete-source analytical pass; capacity refusal preserves
-    // every individually admitted offer. No subset search expands authority.
-    if (actual.size() > 2000000 / (plan.dependencies.size() + 1)) return;
+    stair_retirement_detail::WorkBudget budget{actual.size() * plan.dependencies.size()};
+    const auto admit = [&](const std::vector<std::string>& group) {
+        if (!budget.take(actual.size())) return false;
+        try {
+            const auto retirement = inspect_phase_stair_proposed_rail_retirement_plan(
+                actual, plan.registry_id, plan.alternative_id, group);
+            if (!retirement.ready()) return false;
+        } catch (const std::exception&) { return false; }
+        const auto requirement = "Group retirement is available. Choose Remove for all of these affected railings together: " +
+            dependency_retirement_names(plan, group) + ". The exact chosen removal group will be checked before applying the edit.";
+        for (auto& row : plan.dependencies) if (!row.retirement_eligible &&
+            std::binary_search(group.begin(), group.end(), row.rail_id)) {
+            row.retirement_eligible = true;
+            row.retirement_reason = requirement;
+        }
+        return true;
+    };
+    if (admit(cohort)) return;
     try {
-        const auto retirement = inspect_phase_stair_proposed_rail_retirement_plan(
-            actual, plan.registry_id, plan.alternative_id, cohort);
-        if (!retirement.ready()) return;
-    } catch (const std::exception&) { return; }
-    const auto requirement = "Group retirement is available. Choose Remove for all of these affected railings together: " +
-        dependency_retirement_names(plan, cohort) + ". The exact chosen removal group will be checked before applying the edit.";
-    for (auto& row : plan.dependencies) if (!row.retirement_eligible &&
-        std::binary_search(cohort.begin(), cohort.end(), row.rail_id)) {
-        row.retirement_eligible = true;
-        row.retirement_reason = requirement;
+        for (const auto& group : stair_retirement_detail::groups(actual, cohort, true, budget)) {
+            if (group.size() < 2 || group == cohort) continue;
+            const bool missing = std::any_of(plan.dependencies.begin(), plan.dependencies.end(), [&](const auto& row) {
+                return !row.retirement_eligible && std::binary_search(group.begin(), group.end(), row.rail_id);
+            });
+            if (missing) (void)admit(group);
+        }
+    } catch (const stair_retirement_detail::Capacity&) {
+        // Individual offers survive bounded partition discovery refusal.
+    } catch (const std::exception&) {
+        // Only the actual producer can admit a conditional removal group.
     }
 }
 PhaseStairReplacementDependencyPlan dependency_plan(const Entities& actual,

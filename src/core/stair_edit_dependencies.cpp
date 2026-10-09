@@ -8,6 +8,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
+#include "stair_retirement_groups.hpp"
 
 #include <Standard_Failure.hxx>
 
@@ -191,17 +192,35 @@ void admit_joint_retirement(const Entities& actual, const std::vector<Entity>& e
         needs_joint_offer = needs_joint_offer || !row.retirement_eligible;
     }
     if (!needs_joint_offer || cohort.size() < 2) return;
-    // Reserve one more complete-source analytical pass beyond the individual
-    // preflights. If it cannot fit, keep every individually admitted offer.
-    if (actual.size() > 2000000 / (plan.dependencies.size() + 1)) return;
-    try { preflight_architectural_object_removal(actual, cohort, {}); }
-    catch (const std::exception&) { return; }
-    const auto requirement = "Group retirement is available. Choose Remove for all of these affected railings together: " +
-        retirement_cohort_names(plan, cohort) + ". The exact chosen removal group will be checked before applying the edit.";
-    for (auto& row : plan.dependencies) if (!row.retirement_eligible &&
-        std::binary_search(cohort.begin(), cohort.end(), row.rail_id)) {
-        row.retirement_eligible = true;
-        row.retirement_reason = requirement;
+    stair_retirement_detail::WorkBudget budget{actual.size() * plan.dependencies.size()};
+    const auto admit = [&](const std::vector<std::string>& group) {
+        if (!budget.take(actual.size())) return false;
+        try { preflight_architectural_object_removal(actual, group, {}); }
+        catch (const std::exception&) { return false; }
+        const auto requirement = "Group retirement is available. Choose Remove for all of these affected railings together: " +
+            retirement_cohort_names(plan, group) + ". The exact chosen removal group will be checked before applying the edit.";
+        for (auto& row : plan.dependencies) if (!row.retirement_eligible &&
+            std::binary_search(group.begin(), group.end(), row.rail_id)) {
+            row.retirement_eligible = true;
+            row.retirement_reason = requirement;
+        }
+        return true;
+    };
+    // Preserve the complete-cohort offer when it works. Otherwise one bounded
+    // reference index partitions independent groups; no powerset/native replay.
+    if (admit(cohort)) return;
+    try {
+        for (const auto& group : stair_retirement_detail::groups(actual, cohort, false, budget)) {
+            if (group.size() < 2 || group == cohort) continue;
+            const bool missing = std::any_of(plan.dependencies.begin(), plan.dependencies.end(), [&](const auto& row) {
+                return !row.retirement_eligible && std::binary_search(group.begin(), group.end(), row.rail_id);
+            });
+            if (missing) (void)admit(group);
+        }
+    } catch (const stair_retirement_detail::Capacity&) {
+        // Missing capacity never withdraws individually admitted offers.
+    } catch (const std::exception&) {
+        // Malformed/unsupported index data has no admission authority.
     }
 }
 Inspection inspect(const Entities& actual, const std::vector<Entity>& edited) {

@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 independent stair retirement-group source implementation
+
+Stair editing now retains removal offers for an independent eligible railing
+group when another affected railing blocks the complete cohort. Both ordinary
+edits and shared-original stair replacement first keep their existing complete
+cohort offer, then derive conservative groups from actual railing references,
+hosted aliases and qualified drawing references. Each offered group must pass
+the same actual-source removal producer. The shared analytical work allowance
+bounds discovery; capacity refusal preserves individually admitted choices.
+
+Every affected owner still needs an explicit decision, and the exact submitted
+subset is validated before applying the edit. Group discovery grants no extra
+retirement authority and includes no unrelated owner. Existing protected,
+inactive, foreign and concurrently edited-owner rules and closed request formats
+remain unchanged. This supersedes the earlier complete-cohort-only offer limit;
+conservative grouping can still withhold other combinations. Root source review
+is complete. Compilation and runtime remain unverified. No builds, tests,
+probes, scripts, native jobs, launches, packages or installations ran; the
+installed candidate is unchanged.
+
 ### October 9 independent placed-component source implementation
 
 Delete/Cut now reaches a complete typed command when only a placed component
