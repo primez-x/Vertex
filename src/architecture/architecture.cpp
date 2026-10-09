@@ -149,11 +149,12 @@ TopoDS_Shape opening_box(const OpeningFrame& frame, double along, double across,
 }
 
 TopoDS_Shape rotate_opening_part(const TopoDS_Shape& source, const gp_Pnt& hinge,
-                                 double angle, const char* message) {
+                                 double angle, const char* message,
+                                 const gp_Dir& axis = gp_Dir(0.0, 0.0, 1.0)) {
     if (source.IsNull() || !std::isfinite(angle)) throw std::invalid_argument(message);
     try {
         gp_Trsf transform;
-        transform.SetRotation(gp_Ax1(hinge, gp_Dir(0.0, 0.0, 1.0)), angle);
+        transform.SetRotation(gp_Ax1(hinge, axis), angle);
         BRepBuilderAPI_Transform rotated(source, transform, true);
         if (!rotated.IsDone() || rotated.Shape().IsNull() ||
             !BRepCheck_Analyzer(rotated.Shape()).IsValid()) {
@@ -654,6 +655,9 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
         (void)encode_door_operation(*door_operation);
         if (window) throw std::invalid_argument("Window assembly cannot carry a door operation");
     }
+    const bool overhead = door_operation && door_operation->kind == DoorOperationKind::overhead_tilt_up;
+    if (overhead && wall.baseline.sweep_radians != 0.0)
+        throw std::invalid_argument("Overhead tilt-up doors require a straight host");
     const double clear_height = opening.height - (window ? 2.0 : 1.0) * assembly.frame_width_m;
     if (!std::isfinite(clear_height) || clear_height <= tolerance) {
         throw std::invalid_argument("Opening assembly frame leaves no clear opening height");
@@ -822,17 +826,19 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
         std::vector<TopoDS_Shape> posed_leaf_envelopes;
         // Use the admitted cut host, including material layers and slope, so a
         // recessed frame never permits its leaf to enter real wall material.
-        const auto cut_host = doubled ? make_wall(checked) : TopoDS_Shape{};
+        const auto cut_host = doubled || overhead ? make_wall(checked) : TopoDS_Shape{};
         const auto require_clear = [&](const TopoDS_Shape& first, const TopoDS_Shape& second, const char* message) {
             try {
                 BRepAlgoAPI_Common common(first, second);
                 common.Build();
                 if (!common.IsDone() || common.HasErrors())
-                    throw std::invalid_argument("Double door clearance computation failed");
+                    throw std::invalid_argument(overhead ? "Overhead door clearance computation failed"
+                                                         : "Double door clearance computation failed");
                 if (solid_volume(common.Shape()) > tolerance * tolerance * std::max(1.0, clear_height))
                     throw std::invalid_argument(message);
             } catch (const Standard_Failure& error) {
-                throw std::invalid_argument(std::string("Double door clearance failed: ") + error.what());
+                throw std::invalid_argument(std::string(overhead ? "Overhead door clearance failed: "
+                                                                : "Double door clearance failed: ") + error.what());
             }
         };
         for (int index = 0; index < leaf_count; ++index) {
@@ -874,7 +880,31 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
             }
             std::optional<gp_Pnt> hinge;
             double swing_angle = 0.0;
-            if (door_operation && !sliding) {
+            gp_Dir rotation_axis(0.0, 0.0, 1.0);
+            if (overhead) {
+                // The selected top thickness edge is the horizontal hinge.
+                // Rotation around +along takes a downward panel toward +left;
+                // selecting the outer edge keeps the whole thickness below
+                // the frame head throughout the requested rigid tilt-up pose.
+                hinge = opening_point(leaf_frame, part_start,
+                    part_across + (swing_side > 0.0 ? panel_depth : 0.0),
+                    base_elevation + clear_height);
+                rotation_axis = gp_Dir(leaf_frame.along.x, leaf_frame.along.y, 0.0);
+                swing_angle = door_operation->opening_fraction * std::numbers::pi * 0.5 * swing_side;
+                if (door_operation->opening_fraction != 0.0) {
+                    leaf = rotate_opening_part(leaf, *hinge, swing_angle,
+                        "Overhead door panel rotation failed", rotation_axis);
+                    leaf_envelope = rotate_opening_part(leaf_envelope, *hinge, swing_angle,
+                        "Overhead door clearance rotation failed", rotation_axis);
+                }
+                // Prove clearance using the full panel envelope, including its
+                // glazing cavity, against actual frame and admitted cut host.
+                // Only the requested pose is admitted; this is not a track or
+                // continuous swept-clearance simulation.
+                for (const auto& frame_part : frame_parts)
+                    require_clear(leaf_envelope, frame_part, "Overhead door panel intersects its frame");
+                require_clear(leaf_envelope, cut_host, "Overhead door panel intersects its host wall");
+            } else if (door_operation && !sliding) {
                 const double hinge_along = at_end ? part_start + part_width : part_start;
                 hinge = opening_point(leaf_frame, hinge_along,
                                       doubled ? double_hinge_across : part_across + panel_depth * 0.5,
@@ -907,9 +937,9 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
             }
             add(leaf);
             if (glazing.has_value()) {
-                if (hinge.has_value()) {
+                if (hinge.has_value() && (!overhead || door_operation->opening_fraction != 0.0)) {
                     *glazing = rotate_opening_part(*glazing, *hinge, swing_angle,
-                                                  "Door assembly glazing rotation failed");
+                                                  "Door assembly glazing rotation failed", rotation_axis);
                 }
                 add(*glazing);
             }

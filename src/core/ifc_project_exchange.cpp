@@ -858,6 +858,9 @@ std::optional<DoorOperation> native_operation(const Entity& entity) {
 std::string door_operation_enum(const std::optional<DoorOperation>& operation) {
     if (!operation) return ".USERDEFINED.";
     if (operation->kind == DoorOperationKind::double_hinged) return ".DOUBLE_DOOR_SINGLE_SWING.";
+    // A rigid panel pivoting about its top is described explicitly, without
+    // claiming an IFC standard sliding or vertical-axis swing operation.
+    if (operation->kind == DoorOperationKind::overhead_tilt_up) return ".USERDEFINED.";
     // This profile has one movable and one fixed panel; DOUBLE_DOOR_SLIDING
     // instead specifies two movable panels. Retain an explicit description.
     if (operation->kind == DoorOperationKind::sliding) return ".USERDEFINED.";
@@ -895,6 +898,8 @@ std::string door_operation_label(const std::optional<DoorOperation>& operation,
     // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcdoor.htm
     if (operation && operation->kind == DoorOperationKind::sliding)
         return step_string("Two-track sliding door; one fixed panel", limits);
+    if (operation && operation->kind == DoorOperationKind::overhead_tilt_up)
+        return step_string("OVERHEAD_TILT_UP", limits);
     return operation ? "$" : step_string("Closed leaf; hinge and swing unspecified", limits);
 }
 

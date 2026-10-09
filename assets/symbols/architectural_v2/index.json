@@ -1,7 +1,7 @@
 {
   "library": "Vertex Architectural SVG Library",
   "version": "2.0",
-  "count": 345,
+  "count": 352,
   "symbols": [
     {
       "id": "basin-oval",
@@ -928,10 +928,28 @@
       "file": "symbols/09_doors/door-double.svg"
     },
     {
+      "id": "door-french-double",
+      "name": "Door French Double",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-french-double.svg"
+    },
+    {
       "id": "door-garage",
       "name": "Door Garage",
       "category": "09_doors",
       "file": "symbols/09_doors/door-garage.svg"
+    },
+    {
+      "id": "door-garage-double",
+      "name": "Door Garage Double",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-garage-double.svg"
+    },
+    {
+      "id": "door-garage-single",
+      "name": "Door Garage Single",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-garage-single.svg"
     },
     {
       "id": "door-hinged-760-left",
@@ -970,10 +988,28 @@
       "file": "symbols/09_doors/door-hinged-910-right.svg"
     },
     {
+      "id": "door-hinged-exterior",
+      "name": "Door Hinged Exterior",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-exterior.svg"
+    },
+    {
+      "id": "door-hinged-interior",
+      "name": "Door Hinged Interior",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-interior.svg"
+    },
+    {
       "id": "door-pocket",
       "name": "Door Pocket",
       "category": "09_doors",
       "file": "symbols/09_doors/door-pocket.svg"
+    },
+    {
+      "id": "door-sliding",
+      "name": "Door Sliding",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-sliding.svg"
     },
     {
       "id": "door-sliding-glass",
@@ -1304,6 +1340,12 @@
       "name": "Bollard",
       "category": "15_structure_access",
       "file": "symbols/15_structure_access/bollard.svg"
+    },
+    {
+      "id": "cased-opening",
+      "name": "Cased Opening",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/cased-opening.svg"
     },
     {
       "id": "column-round",

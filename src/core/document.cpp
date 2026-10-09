@@ -1209,7 +1209,25 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             try {
                 if (entity.type != "opening")
                     document_error(DocumentErrorCode::invalid_entity, "Door operation requires an opening");
-                (void)decode_door_operation(entity.properties.at("door_operation"));
+                const auto operation = decode_door_operation(entity.properties.at("door_operation"));
+                if (operation.kind == DoorOperationKind::overhead_tilt_up) {
+                    if (!entity.properties.contains("opening_assembly") ||
+                        parse_opening_assembly(entity.properties.at("opening_assembly")).kind != OpeningAssemblyKind::door)
+                        document_error(DocumentErrorCode::invalid_entity,
+                            "Overhead door operation requires an explicit door assembly");
+                    std::string wall_id, error;
+                    if (!read_document_wall_id(entity, wall_id, error))
+                        document_error(DocumentErrorCode::invalid_entity, error);
+                    const auto wall = entities.find(wall_id);
+                    Wall host;
+                    if (wall == entities.end() || wall->second.type != "wall" ||
+                        !read_document_wall(wall->second, {}, host, error))
+                        document_error(DocumentErrorCode::invalid_entity,
+                            "Overhead door operation requires an actual valid wall");
+                    if (host.baseline.sweep_radians != 0)
+                        document_error(DocumentErrorCode::invalid_entity,
+                            "Overhead door operation requires a straight wall");
+                }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, std::string("Invalid door operation: ") + error.what());
             }

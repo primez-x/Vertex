@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 door-library and overhead-operation source implementation
+
+Seven distinct first-party SVG entries add French double, single/double garage,
+interior/exterior hinged, opaque sliding and cased-opening choices. The library
+now has 352 SVG entries. Presets use the wall-cut width separately from artwork
+margins; placement retains each name. French doors carry two glazed physical
+leaves, the opaque slider has no glazing, and cased openings create an actual
+wall cut. The Pinc counterpart map selects the distinct entries. Catalog source
+metadata was regenerated; original archive provenance remains preserved.
+
+Garage presets now create a real overhead tilt-up operation. Its panel and
+optional glazing rotate around the top horizontal edge, with editable opening
+percentage and wall-normal side. Actual frame/host clearance is checked for the
+requested pose. Plans project the complete posed solid so a fully raised panel
+stays visible; 3D uses the same geometry. Invalid operation edits remain in the
+dialog with their explanation. Document requires an explicit door assembly and
+straight wall; the fallback linework API requires actual height. Schedules and
+IFC retain the mechanism and pose. Native 154 / extraction 152 preserve new
+operation version three throughout retained/undone history; earlier operations
+keep their exact grammar and meaning. Root integrated source review is complete;
+independent source review is pending.
+
+No builds, tests, probes, native jobs, launches, packages or installations ran.
+Only source/artwork/catalog generation and inspection were performed.
+Compilation, rendering and runtime remain unverified; the installed candidate
+is unchanged. Work continues through confirmed source gaps without a goal loop.
+
 ### October 9 independent stair retirement-group source implementation
 
 Stair editing now retains removal offers for an independent eligible railing
@@ -53,7 +80,8 @@ Site fences remain attached; Cut publication follows successful application.
 Native 153 / extraction 151 preserve the additive meaning through direct,
 wrapped, retained and undone history. Older dialects/default policies remain
 unchanged. Root integrated source review is complete; independent source review
-is pending. Compilation and runtime remain unverified.
+approved the integrated source at 6dbbfc4 with no actionable findings.
+Compilation and runtime remain unverified.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or installations
 ran. The installed candidate remains unchanged. Work continues on independent

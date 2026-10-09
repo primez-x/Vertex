@@ -26,7 +26,12 @@ Boundary project_hosted_opening_plan(const Wall& wall, const HostedOpening& open
     const auto geometry = make_opening_assembly_geometry(checked, opening, assembly, operation);
     BuildingViewFrame frame;
     frame.origin.z = wall.elevation + opening.sill + opening.height * 0.5;
-    auto result = project_shape_view(geometry.shape, BuildingViewKind::section, frame);
+    // An overhead panel can be entirely above the usual plan cut. Show the
+    // footprint of its actual pose so a fully open door remains visible.
+    const bool overhead = operation && operation->kind == DoorOperationKind::overhead_tilt_up &&
+        operation->opening_fraction > 0.0;
+    auto result = project_shape_view(geometry.shape,
+        overhead ? BuildingViewKind::plan : BuildingViewKind::section, frame);
     result.insert(result.end(), geometry.door_swings.begin(), geometry.door_swings.end());
     return result;
 }

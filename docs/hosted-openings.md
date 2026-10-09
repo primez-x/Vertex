@@ -39,6 +39,26 @@ hinged kinds. Angles remain finite in (0,180], including the retained angle of
 a slider; sliders do not rotate. Ordinary hinged operations are canonically
 encoded as the original four-field version 1, preserving existing records.
 
+The library now separates French double doors, interior/exterior hinged doors,
+opaque sliding doors, and single/double garage widths. French doors create two
+glazed physical leaves; the opaque slider keeps the same two-track mechanism
+without glazing. Cased openings route to an actual bare wall cut. Each placed
+opening retains its library name for selection and schedules. All preset sizes
+remain editable design defaults.
+
+**Overhead tilt-up** garage doors use a rigid panel hinging along its top edge.
+**Open** at 0% is closed, at 50% is halfway through a 90-degree lift, and at 100%
+the panel lies horizontally at the header. Select the wall-normal side in
+**Door operation**. The frame and host are checked against the requested panel
+pose; an invalid choice stays in the editor with an explanation. This mechanism
+requires a straight wall and an explicit door assembly. It is a tilt-up door,
+not a sectional track simulation or continuous-motion certification. Plans
+project its actual pose, including a fully raised panel, and 3D uses the same
+solid. Save/history preserve the strict four-field operation version three:
+`version`, `kind:overhead_tilt_up`, `side`, and `opening_fraction`.
+Schedules display top hinge and open percentage. Compilation and runtime
+qualification of these additions remain open.
+
 The **Double** catalog door creates two physical half-width leaves and two
 analytic swings. The first leaf's jamb follows `hinge`; the second uses the
 opposite jamb. Pivots clear the selected wall and frame faces. Admission checks

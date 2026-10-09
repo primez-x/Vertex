@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="4960" height="290" viewBox="-20 -20 4960 290" role="img" aria-labelledby="door-garage-double--title door-garage-double--desc" data-vertex-style="white-outline-2">
+<title id="door-garage-double--title">Door · double overhead garage</title>
+<desc id="door-garage-double--desc">Original orthographic plan of a closed wide overhead garage door with eight recessed panel bays and two handles. Nominal footprint 4920 by 250 millimetres. Wall-cut default 4800 millimetres. Front is +Y. Transparent background.</desc>
+<g id="door-garage-double--artwork" fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round">
+<rect x="0" y="0" width="60" height="250"/><rect x="4860" y="0" width="60" height="250"/><rect x="60" y="65" width="4800" height="120"/>
+<g stroke-width="6"><rect x="90" y="90" width="540" height="70"/><rect x="690" y="90" width="540" height="70"/><rect x="1290" y="90" width="540" height="70"/><rect x="1890" y="90" width="540" height="70"/><rect x="2490" y="90" width="540" height="70"/><rect x="3090" y="90" width="540" height="70"/><rect x="3690" y="90" width="540" height="70"/><rect x="4290" y="90" width="540" height="70"/></g>
+<path d="M60 20 h4800 M60 230 h4800 M660 65 v120 M1260 65 v120 M1860 65 v120 M2460 65 v120 M3060 65 v120 M3660 65 v120 M4260 65 v120" fill="none" stroke-width="6"/>
+<rect x="1190" y="173" width="140" height="24" rx="6" fill="#f2f2f2" stroke-width="6"/><rect x="3590" y="173" width="140" height="24" rx="6" fill="#f2f2f2" stroke-width="6"/>
+</g>
+</svg>

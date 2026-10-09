@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="970" height="940" viewBox="-20 -20 970 940" role="img" aria-labelledby="door-hinged-interior--title door-hinged-interior--desc" data-vertex-style="white-outline-2">
+<title id="door-hinged-interior--title">Door · paneled interior hinged</title>
+<desc id="door-hinged-interior--desc">Original orthographic plan of a left hinged interior leaf with two recessed panel details and latch. Nominal footprint 930 by 900 millimetres. Clear opening 810 millimetres. Front is +Y. Transparent background.</desc>
+<g id="door-hinged-interior--artwork" fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round">
+<rect x="0" y="0" width="60" height="150"/><rect x="870" y="0" width="60" height="150"/><rect x="40" y="75" width="40" height="810"/>
+<g fill="#f2f2f2" stroke-width="4"><rect x="50" y="125" width="20" height="295"/><rect x="50" y="460" width="20" height="345"/></g>
+<path d="M870 75 A810 810 0 0 1 60 885" fill="none" stroke-width="7" stroke-dasharray="18 12"/>
+<path d="M80 820 h28 v-18 M60 75 h20 M60 280 h20" fill="none" stroke-width="6"/>
+</g>
+</svg>

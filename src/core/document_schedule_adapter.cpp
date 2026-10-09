@@ -122,11 +122,15 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
     if(*opening_kind == "door" && entity.properties.contains("door_operation")) {
         const auto operation = decode_door_operation(entity.properties.at("door_operation"));
         record.properties.emplace("mechanism", std::string(operation.kind == DoorOperationKind::double_hinged
-            ? "Double hinged" : operation.kind == DoorOperationKind::sliding ? "Sliding" : "Hinged"));
-        record.properties.emplace("hinge", std::string(operation.hinge_at_end?"end":"start"));
+            ? "Double hinged" : operation.kind == DoorOperationKind::sliding ? "Sliding" :
+            operation.kind == DoorOperationKind::overhead_tilt_up ? "Overhead tilt-up" : "Hinged"));
+        record.properties.emplace("hinge", std::string(operation.kind == DoorOperationKind::overhead_tilt_up
+            ? "top" : operation.hinge_at_end ? "end" : "start"));
         record.properties.emplace("swing_side", std::string(operation.swing_left?"left":"right"));
         if (operation.kind == DoorOperationKind::sliding)
             record.properties.emplace("open_percent", operation.slide_fraction * 100.0);
+        else if (operation.kind == DoorOperationKind::overhead_tilt_up)
+            record.properties.emplace("open_percent", operation.opening_fraction * 100.0);
         else record.properties.emplace("swing_angle_degrees", operation.angle_degrees);
     }
     for (const auto [name, unit] : {std::pair{"sill", ScheduleUnit::metre},

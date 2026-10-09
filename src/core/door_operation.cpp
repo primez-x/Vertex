@@ -10,11 +10,17 @@ void validate(const DoorOperation& value) {
     if(!std::isfinite(value.angle_degrees) || value.angle_degrees <= 0 || value.angle_degrees > 180)
         throw std::invalid_argument("Door swing angle must be greater than zero and at most 180 degrees");
     if (value.kind != DoorOperationKind::hinged && value.kind != DoorOperationKind::double_hinged &&
-        value.kind != DoorOperationKind::sliding)
+        value.kind != DoorOperationKind::sliding && value.kind != DoorOperationKind::overhead_tilt_up)
         throw std::invalid_argument("Unsupported door operation kind");
     if (!std::isfinite(value.slide_fraction) || value.slide_fraction < 0 || value.slide_fraction > 1 ||
         (value.kind != DoorOperationKind::sliding && value.slide_fraction != 0))
         throw std::invalid_argument("Door sliding travel must be in [0,1] and zero for hinged doors");
+    if (!std::isfinite(value.opening_fraction) || value.opening_fraction < 0 || value.opening_fraction > 1 ||
+        (value.kind != DoorOperationKind::overhead_tilt_up && value.opening_fraction != 0))
+        throw std::invalid_argument("Door overhead opening must be in [0,1] and zero for other mechanisms");
+    if (value.kind == DoorOperationKind::overhead_tilt_up &&
+        (value.angle_degrees != 90 || value.hinge_at_end))
+        throw std::invalid_argument("Overhead doors require a top hinge and canonical 90 degree travel");
 }
 Vec2 point(const Segment& line,double fraction) {
     if(line.sweep_radians==0) return {std::lerp(line.start.x,line.end.x,fraction),std::lerp(line.start.y,line.end.y,fraction)};
@@ -28,8 +34,22 @@ Vec2 point(const Segment& line,double fraction) {
 }
 DoorOperation decode_door_operation(const nlohmann::json& value) {
     if(!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version")!=1 && value.at("version")!=2))
+        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3))
         throw std::invalid_argument("Unsupported door operation");
+    if (value.at("version") == 3) {
+        if (value.size() != 4u || !value.contains("kind") || !value.at("kind").is_string() ||
+            value.at("kind") != "overhead_tilt_up" || !value.contains("side") ||
+            !value.at("side").is_string() || !value.contains("opening_fraction") ||
+            !value.at("opening_fraction").is_number())
+            throw std::invalid_argument("Overhead door operation has missing, unknown, or invalid fields");
+        const auto side = value.at("side").get<std::string>();
+        if (side != "left" && side != "right")
+            throw std::invalid_argument("Invalid overhead door opening side");
+        DoorOperation result{false, side == "left", 90, DoorOperationKind::overhead_tilt_up,
+                             0, value.at("opening_fraction").get<double>()};
+        validate(result);
+        return result;
+    }
     const bool extended=value.at("version")==2;
     if(value.size()!=(extended?6u:4u) || !value.contains("hinge") || !value.contains("side") ||
         !value.contains("angle_degrees") || !value.at("hinge").is_string() || !value.at("side").is_string() ||
@@ -53,6 +73,10 @@ DoorOperation decode_door_operation(const nlohmann::json& value) {
 }
 nlohmann::json encode_door_operation(const DoorOperation& value) {
     validate(value);
+    if (value.kind == DoorOperationKind::overhead_tilt_up)
+        return {{"version", 3}, {"kind", "overhead_tilt_up"},
+                {"side", value.swing_left ? "left" : "right"},
+                {"opening_fraction", value.opening_fraction}};
     nlohmann::json result={{"version",1},{"hinge",value.hinge_at_end?"end":"start"},
         {"side",value.swing_left?"left":"right"},{"angle_degrees",value.angle_degrees}};
     if(value.kind!=DoorOperationKind::hinged) {
@@ -62,7 +86,8 @@ nlohmann::json encode_door_operation(const DoorOperation& value) {
     }
     return result;
 }
-Boundary door_plan_symbol(const Segment& host,double offset,double width,const DoorOperation& operation) {
+Boundary door_plan_symbol(const Segment& host,double offset,double width,const DoorOperation& operation,
+                          std::optional<double> opening_height_metres) {
     validate(operation);
     const auto length=segment_length(host);
     if(!std::isfinite(host.sweep_radians) || std::abs(host.sweep_radians)>=2*std::numbers::pi ||
@@ -70,8 +95,32 @@ Boundary door_plan_symbol(const Segment& host,double offset,double width,const D
         !std::isfinite(width) || width<=default_geometry_tolerance_metres || !std::isfinite(offset+width) ||
         offset+width>length+default_geometry_tolerance_metres)
         throw std::invalid_argument("Door dimensions must fit the host baseline");
+    if (operation.kind == DoorOperationKind::overhead_tilt_up && host.sweep_radians != 0)
+        throw std::invalid_argument("Overhead tilt-up doors require a straight host");
     const auto start=point(host,offset/length),end=point(host,std::min(1.0,(offset+width)/length));
     const Vec2 midpoint{(start.x+end.x)*0.5,(start.y+end.y)*0.5};
+    if (operation.kind == DoorOperationKind::overhead_tilt_up) {
+        if (!opening_height_metres || !std::isfinite(*opening_height_metres) || *opening_height_metres <= 0.0)
+            throw std::invalid_argument("Overhead door plan requires a finite positive opening height; "
+                                        "use the actual hosted assembly or supply the opening height");
+        Boundary result{{start, end, 0}};
+        const double projection = *opening_height_metres *
+                                  std::sin(operation.opening_fraction * std::numbers::pi * 0.5) *
+                                  (operation.swing_left ? 1.0 : -1.0);
+        const Vec2 normal{-(host.end.y - host.start.y) / length, (host.end.x - host.start.x) / length};
+        const Vec2 delta{normal.x * projection, normal.y * projection};
+        if (std::hypot(delta.x, delta.y) > default_geometry_tolerance_metres) {
+            const Vec2 opened_start{start.x + delta.x, start.y + delta.y};
+            const Vec2 opened_end{end.x + delta.x, end.y + delta.y};
+            if (!std::isfinite(opened_start.x) || !std::isfinite(opened_start.y) ||
+                !std::isfinite(opened_end.x) || !std::isfinite(opened_end.y))
+                throw std::invalid_argument("Overhead door plan exceeds the supported numeric range");
+            result.push_back({start, opened_start, 0});
+            result.push_back({opened_start, opened_end, 0});
+            result.push_back({opened_end, end, 0});
+        }
+        return result;
+    }
     if(operation.kind==DoorOperationKind::sliding) {
         const double dx=end.x-start.x,dy=end.y-start.y;
         const double side=operation.swing_left?1.0:-1.0;

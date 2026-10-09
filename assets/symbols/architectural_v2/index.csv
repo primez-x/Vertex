@@ -153,14 +153,20 @@ wardrobe-triple,Wardrobe Triple,08_storage,symbols/08_storage/wardrobe-triple.sv
 door-barn,Door Barn,09_doors,symbols/09_doors/door-barn.svg
 door-bifold,Door Bifold,09_doors,symbols/09_doors/door-bifold.svg
 door-double,Door Double,09_doors,symbols/09_doors/door-double.svg
+door-french-double,Door French Double,09_doors,symbols/09_doors/door-french-double.svg
 door-garage,Door Garage,09_doors,symbols/09_doors/door-garage.svg
+door-garage-double,Door Garage Double,09_doors,symbols/09_doors/door-garage-double.svg
+door-garage-single,Door Garage Single,09_doors,symbols/09_doors/door-garage-single.svg
 door-hinged-760-left,Door Hinged 760 Left,09_doors,symbols/09_doors/door-hinged-760-left.svg
 door-hinged-760-right,Door Hinged 760 Right,09_doors,symbols/09_doors/door-hinged-760-right.svg
 door-hinged-810-left,Door Hinged 810 Left,09_doors,symbols/09_doors/door-hinged-810-left.svg
 door-hinged-810-right,Door Hinged 810 Right,09_doors,symbols/09_doors/door-hinged-810-right.svg
 door-hinged-910-left,Door Hinged 910 Left,09_doors,symbols/09_doors/door-hinged-910-left.svg
 door-hinged-910-right,Door Hinged 910 Right,09_doors,symbols/09_doors/door-hinged-910-right.svg
+door-hinged-exterior,Door Hinged Exterior,09_doors,symbols/09_doors/door-hinged-exterior.svg
+door-hinged-interior,Door Hinged Interior,09_doors,symbols/09_doors/door-hinged-interior.svg
 door-pocket,Door Pocket,09_doors,symbols/09_doors/door-pocket.svg
+door-sliding,Door Sliding,09_doors,symbols/09_doors/door-sliding.svg
 door-sliding-glass,Door Sliding Glass,09_doors,symbols/09_doors/door-sliding-glass.svg
 skylight,Skylight,10_windows,symbols/10_windows/skylight.svg
 window-bay,Window Bay,10_windows,symbols/10_windows/window-bay.svg
@@ -226,6 +232,7 @@ wall-straight,Wall Straight,15_structure_access,symbols/15_structure_access/wall
 wall-tee,Wall Tee,15_structure_access,symbols/15_structure_access/wall-tee.svg
 wheelchair,Wheelchair,15_structure_access,symbols/15_structure_access/wheelchair.svg
 arched-opening,Arched Opening,16_walls_openings,symbols/16_walls_openings/arched-opening.svg
+cased-opening,Cased Opening,16_walls_openings,symbols/16_walls_openings/cased-opening.svg
 column-round,Column Round,16_walls_openings,symbols/16_walls_openings/column-round.svg
 column-square,Column Square,16_walls_openings,symbols/16_walls_openings/column-square.svg
 exterior-wall,Exterior Wall,16_walls_openings,symbols/16_walls_openings/exterior-wall.svg

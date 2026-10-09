@@ -211,7 +211,9 @@ public:
     // throughout retained/undone history (wall demolition authoring inner v3).
     // Independent complete placed-component consequences require v153
     // throughout retained/undone history (coordinated demolition inner v7).
-    static constexpr std::uint32_t format_version = 153;
+    // Overhead tilt-up door operation v3 requires v154, including retained
+    // and undone entities; older readers must not reinterpret its pose.
+    static constexpr std::uint32_t format_version = 154;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v153
+# Vertex project formats v1 through v154
+
+## Overhead tilt-up door operation (v154)
+
+Native reader 154 and JSON/assets extraction 152 preserve overhead door poses,
+including retained, deleted and undone opening entities. The optional
+`door_operation` version three has exactly four fields: `version:3`,
+`kind:"overhead_tilt_up"`, `side:"left"|"right"`, and finite
+`opening_fraction` in [0,1]. It always decodes to a top horizontal hinge,
+canonical 90-degree travel and zero sliding fraction. Earlier version one/two
+grammars and arithmetic remain unchanged.
+
+The opening requires an explicit door assembly and actual straight wall.
+Its rigid panel and optional glazing rotate about the selected top thickness
+edge: zero is closed and one is horizontal toward the selected wall normal.
+Admission checks the requested full-panel envelope against the actual frame
+and cut host. It does not certify continuous swept motion or a sectional track.
+Plan presentation projects the actual posed solid so a raised panel cannot
+disappear above the usual mid-height plan cut. No sideways swing arc is added.
+The fallback linework API requires an explicit opening height; it does not
+invent one from the opening width.
+
+Schedules retain mechanism, top hinge and opening percentage. IFC uses an
+explicit user-defined `OVERHEAD_TILT_UP` label and complete retained operation
+metadata. Editing, history, saved phase replacements and reflection preserve
+the same pose. Earlier readers refuse the new storage floor. These are source
+contracts; compilation, physical output and runtime qualification remain open.
 
 ## Independent placed-component removal (v153)
 

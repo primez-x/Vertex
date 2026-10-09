@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2560" height="290" viewBox="-20 -20 2560 290" role="img" aria-labelledby="door-garage-single--title door-garage-single--desc" data-vertex-style="white-outline-2">
+<title id="door-garage-single--title">Door · single overhead garage</title>
+<desc id="door-garage-single--desc">Original orthographic plan of a closed overhead garage door with four recessed panel bays and centre handle. Nominal footprint 2520 by 250 millimetres. Wall-cut default 2400 millimetres. Front is +Y. Transparent background.</desc>
+<g id="door-garage-single--artwork" fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round">
+<rect x="0" y="0" width="60" height="250"/><rect x="2460" y="0" width="60" height="250"/>
+<rect x="60" y="65" width="2400" height="120"/>
+<g stroke-width="6"><rect x="90" y="90" width="540" height="70"/><rect x="690" y="90" width="540" height="70"/><rect x="1290" y="90" width="540" height="70"/><rect x="1890" y="90" width="540" height="70"/></g>
+<path d="M60 20 h2400 M60 230 h2400 M660 65 v120 M1260 65 v120 M1860 65 v120" fill="none" stroke-width="6"/>
+<rect x="1190" y="173" width="140" height="24" rx="6" fill="#f2f2f2" stroke-width="6"/>
+</g>
+</svg>

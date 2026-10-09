@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="290" viewBox="-20 -20 1060 290" role="img" aria-labelledby="cased-opening--title cased-opening--desc" data-vertex-style="white-outline-2">
+<title id="cased-opening--title">Opening · cased passage</title>
+<desc id="cased-opening--desc">Original orthographic plan of an unobstructed passage with two full depth jambs and casing on both wall faces, without a door leaf or swing. Nominal footprint 1020 by 250 millimetres. Clear opening 900 millimetres. Front is +Y. Transparent background.</desc>
+<g id="cased-opening--artwork" fill="#ffffff" stroke="#111111" stroke-width="10" stroke-linejoin="round">
+<rect x="0" y="25" width="60" height="200"/><rect x="960" y="25" width="60" height="200"/>
+<rect x="0" y="0" width="60" height="25"/><rect x="0" y="225" width="60" height="25"/><rect x="960" y="0" width="60" height="25"/><rect x="960" y="225" width="60" height="25"/>
+<path d="M45 25 v200 M975 25 v200" fill="none" stroke="#888888" stroke-width="5"/>
+</g>
+</svg>

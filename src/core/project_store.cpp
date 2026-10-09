@@ -804,6 +804,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         }
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
+            if (entity.type == "opening" && entity.properties.is_object()) {
+                const auto operation = entity.properties.find("door_operation");
+                if (operation != entity.properties.end() && operation->is_object() &&
+                    operation->value("version", nlohmann::json()) == 3)
+                    required = std::max(required, 154U);
+            }
             if (has_phase_qualified_roof_join_ownership(entity)) required = std::max(required, 114U);
             if (entity.type == "roof_join" && entity.properties.is_object() &&
                 entity.properties.value("version", nlohmann::json()) == 3)
@@ -2497,6 +2503,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 151 &&
          sqlite3_column_int(user_version.get(), 0) != 152 &&
          sqlite3_column_int(user_version.get(), 0) != 153 &&
+         sqlite3_column_int(user_version.get(), 0) != 154 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3095,6 +3102,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=154)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 154 for overhead tilt-up door operation and retained pose history");
         if (required_format>=153)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 153 for independent placed-component removal in complete coordinated phase authoring");
         if (required_format>=152)
