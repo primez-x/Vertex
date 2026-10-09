@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 reviewed physical-room callout placement source implementation
+
+Ordinary and batch physical-room review now admit selected current-room
+callouts through `PhysicalWallRoomReviewIntent` v4. Native reader 158 and
+JSON/assets extraction 156 preserve the original selection, complete source
+fences and each captured source-frame offset through numerical moves, the
+translation controls in Transform, and Plan/Site wall-and-callout drags.
+The outer single/batch room envelopes, command ceiling 42 and
+nested joint version 17 semantics remain unchanged. Each review group keeps
+explicit room and callout decisions; preview continues to withhold pending
+quantities.
+
+Selected callouts are checked against the actual original and current room
+sources, explicitly kept under retained room owners, and held byte-unchanged
+through admitted geometry and intermediate review stages. Final placement
+preserves their identity, style and opaque data while converting them to manual
+placements before automatic callout regeneration. Retained history requires
+the original anchor immediately before admitted geometry and only plain room
+stages afterward; an external pointer alone or arbitrary ancestor is
+insufficient. The final geometry envelope is anchored to the actual current
+source and checks all room holes. Apply is atomic in one revision with full
+rollback on failure; cancel does not change the document.
+
+Selected symbols, labels and references retain explicit source-based positions
+in connected wall moves. Saved-phase commands reproduce their complete
+presentation changes rather than adding raw supplements. Site annotation
+aliases resolve through the actual captured source map. Pure wall groups with
+selected presentations or unaffected callouts still review every affected room,
+even when no selected room callout needs the new placement lane. Independent
+room callouts use translation in Transform; rotation, flipping and copying
+continue to require their measured owner.
+
+Independent core review found and fixed an empty-placement codec regression
+that would reject legacy v1-v3 intents. Desktop review identified the missing
+numeric Transform route and the original Site frame needed for pending
+callouts; both are corrected. The final source review reports no remaining
+actionable finding in this batch. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations ran.
+Compilation, runtime behavior and save/reopen remain unverified; the installed
+candidate is unchanged.
+
 ### October 9 angular DXF dimension source implementation
 
 Native angle resolution now exposes its admitted vertex and normalized edge

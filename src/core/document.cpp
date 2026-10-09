@@ -4121,6 +4121,108 @@ static void validate_wall_split_lifetime(const WallSplitIntent& intent,
 }
 
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+// A staged review may use the actual inventory immediately before its wall
+// geometry stage. The receipt names admitted retained history; it supplies no
+// projected entities and cannot borrow an unrelated earlier measurement.
+static const std::map<std::string,Entity,std::less<>>* room_dimension_original_source(
+    const std::vector<RevisionRecord>& records,std::size_t preceding_records,
+    const std::map<std::string,Entity,std::less<>>& source,
+    const ApplyBoundaryConstraintChanges& command) {
+    if (!has_room_review_completion(command)) return nullptr;
+    const std::map<std::string,Entity,std::less<>>* result=nullptr;
+    std::optional<PhysicalWallRoomDimensionSource> receipt;
+    for (const auto& encoded:room_review_intents(command)) {
+        const auto intent=decode_physical_wall_room_review_intent(encoded);
+        if (intent.selected_dimension_placements.empty()) continue;
+        if (!intent.selected_dimension_source)
+            throw std::invalid_argument("Selected room callouts require their retained original source receipt");
+        const auto& selected=*intent.selected_dimension_source;
+        if (receipt && (receipt->original_revision!=selected.original_revision ||
+            receipt->original_entities_digest!=selected.original_entities_digest))
+            throw std::invalid_argument("Room callout placements disagree on their actual original source");
+        receipt=selected;
+        if (selected.original_revision==command.expected_revision) {
+            if (selected.original_entities_digest!=entity_map_digest(source))
+                throw std::invalid_argument("Room callout original inventory changed");
+            result=&source;
+            continue;
+        }
+        if (has_room_review_geometry_completion(command) || selected.original_revision>=command.expected_revision ||
+            command.expected_revision>=preceding_records || preceding_records>records.size())
+            throw std::invalid_argument("Room callout receipt does not name the original wall-edit source");
+        const auto origin_index=static_cast<std::size_t>(selected.original_revision);
+        const auto last_index=static_cast<std::size_t>(command.expected_revision);
+        const auto& origin=records.at(origin_index);
+        if (origin.revision!=selected.original_revision ||
+            entity_map_digest(origin.entities)!=selected.original_entities_digest ||
+            records.at(last_index).revision!=command.expected_revision ||
+            records.at(last_index).entities.size()!=source.size())
+            throw std::invalid_argument("Room callout retained source receipt changed");
+        for (const auto& [id,entity]:source) {
+            const auto found=records.at(last_index).entities.find(id);
+            if (found==records.at(last_index).entities.end() || !exact_entity_payload(entity,found->second))
+                throw std::invalid_argument("Room callout stage differs from actual retained history");
+        }
+        for (std::size_t index=origin_index+1;index<=last_index;++index) {
+            const auto& record=records.at(index);
+            if (record.revision!=index || record.parent_revision!=Revision{index-1} || record.source_revision ||
+                record.name || record.assets!=origin.assets || record.boundary_translation || record.boundary_transform ||
+                record.boundary_geometry_edit || record.boundary_translations || record.boundary_transforms)
+                throw std::invalid_argument("Room callout stage contains navigation, naming or unrelated authoring");
+            if (index==origin_index+1) {
+                if (record.boundary_constraint_changes) {
+                    const Command geometry{*record.boundary_constraint_changes};
+                    if (!is_physical_wall_room_geometry_review_command(geometry) ||
+                        record.boundary_constraint_changes->expected_revision!=origin.revision)
+                        throw std::invalid_argument("Room callout anchor must immediately precede an admitted wall geometry stage");
+                } else {
+                    // Raw profile stages have no retained typed command. Only
+                    // one exact existing-wall upsert can reconstruct that lane.
+                    std::vector<EntityChange> changes;
+                    if (record.entities.size()!=origin.entities.size())
+                        throw std::invalid_argument("Room callout raw geometry stage changes object lifetimes");
+                    for (const auto& [id,entity]:origin.entities) {
+                        const auto found=record.entities.find(id);
+                        if (found==record.entities.end())
+                            throw std::invalid_argument("Room callout raw geometry stage lost an original owner");
+                        if (!exact_entity_payload(entity,found->second)) {
+                            if (entity.type!="wall" || found->second.type!="wall" || !changes.empty())
+                                throw std::invalid_argument("Room callout raw geometry stage is not one wall profile edit");
+                            changes.push_back(EntityChange::upsert(found->second));
+                        }
+                    }
+                    const Command geometry{ApplyEntityChanges{origin.revision,std::move(changes),{},record.action}};
+                    if (!is_physical_wall_room_profile_review_command(geometry))
+                        throw std::invalid_argument("Room callout raw geometry stage has no profile authority");
+                    validate_physical_wall_room_profile_review_source(origin.entities,record.entities,geometry);
+                }
+            } else {
+                if (!record.boundary_constraint_changes)
+                    throw std::invalid_argument("Room callout stages may contain only plain room reviews after geometry");
+                const auto& review=*record.boundary_constraint_changes;
+                validate_room_review_mode(review,true);
+                const auto proof=command_to_json(Command{review});
+                if ((proof.at("version")!=18 && proof.at("version")!=29) ||
+                    has_room_review_geometry_completion(review) || has_room_review_batch_completion(review))
+                    throw std::invalid_argument("Room callout stages cannot borrow a composed or unrelated review");
+            }
+            for (const auto& placement:intent.selected_dimension_placements) {
+                const auto& dimension=origin.entities.at(placement.dimension_id);
+                const auto decoded=decode_boundary_dimension_entity(dimension);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                for (const auto& id:{placement.dimension_id,decoded.dimension->boundary_id}) {
+                    const auto original=origin.entities.find(id),current=record.entities.find(id);
+                    if (original==origin.entities.end() || current==record.entities.end() ||
+                        !exact_entity_payload(original->second,current->second))
+                        throw std::invalid_argument("A prior room stage changed a selected callout or its original room");
+                }
+            }
+        }
+        result=&origin.entities;
+    }
+    return result;
+}
+
 static void validate_room_review_lifetime(const nlohmann::json& encoded,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
     const auto intent=decode_physical_wall_room_review_intent(encoded);
@@ -5201,7 +5303,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const std::map<std::string, Entity, std::less<>>& source,
     const std::map<std::string, Asset, std::less<>>& source_assets,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
-    bool active_phase_constraints = false) {
+    bool active_phase_constraints = false,
+    const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
     const bool active_policy=active_phase_constraints || !phase_constraint_authoring_proofs(command).empty();
     if (has_independent_drawing_removal(command)) {
         try {
@@ -5222,7 +5325,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 }
             const auto original=without_independent_drawing_removal(command);
             const auto stage=completed_boundary_constraint_entities(history,source,source_assets,
-                original,retained_replay,active_policy);
+                original,retained_replay,active_policy,original_dimension_source);
             validate_completed_constraint_change(source,stage,original,retained_replay);
             auto result=replay_drawing_selection_removal_after_review(source,stage,intent,active_policy);
             if (has_phase_constraint_authoring(original)) {
@@ -5290,7 +5393,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                         !intent.intent.joint_translation->owner_transformations.empty());
             }
 #endif
-            auto result = completed_boundary_constraint_entities(history, source, source_assets, geometry, retained_replay,active_policy);
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, geometry, retained_replay,active_policy,original_dimension_source);
             const auto geometry_assets = boundary_constraint_assets(source_assets, geometry);
             (void)validate_state(result, geometry_assets,active_policy);
             validate_completed_constraint_change(source, result, geometry, retained_replay);
@@ -5330,7 +5433,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     if (has_disto_measurement_completion(command)) {
         try {
             (void)command_to_json(Command{command});
-            auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay,active_policy);
+            auto result = completed_boundary_constraint_entities(history, source, source_assets, without_disto_measurement(command), retained_replay,active_policy,original_dimension_source);
             attach_disto_measurement(source, result, *command.disto_measurement,
                 disto_completed_owner_id(without_disto_measurement(command),*command.disto_measurement));
             if (!phase_constraint_authoring_proofs(command).empty()) {
@@ -5347,11 +5450,19 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             validate_room_review_mode(command, true);
             (void)command_to_json(Command{command});
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            // Selected room callouts borrow measurement authority only from
+            // this actual original inventory, before a wall edit can stale it.
+            for (const auto& encoded : room_review_intents(command)) {
+                const auto intent=decode_physical_wall_room_review_intent(encoded);
+                if (!intent.selected_dimension_placements.empty())
+                    validate_physical_wall_room_dimension_placements(original_dimension_source ? *original_dimension_source : source,
+                        intent.selected_dimension_placements);
+            }
             auto reviewed_source=source;
             if (has_room_review_geometry_completion(command)) {
                 const auto geometry=room_review_geometry_command(command);
                 if (const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&geometry)) {
-                    reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,*constrained,retained_replay,active_policy);
+                    reviewed_source=completed_boundary_constraint_entities(history,source,source_assets,*constrained,retained_replay,active_policy,original_dimension_source);
                     validate_completed_constraint_change(source,reviewed_source,*constrained,retained_replay);
                     validate_physical_room_source_transition(source,reviewed_source,nullptr,constrained,active_policy);
                     if (boundary_constraint_assets(source_assets,*constrained)!=source_assets)
@@ -5407,8 +5518,10 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 }
             }
             const auto replay=has_room_review_batch_completion(command) ?
-                replay_physical_wall_room_review_batch(reviewed_source,room_review_intents(command),active_policy) :
-                replay_physical_wall_room_review(reviewed_source,command.room_review_intent,active_policy);
+                replay_physical_wall_room_review_batch(reviewed_source,room_review_intents(command),active_policy,
+                    original_dimension_source ? original_dimension_source : &source) :
+                replay_physical_wall_room_review(reviewed_source,command.room_review_intent,active_policy,
+                    original_dimension_source ? original_dimension_source : &source);
             if (!phase_constraint_authoring_proofs(command).empty()) {
                 // Geometry and the separately reviewed room suffix have
                 // different authority. Compare the complete coordinated
@@ -8581,7 +8694,12 @@ Revision Document::apply(const Command& command) {
                 if (has_complete_wall_join_deletion_proof(typed_command))
                     validate_physical_wall_join_removal_identity_lifetime(snapshot(),complete_wall_join_deletion_destinations(typed_command));
 #endif
-                next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets, typed_command,false,source_active_policy);
+                const std::map<std::string,Entity,std::less<>>* dimension_source=nullptr;
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                dimension_source=room_dimension_original_source(history_,history_.size(),current.entities,typed_command);
+#endif
+                next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets,
+                    typed_command,false,source_active_policy,dimension_source);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
                 next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
@@ -9077,7 +9195,12 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     if (has_complete_wall_join_deletion_proof(proof))
                         validate_physical_wall_join_removal_identity_lifetime(previous.entities,snapshot.history(),index,complete_wall_join_deletion_destinations(proof));
 #endif
-                    expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets, proof, true,active_policies.at(index-1));
+                    const std::map<std::string,Entity,std::less<>>* dimension_source=nullptr;
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                    dimension_source=room_dimension_original_source(snapshot.history(),index,previous.entities,proof);
+#endif
+                    expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets,
+                        proof,true,active_policies.at(index-1),dimension_source);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     if (!phase_constraint_authoring_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
                         validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);

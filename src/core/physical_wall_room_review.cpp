@@ -66,6 +66,22 @@ void ids(const std::vector<std::string>& values) {
     if (values.size()>65536) invalid("reference/identity budget exceeded");
     std::set<std::string> unique;for (const auto& value:values) { id(value);if (!unique.insert(value).second) invalid("duplicate identity decision"); }
 }
+bool exact_entity(const Entity& left,const Entity& right);
+bool exact_entities(const Entities& left,const Entities& right);
+bool exact_assets(const std::map<std::string,Asset,std::less<>>& left,
+    const std::map<std::string,Asset,std::less<>>& right);
+void placement_shape(const std::vector<PhysicalWallRoomDimensionPlacement>& placements) {
+    if (placements.empty() || placements.size()>128) invalid("selected dimension placement requires one to 128 callouts");
+    std::string previous;
+    for (const auto& placement:placements) {
+        id(placement.dimension_id);
+        if (!previous.empty() && previous>=placement.dimension_id) invalid("selected dimension placements must have sorted unique identities");
+        previous=placement.dimension_id;
+        if (!std::isfinite(placement.offset.x) || !std::isfinite(placement.offset.y) ||
+            std::abs(placement.offset.x)>1e12 || std::abs(placement.offset.y)>1e12)
+            invalid("selected dimension placement offset is nonfinite or exceeds its bound");
+    }
+}
 std::string relation_name(RoomRelationKind kind) {
     if (kind==RoomRelationKind::independent) return "independent";
     if (kind==RoomRelationKind::follows) return "follows";
@@ -999,6 +1015,9 @@ struct RoomReviewBatchGuard {
     std::vector<std::pair<DrawingContext,double>> reviewed_planes;
     std::set<std::string> reviewed_rooms;
     std::set<std::string> used_tokens;
+    std::set<std::string> selected_placement_ids;
+    Entities placed_dimensions;
+    std::optional<PhysicalWallRoomDimensionSource> placement_source;
 
     explicit RoomReviewBatchGuard(const Entities& source) {
         // Keep these tokens reserved after retirement or replacement. A later
@@ -1015,6 +1034,15 @@ struct RoomReviewBatchGuard {
         }
     }
     void admit(const PhysicalWallRoomReviewIntent& intent) {
+        if (intent.selected_dimension_source) {
+            if (placement_source && (placement_source->original_revision!=intent.selected_dimension_source->original_revision ||
+                placement_source->original_entities_digest!=intent.selected_dimension_source->original_entities_digest))
+                invalid("batch selected placements require one consistent original-source receipt");
+            placement_source=intent.selected_dimension_source;
+        }
+        for (const auto& placement:intent.selected_dimension_placements)
+            if (!selected_placement_ids.insert(placement.dimension_id).second)
+                invalid("batch repeats a selected dimension placement");
         for (const auto& [context,elevation]:reviewed_planes)
             if (context==intent.context &&
                 std::abs(elevation-intent.effective_elevation_m)<=default_geometry_tolerance_metres)
@@ -1036,6 +1064,25 @@ struct RoomReviewBatchGuard {
         for (const auto& decision:intent.retained)
             for (const auto& token:decision.replacement_dimension_ids) reserve(token);
     }
+    void retain_selected(const Entities& stage,const PhysicalWallRoomReviewIntent& intent) {
+        for (const auto& [dimension_id,dimension]:placed_dimensions) {
+            const auto retained=stage.find(dimension_id);
+            if (retained==stage.end() || !exact_entity(retained->second,dimension))
+                invalid("later batch review rewrites an earlier selected placement");
+        }
+        for (const auto& placement:intent.selected_dimension_placements)
+            placed_dimensions.emplace(placement.dimension_id,stage.at(placement.dimension_id));
+    }
+    void validate_final_selected(const Entities& stage) const {
+        for (const auto& [dimension_id,dimension]:placed_dimensions) {
+            (void)dimension;
+            const auto found=stage.find(dimension_id);
+            if (found==stage.end()) invalid("batch selected dimension disappeared from the final map");
+            const auto decoded=decode_boundary_dimension_entity(found->second);
+            if (!decoded.supported()) invalid("batch selected dimension lost supported semantics");
+            (void)resolve_current_boundary_dimension(*decoded.dimension,stage);
+        }
+    }
 };
 } // namespace
 
@@ -1043,22 +1090,48 @@ PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json&
     try {
         if (value.dump().size()>16*1024*1024) invalid("intent exceeds evidence budget");
         if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-            (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3))
+            (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4))
             invalid("unsupported intent version");
-        const bool active_scope=value.at("version")==3;
-        if (active_scope)
+        const bool selected_placements=value.at("version")==4;
+        if (selected_placements && value.dump().size()>1024*1024) invalid("selected placement intent exceeds evidence budget");
+        const bool explicit_scope=value.at("version")==3 || selected_placements;
+        if (selected_placements)
+            keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
+                "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals","active_phase_room_scope","context_plane_selection","selected_dimension_placements","selected_dimension_source"});
+        else if (explicit_scope)
             keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
                 "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals","active_phase_room_scope","context_plane_selection"});
         else
             keys(value,{"version","selected_wall_id","source_snapshot_digest","source_authoring_digest","source_saved_revision","source_entities_digest","context","effective_elevation_m",
                 "retained","fresh","removed_reference_ids","kept_reference_ids","relationship_removals"});
         PhysicalWallRoomReviewIntent result;
-        result.active_phase_room_scope=active_scope;
-        if (active_scope) {
-            if (!value.at("active_phase_room_scope").is_boolean() || value.at("active_phase_room_scope")!=true ||
+        if (explicit_scope) {
+            if (!value.at("active_phase_room_scope").is_boolean() || (!selected_placements && value.at("active_phase_room_scope")!=true) ||
                 !value.at("context_plane_selection").is_boolean()) invalid("version three requires explicit ordinary active room scope and selection mode");
+            result.active_phase_room_scope=value.at("active_phase_room_scope").get<bool>();
             result.context_plane_selection=value.at("context_plane_selection").get<bool>();
         } else result.context_plane_selection=value.at("version")==2;
+        if (selected_placements) {
+            const auto& placements=value.at("selected_dimension_placements");
+            if (!placements.is_array() || placements.empty() || placements.size()>128) invalid("invalid selected dimension placement collection");
+            for (const auto& placement:placements) {
+                keys(placement,{"dimension_id","offset"});
+                const auto& offset=placement.at("offset");
+                if (!offset.is_array() || offset.size()!=2 || !offset[0].is_number() || !offset[1].is_number()) invalid("malformed selected dimension placement offset");
+                result.selected_dimension_placements.push_back({placement.at("dimension_id").get<std::string>(),
+                    {offset[0].get<double>(),offset[1].get<double>()}});
+            }
+            placement_shape(result.selected_dimension_placements);
+            const auto& receipt=value.at("selected_dimension_source");
+            keys(receipt,{"original_revision","original_entities_digest"});
+            const auto& revision=receipt.at("original_revision");
+            if ((!revision.is_number_integer() && !revision.is_number_unsigned()) ||
+                (revision.is_number_integer() && !revision.is_number_unsigned() && revision.get<std::int64_t>()<0))
+                invalid("invalid selected dimension original revision");
+            PhysicalWallRoomDimensionSource original{revision.get<Revision>(),receipt.at("original_entities_digest").get<std::string>()};
+            digest(original.original_entities_digest);
+            result.selected_dimension_source=std::move(original);
+        }
         result.selected_wall_id=value.at("selected_wall_id").get<std::string>();
         if (result.context_plane_selection) {
             if (!result.selected_wall_id.empty()) invalid("context/plane intent cannot contain a selected wall");
@@ -1138,6 +1211,8 @@ PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const Json&
 }
 
 Json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent& intent) {
+    if ((!intent.selected_dimension_placements.empty())!=intent.selected_dimension_source.has_value())
+        invalid("selected dimension placements require exactly one original-source receipt");
     Json retained=Json::array(),fresh=Json::array(),relationships=Json::array();
     for (const auto& d:intent.retained) {
         std::string action;
@@ -1161,23 +1236,83 @@ Json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent&
         Json rows=Json::array();for (const auto& r:d.acknowledged_relations) rows.push_back(relation_json(r));
         relationships.push_back({{"entity_id",d.entity_id},{"removed_room_ids",d.removed_room_ids},{"acknowledged_relations",std::move(rows)}});
     }
-    Json result{{"version",intent.active_phase_room_scope ? 3 : (intent.context_plane_selection ? 2 : 1)},{"selected_wall_id",intent.selected_wall_id},{"source_snapshot_digest",intent.source_snapshot_digest},
+    Json result{{"version",!intent.selected_dimension_placements.empty() ? 4 : (intent.active_phase_room_scope ? 3 : (intent.context_plane_selection ? 2 : 1))},{"selected_wall_id",intent.selected_wall_id},{"source_snapshot_digest",intent.source_snapshot_digest},
         {"source_authoring_digest",intent.source_authoring_digest},
         {"source_saved_revision",intent.source_saved_revision ? Json(*intent.source_saved_revision) : Json(nullptr)},
         {"source_entities_digest",intent.source_entities_digest},{"context",context_json(intent.context)},{"effective_elevation_m",intent.effective_elevation_m},
         {"retained",std::move(retained)},{"fresh",std::move(fresh)},{"removed_reference_ids",intent.removed_reference_ids},
         {"kept_reference_ids",intent.kept_reference_ids},{"relationship_removals",std::move(relationships)}};
-    if (intent.active_phase_room_scope) {
-        result["active_phase_room_scope"]=true;
+    if (intent.active_phase_room_scope || !intent.selected_dimension_placements.empty()) {
+        result["active_phase_room_scope"]=intent.active_phase_room_scope;
         result["context_plane_selection"]=intent.context_plane_selection;
+    }
+    if (!intent.selected_dimension_placements.empty()) {
+        auto placements=Json::array();
+        for (const auto& placement:intent.selected_dimension_placements)
+            placements.push_back({{"dimension_id",placement.dimension_id},{"offset",{placement.offset.x,placement.offset.y}}});
+        result["selected_dimension_placements"]=std::move(placements);
+        result["selected_dimension_source"]={{"original_revision",intent.selected_dimension_source->original_revision},
+            {"original_entities_digest",intent.selected_dimension_source->original_entities_digest}};
     }
     (void)decode_physical_wall_room_review_intent(result);return result;
 }
 
+void validate_physical_wall_room_dimension_placements(const Entities& actual,
+    const std::vector<PhysicalWallRoomDimensionPlacement>& placements) {
+    placement_shape(placements);
+    const auto active=active_physical_wall_room_ids(actual);
+    for (const auto& placement:placements) {
+        const auto found=actual.find(placement.dimension_id);
+        if (found==actual.end() || found->second.id!=placement.dimension_id ||
+            !can_recognize_boundary_dimension_entity_type(found->second.type))
+            invalid("selected placement requires an original saved dimension");
+        const auto decoded=decode_boundary_dimension_entity(found->second);
+        if (!decoded.supported()) invalid("selected placement requires supported original dimension semantics");
+        const auto owner=actual.find(decoded.dimension->boundary_id);
+        if (owner==actual.end() || !is_physical_wall_room(owner->second) ||
+            std::find(active.begin(),active.end(),owner->first)==active.end())
+            invalid("selected placement requires an active original physical-room owner");
+        // This uses actual pregeometry walls and phase choices, never the
+        // stale retained room in a caller-derived geometry candidate.
+        (void)resolve_current_boundary_dimension(*decoded.dimension,actual);
+        const auto position=Vec2{decoded.dimension->text_position.x+placement.offset.x,
+            decoded.dimension->text_position.y+placement.offset.y};
+        if (!std::isfinite(position.x) || !std::isfinite(position.y)) invalid("selected placement produces a nonfinite text position");
+    }
+}
+
+Entities placed_physical_wall_room_dimensions(const Entities& actual,const Entities& geometry_stage,
+    const std::vector<PhysicalWallRoomDimensionPlacement>& placements) {
+    validate_physical_wall_room_dimension_placements(actual,placements);
+    auto result=geometry_stage;
+    for (const auto& placement:placements) {
+        const auto& original=actual.at(placement.dimension_id);
+        const auto decoded=decode_boundary_dimension_entity(original);
+        const auto staged=geometry_stage.find(placement.dimension_id);
+        const auto original_owner=actual.find(decoded.dimension->boundary_id);
+        const auto staged_owner=geometry_stage.find(decoded.dimension->boundary_id);
+        if (staged==geometry_stage.end() || !exact_entity(staged->second,original) ||
+            staged_owner==geometry_stage.end() || !exact_entity(staged_owner->second,original_owner->second))
+            invalid("geometry stage changed a selected original dimension or its physical-room owner");
+        auto& placed=result.at(placement.dimension_id);
+        // Patch presentation only: preserve original numeric spellings, typed
+        // target bindings, style and every opaque property/extension byte.
+        placed.properties["text_position"]=Json::array({decoded.dimension->text_position.x+placement.offset.x,
+            decoded.dimension->text_position.y+placement.offset.y});
+        placed.properties["placement_origin"]="manual";
+        placed.properties.erase("automatic_placement_version");
+        (void)decode_boundary_dimension_entity(placed);
+    }
+    return result;
+}
+
 ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& source,const Json& encoded,
-    bool active_phase_constraints) {
+    bool active_phase_constraints,const Entities* original_dimension_source) {
     const auto intent=decode_physical_wall_room_review_intent(encoded);
     if (entity_map_digest(source)!=intent.source_entities_digest) invalid("preceding entity map differs from reviewed source");
+    if (intent.selected_dimension_source && entity_map_digest(original_dimension_source ? *original_dimension_source : source)!=
+        intent.selected_dimension_source->original_entities_digest)
+        invalid("actual original dimension map differs from its retained receipt");
     const auto constraint_scope=active_phase_constraints
         ? std::optional<ConstraintPhaseScope>{constraint_phase_scope(source)} : std::nullopt;
     const auto detection=intent.context_plane_selection
@@ -1294,12 +1429,24 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
     auto reviewed_references=removed;
     reviewed_references.insert(kept.begin(),kept.end());
     if (reviewed_references!=expected_references) invalid("every affected reference requires an explicit Keep or Remove decision");
+    for (const auto& placement:intent.selected_dimension_placements) {
+        if (!kept.contains(placement.dimension_id) || removed.contains(placement.dimension_id) ||
+            !expected_references.contains(placement.dimension_id))
+            invalid("selected placement must be an affected kept dimension");
+        const auto decoded=decode_boundary_dimension_entity(source.at(placement.dimension_id));
+        if (!decoded.supported() || !old.contains(decoded.dimension->boundary_id) ||
+            old.at(decoded.dimension->boundary_id)->disposition!=PhysicalWallRoomRetainedDisposition::retain)
+            invalid("selected placement cannot belong to a retired or unreviewed room");
+    }
+    if (!intent.selected_dimension_placements.empty())
+        result=placed_physical_wall_room_dimensions(original_dimension_source ? *original_dimension_source : source,
+            source,intent.selected_dimension_placements);
     for (const auto& reference_id:preserved_constraints)
         if (removed.contains(reference_id)) invalid("constraint attached to an inactive design must remain unchanged: "+reference_id);
     // Include every identity that this review can retire, not only room and
     // boundary-child IDs. Unknown incoming references must never be stranded.
     affected_tokens.insert(removed.begin(),removed.end());
-    for (const auto& [reference_id,e]:source) {
+    for (const auto& [reference_id,e]:result) {
         if (!kept.contains(reference_id) || !can_recognize_boundary_dimension_entity_type(e.type)) continue;
         const auto decoded=decode_boundary_dimension_entity(e);
         if (!decoded.supported()) continue;
@@ -1486,6 +1633,15 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
             invalid("room redraw would rewrite a constraint attached to an inactive design: "+reference_id);
     }
     if (const auto error=validate_boundary_integrity(result)) invalid(*error);
+    for (const auto& placement:intent.selected_dimension_placements) {
+        const auto found=result.find(placement.dimension_id);
+        if (found==result.end()) invalid("selected dimension identity disappeared from the final reviewed map");
+        const auto decoded=decode_boundary_dimension_entity(found->second);
+        if (!decoded.supported() || decoded.dimension->id!=placement.dimension_id ||
+            decoded.dimension->placement!=BoundaryDimensionPlacement::manual)
+            invalid("selected dimension was replaced rather than retained manually");
+        (void)resolve_current_boundary_dimension(*decoded.dimension,result);
+    }
     for (const auto& id:kept) {
         if (!result.contains(id)) {
             // Explicitly kept automatic edge dimensions may have been replaced
@@ -1496,6 +1652,8 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
                 old.at(decoded.dimension->boundary_id)->replacement_dimension_ids.empty())
                 invalid("kept reference disappeared from the reviewed candidate");
         } else if (can_recognize_boundary_dimension_entity_type(result.at(id).type)) {
+            if (std::any_of(intent.selected_dimension_placements.begin(),intent.selected_dimension_placements.end(),
+                [&](const auto& placement){return placement.dimension_id==id;})) continue;
             const auto decoded=decode_boundary_dimension_entity(result.at(id));
             (void)resolve_boundary_dimension(*decoded.dimension,result);
         }
@@ -1511,29 +1669,38 @@ ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(const Entities& 
     return {std::move(result),std::move(retained_edits),std::move(created_room_ids),{retiring.begin(),retiring.end()}};
 }
 
-Entities replay_physical_wall_room_review_entities(const Entities& source,const Json& encoded,bool active_phase_constraints) {
-    return replay_physical_wall_room_review(source,encoded,active_phase_constraints).entities;
+Entities replay_physical_wall_room_review_entities(const Entities& source,const Json& encoded,bool active_phase_constraints,
+    const Entities* original_dimension_source) {
+    return replay_physical_wall_room_review(source,encoded,active_phase_constraints,original_dimension_source).entities;
 }
 
 ReplayedPhysicalWallRoomReview replay_physical_wall_room_review_batch(const Entities& source,
-    const std::vector<Json>& intents,bool active_phase_constraints) {
+    const std::vector<Json>& intents,bool active_phase_constraints,const Entities* original_dimension_source) {
     require_room_review_batch_size(intents.size());
     RoomReviewBatchGuard guard(source);
     ReplayedPhysicalWallRoomReview result;result.entities=source;
     for (const auto& encoded:intents) {
-        guard.admit(decode_physical_wall_room_review_intent(encoded));
-        auto stage=replay_physical_wall_room_review(result.entities,encoded,active_phase_constraints);
+        const auto intent=decode_physical_wall_room_review_intent(encoded);
+        guard.admit(intent);
+        auto stage=replay_physical_wall_room_review(result.entities,encoded,active_phase_constraints,
+            original_dimension_source ? original_dimension_source : &source);
+        guard.retain_selected(stage.entities,intent);
         result.entities=std::move(stage.entities);
         result.retained_edits.insert(result.retained_edits.end(),stage.retained_edits.begin(),stage.retained_edits.end());
         result.created_room_ids.insert(result.created_room_ids.end(),stage.created_room_ids.begin(),stage.created_room_ids.end());
         result.retired_room_ids.insert(result.retired_room_ids.end(),stage.retired_room_ids.begin(),stage.retired_room_ids.end());
     }
+    guard.validate_final_selected(result.entities);
     return result;
 }
 
 PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(const DocumentSnapshot& source,
-    const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent) {
+    const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent,
+    const DocumentSnapshot* original_dimension_source) {
     if (!source.is_editable()) invalid("captured document is read-only");
+    if (original_dimension_source && (!original_dimension_source->is_editable() ||
+        original_dimension_source->document_id()!=source.document_id()))
+        invalid("original dimension source must be an editable snapshot of the same document");
     if (!physical_wall_room_correspondence_is_current(report,source) || intent.source_snapshot_digest!=document_snapshot_digest(source) ||
         intent.source_authoring_digest!=document_authoring_source_digest_v2(source) ||
         intent.source_saved_revision!=source.saved_revision_optional())
@@ -1542,11 +1709,27 @@ PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(const DocumentS
         report.context!=intent.context || report.effective_elevation_m!=intent.effective_elevation_m)
         invalid("intent does not belong to the displayed context/plane report");
     auto captured_intent=intent;
+    if (!intent.selected_dimension_placements.empty()) {
+        const auto& original=original_dimension_source ? *original_dimension_source : source;
+        // Forking validates the retained command prefix. A caller-created map
+        // with a borrowed document ID/revision cannot qualify original text.
+        const auto admitted=Document::fork_at_revision(source,original.revision()).snapshot();
+        if (admitted.document_id()!=original.document_id() || admitted.revision()!=original.revision() ||
+            document_authoring_source_digest_v2(admitted)!=document_authoring_source_digest_v2(original) ||
+            !exact_entities(admitted.entities(),original.entities()) || !exact_assets(admitted.assets(),original.assets()))
+            invalid("original dimension source does not match the validated retained document prefix");
+        const PhysicalWallRoomDimensionSource receipt{original.revision(),entity_map_digest(original.entities())};
+        if (intent.selected_dimension_source && (intent.selected_dimension_source->original_revision!=receipt.original_revision ||
+            intent.selected_dimension_source->original_entities_digest!=receipt.original_entities_digest))
+            invalid("selected dimension source receipt conflicts with its actual original snapshot");
+        captured_intent.selected_dimension_source=receipt;
+    }
     // Scope comes from the current displayed ordinary report, never from a
     // caller's unchecked marker or an explicit destination-phase report.
     captured_intent.active_phase_room_scope=report.active_phase_room_scope;
     auto encoded=encode_physical_wall_room_review_intent(captured_intent);
-    auto replayed=replay_physical_wall_room_review(source.entities(),encoded,source.uses_active_phase_constraints());
+    auto replayed=replay_physical_wall_room_review(source.entities(),encoded,source.uses_active_phase_constraints(),
+        original_dimension_source ? &original_dimension_source->entities() : nullptr);
     return {std::move(replayed),std::move(encoded)};
 }
 
@@ -1575,36 +1758,7 @@ bool exact_assets(const std::map<std::string,Asset,std::less<>>& left,
     }
     return true;
 }
-Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& geometry_command,
-    const Json& retained_geometry_proof=Json(nullptr)) {
-    if (!retained_geometry_proof.is_null()) {
-        if (retained_geometry_proof.is_object() &&
-            retained_geometry_proof.value("kind",std::string{})=="mixed_wall_opening_deletion") {
-            const auto decoded=decode_mixed_wall_opening_deletion_review_proof(retained_geometry_proof);
-            if (decoded.command.expected_revision!=source.revision() ||
-                command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
-                invalid("explicit mixed wall/opening proof differs from the captured raw geometry command");
-            const auto admitted=encode_mixed_wall_opening_deletion_review_proof(source,decoded.intent,geometry_command);
-            if (admitted.dump()!=retained_geometry_proof.dump())
-                invalid("explicit mixed wall/opening proof differs from complete captured-source admission");
-            return retained_geometry_proof;
-        }
-        const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
-        if (decoded.command.expected_revision!=source.revision() ||
-            command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
-            invalid("explicit mixed wall proof differs from the captured raw geometry command");
-        const auto admitted=encode_mixed_wall_deletion_review_proof(source,decoded.intent,geometry_command,
-            decoded.complete_opening_hosted_removal);
-        if (admitted.dump()!=retained_geometry_proof.dump())
-            invalid("explicit mixed wall proof differs from complete captured-source admission");
-        return retained_geometry_proof;
-    }
-    if (is_physical_wall_room_deletion_review_command(geometry_command))
-        return encode_physical_wall_deletion_review_proof(source,geometry_command);
-    if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
-    if (is_physical_wall_room_rigid_review_command(geometry_command)) return command_to_json(geometry_command);
-    if (is_physical_wall_room_joint_review_command(geometry_command)) return command_to_json(geometry_command);
-    if (is_physical_wall_room_active_constraint_review_command(geometry_command)) return command_to_json(geometry_command);
+Json qualified_ordinary_geometry(const Command& geometry_command) {
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if (!geometry || geometry->wall_edits.empty()) invalid("review requires a direct command with explicit wall edits");
     // Inspect typed lanes as well as the serialized discriminator: retained or
@@ -1639,6 +1793,38 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
         invalid("wall geometry proof is not canonical");
     return proof;
 }
+Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& geometry_command,
+    const Json& retained_geometry_proof=Json(nullptr)) {
+    if (!retained_geometry_proof.is_null()) {
+        if (retained_geometry_proof.is_object() &&
+            retained_geometry_proof.value("kind",std::string{})=="mixed_wall_opening_deletion") {
+            const auto decoded=decode_mixed_wall_opening_deletion_review_proof(retained_geometry_proof);
+            if (decoded.command.expected_revision!=source.revision() ||
+                command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
+                invalid("explicit mixed wall/opening proof differs from the captured raw geometry command");
+            const auto admitted=encode_mixed_wall_opening_deletion_review_proof(source,decoded.intent,geometry_command);
+            if (admitted.dump()!=retained_geometry_proof.dump())
+                invalid("explicit mixed wall/opening proof differs from complete captured-source admission");
+            return retained_geometry_proof;
+        }
+        const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
+        if (decoded.command.expected_revision!=source.revision() ||
+            command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
+            invalid("explicit mixed wall proof differs from the captured raw geometry command");
+        const auto admitted=encode_mixed_wall_deletion_review_proof(source,decoded.intent,geometry_command,
+            decoded.complete_opening_hosted_removal);
+        if (admitted.dump()!=retained_geometry_proof.dump())
+            invalid("explicit mixed wall proof differs from complete captured-source admission");
+        return retained_geometry_proof;
+    }
+    if (is_physical_wall_room_deletion_review_command(geometry_command))
+        return encode_physical_wall_deletion_review_proof(source,geometry_command);
+    if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_rigid_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_joint_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_active_constraint_review_command(geometry_command)) return command_to_json(geometry_command);
+    return qualified_ordinary_geometry(geometry_command);
+}
 void require_room_review_curve(const DocumentSnapshot& source,const Command& curve_command) {
     if (!source.is_editable()) invalid("captured document is read-only");
     const auto* curve=std::get_if<ApplyBoundaryConstraintChanges>(&curve_command);
@@ -1670,6 +1856,17 @@ Json plain_room_review_proof(const ApplyBoundaryConstraintChanges& command) {
     return proof;
 }
 } // namespace
+
+bool is_physical_wall_room_geometry_review_command(const Command& command) {
+    try {
+        if (is_physical_wall_room_deletion_review_command(command) || is_physical_wall_room_profile_review_command(command) ||
+            is_physical_wall_room_rigid_review_command(command) || is_physical_wall_room_joint_review_command(command)) return true;
+        if (is_physical_wall_room_active_constraint_review_command(command))
+            return command_to_json(command).dump().size()<=1024*1024;
+        (void)qualified_ordinary_geometry(command);
+        return true;
+    } catch (const std::exception&) { return false; }
+}
 
 bool is_physical_wall_room_rigid_review_command(const Command& command) {
     try {
@@ -2302,7 +2499,7 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_af
     const Command& geometry_command,const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent,
     const Json& retained_geometry_proof) {
     const auto derived=preview_physical_wall_room_review_geometry(source,geometry_command,retained_geometry_proof);
-    const auto prepared=prepare_physical_wall_room_review(derived,report,intent);
+    const auto prepared=prepare_physical_wall_room_review(derived,report,intent,&source);
     auto retained_intent=decode_physical_wall_room_review_intent(prepared.intent);
     // The report was reviewed against the detached wall geometry. The final
     // single event must bind the actual original history/save state, while the
@@ -2342,11 +2539,13 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_ba
         // Admission checks the complete actual virtual stage, including its
         // history and save fences, before rebinding the single final event.
         stage=Document::preview_command(stage,Command{room_command});
+        guard.retain_selected(stage.entities(),intent);
         intent.source_snapshot_digest=original_snapshot_digest;
         intent.source_authoring_digest=original_authoring_digest;
         intent.source_saved_revision=original_saved_revision;
         retained_intents.push_back(encode_physical_wall_room_review_intent(intent));
     }
+    guard.validate_final_selected(stage.entities());
     ApplyBoundaryConstraintChanges command;
     command.expected_revision=source.revision();
     if (const auto* raw=std::get_if<ApplyEntityChanges>(&geometry_command)) command.message=raw->message;

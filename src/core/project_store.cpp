@@ -376,13 +376,18 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json())==4 &&
+                value.contains("selected_dimension_placements") && value.contains("retained") &&
+                value.contains("fresh") && value.contains("kept_reference_ids") &&
+                value.contains("source_entities_digest") && value.contains("context_plane_selection"))
+                floor=std::max(floor,158U);
             if (value.is_object() && value.value("physical_room_dimension_completion",nlohmann::json())==true &&
                 value.contains("version") && value.at("version").is_number_integer() &&
                 value.at("version")>=5 && value.at("version")<=8 &&
                 value.contains("rigid_boundary_ids") && value.contains("rigid_stroke_ids") &&
                 value.contains("partial_wall_ids") && value.contains("dimension_ids") &&
                 value.contains("move_connected_objects") && value.contains("offset") && value.contains("presentation_offset"))
-                return 157U;
+                floor=std::max(floor,157U);
             if (value.is_object() && value.value("physical_room_phase_completion",nlohmann::json())==true &&
                 ((value.size()==8 && value.value("version",nlohmann::json())==3 &&
                     value.contains("wall_id") && value.contains("second_wall_id") && value.contains("fraction") &&
@@ -434,9 +439,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         return false;
     };
     for (const auto& revision : snapshot.history()) {
-        if (required<157 && revision.boundary_geometry_edit)
+        if (required<158 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<157 && revision.boundary_constraint_changes)
+        if (required<158 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -739,6 +744,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (active_phase_review(command.room_review_intent) ||
                 std::any_of(command.room_review_additional_intents.begin(),command.room_review_additional_intents.end(),active_phase_review))
                 required=std::max(required,84U);
+            const auto selected_placement_review=[](const nlohmann::json& intent) {
+                return intent.is_object() && intent.value("version",nlohmann::json())==4 &&
+                    intent.contains("selected_dimension_placements");
+            };
+            if (selected_placement_review(command.room_review_intent) ||
+                std::any_of(command.room_review_additional_intents.begin(),command.room_review_additional_intents.end(),selected_placement_review))
+                required=std::max(required,158U);
             if (command.curve_construction_completion)
                 required = std::max(required,75U);
             if (command.room_review_batch_completion || !command.room_review_additional_intents.empty())
@@ -2563,6 +2575,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 155 &&
          sqlite3_column_int(user_version.get(), 0) != 156 &&
          sqlite3_column_int(user_version.get(), 0) != 157 &&
+         sqlite3_column_int(user_version.get(), 0) != 158 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3161,6 +3174,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=158)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 158 for reviewed selected physical-room callout placements");
         if (required_format>=157)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 157 for current physical-room callout joint history");
         if (required_format>=156)

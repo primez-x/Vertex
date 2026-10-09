@@ -32,6 +32,14 @@ struct PhysicalWallRoomRelationshipRemoval {
     std::vector<std::string> removed_room_ids;
     std::vector<RoomRelation> acknowledged_relations;
 };
+struct PhysicalWallRoomDimensionPlacement {
+    std::string dimension_id;
+    Vec2 offset;
+};
+struct PhysicalWallRoomDimensionSource {
+    Revision original_revision{};
+    std::string original_entities_digest;
+};
 struct PhysicalWallRoomReviewIntent {
     std::string selected_wall_id;
     std::string source_snapshot_digest;
@@ -52,6 +60,10 @@ struct PhysicalWallRoomReviewIntent {
     // Version three admits ordinary retained coverage and new-room membership
     // through actual saved phase choices. One/two retain collect-all replay.
     bool active_phase_room_scope{};
+    // Version four places selected retained callouts from original positions.
+    std::vector<PhysicalWallRoomDimensionPlacement> selected_dimension_placements;
+    // Replay resolves this original map from independently admitted history.
+    std::optional<PhysicalWallRoomDimensionSource> selected_dimension_source;
 };
 struct ReplayedPhysicalWallRoomReview {
     std::map<std::string,Entity,std::less<>> entities;
@@ -69,11 +81,22 @@ struct PreparedPhysicalWallRoomReviewAfterGeometry {
 using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAfterGeometry;
 [[nodiscard]] nlohmann::json encode_physical_wall_room_review_intent(const PhysicalWallRoomReviewIntent& intent);
 [[nodiscard]] PhysicalWallRoomReviewIntent decode_physical_wall_room_review_intent(const nlohmann::json& value);
+// Qualifies supported active/current physical-room dimensions in the complete
+// actual pregeometry map, with sorted unique IDs and finite bounded offsets.
+void validate_physical_wall_room_dimension_placements(
+    const std::map<std::string,Entity,std::less<>>& actual,
+    const std::vector<PhysicalWallRoomDimensionPlacement>& placements);
+// Requires unchanged selected dimensions and room owners in the geometry
+// stage. Only declared dimensions become manually placed from original text.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> placed_physical_wall_room_dimensions(
+    const std::map<std::string,Entity,std::less<>>& actual,
+    const std::map<std::string,Entity,std::less<>>& geometry_stage,
+    const std::vector<PhysicalWallRoomDimensionPlacement>& placements);
 // Detached preparation binds the complete captured state, including history,
 // assets and saved/navigation state. Cancellation leaves the source untouched.
 [[nodiscard]] PreparedPhysicalWallRoomReview prepare_physical_wall_room_review(
     const DocumentSnapshot& source,const PhysicalWallRoomCorrespondenceReport& report,
-    const PhysicalWallRoomReviewIntent& intent);
+    const PhysicalWallRoomReviewIntent& intent,const DocumentSnapshot* original_dimension_source=nullptr);
 // A direct ordinary/rigid wall-edit, intact joint wall command, profile change
 // or curve command is admitted on a detached copy. Retained rooms remain
 // available for correspondence review.
@@ -82,6 +105,9 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // upsert or a completed v6/v7 physical upsert with exterior redraws. Ordinary
 // connected/source consequences retain their existing child command authority.
 [[nodiscard]] bool is_physical_wall_room_profile_review_command(const Command& command);
+// Source-independent bounded canonical shape only. Actual source admission
+// remains owned by Document and the existing specialized geometry producers.
+[[nodiscard]] bool is_physical_wall_room_geometry_review_command(const Command& command);
 // Direct rigid v10 or mixed measured-source v11 requires at least one curved
 // v4/straight v5 wall proof. Connected neighbors keep ordinary v1/v2/v3
 // authority. A v21 wall-callout completion may wrap only that same v10/v11
@@ -188,16 +214,19 @@ void validate_physical_wall_room_profile_review_source(
 // against the complete rederived physical-room candidate, including holes.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_physical_wall_room_review_entities(
     const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent,
-    bool active_phase_constraints=false);
+    bool active_phase_constraints=false,
+    const std::map<std::string,Entity,std::less<>>* original_dimension_source=nullptr);
 // Typed transitions are reconstructed from decisions, never accepted as proof.
 [[nodiscard]] ReplayedPhysicalWallRoomReview replay_physical_wall_room_review(
     const std::map<std::string,Entity,std::less<>>& source,const nlohmann::json& intent,
-    bool active_phase_constraints=false);
+    bool active_phase_constraints=false,
+    const std::map<std::string,Entity,std::less<>>* original_dimension_source=nullptr);
 // Sequential pure replay keeps every preceding entity-map digest exact and
 // prevents fresh identity reuse across the entire batch, including retired
 // owners, boundary children and replaced dimensions. No intermediate state is
 // published and no classification or correspondence is inferred.
 [[nodiscard]] ReplayedPhysicalWallRoomReview replay_physical_wall_room_review_batch(
     const std::map<std::string,Entity,std::less<>>& source,
-    const std::vector<nlohmann::json>& intents,bool active_phase_constraints=false);
+    const std::vector<nlohmann::json>& intents,bool active_phase_constraints=false,
+    const std::map<std::string,Entity,std::less<>>* original_dimension_source=nullptr);
 } // namespace sketch

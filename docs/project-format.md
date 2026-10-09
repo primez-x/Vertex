@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v157
+# Vertex project formats v1 through v158
+
+## Selected physical-room callout placements (v158)
+
+Native reader 158 and JSON/assets extraction 156 retain selected physical-room
+callout placements in reviewed room edits. `PhysicalWallRoomReviewIntent` v4
+adds `selected_dimension_placements` and `selected_dimension_source` while
+versions one through three keep their original meanings. A placement list is
+nonempty, sorted by unique dimension ID, contains at most 128 entries, and
+uses finite offsets bounded to 1e12 in each coordinate. Its receipt contains
+the original revision and original entity-map digest; placements require that
+receipt.
+
+Each placement is qualified against the actual current active room dimensions
+and the actual original source. The selected dimension must be explicitly kept
+and owned by a retained room. Across the admitted geometry and intervening
+room-review stages, selected dimensions and their room owners remain byte
+unchanged. At final placement, the selected dimension becomes manual using its
+original text position and reviewed offset, preserving its ID, style and opaque data.
+The final geometry envelope anchors the actual current source and supports all
+current room holes; untouched automatic dimensions continue to regenerate.
+
+Retained history must prove the original anchor immediately before admitted
+geometry, followed only by plain room-review stages. An external pointer alone
+does not prove this history, and arbitrary ancestors are not accepted. Apply
+publishes the admitted work atomically as one revision with full rollback on
+failure; cancel leaves the document unchanged.
+
+The existing outer single/batch room envelopes and command ceiling 42 are
+unchanged. Nested joint version 17 keeps its existing semantics. These are
+source contracts; compilation and runtime qualification remain pending.
 
 ## Current physical-room callouts in connected moves (v157)
 

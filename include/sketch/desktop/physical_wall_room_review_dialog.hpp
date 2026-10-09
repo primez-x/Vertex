@@ -1,5 +1,6 @@
 #pragma once
 #include "sketch/document.hpp"
+#include "sketch/physical_wall_room_review.hpp"
 #include <QDialog>
 #include <QString>
 #include <functional>
@@ -25,6 +26,8 @@ public:
     // Display and acknowledge original wall-linked removals even when this
     // dialog reviews a later detached stage in a multi-context batch.
     void setDeletionConsequences(const DocumentSnapshot& original,const ApplyEntityChanges& deletion);
+    void setSelectedDimensionPlacements(const DocumentSnapshot& original,
+        const std::vector<PhysicalWallRoomDimensionPlacement>& placements);
     void accept() override;
     void reject() override;
 private:
