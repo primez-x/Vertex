@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v151
+# Vertex project formats v1 through v152
+
+## Complete mixed-wall hosted catalog consequences (v152)
+
+Native reader 152 and JSON/assets extraction 150 retain wall-demolition
+authoring inner three under the existing exclusive phase-authoring dialect
+sixteen. Inner three has exactly nine fields: the six inner-one fields plus
+`ordinary_wall_ids`, `wall_additional_identities` and
+`complete_hosted_catalog_consequences:true`. Empty ordinary-wall roots require
+empty wall destinations; nonempty roots retain inner-two's source-derived join
+slots and budgets. Historical children remain restricted to their original
+demolition dialects, including coordinated inner one through three.
+
+This opt-in completes ordinary proposed wall, roof and independent opening
+consequences while original walls are demolished in the same saved alternative.
+Actual roots, qualified rows and hosts authenticate before historical/native
+leaves. Only an active, nonrequired baseline catalog in the actual proposed
+host's saved registry may retain its carrier while admitted placed rows retire.
+Selected physical walls must have sole active proposed ownership. Baseline,
+foreign, required, inactive and protected physical owners remain preserved.
+An independently admitted proposed opening may retire its placed row on an
+unchanged original wall; the actual opening must be physically absent and the
+original wall remain byte-exact. That exception persists through room review.
+
+Physical wall replay and join-inference preflight share the opt-in qualified
+catalog policy with the component producer. Admission preserves complete source
+work budgets, aliases and inactive ownership. Retained catalog envelopes,
+definitions, materials, raw survivor order and membership are proved against
+the original carrier. Compound consequences use complete source-based
+composition, followed by the existing explicit detached-room review. Controller
+Delete/Cut retain source, selection, pending-placement and Site authority, with
+Cut publication only after application. Fresh-ID admission reserves all new
+proof vocabulary and retained/undone destinations. Defaults and older inner
+one/two meanings are unchanged; no build or runtime acceptance is claimed.
 
 ## Complete proposed-roof catalog consequences (v151)
 

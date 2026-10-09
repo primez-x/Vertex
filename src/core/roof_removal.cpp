@@ -342,7 +342,8 @@ void validate_retained_catalog_rows(const RoofRemovalEntities& source,
         for (const auto& row : expected.properties.at("model").at("instances"))
             if (!retired.at(id).contains(row.at("id").get<std::string>())) rows.push_back(row);
         expected.properties.at("model").at("instances") = std::move(rows);
-        if (found->second != expected)
+        if (found->second != expected || found->second.properties.dump() != expected.properties.dump() ||
+            found->second.extensions.dump() != expected.extensions.dump())
             reject("complete roof consequence changed its raw retained catalog beyond admitted rows: " + id);
         const auto& registry = derived.memberships.at(id);
         const auto before = ModelPhases::from_json(source.at(registry).properties.at("model"));

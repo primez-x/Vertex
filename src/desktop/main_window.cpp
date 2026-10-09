@@ -31853,6 +31853,7 @@ public:
             PhaseWallDemolitionAuthoring demolition;
             demolition.wall_demolition=wall_selection->baseline;
             demolition.ordinary_wall_ids=wall_selection->ordinary_wall_ids;
+            demolition.complete_hosted_catalog_consequences=true;
             std::vector<std::string> baseline_ids,ordinary_ids;
             for (const auto& id:other_ids) (baseline(id) ? baseline_ids : ordinary_ids).push_back(id);
             const std::set<std::string,std::less<>> selected_walls(intent.wall_ids.begin(),intent.wall_ids.end());
@@ -31865,12 +31866,13 @@ public:
             std::sort(baseline_ids.begin(),baseline_ids.end());
             if (const auto other=baselineArchitecturalDemolitionCommand(source,baseline_ids,message,destination))
                 demolition.other_authoring=other->phase_constraint_authoring_intent;
-            demolition.ordinary=captureArchitecturalSelectionRemoval(source,std::move(ordinary_ids),std::move(components));
+            demolition.ordinary=captureArchitecturalSelectionRemoval(source,std::move(ordinary_ids),std::move(components),
+                demolition.complete_hosted_catalog_consequences);
             // All declared slots, including omitted historical copies, reserve
             // their names before independently allocated ordinary roof splits.
             auto occupied=retainedSlabIdentityNames(source,true);
             for (const auto* token:{"wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
-                "ordinary_wall_ids","wall_additional_identities",
+                "ordinary_wall_ids","wall_additional_identities","complete_hosted_catalog_consequences",
                 "independent_drawing_removal_completion","independent_drawing_removal_intent","owner_ids",
                 "annotations","owner_id","child_id","proof"}) occupied.insert(token);
             std::vector<const json*> pending{&demolition.other_authoring};
@@ -31887,7 +31889,8 @@ public:
             }
             if (!demolition.ordinary_wall_ids.empty()) {
                 require_current();
-                preflight_physical_walls_deletion_join_inference(source.entities(),demolition.ordinary_wall_ids,true);
+                preflight_physical_walls_deletion_join_inference(source.entities(),demolition.ordinary_wall_ids,true,
+                    demolition.complete_hosted_catalog_consequences);
                 const auto joins=inspect_physical_wall_join_removal(source.entities(),demolition.ordinary_wall_ids);
                 if (!joins.ready()) {
                     std::string reasons;
@@ -52593,6 +52596,9 @@ private:
                         targets.insert(demolition.wall_demolition.wall_ids.begin(),demolition.wall_demolition.wall_ids.end());
                         targets.insert(demolition.ordinary_wall_ids.begin(),demolition.ordinary_wall_ids.end());
                         targets.insert(demolition.opening_ids.begin(),demolition.opening_ids.end());
+                        if (demolition.complete_hosted_catalog_consequences)
+                            for (const auto& id:demolition.opening_ids)
+                                targets.insert(source.entities().at(id).properties.at("wall_id").get<std::string>());
                         targets.insert(demolition.ordinary.object_ids.begin(),demolition.ordinary.object_ids.end());
                         const auto aliases=embedded_assembly_presentation_ids(source.entities());
                         for (const auto& key:demolition.ordinary.components) {

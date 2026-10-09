@@ -14,12 +14,17 @@ namespace sketch {
 // Component-only selection is supported; ordinary wall/roof hosts are admitted
 // through their existing codecs without acquiring physical deletion authority.
 // The source is immutable. Document command admission retains source history.
+// Complete catalog consequences admit only actual qualified placed rows on a
+// sole active proposed wall, or its active semantic opening, in a retained
+// baseline carrier of that same saved registry. Raw carrier bytes and phase
+// membership remain exact except for the admitted placed-row retirement.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
     const std::vector<std::pair<std::string, std::string>>& explicit_components = {},
     bool allow_manufactured_opening_hosts = false,
-    std::size_t reserved_native_work = 0);
+    std::size_t reserved_native_work = 0,
+    bool complete_hosted_catalog_consequences = false);
 
 // Source-only analytical admission for the opt-in opening-host lane. Includes
 // both complete supported source/candidate inventories and component work in
@@ -28,6 +33,7 @@ void preflight_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
-    std::size_t reserved_native_work = 0);
+    std::size_t reserved_native_work = 0,
+    bool complete_hosted_catalog_consequences = false);
 
 } // namespace sketch

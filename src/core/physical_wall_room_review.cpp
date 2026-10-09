@@ -562,7 +562,7 @@ void refuse_retired_wall_overlay_references(const Entities& source,const Entitie
 }
 std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities& source,const std::vector<std::string>& wall_ids,
     bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
-    bool complete_opening_hosted_removal=false) {
+    bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false) {
     if (complete_opening_hosted_removal && !complete_join_removal)
         invalid("opening-hosted completion requires hosted and join completion");
     if (!complete_join_removal && !additional_join_identities.empty()) invalid("fresh join identities require join completion");
@@ -577,6 +577,23 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         for (const auto& member:registry.registered_entity_ids)
             if (!memberships.emplace(member,registry.registry_id).second) invalid("overlapping complete deletion phase ownership");
     }
+    std::set<std::string> sole_active_proposals,protected_carriers;
+    if (complete_hosted_catalog_consequences) for (const auto& [registry,model]:phases) {
+        (void)registry;
+        if (!model.active_alternative()) continue;
+        std::set<std::string> protected_proposals;
+        for (const auto& alternative:model.alternatives()) {
+            protected_carriers.insert(alternative.proposed_ids.begin(),alternative.proposed_ids.end());
+            protected_carriers.insert(alternative.demolished_ids.begin(),alternative.demolished_ids.end());
+            protected_proposals.insert(alternative.demolished_ids.begin(),alternative.demolished_ids.end());
+            if (alternative.id==*model.active_alternative())
+                sole_active_proposals.insert(alternative.proposed_ids.begin(),alternative.proposed_ids.end());
+            else protected_proposals.insert(alternative.proposed_ids.begin(),alternative.proposed_ids.end());
+        }
+        for (const auto& owner:model.baseline_ids()) sole_active_proposals.erase(owner);
+        for (const auto& owner:protected_proposals) sole_active_proposals.erase(owner);
+    }
+    std::set<std::string> retained_baseline_catalogs;
     const auto mutable_owner=[&](const std::string& owner) {
         const auto found=source.find(owner);
         if (found==source.end() || found->second.required) invalid("required or absent complete deletion owner: "+owner);
@@ -604,6 +621,10 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         const auto& model=phases.at(member->second);
         const auto contains=[&](const auto& values) { return std::find(values.begin(),values.end(),owner)!=values.end(); };
         if (contains(model.baseline_ids())) {
+            // Only a separately proved, physically retained catalog can borrow
+            // row consequence authority. All preceding envelope/context,
+            // required, inactive and actual-registry checks still apply.
+            if (retained_baseline_catalogs.contains(owner)) return;
             if (model.active_alternative() || !model.alternatives().empty())
                 invalid("shared baseline owner requires typed phase demolition: "+owner);
             return;
@@ -657,6 +678,37 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
     std::vector<std::pair<std::string,std::string>> components;
     bool opening_hosted_rows{};
     std::set<std::string> locals;
+    const auto retained_baseline_catalog_row=[&](const Entity& catalog,const std::string& host_id) {
+        if (!complete_hosted_catalog_consequences) return false;
+        const auto carrier=memberships.find(catalog.id);
+        if (carrier==memberships.end()) return false;
+        const auto& model=phases.at(carrier->second);
+        const auto contains=[](const auto& values,const std::string& owner) {
+            return std::find(values.begin(),values.end(),owner)!=values.end();
+        };
+        if (!model.active_alternative() || !contains(model.baseline_ids(),catalog.id)) return false;
+        if (catalog.required || scope.inactive_owner_ids.contains(catalog.id) || protected_carriers.contains(catalog.id))
+            invalid("complete wall consequence requires an active nonrequired catalog: "+catalog.id);
+        auto wall_id=host_id;
+        const auto& host=source.at(host_id);
+        if (host.type=="opening") {
+            std::string error;
+            if (!complete_opening_hosted_removal || !removed.contains(host_id) ||
+                !read_document_wall_id(host,wall_id,error))
+                invalid("complete wall catalog consequence lacks an actual removed semantic opening");
+            const auto opening_member=memberships.find(host_id);
+            if (opening_member!=memberships.end() && (opening_member->second!=carrier->second ||
+                !sole_active_proposals.contains(host_id)))
+                invalid("complete wall catalog consequence has foreign opening ownership: "+host_id);
+        } else if (host.type!="wall") invalid("complete wall catalog consequence requires an actual wall host");
+        const auto wall_member=memberships.find(wall_id);
+        if (!roots.contains(wall_id) || wall_member==memberships.end() || wall_member->second!=carrier->second ||
+            source.at(wall_id).type!="wall" || source.at(wall_id).required || scope.inactive_owner_ids.contains(wall_id))
+            invalid("complete wall catalog consequence has absent, protected or foreign actual wall ownership: "+wall_id);
+        if (!sole_active_proposals.contains(wall_id))
+            invalid("complete wall catalog consequence requires actual proposed wall ownership: "+wall_id);
+        return true;
+    };
     for (const auto& [entity_id,entity]:source) if (entity.type=="assembly_model") {
         const auto& model=catalogs.emplace(entity_id,AssemblyModel::from_json(entity.properties.at("model"))).first->second;
         for (std::size_t index=0;index<model.instances().size();++index) {
@@ -668,8 +720,10 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
                 host!=source.end() && host->second.type=="opening";
             if (!roots.contains(host_id) && !opening_host) continue;
             opening_hosted_rows=opening_hosted_rows || opening_host;
+            const bool retained_carrier=retained_baseline_catalog_row(entity,host_id);
+            if (retained_carrier) retained_baseline_catalogs.insert(entity_id);
             mutable_owner(entity_id);
-            if (memberships.contains(entity_id) && (!memberships.contains(host_id) ||
+            if (!retained_carrier && memberships.contains(entity_id) && (!memberships.contains(host_id) ||
                 memberships.at(entity_id)!=memberships.at(host_id)))
                 invalid("hosted catalog and removed wall have foreign phase ownership");
             if (components.size()>=4096) invalid("complete deletion hosted instance budget exceeded");
@@ -812,8 +866,8 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
             if (layers>32 || joined_openings[owner]>128) invalid("complete deletion joined source geometry budget exceeded");
             add(4*(1+layers)*(1+joined_openings[owner]));
         }
-        if (opening_hosted_rows)
-            preflight_architectural_object_removal(source,{},components,work);
+        if (opening_hosted_rows || (complete_hosted_catalog_consequences && !components.empty()))
+            preflight_architectural_object_removal(source,{},components,work,complete_hosted_catalog_consequences);
         join_candidate=replay_physical_wall_join_removal(source,wall_ids,additional_join_identities);
         for (const auto& [owner,entity]:source) if (entity.type=="wall_join" && !join_candidate.contains(owner)) {
             mutable_owner(owner);removed.insert(owner);cleanup_names.insert(owner);
@@ -856,21 +910,64 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
                 invalid("complete wall deletion changes a surviving component presentation alias");
         }
     };
+    const auto preserve_retained_catalogs=[&](const Entities& result) {
+        if (retained_baseline_catalogs.empty()) return;
+        for (const auto& catalog:retained_baseline_catalogs) {
+            const auto after=result.find(catalog);
+            if (after==result.end()) invalid("complete wall consequence erased a retained catalog: "+catalog);
+            auto expected=source.at(catalog);
+            auto& rows=expected.properties.at("model").at("instances");
+            const auto& retired=retired_rows.at(catalog);
+            rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+                return retired.contains(row.at("id").template get<std::string>());
+            }),rows.end());
+            if (after->second!=expected || after->second.properties.dump()!=expected.properties.dump() ||
+                after->second.extensions.dump()!=expected.extensions.dump())
+                invalid("complete wall consequence changed raw retained catalog beyond admitted rows: "+catalog);
+        }
+        // Compare the actual raw membership projection for all retained
+        // carriers together. Other owners may retire; carrier registration,
+        // saved choice and every alternative membership remain exact.
+        const auto membership_projection=[&](const Json& raw) {
+            Json result=raw;
+            const auto keep=[&](Json& values) {
+                values.erase(std::remove_if(values.begin(),values.end(),[&](const auto& value) {
+                    return !retained_baseline_catalogs.contains(value.template get<std::string>());
+                }),values.end());
+            };
+            keep(result.at("entity_ids"));keep(result.at("baseline_ids"));
+            for (auto& alternative:result.at("alternatives")) {
+                keep(alternative.at("proposed_ids"));keep(alternative.at("demolished_ids"));
+            }
+            return result;
+        };
+        for (const auto& [registry,model]:phases) {
+            (void)model;
+            const auto after=result.find(registry);
+            if (after==result.end() || after->second.type!="model_phases" ||
+                membership_projection(source.at(registry).properties.at("model")).dump()!=
+                    membership_projection(after->second.properties.at("model")).dump())
+                invalid("complete wall consequence changed retained catalog phase membership: "+registry);
+        }
+    };
     preserve_aliases(preflight);
+    preserve_retained_catalogs(preflight);
     for (const auto& [entity_id,entity]:source) {
         const auto after=preflight.find(entity_id);
         if (after==preflight.end() || entity!=after->second || entity.properties.dump()!=after->second.properties.dump() ||
             entity.extensions.dump()!=after->second.extensions.dump()) mutable_owner(entity_id);
     }
     auto candidate=components.empty() ? source : replay_architectural_object_removal(source,{},components,
-        opening_hosted_rows,opening_hosted_rows ? work : 0);
+        opening_hosted_rows,opening_hosted_rows ? work : 0,complete_hosted_catalog_consequences);
     if (complete_join_removal) candidate=components.empty() ? join_candidate :
-        compose_ordinary_architectural_removal_candidates(source,{join_candidate,candidate});
+        compose_ordinary_architectural_removal_candidates(source,{join_candidate,candidate},
+            complete_hosted_catalog_consequences,complete_hosted_catalog_consequences);
     for (const auto& owner:removed) candidate.erase(owner);
     candidate=remove_known_object_memberships(std::move(candidate),removed,true);
     refuse_unresolved_wall_deletion_references(source,candidate,removed,true);
     refuse_retired_wall_overlay_references(source,candidate);
     preserve_aliases(candidate);
+    preserve_retained_catalogs(candidate);
     bound_complete_wall_deletion_source(candidate);
     if (constraint_phase_scope(candidate).inactive_owner_ids!=scope.inactive_owner_ids)
         invalid("complete deletion changes retained inactive ownership");
@@ -1682,7 +1779,7 @@ namespace {
 // join work together before asking the helper to derive its canonical slots.
 // This is analytical source admission, never a modified native source map.
 void bound_wall_deletion_join_inference(const Entities& source,const std::vector<std::string>& wall_ids,
-    bool complete_opening_hosted_removal=false) {
+    bool complete_opening_hosted_removal=false,bool complete_hosted_catalog_consequences=false) {
     bound_complete_wall_deletion_source(source);
     const std::set<std::string> roots(wall_ids.begin(),wall_ids.end());
     std::set<std::string> joined_walls;
@@ -1755,8 +1852,8 @@ void bound_wall_deletion_join_inference(const Entities& source,const std::vector
         }
     }
     add(expansion_budget.consumed_nodes);add(expansion_budget.consumed_profile_segments);
-    if (opening_hosted_rows)
-        preflight_architectural_object_removal(source,{},components,work);
+    if (opening_hosted_rows || (complete_hosted_catalog_consequences && !components.empty()))
+        preflight_architectural_object_removal(source,{},components,work,complete_hosted_catalog_consequences);
 }
 PhysicalWallJoinRemovalAdditionalIdentities decode_wall_deletion_join_identities(const Json& value) {
     if (!value.is_object() || value.size()>128) invalid("unsupported additional join identity map");
@@ -1839,10 +1936,10 @@ bool retired_opening_hosted_rows(const Entities& source,const Entities& candidat
 } // namespace
 
 void preflight_physical_walls_deletion_join_inference(const Entities& actual,const std::vector<std::string>& wall_ids,
-    bool complete_opening_hosted_removal) {
+    bool complete_opening_hosted_removal,bool complete_hosted_catalog_consequences) {
     if (wall_ids.empty() || wall_ids.size()>128) invalid("join preflight requires one to 128 physical walls");
     auto roots=wall_ids;std::sort(roots.begin(),roots.end());ids(roots);
-    bound_wall_deletion_join_inference(actual,roots,complete_opening_hosted_removal);
+    bound_wall_deletion_join_inference(actual,roots,complete_opening_hosted_removal,complete_hosted_catalog_consequences);
 }
 
 Command decode_physical_wall_deletion_review_proof(const Json& proof) {
@@ -2041,10 +2138,12 @@ void validate_physical_wall_room_deletion_review_source(const Entities& source,c
 }
 
 Entities replay_complete_physical_walls_deletion(const Entities& actual,const std::vector<std::string>& wall_ids,
-    const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities,bool complete_opening_hosted_removal) {
+    const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities,bool complete_opening_hosted_removal,
+    bool complete_hosted_catalog_consequences) {
     if (wall_ids.empty() || wall_ids.size()>128) invalid("complete replay requires one to 128 physical walls");
     auto roots=wall_ids;std::sort(roots.begin(),roots.end());ids(roots);
-    const auto changes=complete_physical_wall_deletion_changes(actual,roots,true,additional_join_identities,complete_opening_hosted_removal);
+    const auto changes=complete_physical_wall_deletion_changes(actual,roots,true,additional_join_identities,
+        complete_opening_hosted_removal,complete_hosted_catalog_consequences);
     auto candidate=actual;
     for (const auto& change:changes) {
         if (change.kind==EntityChangeKind::erase) candidate.erase(change.entity_id);

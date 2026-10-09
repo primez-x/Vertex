@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete mixed-wall catalog source implementation
+
+Wall-demolition authoring inner three now completes ordinary proposed wall,
+roof and independent door/window consequences in the same operation as original
+wall demolition. Active original catalog carriers no longer block those
+admitted placed-row retirements. The physical-wall replay, join-inference
+preflight and qualified component producer share the explicit default-off
+policy; baseline physical, foreign, required, inactive and protected owners
+retain their safeguards. Retained carriers preserve exact raw filtering,
+definitions, materials, survivor order and saved membership.
+
+The complete explicit selection authenticates against the original source
+before historical/native leaves. An independently admitted proposed opening's
+catalog consequence on an unchanged original wall remains valid through final
+room review. Controller Delete/Cut capture complete actual roof/wall join slots,
+retain pending-placement/selection/Site fences, and publish Cut content only
+after successful application. Native 152 / extraction 150 preserve the additive
+meaning in direct, wrapped, retained and undone history. Older inner one/two
+grammars and historical coordinated child restrictions remain unchanged. Root
+integrated source review is complete; independent review of this batch is pending.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation and runtime remain unverified; the installed candidate is
+unchanged. Source implementation continues without a goal loop. Source audits
+found no confirmed remaining canvas-transform or mixed-family copy gap in their
+bounded assignments; these audits do not establish human-observed usability.
+
 ### October 9 complete proposed-roof catalog source implementation
 
 Closed coordinated demolition inner six now removes an active proposed roof
@@ -30,7 +57,10 @@ join and component consequences. Mixed roof/primitive/component candidates can
 compose their distinct catalog retirements. Native 151 / extraction 149 preserve
 the new operation throughout direct, wrapped, retained and undone history;
 historical and default façades retain their previous semantics. Root integrated
-source review is complete; independent review of inner six is pending.
+source review is complete. Independent review approved integrated inner-six
+source at 7cfaa60 with no actionable findings, without compilation or runtime
+acceptance. The subsequent mixed-wall batch also makes the retained roof
+carrier's raw numeric/extension representation check explicit.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or installations
 ran. Compilation and runtime remain unverified. The installed candidate remains

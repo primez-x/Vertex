@@ -2953,6 +2953,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     std::set<std::string,std::less<>> wall_demolition_join_destinations;
     bool complete_wall_demolition=false;
     bool complete_ordinary_wall_demolition=false;
+    bool complete_wall_catalog_demolition=false;
     bool complete_hosted_demolition=false;
     bool complete_opening_demolition=false;
     for (const auto& [id,entity] : candidate) {
@@ -2986,7 +2987,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             structural_hosted_alias_reservation=true;
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
             const auto demolition=decode_phase_wall_demolition_authoring(root_intent.wall_demolition);
-            complete_ordinary_wall_demolition=complete_ordinary_wall_demolition || !demolition.ordinary_wall_ids.empty();
+            complete_wall_catalog_demolition=complete_wall_catalog_demolition || demolition.complete_hosted_catalog_consequences;
+            complete_ordinary_wall_demolition=complete_ordinary_wall_demolition ||
+                !demolition.ordinary_wall_ids.empty() || demolition.complete_hosted_catalog_consequences;
             for (const auto& [original,ids]:demolition.wall_additional_identities) {
                 (void)original;
                 for (const auto& id:ids) {
@@ -3208,7 +3211,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
     if (complete_wall_demolition) nested_fresh.insert(fresh.begin(),fresh.end());
     // Inner one predates this vocabulary. Its retained identities keep their
-    // historical meaning; only inner two introduces these reserved fields.
+    // historical meaning; only inner two/three introduce these reserved fields.
     if (complete_ordinary_wall_demolition) {
         for (const auto* token:{"version","wall_demolition","other_authoring","ordinary","opening_ids",
             "room_review_intent","registry_id","alternative_id","wall_ids","ordinary_wall_ids",
@@ -3229,6 +3232,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             if (fresh.contains(token))
                 throw std::invalid_argument("A fresh architectural demolition destination borrows a semantic proof field: "+std::string(token));
     }
+    if (complete_wall_catalog_demolition && fresh.contains("complete_hosted_catalog_consequences"))
+        throw std::invalid_argument("A fresh wall demolition destination borrows the complete catalog proof field");
     if (complete_opening_demolition && fresh.contains("ordinary_opening_ids"))
         throw std::invalid_argument("A fresh architectural demolition destination borrows the ordinary opening proof field");
     if (phase_drawing_enclosure) {

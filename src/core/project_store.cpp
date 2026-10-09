@@ -499,6 +499,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (intent.is_object()) {
                     const auto demolition=intent.find("wall_demolition");
                     if (demolition!=intent.end() && demolition->is_object() &&
+                        demolition->value("version",nlohmann::json())==3) return 152U;
+                    if (demolition!=intent.end() && demolition->is_object() &&
                         (demolition->value("version",nlohmann::json())==2 ||
                             demolition->contains("ordinary_wall_ids") ||
                             demolition->contains("wall_additional_identities"))) return 148U;
@@ -2491,6 +2493,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 149 &&
          sqlite3_column_int(user_version.get(), 0) != 150 &&
          sqlite3_column_int(user_version.get(), 0) != 151 &&
+         sqlite3_column_int(user_version.get(), 0) != 152 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3089,6 +3092,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=152)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 152 for complete hosted catalog consequences in mixed wall demolition");
         if (required_format>=151)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 151 for proposed roof removal with complete hosted catalog consequences");
         if (required_format>=150)
