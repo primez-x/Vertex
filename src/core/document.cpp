@@ -47,6 +47,7 @@
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_roof_transform.hpp"
+#include "sketch/phase_roof_uniform_transform.hpp"
 #include "sketch/phase_roof_resize.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
@@ -518,7 +519,8 @@ void validate_entity(const Entity& entity) {
                 std::string("invalid horizontal geometry derivation: ") + error.what());
         }
     }
-    for (const auto* key : {"roof_rigid_transform_derivations", "roof_plan_resize_derivations"})
+    for (const auto* key : {"roof_rigid_transform_derivations", "roof_plan_resize_derivations",
+                          "roof_uniform_transform_derivations"})
     if (entity.type == "roof" && entity.extensions.contains(key)) {
         try {
             const auto& archive = entity.extensions.at(key);
@@ -531,7 +533,9 @@ void validate_entity(const Entity& entity) {
             if (archive.at("version") == 1) {
                 if (std::string_view(key) == roof_rigid_transform_derivations_key)
                     validate_roof_rigid_transform_derivations(entity);
-                else validate_roof_plan_resize_derivations(entity);
+                else if (std::string_view(key) == roof_plan_resize_derivations_key)
+                    validate_roof_plan_resize_derivations(entity);
+                else validate_roof_uniform_transform_derivations(entity);
             }
 #endif
         } catch (const std::exception& error) {
@@ -1464,7 +1468,8 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             entity.extensions.at("wall_merge_archive").at("version")!=1)
             unsupported_boundary="Unsupported wall merge archive: "+id;
     for (const auto& [id, entity] : entities)
-        for (const auto* key : {"roof_rigid_transform_derivations", "roof_plan_resize_derivations"})
+        for (const auto* key : {"roof_rigid_transform_derivations", "roof_plan_resize_derivations",
+                              "roof_uniform_transform_derivations"})
         if (entity.type == "roof" && entity.extensions.contains(key)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
             if (entity.extensions.at(key).at("version") != 1)

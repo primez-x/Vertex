@@ -11,6 +11,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/roof_join_phase_ownership.hpp"
+#include "sketch/phase_roof_uniform_transform.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
@@ -107,6 +108,9 @@ Entity opaque_remainder(Entity entity) {
     auto& p = entity.properties;
     if (entity.type == "roof") {
         (void)decode_roof_entity(entity);
+        if (entity.extensions.contains(std::string(roof_uniform_transform_derivations_key)))
+            entity.extensions.at(std::string(roof_uniform_transform_derivations_key)) =
+                roof_uniform_transform_opaque_remainder(entity);
         if (entity.extensions.contains(std::string(roof_rigid_transform_derivations_key)))
             entity.extensions.at(std::string(roof_rigid_transform_derivations_key)) =
                 roof_rigid_transform_opaque_remainder(entity);
@@ -192,7 +196,7 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
             const auto found = source.find(id);
             if (found == source.end() || found->second.type != "roof") reject("target must be an actual roof: " + id);
             if (!shapes.contains(id)) {
-                validate_roof_rigid_transform_source_entity(found->second);
+                validate_roof_uniform_transform_source_entity(found->second);
                 if (found->second.properties.contains("material_assignment"))
                     admit_assignment(source, found->second.properties.at("material_assignment"));
                 shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second))));
@@ -284,6 +288,16 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                 } catch (const std::exception&) {
                     // Unsupported unrelated history remains opaque. Qualified
                     // historical frames never declare current cut identities.
+                }
+            }
+            if (entity.type == "roof" && extensions.contains(std::string(roof_uniform_transform_derivations_key))) {
+                try {
+                    extensions.at(std::string(roof_uniform_transform_derivations_key)) =
+                        roof_uniform_transform_opaque_remainder(entity);
+                } catch (const std::exception&) {
+                    // Unsupported unrelated history remains opaque. Only a
+                    // validated uniform-transform archive can release its
+                    // historical identity declarations.
                 }
             }
             child_declarations(extensions, declarations);
@@ -438,7 +452,7 @@ RoofCloneResult replay_roof_clone(const RoofCloneEntities& source, const RoofClo
                     entries = std::move(mapped);
                 }
                 if (derived.independent_assignments.contains(id)) copy.properties["material_assignment"] = derived.independent_assignments.at(id);
-                validate_roof_rigid_transform_source_entity(copy);
+                validate_roof_uniform_transform_source_entity(copy);
             } else if (copy.type == "roof_join") {
                 for (auto& roof : copy.properties.at("roof_ids")) roof = identities.at(roof.get<std::string>());
                 // Independent copies own fresh members and do not inherit the

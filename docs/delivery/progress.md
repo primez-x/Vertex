@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 uniform roof scaling source integration
+
+Roof scaling now has actual-source uniform XYZ authority. Numeric architectural
+transforms, transformed copies and roof/horizontal group transforms carry the
+original operation into typed roof edit five, including saved-active proposed replacements. Group
+authoring composes rigid and scaled roof members before final join admission;
+slab-hosted catalog changes stay separate and retain their actual source.
+
+The floor/level datum comes from the captured map. Native roof dimensions,
+thickness and opening coordinates/sizes scale together, retaining pitch,
+materials, child IDs, binding, row order and opaque siblings. Affected entered
+receipts retire verbatim into the new closed historical derivation. Clone,
+replacement, demolition and removal qualify the new archive without rewriting
+live history. Native 121/extraction 119 retains direct, wrapped and historical
+proofs. Older rigid/resize/edit meanings remain closed.
+
+Independent integrated source review approved after correcting the numeric
+copy path to use the same actual world-space datum as the ordinary transform.
+No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation,
+interaction, output and storage round trips remain unverified; the installed
+candidate is unchanged.
+
 ### October 8 proposed wall presentation source integration
 
 Wall geometry, profile and layer edits and hosted opening edits/rehosting/type

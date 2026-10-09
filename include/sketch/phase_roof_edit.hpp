@@ -6,6 +6,7 @@
 #include "sketch/phase_roof_profile_edit.hpp"
 #include "sketch/phase_roof_resize.hpp"
 #include "sketch/phase_roof_transform.hpp"
+#include "sketch/phase_roof_uniform_transform.hpp"
 
 namespace sketch {
 
@@ -20,6 +21,7 @@ struct RoofEditIntent {
     std::optional<RoofFormEditIntent> form;
     std::optional<RoofRigidTransformIntent> transform;
     std::optional<RoofPlanResizeIntent> resize;
+    std::optional<RoofUniformTransformIntent> uniform_transform;
 };
 
 // Strict version one: version, roof_id, profile, openings, pose. At least one
@@ -30,6 +32,8 @@ struct RoofEditIntent {
 // transform is exclusive and reads the actual mathematical operation.
 // Plan resize uses strict version four with an additional resize field;
 // resize is exclusive and derives native footprint dimensions from source.
+// Uniform XYZ scaling uses strict version five: the eight v4 fields plus
+// uniform_transform, exclusively nonnull. Actual-map replay supplies its datum.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 

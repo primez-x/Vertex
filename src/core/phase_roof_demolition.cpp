@@ -11,6 +11,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/roof_join_phase_ownership.hpp"
+#include "sketch/phase_roof_uniform_transform.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
@@ -85,11 +86,9 @@ void admit_roofs_and_joins(const RoofDemolitionEntities& source, const Ids& roof
         if (!shapes.contains(id)) {
             const auto found = source.find(id);
             if (found == source.end() || found->second.type != "roof") reject("join member is not an actual roof: " + id);
-            // Known quantity, opening and historical transform/resize receipts
+            // Known quantity, opening and historical uniform/rigid/resize receipts
             // bind the actual raw owner before context-derived native geometry.
-            validate_roof_profile_source_entity(found->second);
-            validate_roof_rigid_transform_derivations(found->second);
-            validate_roof_plan_resize_derivations(found->second);
+            validate_roof_uniform_transform_source_entity(found->second);
             if (found->second.properties.contains("material_assignment"))
                 admit_material_assignment(source, found->second.properties.at("material_assignment"));
             shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second))));
@@ -166,7 +165,7 @@ DemolitionDerivation derive_demolition(const RoofDemolitionEntities& source,
         for (const auto& roof : join.roof_ids) if (!seeds.contains(roof)) {
             const auto& original = source.at(roof);
             if (!shapes.contains(roof)) {
-                validate_roof_profile_source_entity(original);
+                validate_roof_uniform_transform_source_entity(original);
                 shapes.emplace(roof, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, original))));
             }
             survivors.push_back(roof); members.push_back(shapes.at(roof));

@@ -103,11 +103,13 @@ void merge_component(Entity& result, const Entity& source, const Entity& staged,
         transfer(result.extensions, staged.extensions, key);
     }
 }
-void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resize_targets) {
+void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resize_targets, const Ids& uniform_targets) {
     const auto qualified_cohorts = phase_qualified_roof_join_cohort_ids(entities);
     const auto scope = constraint_phase_scope(entities);
-    for (const auto& id : targets)
+    for (const auto& id : targets) {
+        if (uniform_targets.contains(id)) validate_roof_uniform_transform_source_entity(entities.at(id));
         (void)make_roof_shape(decode_roof_entity(resolve_vertical_placement(entities, entities.at(id))));
+    }
     Ids joined;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "roof_join") continue;
@@ -124,6 +126,8 @@ void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resi
         if (std::none_of(join.roof_ids.begin(), join.roof_ids.end(), [&](const auto& member) { return targets.contains(member); })) continue;
         const bool resize = std::any_of(join.roof_ids.begin(), join.roof_ids.end(),
             [&](const auto& member) { return resize_targets.contains(member); });
+        const bool uniform = std::any_of(join.roof_ids.begin(), join.roof_ids.end(),
+            [&](const auto& member) { return uniform_targets.contains(member); });
         if (scope.inactive_owner_ids.contains(id)) {
             if (resize) invalid("An affected roof resize belongs to an inactive join");
             continue;
@@ -131,7 +135,8 @@ void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resi
         std::vector<TopoDS_Shape> members;
         for (const auto& member : join.roof_ids) {
             if (scope.inactive_owner_ids.contains(member)) invalid("An active roof join contains an inactive roof");
-            if (resize) validate_roof_plan_resize_source_entity(entities.at(member));
+            if (uniform) validate_roof_uniform_transform_source_entity(entities.at(member));
+            else if (resize) validate_roof_plan_resize_source_entity(entities.at(member));
             else validate_roof_profile_source_entity(entities.at(member));
             members.push_back(make_roof_shape(decode_roof_entity(resolve_vertical_placement(entities, entities.at(member)))));
         }
@@ -141,14 +146,24 @@ void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resi
 } // namespace
 
 nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent) {
-    if (!identity(intent.roof_id) || (!intent.profile && !intent.openings && !intent.pose && !intent.form && !intent.transform && !intent.resize))
+    if (!identity(intent.roof_id) || (!intent.profile && !intent.openings && !intent.pose && !intent.form && !intent.transform && !intent.resize && !intent.uniform_transform))
         invalid("Roof edit requires a valid owner and a typed component");
     if (intent.form && intent.profile) invalid("Roof conversion cannot also author a profile component");
-    if (intent.transform && (intent.profile || intent.openings || intent.pose || intent.form || intent.resize))
+    if (intent.transform && (intent.profile || intent.openings || intent.pose || intent.form || intent.resize || intent.uniform_transform))
         invalid("Roof rigid transform cannot borrow another component's edit authority");
-    if (intent.resize && (intent.profile || intent.openings || intent.pose || intent.form || intent.transform))
+    if (intent.resize && (intent.profile || intent.openings || intent.pose || intent.form || intent.transform || intent.uniform_transform))
         invalid("Roof plan resize cannot borrow another component's edit authority");
+    if (intent.uniform_transform && (intent.profile || intent.openings || intent.pose || intent.form || intent.transform || intent.resize))
+        invalid("Roof uniform transform cannot borrow another component's edit authority");
     Json result{{"version", 1}, {"roof_id", intent.roof_id}, {"profile", nullptr}, {"openings", nullptr}, {"pose", nullptr}};
+    if (intent.uniform_transform) {
+        if (intent.uniform_transform->roof_id != intent.roof_id) invalid("Roof uniform transform component owner differs");
+        result["version"] = 5;
+        result["form"] = nullptr;
+        result["transform"] = nullptr;
+        result["resize"] = nullptr;
+        result["uniform_transform"] = encode_roof_uniform_transform_intent(*intent.uniform_transform);
+    }
     if (intent.resize) {
         if (intent.resize->roof_id != intent.roof_id) invalid("Roof plan resize component owner differs");
         result["version"] = 4;
@@ -190,7 +205,15 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
     const bool conversion = value.at("version") == 2;
     const bool rigid_transform = value.at("version") == 3;
     const bool plan_resize = value.at("version") == 4;
-    if (plan_resize) {
+    const bool uniform_transform = value.at("version") == 5;
+    if (uniform_transform) {
+        if (value.size() != 9 || !value.contains("form") || !value.at("form").is_null() ||
+            !value.contains("transform") || !value.at("transform").is_null() ||
+            !value.contains("resize") || !value.at("resize").is_null() ||
+            !value.contains("uniform_transform") || value.at("uniform_transform").is_null() ||
+            !value.at("profile").is_null() || !value.at("openings").is_null() || !value.at("pose").is_null())
+            invalid("Roof uniform transform requires exactly nine version-five fields and no other component");
+    } else if (plan_resize) {
         if (value.size() != 8 || !value.contains("form") || !value.at("form").is_null() ||
             !value.contains("transform") || !value.at("transform").is_null() ||
             !value.contains("resize") || value.at("resize").is_null() ||
@@ -209,6 +232,7 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
     }
     RoofEditIntent result;
     result.roof_id = value.at("roof_id").get<std::string>();
+    if (uniform_transform) result.uniform_transform = decode_roof_uniform_transform_intent(value.at("uniform_transform"));
     if (plan_resize) result.resize = decode_roof_plan_resize_intent(value.at("resize"));
     if (rigid_transform) result.transform = decode_roof_rigid_transform_intent(value.at("transform"));
     if (conversion) result.form = decode_roof_form_edit_intent(value.at("form"));
@@ -221,6 +245,7 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
 Entity replay_roof_edit_entity(const Entity& source, const RoofEditIntent& intent) {
     (void)encode_roof_edit_intent(intent);
     if (source.id != intent.roof_id) invalid("Roof edit target differs from its actual source identity");
+    if (intent.uniform_transform) invalid("Roof uniform transform requires the actual source map and vertical datum");
     if (intent.resize) return replay_roof_plan_resize_entity(source, *intent.resize);
     if (intent.transform) return replay_roof_rigid_transform_entity(source, *intent.transform);
     validate_roof_profile_source_entity(source);
@@ -246,14 +271,15 @@ std::map<std::string, Entity, std::less<>> replay_roof_edit_entities(
     if (intents.size() > collection_limit) invalid("Roof edit target budget exceeded");
     (void)new_roof_opening_identity_ids(source, roof_edit_opening_intents(intents));
     const auto scope = constraint_phase_scope(source);
-    Ids targets, resize_targets;
+    Ids targets, resize_targets, uniform_targets;
     std::size_t bytes = 0;
     for (const auto& intent : intents) {
         const auto count = encode_roof_edit_intent(intent).dump().size();
         if (count > proof_limit - bytes) invalid("Roof edit batch proof byte budget exceeded");
         bytes += count;
         if (!targets.insert(intent.roof_id).second) invalid("Roof edit contains duplicate targets");
-        if (intent.resize) resize_targets.insert(intent.roof_id);
+        if (intent.resize || intent.uniform_transform) resize_targets.insert(intent.roof_id);
+        if (intent.uniform_transform) uniform_targets.insert(intent.roof_id);
         const auto found = source.find(intent.roof_id);
         if (found == source.end() || found->second.id != found->first || found->second.type != "roof")
             invalid("Roof edit target is missing or inconsistent");
@@ -261,19 +287,28 @@ std::map<std::string, Entity, std::less<>> replay_roof_edit_entities(
     }
     if (resize_targets.size() > maximum_architectural_group_targets)
         invalid("Roof resize target budget exceeded");
-    admit_cohorts(source, targets, resize_targets);
+    admit_cohorts(source, targets, resize_targets, uniform_targets);
     auto result = source;
-    std::size_t resize_archive_bytes = 0;
+    std::size_t resize_archive_bytes = 0, uniform_archive_bytes = 0;
     for (const auto& intent : intents) {
-        auto roof = replay_roof_edit_entity(source.at(intent.roof_id), intent);
+        // Every member reads the complete original map. A transient partially
+        // scaled join is never admitted; source/final cohorts bound the batch.
+        auto roof = intent.uniform_transform
+            ? stage_roof_uniform_transform_entity(source, *intent.uniform_transform)
+            : replay_roof_edit_entity(source.at(intent.roof_id), intent);
         if (intent.resize && roof.extensions.contains(std::string(roof_plan_resize_derivations_key))) {
             const auto bytes = roof.extensions.at(std::string(roof_plan_resize_derivations_key)).dump().size();
             if (bytes > proof_limit - resize_archive_bytes) invalid("Roof resize batch archive budget exceeded");
             resize_archive_bytes += bytes;
         }
+        if (intent.uniform_transform && roof.extensions.contains(std::string(roof_uniform_transform_derivations_key))) {
+            const auto bytes = roof.extensions.at(std::string(roof_uniform_transform_derivations_key)).dump().size();
+            if (bytes > proof_limit - uniform_archive_bytes) invalid("Roof uniform transform batch archive budget exceeded");
+            uniform_archive_bytes += bytes;
+        }
         result.at(intent.roof_id) = std::move(roof);
     }
-    admit_cohorts(result, targets, resize_targets);
+    admit_cohorts(result, targets, resize_targets, uniform_targets);
     return result;
 }
 std::optional<RoofEditIntent> capture_roof_edit(const Entity& original, const Entity& candidate) {

@@ -12,6 +12,7 @@
 #include "sketch/wall_semantics.hpp"
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
 #include "sketch/slab_hosted_geometry_edit.hpp"
+#include "sketch/phase_roof_edit.hpp"
 #endif
 
 #include <algorithm>
@@ -678,9 +679,25 @@ std::optional<Entity> try_transform_shared_solid(EntityState& entities,
     return std::nullopt;
 }
 
-Entity transform_building_entity(const Entity& source,
+Entity transform_building_entity(const EntityState& actual_entities, const Entity& source,
                                  const ArchitecturalTransform& transform,
                                  bool flip_horizontal = false, bool flip_vertical = false) {
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+    if (source.type == "roof" && transform.scale != 1.0) {
+        const auto effective = resolve_vertical_placement(actual_entities, source);
+        const auto datum = effective.properties.at("base_position_m").at(2).get<double>() -
+            source.properties.at("base_position_m").at(2).get<double>();
+        // Legacy transaction affine coordinates operate in the persisted local
+        // frame. Convert that exact operator into a world-space intent using
+        // the actual level datum. Group authoring retains its original pivot
+        // through the separate actual-map producer below.
+        return stage_roof_uniform_transform_entity(actual_entities, {source.id,
+            {{}, {transform.x, transform.y, transform.z - (transform.scale - 1.0) * datum},
+                transform.rotation_z_radians, transform.scale, flip_horizontal, flip_vertical}});
+    }
+#else
+    (void)actual_entities;
+#endif
     if (source.type == "roof" && transform.scale == 1.0) {
         // Actual movement math retires affected entered coordinates into a
         // retained derivation. Generic receipt invalidation must not discard
@@ -940,7 +957,7 @@ EntityState apply_operations(const DocumentSnapshot& source,
                     encode_assembly_transform(*value.instance.root_transform);
                 (void)decode_document_assembly_instance(found->second);
             } else if (can_recognize_building_entity_type(found->second.type)) {
-                found->second = transform_building_entity(found->second, *operation.transform);
+                found->second = transform_building_entity(entities, found->second, *operation.transform);
             } else if (const auto transformed =
                            try_transform_shared_solid(entities, found->second, *operation.transform)) {
                 found->second = *transformed;
@@ -1782,6 +1799,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
     std::vector<SlabGeometryEditIntent> slab_intents;
     slab_intents.reserve(requested_targets.size());
+    std::vector<RoofEditIntent> roof_intents;
+    roof_intents.reserve(requested_targets.size());
 #endif
     targets.reserve(requested_targets.size());
     bool identity=true;
@@ -1801,6 +1820,14 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         intents.emplace(id,intent);
         identity=identity && intent.identity;
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+        if (found->second.type == "roof") {
+            RoofEditIntent edit;
+            edit.roof_id = id;
+            if (target.transform.scale == 1.0)
+                edit.transform = RoofRigidTransformIntent{id, target.transform};
+            else edit.uniform_transform = RoofUniformTransformIntent{id, target.transform};
+            roof_intents.push_back(std::move(edit));
+        }
         if (found->second.type=="slab" && !intent.identity) {
             // Replay the captured mathematical operation, never the affine
             // translation or level compensation used by the other families.
@@ -1920,6 +1947,22 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         }
     }
 #endif
+    // Each producer reads the same captured map. All selected roof operations
+    // compose before final cohort admission, including mixed rigid/scaled
+    // members. Roof changes cannot overwrite slab-hosted catalog consequences.
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+    if (!roof_intents.empty()) {
+        const auto roofs = replay_roof_edit_entities(source.entities(), roof_intents);
+        for (const auto& [id, after] : roofs) {
+            const auto& before = source.entities().at(id);
+            if (after == before && after.properties.dump() == before.properties.dump() &&
+                after.extensions.dump() == before.extensions.dump()) continue;
+            if (!selected.contains(id) || after.type != "roof" || before.type != "roof" || after.id != id)
+                throw std::invalid_argument("Architectural roof replay changed an unrelated source owner.");
+            candidate.at(id) = after;
+        }
+    }
+#endif
     const auto transaction=ArchitecturalTransaction::create(transaction_id,std::to_string(source.revision()),
         std::move(transaction_targets),std::move(operations),"Transform architectural group");
     // Creating the validated transaction also checks transaction/target lexical
@@ -1937,6 +1980,10 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         const auto& before = source.entities().at(id);
         const auto& movement = *operation.transform;
         auto& after = candidate.at(id);
+#ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
+        if (before.type == "roof")
+            continue; // Actual source pivot, datum, openings and receipts are already complete.
+#endif
         if (before.type == "slab")
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
             continue; // Source-derived geometry, receipts and hosted motion are already complete.
@@ -1965,7 +2012,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             after.properties.at("instance")["root_transform"] = encode_assembly_transform(root);
             (void)decode_document_assembly_instance(after);
         } else {
-            after = transform_building_entity(before, movement, horizontal, vertical);
+            after = transform_building_entity(source.entities(), before, movement, horizontal, vertical);
             if (canonical_stair(before)) {
                 if (reflected)
                     reflect_stair_railings(candidate, source.entities(), before, after, movement, horizontal, vertical);

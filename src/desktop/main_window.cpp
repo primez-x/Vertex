@@ -7758,7 +7758,7 @@ public:
                 std::get<ApplyEntityChanges>(complete), &capture);
             return {std::move(complete), identities.at(original.id)};
         }
-        if (clone && original.type == "roof" && gesture.scale == 1.0) {
+        if (clone && original.type == "roof") {
             RoofCloneIdentityMap identities;
             IndependentModelCopyCapture capture;
             auto command = sourceDerivedRoofCloneCommand(source, {original.id},
@@ -7769,7 +7769,7 @@ public:
             return {std::move(complete), identities.at(original.id)};
         }
         if (!clone) {
-            if (original.type == "roof" && gesture.scale == 1.0)
+            if (original.type == "roof")
                 return {sourceDerivedRoofTransformCommand(source, {{original.id, transform}},
                     "Transform roof"), original.id};
             if (original.type == "slab") {
@@ -8698,7 +8698,7 @@ public:
                 const auto found = source.entities().find(id.toStdString());
                 return found != source.entities().end() && found->second.type == "roof";
             })) {
-            std::vector<RoofRigidTransformIntent> roofs;
+            std::vector<ArchitecturalGroupTransformTarget> roofs;
             for (const auto& id : model_ids)
                 roofs.push_back({id.toStdString(), {{}, {offset.x, offset.y, 0.0}, 0.0, 1.0, false, false}});
             return sourceDerivedRoofTransformCommand(source, roofs, "Move roofs");
@@ -13194,7 +13194,7 @@ public:
                             std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
                                 return source.entities().at(target.entity_id).type == "roof";
                             })) {
-                            std::vector<RoofRigidTransformIntent> roofs;
+                            std::vector<ArchitecturalGroupTransformTarget> roofs;
                             for (const auto& target : physical_targets)
                                 roofs.push_back({target.entity_id, target.transform});
                             return {sourceDerivedRoofTransformCommand(source, roofs, "Transform roofs"),
@@ -24191,21 +24191,19 @@ public:
         if (original.type == "roof" && operations.size() == 2 &&
             operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
             operations[1].action == ArchitecturalAction::transform &&
-            operations[1].object_id == operations[0].duplicate_id && operations[1].transform &&
-            operations[1].transform->scale == 1.0) {
+            operations[1].object_id == operations[0].duplicate_id && operations[1].transform) {
             const auto& movement = *operations[1].transform;
             RoofCloneIdentityMap identities{{original.id, operations[0].duplicate_id}};
             return sourceDerivedRoofCloneCommand(source, {original.id}, {{original.id,
-                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, 1.0, false, false}}},
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
                 transaction.undo_label(), identities);
         }
         if (original.type == "roof" && operations.size() == 1 &&
             operations.front().action == ArchitecturalAction::transform &&
-            operations.front().object_id == original.id && operations.front().transform &&
-            operations.front().transform->scale == 1.0) {
+            operations.front().object_id == original.id && operations.front().transform) {
             const auto& movement = *operations.front().transform;
             return sourceDerivedRoofTransformCommand(source, {{original.id,
-                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, 1.0, false, false}}},
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
                 transaction.undo_label());
         }
         if (original.type == "slab" && operations.size() == 1 &&
@@ -42232,8 +42230,8 @@ private:
         std::set<std::string, std::less<>> moved;
         for (const auto& operation : operations) {
             if (!std::binary_search(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end(), operation.entity_id) ||
-                !moved.insert(operation.entity_id).second || operation.transform.scale != 1.0)
-                throw std::invalid_argument("A roof copy requires one rigid operation for each selected roof.");
+                !moved.insert(operation.entity_id).second)
+                throw std::invalid_argument("A roof copy requires one explicit operation for each selected roof.");
             targets.push_back({identities.at(operation.entity_id), operation.transform});
         }
         if (moved.size() != plan.selected_roof_ids.size())
@@ -42316,22 +42314,39 @@ private:
         return command;
     }
 
+    static std::vector<RoofEditIntent> roofTransformEditIntents(
+        std::span<const ArchitecturalGroupTransformTarget> operations) {
+        std::vector<RoofEditIntent> edits;
+        edits.reserve(operations.size());
+        for (const auto& operation : operations) {
+            RoofEditIntent edit;
+            edit.roof_id = operation.entity_id;
+            if (operation.transform.scale == 1.0)
+                edit.transform = RoofRigidTransformIntent{operation.entity_id, operation.transform};
+            else edit.uniform_transform = RoofUniformTransformIntent{operation.entity_id, operation.transform};
+            edits.push_back(std::move(edit));
+        }
+        return edits;
+    }
+
+    static void omitUnchangedRoofEdits(const DocumentSnapshot& source,
+        const std::map<std::string, Entity, std::less<>>& physical, std::vector<RoofEditIntent>& edits) {
+        std::erase_if(edits, [&](const auto& edit) {
+            const auto& before = source.entities().at(edit.roof_id);
+            const auto& after = physical.at(edit.roof_id);
+            return before == after && before.properties.dump() == after.properties.dump() &&
+                before.extensions.dump() == after.extensions.dump();
+        });
+    }
+
     static Command sourceDerivedRoofTransformCommand(const DocumentSnapshot& source,
-        const std::vector<RoofRigidTransformIntent>& operations, const std::string& message) {
+        const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message) {
         // Explicit mathematical intent is captured before any generic preview
         // can attempt to mutate a shared baseline. Never infer an operation
         // from a detached, arbitrarily changed roof descriptor.
-        const auto physical = replay_roof_rigid_transform_entities(source.entities(), operations);
-        std::vector<RoofEditIntent> edits;
-        for (const auto& operation : operations) {
-            if (const auto captured = capture_roof_rigid_transform(source.entities().at(operation.roof_id),
-                    physical.at(operation.roof_id), operation.transform)) {
-                RoofEditIntent edit;
-                edit.roof_id = operation.roof_id;
-                edit.transform = *captured;
-                edits.push_back(std::move(edit));
-            }
-        }
+        auto edits = roofTransformEditIntents(operations);
+        const auto physical = replay_roof_edit_entities(source.entities(), edits);
+        omitUnchangedRoofEdits(source, physical, edits);
         return sourceDerivedRoofMathEditCommand(source, physical, std::move(edits), message);
     }
 
@@ -42792,22 +42807,18 @@ private:
                 coordinated.at("slab_replacement") = physical_intent.slab_replacement;
             }
         } else {
-            std::vector<RoofRigidTransformIntent> roofs;
+            std::vector<ArchitecturalGroupTransformTarget> roofs;
             for (const auto& target : physical_targets) {
                 if (source.entities().at(target.entity_id).type == "roof") roofs.push_back({target.entity_id, target.transform});
                 else coordinated.at("ordinary_slab_geometry").push_back(
                     encode_slab_geometry_edit_intent(slabTransformGeometryIntent(target.entity_id, target.transform)));
             }
             if (!roofs.empty()) {
-                const auto transformed = replay_roof_rigid_transform_entities(source.entities(), roofs);
-                for (const auto& operation : roofs)
-                    if (const auto captured = capture_roof_rigid_transform(source.entities().at(operation.roof_id),
-                            transformed.at(operation.roof_id), operation.transform)) {
-                        RoofEditIntent edit;
-                        edit.roof_id = operation.roof_id;
-                        edit.transform = *captured;
-                        coordinated.at("ordinary_roof_edits").push_back(encode_roof_edit_intent(edit));
-                    }
+                auto edits = roofTransformEditIntents(roofs);
+                const auto transformed = replay_roof_edit_entities(source.entities(), edits);
+                omitUnchangedRoofEdits(source, transformed, edits);
+                for (const auto& edit : edits)
+                    coordinated.at("ordinary_roof_edits").push_back(encode_roof_edit_intent(edit));
             }
         }
         if (coordinated.at("roof_replacement").is_null() && coordinated.at("slab_replacement").is_null() &&
@@ -42833,7 +42844,7 @@ private:
         if (targets.empty() || targets.size() > maximum_architectural_group_targets)
             throw std::invalid_argument("Select a bounded group of actual roofs and horizontal assemblies.");
         std::set<std::string, std::less<>> owners;
-        std::vector<RoofRigidTransformIntent> roofs;
+        std::vector<ArchitecturalGroupTransformTarget> roofs;
         std::vector<SlabGeometryEditIntent> slabs;
         for (const auto& target : targets) {
             const auto found = source.entities().find(target.entity_id);
@@ -42844,17 +42855,9 @@ private:
                 slabs.push_back(slabTransformGeometryIntent(target.entity_id, target.transform));
             else throw std::invalid_argument("This coordinated group requires actual roofs and horizontal assemblies.");
         }
-        const auto roof_physical = roofs.empty() ? source.entities() :
-            replay_roof_rigid_transform_entities(source.entities(), roofs);
-        std::vector<RoofEditIntent> roof_edits;
-        for (const auto& operation : roofs)
-            if (const auto captured = capture_roof_rigid_transform(source.entities().at(operation.roof_id),
-                    roof_physical.at(operation.roof_id), operation.transform)) {
-                RoofEditIntent edit;
-                edit.roof_id = operation.roof_id;
-                edit.transform = *captured;
-                roof_edits.push_back(std::move(edit));
-            }
+        auto roof_edits = roofTransformEditIntents(roofs);
+        const auto roof_physical = replay_roof_edit_entities(source.entities(), roof_edits);
+        omitUnchangedRoofEdits(source, roof_physical, roof_edits);
         if (!slabs.empty()) {
             const auto slab_physical = replay_slab_geometry_entities(source.entities(), slabs);
             std::erase_if(slabs, [&](const auto& edit) {
@@ -50463,7 +50466,7 @@ private:
             std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
                 return source.entities().at(target.entity_id).type == "roof";
             })) {
-            std::vector<RoofRigidTransformIntent> roofs;
+            std::vector<ArchitecturalGroupTransformTarget> roofs;
             for (const auto& target : physical_targets) roofs.push_back({target.entity_id, target.transform});
             return sourceDerivedRoofTransformCommand(source, roofs, "Move roofs on Site");
         }

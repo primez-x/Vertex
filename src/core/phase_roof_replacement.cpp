@@ -8,6 +8,7 @@
 #include "sketch/roof_join_phase_ownership.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/phase_roof_uniform_transform.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
@@ -93,6 +94,9 @@ Entity opaque_remainder(Entity entity) {
         const bool known_form = p.contains("form") && (p.at("form") == "sloped_roof_panel" ||
             p.at("form") == "gable_roof" || p.at("form") == "hip_roof");
         if (!known_schema || !known_form) return entity;
+        if (entity.extensions.contains(std::string(roof_uniform_transform_derivations_key)))
+            entity.extensions[std::string(roof_uniform_transform_derivations_key)] =
+                roof_uniform_transform_opaque_remainder(entity);
         if (entity.extensions.contains(roof_rigid_transform_derivations_key)) {
             // Closed historical frames identify their original source; their
             // owner/cut IDs are provenance, not current replacement bindings.
@@ -141,7 +145,7 @@ void admit_roofs_and_joins(const PhaseRoofReplacementEntities& source, const Ids
         if (!shapes.contains(id)) {
             const auto found = source.find(id);
             if (found == source.end() || found->second.type != "roof") reject("join source is not an actual roof: " + id);
-            validate_roof_profile_source_entity(found->second);
+            validate_roof_uniform_transform_source_entity(found->second);
             shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second))));
         }
         return shapes.at(id);

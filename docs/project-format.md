@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v120
+# Vertex project formats v1 through v121
+
+## Source-derived uniform roof scaling (v121)
+
+Native format 121 and JSON/assets extraction version 119 retain roof edit five
+and `roof_uniform_transform_derivations`. The edit has exactly the eight
+version-four fields plus `uniform_transform`; only the new component is nonnull.
+Older edit one through four, rigid transform one and plan resize one retain
+their closed meanings.
+
+The uniform operation has exactly `version`, `roof_id` and `transform`. Its six
+transform fields retain the actual group pivot, offset, angle, positive non-unit
+scale and reflection flags. The actual captured entity map resolves the floor
+datum; an entity-only edit cannot supply or infer it. Roof length/run, span,
+rise, overhang, thickness and every opening's X/Y/width/depth scale together.
+Pitch, placement bindings, materials, child IDs and raw opaque siblings remain
+exact. Reflection retains panel-corner and centered gable/hip semantics.
+
+The new owned archive has exactly `version` and `operations`. Each operation
+retains the mathematical intent, closed source/result physical frames with
+historical vertical datum, and the full raw affected entered receipts. Replay
+checks the derivation and receipt values; computed coordinates never become
+invented user input. Historical IDs remain historical through clone and design
+replacement. Typed residual inspection strips understood historical cores only
+on scratch copies and preserves unknown receipt/rational siblings.
+
+Numeric transforms and transformed copies use the same actual world-space
+pivot and level datum. Identity copies admit their complete source-derived
+graph before applying the operation; original owners and assets remain exact.
+All roof members derive from the same actual source before final cohort and
+native admission, including combined rigid/scaled operations. Direct, wrapped
+and historical proposed commands and current/historical archives raise the
+reader floor. Unknown future archives retain their data without granting edit
+authority. No build, package, runtime or storage round trip was performed.
 
 ## Complete proposed wall presentation references (v120)
 

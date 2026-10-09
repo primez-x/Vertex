@@ -13,6 +13,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/roof_join_phase_ownership.hpp"
+#include "sketch/phase_roof_uniform_transform.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
@@ -100,7 +101,7 @@ std::map<std::string, TopoDS_Shape, std::less<>> admit_roofs_and_joins(
     for (const auto& id : roofs) {
         const auto& entity = source.at(id);
         if (entity.type != "roof") reject("affected source owner is not an actual roof: " + id);
-        validate_roof_profile_source_entity(entity);
+        validate_roof_uniform_transform_source_entity(entity);
         if (entity.properties.contains("material_assignment")) admit_assignment(source, entity.properties.at("material_assignment"));
         shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, entity))));
     }
@@ -139,9 +140,12 @@ void admit_assignment(const RoofRemovalEntities& source, const Json& assignment)
 Entity opaque_remainder(Entity entity, const Ids& retained_roofs) {
     auto& p = entity.properties;
     if (entity.type == "roof" && retained_roofs.contains(entity.id)) {
-        validate_roof_profile_source_entity(entity);
+        validate_roof_uniform_transform_source_entity(entity);
         // These admitted receipts describe historical geometry, which remains
         // exact. Only their codec-qualified provenance identities are omitted.
+        if (entity.extensions.contains(std::string(roof_uniform_transform_derivations_key)))
+            entity.extensions[std::string(roof_uniform_transform_derivations_key)] =
+                roof_uniform_transform_opaque_remainder(entity);
         if (entity.extensions.contains(roof_rigid_transform_derivations_key))
             entity.extensions[std::string(roof_rigid_transform_derivations_key)] = roof_rigid_transform_opaque_remainder(entity);
         if (entity.extensions.contains(roof_plan_resize_derivations_key))

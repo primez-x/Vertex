@@ -389,7 +389,30 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                  command.phase_constraint_authoring_intent.contains("version") && command.phase_constraint_authoring_intent.at("version")==2) ||
                 replacement_proof(replacement_proof,command.room_review_geometry_proof,0))
                 required=std::max(required,87U);
-            const auto profile_intent=[](const nlohmann::json& intent)->std::uint32_t {
+            const auto has_uniform_roof_edits=[](const nlohmann::json& authoring) {
+                if (!authoring.is_object()) return false;
+                for (const auto* name : {"roof_edits", "ordinary_roof_edits"}) {
+                    const auto rows = authoring.find(name);
+                    if (rows != authoring.end() && rows->is_array() &&
+                        std::any_of(rows->begin(), rows->end(), [](const auto& edit) {
+                            return edit.is_object() && edit.value("version", 0) == 5;
+                        })) return true;
+                }
+                return false;
+            };
+            const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version", 0) == 4) {
+                    const auto roof = intent.find("roof_replacement");
+                    if (roof != intent.end() && has_uniform_roof_edits(*roof)) return 121U;
+                }
+                if (intent.is_object() && (intent.value("version", 0) == 7 || intent.value("version", 0) == 8)) {
+                    const auto coordinated = intent.find("coordinated_replacements");
+                    if (coordinated != intent.end() && coordinated->is_object()) {
+                        if (has_uniform_roof_edits(*coordinated)) return 121U;
+                        const auto roof = coordinated->find("roof_replacement");
+                        if (roof != coordinated->end() && has_uniform_roof_edits(*roof)) return 121U;
+                    }
+                }
                 if (intent.is_object() && intent.value("version",0)==8) {
                     const auto coordinated = intent.find("coordinated_replacements");
                     if (coordinated != intent.end() && coordinated->is_object()) {
@@ -637,6 +660,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required = std::max(required, 99U);
             if (entity.type == "roof" && entity.extensions.contains("roof_plan_resize_derivations"))
                 required = std::max(required, 100U);
+            if (entity.type == "roof" && entity.extensions.contains("roof_uniform_transform_derivations"))
+                required = std::max(required, 121U);
             // This semantic marker changes which measured source graph is
             // authoritative. Older readers must not ignore it, even if the
             // marked owner is retained only in an earlier revision.
@@ -2279,6 +2304,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 121 &&
          sqlite3_column_int(user_version.get(), 0) != 120 &&
          sqlite3_column_int(user_version.get(), 0) != 119 &&
          sqlite3_column_int(user_version.get(), 0) != 118 &&
@@ -2854,6 +2880,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=121)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 121 for source-derived uniform roof scaling");
         if (required_format>=120)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 120 for complete proposed wall presentation references");
         if (required_format>=119)

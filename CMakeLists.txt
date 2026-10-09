@@ -827,6 +827,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_hosted_opening_rehost.cpp src/core/phase_hosted_opening_family_edit.cpp
     src/core/phase_opening_demolition.cpp src/core/phase_roof_profile_edit.cpp src/core/phase_roof_opening_edit.cpp
     src/core/phase_roof_pose_edit.cpp src/core/phase_roof_form_edit.cpp src/core/phase_roof_transform.cpp
+    src/core/phase_roof_uniform_transform.cpp
     src/core/phase_roof_resize.cpp src/core/phase_roof_edit.cpp src/core/roof_derivation_cache.cpp
     src/architecture/plan_axis_resize.cpp
     src/core/roof_clone.cpp

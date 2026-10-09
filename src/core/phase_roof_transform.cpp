@@ -1,4 +1,5 @@
 #include "sketch/phase_roof_transform.hpp"
+#include "sketch/phase_roof_uniform_transform.hpp"
 #include "roof_derivation_cache.hpp"
 
 #include "sketch/architecture.hpp"
@@ -433,6 +434,7 @@ void validate_roof_rigid_transform_source_entity(const Entity& source) {
     validate_roof_profile_source_entity(source);
     admit_frame(frame(source));
     validate_roof_rigid_transform_derivations(source);
+    validate_roof_uniform_transform_derivations(source);
 }
 Entity stage_roof_rigid_transform_entity(const Entity& source, const RoofRigidTransformIntent& intent) {
     const auto operation = encode_roof_rigid_transform_intent(intent);
