@@ -472,6 +472,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==10) return 125U;
                 if (intent.is_object() && intent.value("version",0)==9) {
                     const auto structural=intent.find("structural_replacement");
                     if (structural!=intent.end() && structural->is_object() && structural->value("version",0)==3)
@@ -2386,6 +2387,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 125 &&
          sqlite3_column_int(user_version.get(), 0) != 124 &&
          sqlite3_column_int(user_version.get(), 0) != 123 &&
          sqlite3_column_int(user_version.get(), 0) != 122 &&
@@ -2965,6 +2967,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=125)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 125 for coordinated structural and architectural alternatives");
         if (required_format>=124)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 124 for proposed structural hosted components");
         if (required_format>=123)

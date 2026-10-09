@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 mixed architectural transforms source integration
+
+Mixed column/beam, roof and horizontal-assembly groups now derive each family
+from the same captured source. Canvas movement, numeric transforms and Site
+movement route through one composition path. Walls join the same path with
+their connected solve and mandatory room review; existing wall-only and
+ordinary wall/roof/floor behavior remains available.
+
+Active alternatives now compose structural replacement and ordinary transform
+lanes with wall/roof/floor authority. Shared catalogs compose distinct actual
+placement rows, preserve baseline hosted rows and retain original definitions.
+Pending wall room choices remain pending. Complete aliases, fresh global/local
+identities and retained history/assets stay reserved. Native 125/extraction
+123 fences coordinated inner three and authoring ten, including retained proofs.
+
+Independent integrated source review approved after retaining typed ordinary
+wall room-review authority and correcting baseline-mode editing without an
+active alternative. Root source review and the scoped whitespace check passed.
+Mixed independent annotations/references/
+assemblies, other object families and mixed-family copies remain unfinished.
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, interactions, geometry, output and storage
+remain unverified; the installed candidate is unchanged.
+
 ### October 8 independent structural copies source integration
 
 Column and beam duplication now derives the complete copy from the captured

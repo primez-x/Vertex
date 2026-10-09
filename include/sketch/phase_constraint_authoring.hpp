@@ -41,6 +41,14 @@ struct PhaseConstraintAuthoringIntent {
     // inner version two: an optional canonical wall geometry authoring child
     // joins optional roof/horizontal lanes, with at least two families present
     // and at least one actual replacement. Every child binds the same source.
+    // Dialect ten selects closed inner version three, adding an optional
+    // structural replacement or ordinary transform-only structural edit list.
+    // Its exact keys are version, wall_authoring, roof_replacement,
+    // slab_replacement, structural_replacement, ordinary_roof_edits,
+    // ordinary_slab_geometry, ordinary_structural_edits. Each absent leaf is
+    // null and each absent ordinary list is []; at least two families are
+    // required. Unlike historical inner one/two, actual-source ordinary lanes
+    // may compose without a replacement, retaining typed wall room authority.
     nlohmann::json coordinated_replacements=nullptr;
     // Dialect nine: source-derived column/beam edits in one saved alternative.
     // Shared baseline owners remain exact; explicit structural intent alone
@@ -61,10 +69,19 @@ struct PhaseConstraintAuthoringIntent {
     const DocumentSnapshot& source, const ConstraintAuthoringIntent& intent);
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
-// Detached physical preview only for coordinated inner v2 wall replacements.
+// Detached physical preview only for coordinated inner v2/v3 wall replacements.
 // Pending room decisions remain pending; this map is not publication authority.
 [[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_coordinated_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);
+
+// Compose independently replayed ordinary family maps from the same actual
+// source. All source owners must remain and no fresh owners are admitted.
+// Conflicting physical edits refuse; only codec-known presentation/registry
+// rows and distinct hosted instance placements have composition authority.
+// Callers still own complete geometry, phase-scope and command admission.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_architectural_family_candidates(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& candidates);
 
 // Independently evaluated saved selections, including the empty-registry case.
 [[nodiscard]] nlohmann::json phase_constraint_authoring_selections(

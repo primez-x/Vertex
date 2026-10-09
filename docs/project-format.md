@@ -1,4 +1,43 @@
-# Vertex project formats v1 through v124
+# Vertex project formats v1 through v125
+
+## Coordinated structural and architectural alternatives (v125)
+
+Native reader 125 and JSON/assets extraction 123 retain active-design authoring
+ten with coordinated inner three. The inner object has exactly `version`,
+`wall_authoring`, `roof_replacement`, `slab_replacement`,
+`structural_replacement`, `ordinary_roof_edits`, `ordinary_slab_geometry` and
+`ordinary_structural_edits`. Absent leaves are null; absent ordinary lists are
+empty. At least two families are required. Actual-source ordinary lanes may
+compose without replacement in inner three, retaining typed wall room-review
+authority. Historical inner one/two still require a replacement. Every
+child uses the same captured source; replacement leaves use the same actual
+registry and alternative. Historical inner one/two and outer seven/eight keep
+their original meanings.
+
+The structural lane carries canonical transform-only edits, either as a
+source-derived replacement leaf or an ordinary list. It grants no profile,
+demolition or arbitrary entity-change authority. Ordinary columns/beams keep
+their identities and attached components; baseline owners receive proposed
+physical objects and private component catalogs. Pending wall room decisions
+remain pending during combined previews.
+
+Independent family consequences compose only understood source rows. Shared
+catalogs may change distinct actual instance placements while retaining their
+raw definitions, identities, ordering and envelopes; necessary legacy promotion
+uses row-local catalog seven. Conflicting owner/row edits refuse. Original
+baseline physical objects and their hosted rows remain exact. The complete
+candidate recomputes aliases before publication, and existing current/history/
+asset identity checks enumerate every replacement leaf. Native reader floors
+also cover retained proofs and their room-review wrappers.
+
+Entirely ordinary mixed groups use the same bounded source-row composition
+without new owners; wall groups retain their typed coordinated proof for
+mandatory room review. Canvas, numeric transforms and Site
+movement share these producers. Mixed independent annotations, references,
+assemblies and other object families remain additional source scope.
+
+Independent integrated source review approved. No compilation, runtime, interaction or
+storage qualification was performed under the source-only instruction.
 
 ## Independent structural copy authoring
 
