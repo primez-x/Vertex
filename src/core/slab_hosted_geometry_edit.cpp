@@ -5,6 +5,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/site_frame.hpp"
 
 #include <cmath>
 #include <numbers>
@@ -135,7 +136,7 @@ AssemblyTransform world_transform(const SlabGeometryEditIntent& intent) {
 // Same authoritative profile/legacy-host split as native assembly rendering.
 // Both snapshots are admitted; legacy geometry comes from each actual resolved
 // host, including vertex and axis edits that have no rigid placement operator.
-void admit_instance(const AssemblyModel& model, const AssemblyInstance& instance,
+bool admit_instance(const AssemblyModel& model, const AssemblyInstance& instance,
     const Entities& entities, AssemblyExpansionBudget& budget) try {
     if (!instance.placement) reject("affected instance has no actual hosted placement: " + instance.id);
     const auto& placement = *instance.placement;
@@ -145,7 +146,7 @@ void admit_instance(const AssemblyModel& model, const AssemblyInstance& instance
     const auto expansion = model.expand(instance, budget);
     if (!expansion.profiles.empty()) {
         (void)make_assembly_geometry(expansion);
-        return;
+        return true;
     }
     Slab slab; std::string error;
     if (!read_document_slab(resolve_vertical_placement(entities, host->second), slab, error))
@@ -153,6 +154,7 @@ void admit_instance(const AssemblyModel& model, const AssemblyInstance& instance
     (void)transform_assembly_shape(make_slab(slab),
         {{placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
             placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
+    return false;
 } catch (const Standard_Failure& error) {
     reject(std::string("affected hosted native admission failed: ") + error.what());
 }
@@ -181,22 +183,37 @@ std::map<std::string, Entity, std::less<>> replay_slab_geometry_with_hosted_enti
         catalog_bounds(*raw, inventory, id);
         try {
             const auto model = AssemblyModel::from_json(*raw);
-            std::map<std::string, AssemblyTransform, std::less<>> transforms;
+            std::map<std::string, AssemblyTransform, std::less<>> historical_transforms, coordinated_transforms;
             Ids instance_ids;
             for (const auto& instance : model.instances()) {
                 if (!instance.placement || !owners.contains(instance.placement->host_entity_id)) continue;
                 instance_ids.insert(instance.id);
-                admit_instance(model, instance, source, source_budget);
+                const bool type_owned = admit_instance(model, instance, source, source_budget);
                 const auto& intent = *changed_intents.at(instance.placement->host_entity_id);
                 if (intent.kind == SlabGeometryEditKind::transform_plan ||
-                    intent.kind == SlabGeometryEditKind::transform_model)
-                    transforms.emplace(instance.id, world_transform(intent));
+                    intent.kind == SlabGeometryEditKind::transform_model) {
+                    auto transform = world_transform(intent);
+                    if (intent.coordinate_world_hosted_geometry) {
+                        if (type_owned) {
+                            const auto frame = resolve_site_presentation(source, instance.placement->host_entity_id).forward;
+                            transform = conjugate_assembly_transform_through_rigid_frame(transform,
+                                {{frame.translation_m.x, frame.translation_m.y, frame.translation_m.z},
+                                    frame.rotation_radians, 1.0, false});
+                        }
+                        coordinated_transforms.emplace(instance.id, transform);
+                    } else historical_transforms.emplace(instance.id, transform);
+                }
             }
             if (instance_ids.empty()) reject("catalog has an affected host binding outside a supported hosted instance: " + id);
             // Raw patching keeps definitions, materials, overrides and unchanged
             // scalars exact. XYZ envelope upgrade happens only when required.
-            if (!transforms.empty()) result.at(id).properties.at("model") =
-                transform_hosted_assembly_model(*raw, transforms);
+            // Historical operations retain their whole-catalog dialect upgrade.
+            // Coordinated operations patch only their actual affected rows.
+            auto& candidate_raw = result.at(id).properties.at("model");
+            if (!historical_transforms.empty()) candidate_raw =
+                transform_hosted_assembly_model(*raw, historical_transforms);
+            if (!coordinated_transforms.empty()) candidate_raw =
+                transform_hosted_assembly_model(candidate_raw, coordinated_transforms, true);
             const auto candidate = AssemblyModel::from_json(result.at(id).properties.at("model"));
             for (const auto& instance : candidate.instances()) if (instance_ids.contains(instance.id))
                 admit_instance(candidate, instance, result, candidate_budget);

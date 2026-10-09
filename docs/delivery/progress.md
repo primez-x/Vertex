@@ -14,6 +14,46 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 Site-aware horizontal components source implementation
+
+Floor/ceiling/deck component movement now distinguishes type-owned world
+geometry from legacy host-derived source geometry. Current UI and group
+producers capture the actual Site frame; ordinary edits, proposed replacements
+and copies use the same stable conjugation. The shared transform math preserves
+small translations at distant origins and keeps exact cardinal rotations.
+
+Closed slab intent three and derivation archive three preserve older operation
+meanings and raw retired quantities. Native 126/extraction 124 fences current
+and retained archives plus direct/mixed/wrapped authoring proofs. Independent
+integrated source review approved; root review and the scoped whitespace check
+passed. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation,
+geometry, interaction and storage remain unverified; installed candidate stays
+unchanged.
+
+### October 8 mixed architectural copies source integration
+
+Column/beam, roof and horizontal-assembly selections now copy together through
+their actual-source family producers. The combined command preserves original
+owners/catalogs/registries, retains shared assets, carries attached components
+and saved presentations, and admits the complete candidate before scope
+enrollment. One captured copy intent covers the whole selection.
+
+Shared source catalogs can produce separate private copies for distinct host
+families. Catalog mappings stay local to their producer; body and qualified
+child redirects remain distinct. Combined aliases must retain each original
+and each family copy's identity. Known source presentation arrays only append
+exact source-preserving suffixes; conflicting destinations refuse.
+
+Independent integrated source review approved after preserving source-valid
+unresolved optional presentation targets and using qualified view/overlay
+identities across codec sorting. Root review and the scoped whitespace check
+passed. Mixed walls/rooms/stairs/railings,
+independent annotations/references and unsupported affected references remain
+additional copy scope. No builds, tests, probes, scripts, native jobs,
+launches, packages or installations ran. Compilation, interactions, geometry,
+output and storage remain unverified; the installed candidate is unchanged.
+
 ### October 8 mixed architectural transforms source integration
 
 Mixed column/beam, roof and horizontal-assembly groups now derive each family

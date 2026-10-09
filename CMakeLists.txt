@@ -837,6 +837,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_structural_replacement.cpp
     src/core/structural_hosted_components.cpp
     src/core/structural_clone.cpp
+    src/core/model_copy_composition.cpp
     src/core/phase_slab_profile_edit.cpp src/core/phase_slab_replacement.cpp src/core/phase_slab_demolition.cpp
     src/core/slab_layer_stack_edit.cpp src/core/slab_geometry_edit.cpp src/core/slab_clone.cpp
     src/core/slab_hosted_geometry_edit.cpp

@@ -291,6 +291,33 @@ AssemblyTransform compose_assembly_transform(const AssemblyTransform& parent,con
         positive_product({parent.vertical_scale,local.vertical_scale})};
     transform(result);return result;
 }
+AssemblyTransform conjugate_assembly_transform_through_rigid_frame(
+    const AssemblyTransform& operation,const AssemblyTransform& frame) {
+    transform(operation);transform(frame);
+    require(frame.scale==1 && frame.vertical_scale==1 && !frame.mirrored_y,
+        "assembly conjugation frame must be orientation-preserving and rigid");
+    if(operation==AssemblyTransform{} || (frame.translation_m==AssemblyPoint3{} &&
+        frame.rotation_radians==0))return operation;
+    auto result=operation;
+    // R_phi * R_theta * D * R_-phi keeps theta exactly without reflection;
+    // reflected yaw is theta+2*phi. Avoid adding/cancelling a frame angle.
+    if(operation.mirrored_y)result.rotation_radians=std::remainder(std::fma(2.0,
+        std::remainder(frame.rotation_radians,2.0*std::numbers::pi),operation.rotation_radians),
+        2.0*std::numbers::pi);
+    const auto rotated=transform_assembly_point(operation.translation_m,
+        AssemblyTransform{{},frame.rotation_radians,1.0,false});
+    const auto [c,s]=assembly_rotation_components(result.rotation_radians);
+    const auto parity=result.mirrored_y ? -1.0 : 1.0;
+    // R_phi*t + (I-L_world)*origin avoids subtracting and re-adding origin.
+    const auto x_coefficient=(1.0-result.scale)+result.scale*(1.0-c);
+    const auto y_coefficient=parity==1.0 ? x_coefficient :
+        (1.0+result.scale)-result.scale*(1.0-c);
+    result.translation_m={
+        rotated.x+x_coefficient*frame.translation_m.x+result.scale*s*parity*frame.translation_m.y,
+        rotated.y-result.scale*s*frame.translation_m.x+y_coefficient*frame.translation_m.y,
+        rotated.z+(1.0-z_scale(result.scale,result.vertical_scale))*frame.translation_m.z};
+    transform(result);return result;
+}
 AssemblyPlacement transform_assembly_placement(const AssemblyPlacement& source,
     const AssemblyTransform& world_transform,bool host_geometry_transformed) {
     placement(source);transform(world_transform);

@@ -41,12 +41,16 @@ struct SlabGeometryEditIntent {
     // transform_model only: positive physical scale and model-space XYZ move,
     // Z yaw and plan reflections. The legacy plan scale remains exactly one.
     std::optional<SlabModelTransform> model_transform;
+    // v3 rigid plan/model edits coordinate type-owned world profiles through
+    // the actual Site frame. False retains historical v1/v2 hosted semantics.
+    bool coordinate_world_hosted_geometry{false};
 };
 
 inline constexpr std::string_view slab_geometry_derivations_key = "slab_geometry_derivations";
 
 // Closed bounded v1 plan operation or v2 model operation, with the same six
-// wire fields. Exactly the selected operation is present;
+// wire fields, or v3 plan/model with coordinate_world_hosted_geometry:true.
+// Exactly the selected operation is present;
 // coordinates and scales are mathematical intent, never entered quantities.
 [[nodiscard]] nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& intent);
 [[nodiscard]] SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& value);
@@ -70,6 +74,8 @@ void validate_slab_geometry_derivation(const Entity& source);
 // Frames are {boundary,holes} with closed {start,end,sweep_radians} segments;
 // receipts is {quantity_entries:{pointer:verbatim_retired_receipt}}.
 // Model archives use version 2 and may retain earlier unchanged v1 records.
+// Coordinated archives use version 3, require at least one v3 operation, and
+// retain earlier unchanged plan/model records and their original frame policy.
 // Model frames additionally contain profile (canonical/alias thickness and
 // elevation, null for absent fields, and null or ordered numeric layers) and
 // elevation_shift_m from actual resolved placement. Layer IDs are not frames.

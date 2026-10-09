@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version 124 requires native reader 126 for Site-aware horizontal
+hosted components. It retains closed slab geometry intent three and derivation
+archive three, including older unchanged records. The floor covers direct,
+coordinated and wrapped alternative proofs and all retained revisions. Earlier
+intent one/two and archive one/two retain their original meanings. Composition
+of independent model copies introduces no separate exchange command dialect.
+
 Exchange version 101 requires native reader 103 for horizontal layer-stack
 authoring and retired entered layer measurements. It retains exclusive slab
 replacement two inside phase envelope five, ordered stack intent one, actual

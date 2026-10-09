@@ -1,4 +1,47 @@
-# Vertex project formats v1 through v125
+# Vertex project formats v1 through v126
+
+## Site-aware horizontal hosted components (v126)
+
+Native reader 126 and JSON/assets extraction 124 retain slab geometry intent
+three. It has the six earlier intent fields plus the explicit boolean
+`coordinate_world_hosted_geometry:true`, and admits only `transform_plan` or
+`transform_model`. The actual host's Site frame conjugates the source operation
+for type-owned component geometry published in world coordinates. Legacy
+host-derived component bodies retain their source-frame geometry contract.
+Unchanged catalog rows and definitions remain exact through row-local dialect
+seven. Earlier intent one/two keep their original replay meanings.
+
+Derivation archive three retains ordered earlier plan/model records and
+requires at least one intent-three record. Later appended operations never
+downgrade that archive. Frames and retired entered quantities retain their
+existing policies. The reader floor covers current and retained archives,
+direct alternative proofs, mixed-family proofs and wrapped room-review proofs,
+including geometrically unchanged intent. Copies use the original host's actual
+frame before fresh scope enrollment. Independent integrated source review
+approved; no runtime or storage qualification is claimed.
+
+## Mixed independent architectural copy composition
+
+Mixed structural, roof and horizontal-assembly copies retain their existing
+entity and catalog formats; composition introduces no persisted command
+dialect. Each family derives and admits its additive copy against the same
+actual source. A complete candidate keeps every physical original, catalog and
+registry exact, admits only known presentation-array suffixes, and preserves
+all original and independently derived component aliases.
+
+Fresh body owners are globally distinct. Private catalog mappings remain
+family-local when multiple host families share one source catalog. Component
+IDs remain catalog-local; view overlay IDs remain view-local. Known copied
+appearance/annotation templates retain source fields. Bound overlays retain
+geometry/offset, while independently admitted unbound overlays carry their
+actual transformed coordinates. Existing annotation child vocabulary is
+preserved; new child destinations remain reserved. The enclosing producer
+reserves retained history/assets and admits one atomic command before scope
+enrollment. Mixed wall/room/stair/railing and independent presentation copies
+remain additional scope.
+
+Independent integrated source review approved. No compilation, interaction or storage
+qualification was performed under the source-only instruction.
 
 ## Coordinated structural and architectural alternatives (v125)
 

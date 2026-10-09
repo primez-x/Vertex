@@ -231,31 +231,9 @@ AssemblyTransform structural_world_transform(const StructuralHostedEntities& act
     const auto& host=actual.at(host_id);
     validate_structural_object_source_entity(host);
     const auto placement=resolve_site_presentation(actual,host_id);
-    if (local==AssemblyTransform{}) return local;
     const auto& frame=placement.forward;
-    if (frame.translation_m.x==0 && frame.translation_m.y==0 && frame.translation_m.z==0 &&
-        frame.rotation_radians==0) return local;
-    auto result=local;
-    // R_phi * R_theta * D * R_-phi keeps theta exactly without reflection;
-    // reflected yaw is theta+2*phi. Avoid adding/cancelling a frame angle.
-    if (local.mirrored_y) result.rotation_radians=std::remainder(std::fma(2.0,
-        std::remainder(frame.rotation_radians,2.0*std::numbers::pi),local.rotation_radians),
-        2.0*std::numbers::pi);
-    const auto rotated=transform_assembly_point(local.translation_m,
-        AssemblyTransform{{},frame.rotation_radians,1.0,false});
-    const auto [c,s]=assembly_rotation_components(result.rotation_radians);
-    const auto parity=result.mirrored_y ? -1.0 : 1.0;
-    // R_phi*t + (I-L_world)*origin. Difference form retains tiny translation
-    // at a distant Site origin instead of subtracting and re-adding that origin.
-    const auto x_coefficient=(1.0-result.scale)+result.scale*(1.0-c);
-    const auto y_coefficient=parity==1.0 ? x_coefficient :
-        (1.0+result.scale)-result.scale*(1.0-c);
-    result.translation_m={
-        rotated.x+x_coefficient*frame.translation_m.x+result.scale*s*parity*frame.translation_m.y,
-        rotated.y-result.scale*s*frame.translation_m.x+y_coefficient*frame.translation_m.y,
-        rotated.z+(1.0-result.scale)*frame.translation_m.z};
-    (void)transform_assembly_point({},result);
-    return result;
+    return conjugate_assembly_transform_through_rigid_frame(local,
+        {{frame.translation_m.x,frame.translation_m.y,frame.translation_m.z},frame.rotation_radians,1.0,false});
 }
 
 AssemblyTransform structural_hosted_transform(const StructuralHostedEntities& actual,

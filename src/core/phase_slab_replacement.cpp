@@ -8,6 +8,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/site_frame.hpp"
 #include "sketch/slab_clone.hpp"
 #include "sketch/slab_hosted_geometry_edit.hpp"
 
@@ -569,10 +570,12 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
             for (const auto& id : hosted_plan.required_entity_ids) clone_ids.emplace(id, identities.at(id));
             for (const auto& id : hosted_plan.required_child_ids) clone_ids.emplace(id, identities.at(id));
             const auto hosted_copies = replay_slab_clone(source, hosted_plan, clone_ids, hosted_instance_identities);
+            AssemblyExpansionBudget hosted_source_budget;
             for (const auto& id : plan.required_entity_ids) {
                 if (seeds.contains(id)) continue;
                 auto copy = hosted_copies.entities.at(identities.at(id));
                 std::map<std::string, AssemblyTransform, std::less<>> transforms;
+                bool preserve_untouched_rows = false;
                 const auto catalog = AssemblyModel::from_json(source.at(id).properties.at("model"));
                 for (const auto& instance : catalog.instances()) {
                     if (!instance.placement || !expected_instances.contains({id, instance.id})) continue;
@@ -580,11 +583,23 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
                         return edit.slab_id == instance.placement->host_entity_id;
                     });
                     if (intent != geometry.end() && (intent->kind == SlabGeometryEditKind::transform_model ||
-                        intent->kind == SlabGeometryEditKind::transform_plan))
-                        transforms.emplace(instance.id, hosted_world_transform(*intent));
+                        intent->kind == SlabGeometryEditKind::transform_plan)) {
+                        auto delta = hosted_world_transform(*intent);
+                        if (intent->coordinate_world_hosted_geometry) {
+                            preserve_untouched_rows = true;
+                            if (!catalog.expand(instance, hosted_source_budget).profiles.empty()) {
+                                const auto& frame = resolve_site_presentation(source, instance.placement->host_entity_id).forward;
+                                delta = conjugate_assembly_transform_through_rigid_frame(delta,
+                                    {{frame.translation_m.x, frame.translation_m.y, frame.translation_m.z},
+                                        frame.rotation_radians, 1.0, false});
+                            }
+                        }
+                        transforms.emplace(instance.id, delta);
+                    }
                 }
                 if (!transforms.empty()) {
-                    const auto transformed = transform_hosted_assembly_model(source.at(id).properties.at("model"), transforms);
+                    const auto transformed = transform_hosted_assembly_model(source.at(id).properties.at("model"), transforms,
+                        preserve_untouched_rows);
                     auto& copied_model = copy.properties.at("model");
                     // Keep the source envelope, including v6 vertical factors,
                     // or its admitted placement upgrade and required legacy

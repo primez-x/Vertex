@@ -43,6 +43,9 @@ bool version_one(const Json& value) {
 bool version_two(const Json& value) {
     return (value.is_number_integer() || value.is_number_unsigned()) && value == 2;
 }
+bool version_three(const Json& value) {
+    return (value.is_number_integer() || value.is_number_unsigned()) && value == 3;
+}
 std::string identity(const Json& value) {
     if (!value.is_string()) invalid("identity must be a string");
     const auto& id = value.get_ref<const std::string&>();
@@ -504,6 +507,9 @@ void admit_map(const Entities& source, const Ids& targets) {
 
 nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& intent) {
     (void)identity(intent.slab_id);
+    if (intent.coordinate_world_hosted_geometry && intent.kind != SlabGeometryEditKind::transform_plan &&
+        intent.kind != SlabGeometryEditKind::transform_model)
+        invalid("coordinated hosted geometry requires a plan or model transform");
     Json result{{"version", 1}, {"slab_id", intent.slab_id}, {"kind", ""},
         {"vertex", nullptr}, {"transform", nullptr}, {"resize", nullptr}};
     switch (intent.kind) {
@@ -550,17 +556,30 @@ nlohmann::json encode_slab_geometry_edit_intent(const SlabGeometryEditIntent& in
     }
     default: invalid("unsupported geometry edit kind");
     }
+    if (intent.coordinate_world_hosted_geometry) {
+        result.at("version") = 3;
+        result["coordinate_world_hosted_geometry"] = true;
+    }
     (void)proof_budget(result);
     return result;
 }
 SlabGeometryEditIntent decode_slab_geometry_edit_intent(const nlohmann::json& value) {
     (void)proof_budget(value);
-    keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize"});
-    if ((!version_one(value.at("version")) && !version_two(value.at("version"))) ||
+    const bool coordinated = value.is_object() && value.contains("version") && version_three(value.at("version"));
+    if (coordinated) {
+        keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize", "coordinate_world_hosted_geometry"});
+        if (!value.at("coordinate_world_hosted_geometry").is_boolean() ||
+            !value.at("coordinate_world_hosted_geometry").get<bool>())
+            invalid("coordinated hosted geometry flag must be boolean true");
+    } else keys(value, {"version", "slab_id", "kind", "vertex", "transform", "resize"});
+    if ((!version_one(value.at("version")) && !version_two(value.at("version")) && !coordinated) ||
         !value.at("kind").is_string()) invalid("unsupported intent version or kind");
     SlabGeometryEditIntent result; result.slab_id = identity(value.at("slab_id"));
+    result.coordinate_world_hosted_geometry = coordinated;
     const auto& kind = value.at("kind");
-    if (version_two(value.at("version")) != (kind == "transform_model"))
+    if (coordinated && kind != "transform_plan" && kind != "transform_model")
+        invalid("coordinated hosted geometry requires a plan or model transform");
+    if (!coordinated && version_two(value.at("version")) != (kind == "transform_model"))
         invalid("intent version does not match its operation kind");
     if (kind == "move_vertex") {
         if (!value.at("transform").is_null() || !value.at("resize").is_null()) invalid("vertex wire must be exclusive");
@@ -604,18 +623,26 @@ void validate_slab_geometry_derivation(const Entity& source) {
     (void)proof_budget(*archive);
     keys(*archive, {"version", "operations"});
     const bool model_archive = version_two(archive->at("version"));
-    if (!version_one(archive->at("version")) && !model_archive) invalid("unsupported derivation archive namespace");
+    const bool coordinated_archive = version_three(archive->at("version"));
+    if (!version_one(archive->at("version")) && !model_archive && !coordinated_archive)
+        invalid("unsupported derivation archive namespace");
     const auto& operations = archive->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit) invalid("archive operation budget exceeded");
-    bool contains_model = false;
+    bool contains_model = false, contains_coordinated = false;
     for (const auto& record : operations) {
         const auto intent = decode_slab_geometry_edit_intent(record.at("operation"));
         const bool model = intent.kind == SlabGeometryEditKind::transform_model;
-        if (model && !model_archive) invalid("version one archive cannot contain a model operation");
+        if (intent.coordinate_world_hosted_geometry && !coordinated_archive)
+            invalid("historical archive cannot contain a coordinated hosted operation");
+        if (model && !model_archive && !coordinated_archive)
+            invalid("version one archive cannot contain a model operation");
         contains_model = contains_model || model;
+        contains_coordinated = contains_coordinated || intent.coordinate_world_hosted_geometry;
         admit_record(record);
     }
     if (model_archive && !contains_model) invalid("version two archive requires a model operation");
+    if (coordinated_archive && !contains_coordinated)
+        invalid("version three archive requires a coordinated hosted operation");
 }
 namespace {
 Entity replay_with_actual_shift(const Entity& source, const SlabGeometryEditIntent& intent,
@@ -636,8 +663,11 @@ Entity replay_with_actual_shift(const Entity& source, const SlabGeometryEditInte
         invalid("actual footprint/profile staging differs from mathematical replay");
     const auto receipts = retire_receipts(source, result, before, after);
     const auto key = std::string(slab_geometry_derivations_key);
-    if (!result.extensions.contains(key)) result.extensions[key] = {{"version", model ? 2 : 1}, {"operations", Json::array()}};
-    else if (model) result.extensions.at(key).at("version") = 2;
+    if (!result.extensions.contains(key)) result.extensions[key] =
+        {{"version", intent.coordinate_world_hosted_geometry ? 3 : (model ? 2 : 1)}, {"operations", Json::array()}};
+    else if (intent.coordinate_world_hosted_geometry) result.extensions.at(key).at("version") = 3;
+    else if (model && !version_three(result.extensions.at(key).at("version")))
+        result.extensions.at(key).at("version") = 2;
     auto& operations = result.extensions.at(key).at("operations");
     if (operations.size() >= operation_limit) invalid("archive operation budget exceeded");
     operations.push_back({{"operation", operation}, {"source", before}, {"result", after}, {"receipts", receipts}});

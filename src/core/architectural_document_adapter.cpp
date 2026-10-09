@@ -1855,6 +1855,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             const auto& transform=target.transform;
             SlabGeometryEditIntent slab_intent;
             slab_intent.slab_id=id;
+            slab_intent.coordinate_world_hosted_geometry=true;
             if (transform.scale==1.0 && transform.offset.z==0.0) {
                 slab_intent.kind=SlabGeometryEditKind::transform_plan;
                 slab_intent.transform=PlanarTransform{{transform.pivot.x,transform.pivot.y},

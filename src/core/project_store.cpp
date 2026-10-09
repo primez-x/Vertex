@@ -471,7 +471,26 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 }
                 return false;
             };
+            const auto coordinated_slab_intent=[](const auto& self, const nlohmann::json& value, unsigned depth)->bool {
+                if (depth > 3 || !value.is_object()) return false;
+                for (const auto* name : {"slab_geometry", "ordinary_geometry", "ordinary_slab_geometry"}) {
+                    const auto rows = value.find(name);
+                    if (rows == value.end() || !rows->is_array()) continue;
+                    for (const auto& edit : *rows)
+                        if (edit.is_object() && edit.value("version", nlohmann::json()) == 3 &&
+                            edit.value("coordinate_world_hosted_geometry", nlohmann::json()) == true &&
+                            edit.contains("slab_id") && edit.at("slab_id").is_string() &&
+                            (edit.value("kind", nlohmann::json()) == "transform_plan" ||
+                                edit.value("kind", nlohmann::json()) == "transform_model")) return true;
+                }
+                for (const auto* name : {"slab_replacement", "coordinated_replacements"}) {
+                    const auto child = value.find(name);
+                    if (child != value.end() && self(self, *child, depth + 1)) return true;
+                }
+                return false;
+            };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (coordinated_slab_intent(coordinated_slab_intent, intent, 0)) return 126U;
                 if (intent.is_object() && intent.value("version",0)==10) return 125U;
                 if (intent.is_object() && intent.value("version",0)==9) {
                     const auto structural=intent.find("structural_replacement");
@@ -735,7 +754,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required = std::max(required, 103U);
             if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations")) {
                 const auto& archive = entity.extensions.at("slab_geometry_derivations");
-                required = std::max(required, archive.is_object() && archive.value("version", 0) == 2 ? 109U : 104U);
+                required = std::max(required, archive.is_object() && archive.value("version", 0) == 3 ? 126U :
+                    archive.is_object() && archive.value("version", 0) == 2 ? 109U : 104U);
             }
             if (entity.type == "wall" && entity.extensions.contains("wall_layer_stack_retirement"))
                 required = std::max(required, 107U);
@@ -2387,6 +2407,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 126 &&
          sqlite3_column_int(user_version.get(), 0) != 125 &&
          sqlite3_column_int(user_version.get(), 0) != 124 &&
          sqlite3_column_int(user_version.get(), 0) != 123 &&
@@ -2967,6 +2988,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=126)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 126 for Site-aware horizontal hosted components");
         if (required_format>=125)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 125 for coordinated structural and architectural alternatives");
         if (required_format>=124)

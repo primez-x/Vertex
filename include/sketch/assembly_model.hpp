@@ -47,6 +47,10 @@ struct AssemblyRotationComponents {
 [[nodiscard]] AssemblyRotationComponents assembly_rotation_components(double radians);
 [[nodiscard]] AssemblyPoint3 transform_assembly_point(AssemblyPoint3 point, const AssemblyTransform& transform);
 [[nodiscard]] AssemblyTransform compose_assembly_transform(const AssemblyTransform& parent, const AssemblyTransform& local);
+// F*G*F^-1 for an orientation-preserving rigid frame F (unit XY/Z scales).
+// Difference-origin arithmetic retains small moves at distant frame origins.
+[[nodiscard]] AssemblyTransform conjugate_assembly_transform_through_rigid_frame(
+    const AssemblyTransform& operation, const AssemblyTransform& frame);
 struct AssemblyProfile {
     std::string id;
     Boundary outer;

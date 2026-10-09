@@ -48,6 +48,7 @@
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/structural_hosted_components.hpp"
 #include "sketch/structural_clone.hpp"
+#include "sketch/model_copy_composition.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
@@ -8752,6 +8753,7 @@ public:
                 intent.slab_id = id.toStdString();
                 intent.kind = SlabGeometryEditKind::transform_plan;
                 intent.transform = PlanarTransform{{}, 0.0, false, false, offset};
+                intent.coordinate_world_hosted_geometry = true;
                 slabs.push_back(std::move(intent));
             }
             return sourceDerivedSlabGeometryEditCommand(source, slabs, "Move horizontal assemblies");
@@ -9414,6 +9416,42 @@ public:
         std::size_t maximum_entities = kMaximumClipboardEntities,
         const std::function<PlanarTransform(const std::string&)>& owner_transform = {},
         IndependentModelCopyCapture* model_copy = nullptr) {
+        if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
+                return structuralObject(entity) || entity.type == "roof" || entity.type == "roof_join" || entity.type == "slab";
+            })) {
+            std::set<std::string, std::less<>> owners;
+            std::set<std::string, std::less<>> families;
+            for (const auto& entity : seeds) {
+                const auto& actual = source.entities().at(entity.id);
+                if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
+                    actual.extensions.dump() != entity.extensions.dump())
+                    throw std::invalid_argument("The mixed copy no longer matches its captured source.");
+                if (entity.type == "roof_join") {
+                    for (const auto& id : parse_roof_join(entity.properties, entity.id).roof_ids) owners.insert(id);
+                    families.insert("roof");
+                } else {
+                    owners.insert(entity.id);
+                    families.insert(structuralObject(entity) ? "structural" : entity.type);
+                }
+            }
+            if (families.size() > 1) {
+                if (!presentation.entity_changes.empty() || !presentation.asset_changes.empty() ||
+                    presentation.expected_revision != source.revision())
+                    throw std::invalid_argument("Copy architectural objects separately from independent labels and references.");
+                std::vector<ArchitecturalGroupTransformTarget> operations;
+                for (const auto& id : owners) {
+                    const auto operation = owner_transform ? owner_transform(id) : transform;
+                    operations.push_back({id, {{operation.pivot.x, operation.pivot.y, 0.0},
+                        {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
+                        operation.flip_horizontal, operation.flip_vertical}});
+                }
+                auto command = sourceDerivedMixedModelCloneCommand(source, operations,
+                    "Copy architectural selection", identities, child_identities, model_copy);
+                if (command.entity_changes.size() > maximum_entities)
+                    throw std::invalid_argument("The complete architectural copy exceeds the selection entity limit.");
+                return command;
+            }
+        }
         if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
                 return structuralObject(entity);
             })) {
@@ -13274,6 +13312,7 @@ public:
                                 intent.transform = PlanarTransform{{movement.pivot.x, movement.pivot.y},
                                     movement.rotation_z_radians, movement.flip_horizontal, movement.flip_vertical,
                                     {movement.offset.x, movement.offset.y}};
+                                intent.coordinate_world_hosted_geometry = true;
                                 slabs.push_back(std::move(intent));
                             }
                             return {sourceDerivedSlabGeometryEditCommand(source, slabs, "Transform horizontal assemblies"),
@@ -26250,6 +26289,7 @@ public:
                 edit.kind = SlabGeometryEditKind::transform_plan;
                 edit.transform = planar;
                 edit.uniform_scale = intent.scale;
+                edit.coordinate_world_hosted_geometry = true;
                 command = sourceDerivedSlabGeometryEditCommand(source, {edit}, "Transform horizontal assembly in plan");
             } else if (entity.type=="wall" && intent.scale==1.0)
                 command=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,planar).first;
@@ -42788,6 +42828,7 @@ private:
             throw std::invalid_argument("Horizontal assembly transforms require finite coordinates and a positive scale.");
         SlabGeometryEditIntent intent;
         intent.slab_id = id;
+        intent.coordinate_world_hosted_geometry = true;
         if (transform.scale == 1.0 && transform.offset.z == 0.0) {
             intent.kind = SlabGeometryEditKind::transform_plan;
             intent.transform = PlanarTransform{{transform.pivot.x, transform.pivot.y}, transform.rotation_z_radians,
@@ -42873,6 +42914,97 @@ private:
         return creation;
     }
 
+    static ApplyEntityChanges sourceDerivedMixedModelCloneCommand(const DocumentSnapshot& source,
+        const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
+        std::map<std::string, std::string, std::less<>>& identities,
+        std::map<std::pair<std::string, std::string>, std::string>& child_identities,
+        IndependentModelCopyCapture* capture = nullptr) {
+        if (operations.empty() || operations.size() > maximum_architectural_group_targets)
+            throw std::invalid_argument("Select a bounded group of actual architectural objects to copy.");
+        std::vector<ArchitecturalGroupTransformTarget> structural, roofs, slabs;
+        std::vector<std::string> roof_owners, slab_owners;
+        std::set<std::string, std::less<>> selected;
+        for (const auto& operation : operations) {
+            const auto found = source.entities().find(operation.entity_id);
+            if (found == source.entities().end() || !selected.insert(operation.entity_id).second)
+                throw std::invalid_argument("The copy contains a missing or repeated actual owner.");
+            if (structuralObject(found->second)) structural.push_back(operation);
+            else if (found->second.type == "roof") { roofs.push_back(operation); roof_owners.push_back(operation.entity_id); }
+            else if (found->second.type == "slab") { slabs.push_back(operation); slab_owners.push_back(operation.entity_id); }
+            else throw std::invalid_argument("This mixed copy requires actual columns, beams, roofs or horizontal assemblies.");
+        }
+        if (static_cast<int>(!structural.empty()) + static_cast<int>(!roofs.empty()) + static_cast<int>(!slabs.empty()) < 2)
+            throw std::invalid_argument("A mixed architectural copy requires at least two object families.");
+        StructuralCloneIdentityMap structural_ids;
+        RoofCloneIdentityMap roof_ids;
+        SlabCloneIdentityMap slab_ids;
+        for (const auto& [original, copied] : identities) {
+            const auto found = source.entities().find(original);
+            if (found == source.entities().end())
+                throw std::invalid_argument("A supplied mixed-copy identity is not an actual source owner.");
+            if (structuralObject(found->second) && selected.contains(original)) structural_ids.emplace(original, copied);
+            else if ((found->second.type == "roof" && selected.contains(original)) || found->second.type == "roof_join")
+                roof_ids.emplace(original, copied);
+            else if (found->second.type == "slab" && selected.contains(original)) slab_ids.emplace(original, copied);
+            else throw std::invalid_argument("A supplied mixed-copy identity has no selected family authority.");
+        }
+        auto occupied = retainedSlabIdentityNames(source, true);
+        std::vector<ModelCopyEntities> candidates;
+        const auto append_family = [&](const ApplyEntityChanges& command) {
+            if (command.expected_revision != source.revision() || !command.asset_changes.empty())
+                throw std::invalid_argument("A mixed copy must retain its actual source revision and shared assets.");
+            for (const auto& change : command.entity_changes) if (change.kind != EntityChangeKind::upsert)
+                throw std::invalid_argument("A mixed copy cannot remove original owners.");
+            candidates.push_back(Document::preview_command(source, Command{command}).entities());
+        };
+        if (!structural.empty()) append_family(sourceDerivedStructuralCloneCommand(source, structural, message, structural_ids));
+        if (!roofs.empty()) append_family(sourceDerivedRoofCloneCommand(source, roof_owners, roofs, message, roof_ids));
+        if (!slabs.empty()) append_family(sourceDerivedSlabCloneCommand(source, slab_owners, slabs, message, slab_ids));
+        std::set<std::string, std::less<>> fresh;
+        for (const auto* family : {&structural_ids, &roof_ids, &slab_ids})
+            for (const auto& [original, copied] : *family) {
+                if (occupied.contains(copied) || !fresh.insert(copied).second)
+                    throw std::invalid_argument("Mixed-copy destinations overlap another family or retained identity.");
+                const auto owner = source.entities().find(original);
+                // A shared source catalog may produce a separate private
+                // catalog per family. Its local mapping is not a body redirect.
+                if (owner != source.entities().end() && owner->second.type != "assembly_model") {
+                    const auto [found, inserted] = identities.emplace(original, copied);
+                    if (!inserted && found->second != copied)
+                        throw std::invalid_argument("The mixed copy has conflicting body identity redirects.");
+                }
+            }
+        for (const auto& id : slab_owners) if (source.entities().at(id).properties.contains("layers"))
+            for (const auto& layer : source.entities().at(id).properties.at("layers"))
+                child_identities.emplace(std::make_pair(id, layer.at("id").get<std::string>()),
+                    slab_ids.at(layer.at("id").get<std::string>()));
+        for (const auto& id : roof_owners) if (source.entities().at(id).properties.contains("roof_openings"))
+            for (const auto& opening : source.entities().at(id).properties.at("roof_openings"))
+                child_identities.emplace(std::make_pair(id, opening.at("id").get<std::string>()),
+                    roof_ids.at(opening.at("id").get<std::string>()));
+        const auto candidate = compose_independent_model_copy_candidates(source.entities(), candidates);
+        const auto source_aliases = embedded_assembly_presentation_ids(source.entities());
+        const auto final_aliases = embedded_assembly_presentation_ids(candidate);
+        for (const auto& [key, alias] : final_aliases) if (!source_aliases.contains(key)) {
+            if (occupied.contains(alias) || !fresh.insert(alias).second)
+                throw std::invalid_argument("A mixed-copy component alias overlaps another fresh or retained identity.");
+        }
+        ApplyEntityChanges creation{source.revision(), {}, {}, message};
+        for (const auto& [id, entity] : candidate) {
+            const auto before = source.entities().find(id);
+            if (before == source.entities().end() || before->second != entity ||
+                before->second.properties.dump() != entity.properties.dump() || before->second.extensions.dump() != entity.extensions.dump())
+                creation.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        const auto preview = Document::preview_command(source, Command{creation});
+        validate_architectural_geometry_changes(source, preview);
+        if (capture) {
+            capture->source_digest = document_snapshot_digest(source);
+            capture->intent = creation;
+        }
+        return creation;
+    }
+
     static ApplyEntityChanges sourceDerivedSlabCloneCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& owners,
         const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
@@ -42935,19 +43067,33 @@ private:
         // snapshot cannot lend source/history authority to a transformed copy.
         auto candidate = replay_slab_geometry_entities(copied.entities, movement);
         std::map<std::string, std::map<std::string, AssemblyTransform, std::less<>>, std::less<>> catalog_transforms;
-        for (const auto& original : plan.required_hosted_instance_ids) {
-            const auto& instances = source.entities().at(original.first).properties.at("model").at("instances");
-            const auto instance = std::find_if(instances.begin(), instances.end(), [&](const auto& row) {
-                return row.at("id") == original.second;
-            });
-            if (instance == instances.end() || !instance->contains("placement"))
-                throw std::invalid_argument("A copied hosted component no longer has its actual source placement.");
-            const auto host_id = instance->at("placement").at("host_entity_id").get<std::string>();
-            catalog_transforms[identities.at(original.first)].emplace(hosted_identities.at(original), host_transforms.at(host_id));
+        std::set<std::string, std::less<>> hosted_catalogs;
+        for (const auto& original : plan.required_hosted_instance_ids) hosted_catalogs.insert(original.first);
+        AssemblyExpansionBudget hosted_source_budget;
+        for (const auto& original_catalog : hosted_catalogs) {
+            const auto model = AssemblyModel::from_json(source.entities().at(original_catalog).properties.at("model"));
+            for (const auto& instance : model.instances()) {
+                const SlabCloneHostedInstanceKey original{original_catalog, instance.id};
+                const auto copied_instance = hosted_identities.find(original);
+                if (copied_instance == hosted_identities.end()) continue;
+                if (!instance.placement)
+                    throw std::invalid_argument("A copied hosted component no longer has its actual source placement.");
+                const auto& host_id = instance.placement->host_entity_id;
+                auto delta = host_transforms.at(host_id);
+                // Type-owned profiles publish in the actual Site world frame.
+                // Legacy host-derived bodies retain their source-frame contract.
+                if (!model.expand(instance, hosted_source_budget).profiles.empty()) {
+                    const auto& frame = resolve_site_presentation(source.entities(), host_id).forward;
+                    delta = conjugate_assembly_transform_through_rigid_frame(delta,
+                        {{frame.translation_m.x, frame.translation_m.y, frame.translation_m.z},
+                            frame.rotation_radians, 1.0, false});
+                }
+                catalog_transforms[identities.at(original_catalog)].emplace(copied_instance->second, delta);
+            }
         }
         for (const auto& [catalog_id, transforms] : catalog_transforms) {
             auto& model = candidate.at(catalog_id).properties.at("model");
-            model = transform_hosted_assembly_model(model, transforms);
+            model = transform_hosted_assembly_model(model, transforms, true);
         }
         const auto presentations = embedded_assembly_presentation_ids(candidate);
         for (const auto& [original, copied_instance] : hosted_identities) {
@@ -51029,6 +51175,7 @@ private:
                 intent.kind = SlabGeometryEditKind::transform_plan;
                 intent.transform = PlanarTransform{{}, 0.0, false, false,
                     {target.transform.offset.x, target.transform.offset.y}};
+                intent.coordinate_world_hosted_geometry = true;
                 slabs.push_back(std::move(intent));
             }
             return sourceDerivedSlabGeometryEditCommand(source, slabs, "Move horizontal assemblies on Site");
