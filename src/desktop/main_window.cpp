@@ -37603,8 +37603,9 @@ public:
                 auto imported = candidate;
                 imported.id = identity->second;
                 remap_entity_references(imported, identities);
-                if (imported.extensions.contains("dxf_dimension")) {
-                    auto& dimension = imported.extensions["dxf_dimension"];
+                for (const auto* key : {"dxf_dimension", "dxf_arc_dimension"}) {
+                    if (!imported.extensions.contains(key)) continue;
+                    auto& dimension = imported.extensions[key];
                     const auto annotation_id = dimension.value("annotation_id", std::string{});
                     if (const auto remapped = annotation_identities.find(annotation_id); remapped != annotation_identities.end())
                         dimension["annotation_id"] = remapped->second;

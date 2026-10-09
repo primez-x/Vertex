@@ -70,7 +70,7 @@ class _DxfWriter:
             raise ValueError("cad_output_limit")
         self.parts.append(pair)
 
-    def entity(self, entity, block_header=False):
+    def entity(self, entity, block_header=False, omit_dimension_picture=False):
         from ezdxf.lldxf.tagwriter import TagCollector
         collector = TagCollector(dxfversion="AC1027", write_handles=False, optional=False)
         entity.export_dxf(collector)
@@ -78,15 +78,21 @@ class _DxfWriter:
         # ezdxf's generated defaults. Explicit source fields remain present
         # for the strict mapper to assess, including unsupported styles.
         absent_dimension_defaults = set()
-        if entity.dxftype() == "DIMENSION":
+        dimension = entity.dxftype() in {"DIMENSION", "ARC_DIMENSION"}
+        if dimension:
             absent_dimension_defaults = {
                 code for code, attribute in ((3, "dimstyle"),
                                              (71, "attachment_point"),
                                              (280, "version"))
                 if not entity.dxf.hasattr(attribute)
             }
+        subclass = None
         for tag in collector.tags:
-            if tag.code in absent_dimension_defaults:
+            if tag.code == 100:
+                subclass = tag.value
+            if (dimension and subclass == "AcDbDimension" and
+                    (tag.code in absent_dimension_defaults or
+                     (omit_dimension_picture and tag.code == 2))):
                 continue
             # Virtual/rebuilt entities have no handle/owner. Omit identifiers
             # consistently; they are not source identities in this candidate.
@@ -213,6 +219,24 @@ def normalize_dxf(data: bytes) -> dict:
         if expansion > MAX_DXF_ENTITIES:
             raise ValueError("dxf_entity_limit")
 
+    # Direct dimensions keep their source geometry picture in the same frame.
+    # References in transformed foreign blocks are validated too, but their
+    # pictures cannot be reused after virtual-entity transformation.
+    dimension_pictures = set()
+    dimension_containers = [(doc.modelspace(), True)]
+    dimension_containers.extend((block, block.name in native) for block in doc.blocks)
+    for container, direct in dimension_containers:
+        for entity in container:
+            if entity.dxftype() not in {"DIMENSION", "ARC_DIMENSION"}:
+                continue
+            picture = entity.dxf.get("geometry", "")
+            if picture:
+                block = doc.blocks.get(picture)
+                if block is None:
+                    raise ValueError("dxf_missing_block")
+                if direct:
+                    dimension_pictures.add(block.name)
+
     writer = _DxfWriter()
     writer.section("HEADER")
     writer.put(9, "$ACADVER")
@@ -232,20 +256,28 @@ def normalize_dxf(data: bytes) -> dict:
         writer.put(70, 0)
         writer.put(0, "ENDTAB")
         writer.end()
+    serialized_entities = 0
+    if native or dimension_pictures:
         writer.section("BLOCKS")
         for block in doc.blocks:
-            if block.name in native:
+            if block.name in native or block.name in dimension_pictures:
+                serialized_entities += 2  # BLOCK and ENDBLK records.
+                if serialized_entities > MAX_DXF_ENTITIES:
+                    raise ValueError("dxf_entity_limit")
                 writer.entity(block.block, block_header=True)
-                # Export exact native geometry, including unsupported tags. The
-                # strict C++ path decides activation; normalization cannot turn
-                # unsupported native data into valid editable semantics.
+                # Preserve source headers and geometry, including unsupported
+                # tags. The strict C++ path decides picture support and native
+                # activation; a picture reference grants no metadata authority.
                 for entity in block:
+                    serialized_entities += 1
+                    if serialized_entities > MAX_DXF_ENTITIES:
+                        raise ValueError("dxf_entity_limit")
                     writer.entity(entity)
                 writer.entity(block.endblk)
         writer.end()
     writer.section("ENTITIES")
-    written = 0
-    mapped = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "TEXT", "DIMENSION", "HATCH"}
+    written = serialized_entities
+    mapped = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "TEXT", "DIMENSION", "ARC_DIMENSION", "HATCH"}
 
     def emit(entity, depth=0, inherited_layer="0", fallback_source_id=""):
         nonlocal written
@@ -254,6 +286,9 @@ def normalize_dxf(data: bytes) -> dict:
             raise ValueError("dxf_entity_limit")
         kind = entity.dxftype()
         source_id = _source_id(entity) or fallback_source_id
+        copied_dimension_picture = (kind in {"DIMENSION", "ARC_DIMENSION"} and
+                                    entity.origin_of_copy is not None and
+                                    bool(entity.dxf.get("geometry", "")))
         if any(isinstance(value,str) and any(ord(c)>127 for c in value)
                for value in entity.dxf.all_existing_dxf_attribs().values()):
             diagnostics.append(_diagnostic(source_id,kind,"dxf_string_encoding_not_mapped"))
@@ -340,7 +375,10 @@ def normalize_dxf(data: bytes) -> dict:
                 poly.set_xdata(NATIVE_DXF_APPID, entity.get_xdata(NATIVE_DXF_APPID))
             writer.entity(poly)
         elif kind in mapped:
-            writer.entity(entity)
+            if copied_dimension_picture:
+                diagnostics.append(_diagnostic(source_id, kind,
+                    "dxf_dimension_picture_transform_not_mapped"))
+            writer.entity(entity, omit_dimension_picture=copied_dimension_picture)
         else:
             diagnostics.append(_diagnostic(source_id, kind, "dxf_geometry_not_mapped"))
 

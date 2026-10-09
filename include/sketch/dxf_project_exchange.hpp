@@ -45,6 +45,12 @@ struct DxfProjectImportResult {
 // does not preserve phase registries or alternatives. Without a phase registry,
 // the existing whole-project mapping applies. The result remains in memory;
 // use export_dxf_ascii separately when ready to serialize it to a local path.
+// Current physical-room and wall-axis lengths resolve from the complete saved
+// inventory. Single curved lengths use analytical ARC_DIMENSION; straight
+// lengths use aligned DIMENSION. Bent/curved multi-edge totals retain their
+// measured quantity as a named text callout with an explicit fidelity diagnostic.
+// Angle/area quantities likewise retain named callouts rather than substituting
+// linear measurements; their native target association is explicitly diagnosed.
 [[nodiscard]] DxfProjectExportResult export_project_dxf(
     const DocumentSnapshot& document,
     const DxfExchangeLimits& limits = {});
@@ -65,6 +71,9 @@ struct DxfProjectImportResult {
 // Inches, feet, millimetres, centimetres, metres and kilometres are normalized
 // to native SI metres before mapping. Missing/unitless or other source units
 // return no candidates, an explicit diagnostic and required source retention.
+// Linear/arc dimensions reconstruct their measured geometry and actual text,
+// retaining their presentation metadata. Foreign owner association remains
+// unbound and diagnosed; a dimension picture block supplies no native authority.
 [[nodiscard]] DxfProjectImportResult import_project_dxf(
     std::string_view bytes,
     const DxfExchangeLimits& limits = {});

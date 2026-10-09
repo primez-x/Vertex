@@ -5,6 +5,8 @@
 #include <cmath>
 #include <initializer_list>
 #include <limits>
+#include <map>
+#include <numbers>
 #include <optional>
 #include <set>
 #include <span>
@@ -92,6 +94,11 @@ double real(Record r, int code, double fallback = 0) { const auto v = field(r, c
 int integer(Record r, int code, int fallback = 0) { const auto v = field(r, code); return v ? number<int>(*v) : fallback; }
 DxfPoint point(Record r, int x, int y) { return {number<double>(mandatory(r, x)), number<double>(mandatory(r, y))}; }
 bool member(int c, std::initializer_list<int> codes) { return std::find(codes.begin(), codes.end(), c) != codes.end(); }
+std::string block_identity(std::string_view name) {
+    std::string identity(name);
+    for (auto& c : identity) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    return identity;
+}
 std::string layer(Record r, const DxfExchangeLimits& l) {
     const auto v = field(r, 8).value_or("0"); printable(v, l); require(!v.empty()); return std::string(v);
 }
@@ -110,16 +117,160 @@ bool supported(Record r, std::initializer_list<int> specific, const DxfExchangeL
     }
     return ok;
 }
+// Repeated codes belong to their subclass, particularly ARC_DIMENSION's 70
+// and 71. Never resolve these through a whole-record lookup.
+std::optional<Record> subclass(Record r, std::string_view name) {
+    std::optional<Record> found;
+    for (std::size_t i = 0; i < r.size(); ++i) {
+        if (r[i].code != 100 || r[i].value != name) continue;
+        require(!found.has_value());
+        const auto first = i + 1;
+        auto end = first;
+        while (end < r.size() && r[end].code != 100) ++end;
+        found = r.subspan(first, end - first);
+    }
+    return found;
+}
+bool dimension_defaults(Record r, const DxfExchangeLimits& l, bool legacy) {
+    const auto attachment = integer(r, 71, 5);
+    const auto spacing = integer(r, 72, 1);
+    const auto style = field(r, 3).value_or("Standard");
+    // Group 42 is only a cache; finite bounded data is admitted but never used
+    // in place of the extension geometry when calculating a measurement.
+    (void)real(r, 42);
+    return supported(r, {1, 2, 3, 10, 20, 11, 21, 12, 22, 32, 13, 23, 33, 14, 24, 34, 50, 70, 71, 72,
+                          73, 74, 75, 41, 42, 43, 44, 51, 52, 53, 280}, l) &&
+        (attachment == 5 || (legacy && attachment == 0)) &&
+        (spacing == 1 || (legacy && spacing == 0)) &&
+        integer(r, 73) == 0 && integer(r, 74) == 0 && integer(r, 75) == 0 &&
+        integer(r, 280) == 0 && real(r, 41, 1) == 1 &&
+        real(r, 43) == 0 && real(r, 44) == 0 && real(r, 51) == 0 && real(r, 52) == 0 &&
+        real(r, 30) == 0 && real(r, 31) == 0 && real(r, 33) == 0 && real(r, 34) == 0 &&
+        real(r, 12) == 0 && real(r, 22) == 0 && real(r, 32) == 0 &&
+        (style == "Standard" || style == "STANDARD" || (legacy && style.empty()));
+}
+double degrees(DxfPoint vector) {
+    auto value = std::atan2(vector.y, vector.x) * 180.0 / std::numbers::pi;
+    if (value < 0) value += 360.0;
+    return value == 360.0 ? 0.0 : value;
+}
+struct ArcDimensionGeometry { double radius, dimension_radius, start, end, sweep; };
+std::optional<ArcDimensionGeometry> arc_dimension_geometry(const DxfArcDimension& v) {
+    const DxfPoint a{v.extension_start.x - v.center.x, v.extension_start.y - v.center.y};
+    const DxfPoint b{v.extension_end.x - v.center.x, v.extension_end.y - v.center.y};
+    const auto radius = std::hypot(a.x, a.y);
+    const auto other_radius = std::hypot(b.x, b.y);
+    const auto picture_radius = std::hypot(v.dimension_arc.x - v.center.x, v.dimension_arc.y - v.center.y);
+    const auto start = degrees(a), end = degrees(b);
+    auto sweep = end - start;
+    if (sweep <= 0) sweep += 360.0;
+    if (!std::isfinite(radius) || !std::isfinite(other_radius) || !std::isfinite(picture_radius) ||
+        radius <= std::numeric_limits<double>::epsilon() || picture_radius <= std::numeric_limits<double>::epsilon() ||
+        std::abs(radius - other_radius) > 1e-9 * std::max(radius, other_radius) ||
+        start == end || !(sweep > 0 && sweep < 360)) return {};
+    return ArcDimensionGeometry{radius, picture_radius, start, end, sweep};
+}
+struct DimensionPicture {
+    std::string name;
+    std::size_t entity_index, dimension_index;
+    bool arc;
+};
+void bounded_point(DxfPoint p) {
+    require(std::isfinite(p.x) && std::isfinite(p.y) && std::abs(p.x) <= 1e12 && std::abs(p.y) <= 1e12);
+}
+void dimension_text(DxfBlock& block, DxfPoint position, double height, double rotation,
+                    std::string_view override_text, double measurement, const DxfExchangeLimits& l) {
+    bounded_point(position);
+    require(std::isfinite(height) && height > 0 && height <= 1e12 &&
+        std::isfinite(rotation) && std::abs(rotation) <= 1e12 &&
+        std::isfinite(measurement) && measurement >= 0 && measurement <= 1e12);
+    printable(override_text, l);
+    require(override_text.find('\\') == std::string_view::npos && override_text.find("%%") == std::string_view::npos);
+    if (override_text == " ") return;
+    char buffer[64];
+    const auto conversion = std::to_chars(buffer, buffer + sizeof(buffer), measurement,
+        std::chars_format::general, 12);
+    require(conversion.ec == std::errc{});
+    const std::string actual(buffer, conversion.ptr);
+    std::string text;
+    if (override_text.empty()) text = actual;
+    else {
+        // DXF's <> token substitutes the analytical measurement.
+        for (std::size_t cursor = 0; cursor < override_text.size();) {
+            if (override_text.substr(cursor, 2) == "<>") { text += actual; cursor += 2; }
+            else text += override_text[cursor++];
+            require(text.size() <= l.max_string_bytes);
+        }
+    }
+    printable(text, l);
+    block.labels.push_back({position, height, rotation, std::move(text), "0"});
+}
+void dimension_tick(DxfBlock& block, DxfPoint point, DxfPoint tangent, double height) {
+    // Two simple drafting ticks avoid font/arrow-block dependencies.
+    const DxfPoint delta{(tangent.x - tangent.y) * height * 0.35,
+                         (tangent.y + tangent.x) * height * 0.35};
+    block.lines.push_back({{point.x - delta.x, point.y - delta.y},
+                           {point.x + delta.x, point.y + delta.y}, "0"});
+}
+DxfBlock dimension_picture(const DxfDimension& v, const DxfExchangeLimits& l) {
+    bounded_point(v.extension_start); bounded_point(v.extension_end); bounded_point(v.dimension_line);
+    require(std::isfinite(v.rotation_degrees) && std::abs(v.rotation_degrees) <= 1e12);
+    const DxfPoint delta{v.extension_end.x - v.extension_start.x, v.extension_end.y - v.extension_start.y};
+    const auto length = std::hypot(delta.x, delta.y);
+    require(length > std::numeric_limits<double>::epsilon());
+    const auto radians = std::fmod(v.rotation_degrees, 360.0) * std::numbers::pi / 180.0;
+    const DxfPoint direction = v.aligned ? DxfPoint{delta.x / length, delta.y / length} :
+                                         DxfPoint{std::cos(radians), std::sin(radians)};
+    const DxfPoint normal{-direction.y, direction.x};
+    const auto project = [&](DxfPoint p) {
+        const auto offset = (v.dimension_line.x - p.x) * normal.x + (v.dimension_line.y - p.y) * normal.y;
+        return DxfPoint{p.x + normal.x * offset, p.y + normal.y * offset};
+    };
+    const auto start = project(v.extension_start), end = project(v.extension_end);
+    DxfBlock block;
+    const auto measurement = v.aligned ? length : std::abs(delta.x * direction.x + delta.y * direction.y);
+    dimension_text(block, v.text_position, v.text_height, v.text_rotation_degrees, v.text, measurement, l);
+    block.lines.push_back({v.extension_start, start, "0"});
+    block.lines.push_back({v.extension_end, end, "0"});
+    block.lines.push_back({start, end, "0"});
+    dimension_tick(block, start, direction, v.text_height);
+    dimension_tick(block, end, direction, v.text_height);
+    return block;
+}
+DxfBlock dimension_picture(const DxfArcDimension& v, const DxfExchangeLimits& l) {
+    bounded_point(v.extension_start); bounded_point(v.extension_end); bounded_point(v.center); bounded_point(v.dimension_arc);
+    const auto geometry = arc_dimension_geometry(v); require(geometry.has_value());
+    const auto& g = *geometry;
+    const auto radial_point = [&](DxfPoint p) {
+        const auto radius = std::hypot(p.x - v.center.x, p.y - v.center.y);
+        return DxfPoint{v.center.x + (p.x - v.center.x) * (g.dimension_radius / radius),
+                         v.center.y + (p.y - v.center.y) * (g.dimension_radius / radius)};
+    };
+    const auto start = radial_point(v.extension_start), end = radial_point(v.extension_end);
+    DxfBlock block;
+    dimension_text(block, v.text_position, v.text_height, v.text_rotation_degrees, v.text,
+        g.radius * (g.sweep * std::numbers::pi / 180.0), l);
+    block.lines.push_back({v.extension_start, start, "0"});
+    block.lines.push_back({v.extension_end, end, "0"});
+    block.arcs.push_back({v.center, g.dimension_radius, g.start, g.end, "0"});
+    const auto tangent = [&](double angle) {
+        const auto radians = angle * std::numbers::pi / 180.0;
+        return DxfPoint{-std::sin(radians), std::cos(radians)};
+    };
+    dimension_tick(block, start, tangent(g.start), v.text_height);
+    dimension_tick(block, end, tangent(g.end), v.text_height);
+    return block;
+}
 void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view type, Record r,
     std::size_t index, std::size_t& vertices, const DxfExchangeLimits& l,
-    bool allow_insert = true) {
+    bool allow_insert = true, std::vector<DimensionPicture>* pictures = nullptr) {
     auto diagnostic = [&](const char* code) { result.diagnostics.push_back({index, std::string(type), code}); };
     bool malformed_xdata = false;
     (void)block_xdata(r, malformed_xdata);
     if (without_xdata(r).size() != r.size()) diagnostic("xdata_not_activated");
     r = without_xdata(r);
     if (type != "LINE" && type != "ARC" && type != "CIRCLE" && type != "LWPOLYLINE" && type != "TEXT" &&
-        type != "DIMENSION" && type != "HATCH" && type != "INSERT") {
+        type != "DIMENSION" && type != "ARC_DIMENSION" && type != "HATCH" && type != "INSERT") {
         diagnostic("unsupported_entity"); return;
     }
     const auto entity_layer = layer(r, l);
@@ -151,19 +302,75 @@ void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view t
         DxfDimension v{point(r, 13, 23), point(r, 14, 24), point(r, 10, 20),
             point(r, 11, 21), real(r, 50), std::string(field(r, 1).value_or("")), entity_layer};
         printable(v.text, l);
-        const bool linear = field(r, 70).has_value() && integer(r, 70) == 0;
-        const bool plain = integer(r, 71) == 0 && integer(r, 72) == 0 &&
-            integer(r, 73) == 0 && integer(r, 74) == 0 &&
-            real(r, 41, 1) == 1 && real(r, 42) == 0 && real(r, 43) == 0 &&
-            real(r, 44) == 0 && real(r, 51) == 0 &&
-            field(r, 3).value_or("").empty();
-        if (!supported(r, {10, 20, 30, 11, 21, 31, 13, 23, 33, 14, 24, 34, 50, 1, 70,
-                           71, 72, 73, 74, 41, 42, 43, 44, 51, 3}, l) || !linear || !plain ||
+        const auto kind = integer(r, 70, -1);
+        // Bit 128 changes text placement, not the analytical dimension type.
+        // Removing only that documented flag still rejects every unknown bit.
+        const auto base_kind = kind & ~128;
+        const bool legacy = kind >= 0 && base_kind == 0 && !field(r, 2).has_value();
+        const bool linear = legacy || (kind >= 0 && (base_kind == 32 || base_kind == 33));
+        v.aligned = base_kind == 33;
+        if (v.aligned && !field(r, 50)) v.rotation_degrees = degrees({v.extension_end.x - v.extension_start.x,
+                                                                   v.extension_end.y - v.extension_start.y});
+        v.text_rotation_degrees = real(r, 53);
+        const bool plain = dimension_defaults(r, l, legacy) &&
+            v.text.find('\\') == std::string::npos && v.text.find("%%") == std::string::npos;
+        if (!supported(r, {1, 2, 3, 10, 20, 11, 21, 12, 22, 32, 13, 23, 33, 14, 24, 34, 50, 70,
+                           71, 72, 73, 74, 75, 41, 42, 43, 44, 51, 52, 53, 280}, l) || !linear || !plain ||
             std::hypot(v.extension_end.x - v.extension_start.x,
                        v.extension_end.y - v.extension_start.y) <= std::numeric_limits<double>::epsilon()) {
             diagnostic("unsupported_feature");
         } else {
+            if (!legacy) {
+                if (const auto name = field(r, 2)) {
+                    require(!name->empty()); printable(*name, l); require(pictures != nullptr);
+                    pictures->push_back({std::string(*name), index, destination.dimensions.size(), false});
+                } else diagnostic("dimension_picture_not_retained");
+            }
             destination.dimensions.push_back(std::move(v));
+        }
+    } else if (type == "ARC_DIMENSION") {
+        const auto common = subclass(r, "AcDbDimension");
+        const auto arc = subclass(r, "AcDbArcDimension");
+        int stage = 0;
+        bool valid_subclasses = true;
+        for (const auto& p : r) if (p.code == 100) {
+            if (p.value == "AcDbEntity" && stage == 0) stage = 1;
+            else if (p.value == "AcDbDimension" && stage <= 1) stage = 2;
+            else if (p.value == "AcDbArcDimension" && stage == 2) stage = 3;
+            else valid_subclasses = false;
+        }
+        if (!common || !arc || !valid_subclasses) { diagnostic("unsupported_feature"); return; }
+        DxfArcDimension v{point(*arc, 13, 23), point(*arc, 14, 24), point(*arc, 15, 25),
+            point(*common, 10, 20), point(*common, 11, 21), real(*common, 53),
+            std::string(field(*common, 1).value_or("")), entity_layer};
+        printable(v.text, l);
+        const bool plain_common = supported(*common, {1, 2, 3, 10, 20, 11, 21, 12, 22, 32,
+            70, 71, 72, 73, 74, 75, 41, 42, 43, 44, 51, 52, 53, 280}, l) &&
+            dimension_defaults(*common, l, false) &&
+            integer(*common, 70, -1) >= 0 &&
+            ((integer(*common, 70, -1) & ~128) == 37 ||
+                ((integer(*common, 70, -1) & ~128) == 5 && !field(*common, 2)));
+        const bool plain_arc = supported(*arc, {13, 23, 33, 14, 24, 34, 15, 25, 35,
+            40, 41, 70, 71, 16, 26, 36, 17, 27, 37}, l) &&
+            integer(*arc, 70) == 0 && integer(*arc, 71) == 0 && real(*arc, 40) == 0 && real(*arc, 41) == 0 &&
+            real(*arc, 33) == 0 && real(*arc, 34) == 0 && real(*arc, 35) == 0 &&
+            real(*arc, 16) == 0 && real(*arc, 26) == 0 && real(*arc, 36) == 0 &&
+            real(*arc, 17) == 0 && real(*arc, 27) == 0 && real(*arc, 37) == 0;
+        // The prefix can carry only ordinary entity metadata. It must not
+        // smuggle dimension geometry outside the declared subclasses.
+        const auto marker = std::find_if(r.begin(), r.end(), [](const auto& p) {
+            return p.code == 100 && p.value == "AcDbDimension";
+        });
+        const bool plain_prefix = supported(r.first(static_cast<std::size_t>(marker - r.begin())), {}, l);
+        if (!plain_common || !plain_arc || !plain_prefix || !arc_dimension_geometry(v) ||
+            v.text.find('\\') != std::string::npos || v.text.find("%%") != std::string::npos) {
+            diagnostic("unsupported_feature");
+        } else {
+            if (const auto name = field(*common, 2)) {
+                require(!name->empty()); printable(*name, l); require(pictures != nullptr);
+                pictures->push_back({std::string(*name), index, destination.arc_dimensions.size(), true});
+            } else diagnostic("dimension_picture_not_retained");
+            destination.arc_dimensions.push_back(std::move(v));
         }
     } else if (type == "HATCH") {
         DxfHatch v{{}, integer(r, 70) == 1, entity_layer};
@@ -280,9 +487,10 @@ void parse_block_section(DxfImportResult& result, const std::vector<Pair>& pairs
         }
         const auto name_value = mandatory(header, 2);
         printable(name_value, limits);
-        require(!name_value.empty() && names.insert(std::string(name_value)).second);
+        require(!name_value.empty() && names.insert(block_identity(name_value)).second);
         const auto base = point(header, 10, 20);
-        const bool plain_header = integer(header, 70, 0) == 0 && real(header, 30) == 0 &&
+        const auto block_flags = integer(header, 70, 0);
+        const bool plain_header = (block_flags == 0 || (block_flags == 1 && name_value.front() == '*')) && real(header, 30) == 0 &&
                                   field(header, 3).value_or(name_value) == name_value;
         const auto diagnostics_before = result.diagnostics.size();
         if (!supported(header, {2, 3, 10, 20, 30, 70}, limits) || !plain_header) {
@@ -303,7 +511,7 @@ void parse_block_section(DxfImportResult& result, const std::vector<Pair>& pairs
                 break;
             }
             require(++entity_count <= limits.max_entities);
-            if (type == "DIMENSION" || type == "HATCH" || type == "INSERT") {
+            if (type == "DIMENSION" || type == "ARC_DIMENSION" || type == "HATCH" || type == "INSERT") {
                 result.diagnostics.push_back({0, std::string(type), "unsupported_entity"});
                 continue;
             }
@@ -375,6 +583,7 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
         pairs.push_back({code, v});
     }
     DxfImportResult result;
+    std::vector<DimensionPicture> pictures;
     std::size_t i = 0, entity_count = 0, entity_ordinal = 0, vertices = 0;
     bool header = false, blocks = false, entities = false, version = false, eof = false, units = false;
     bool vertex_registered = false;
@@ -428,7 +637,7 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
                 const auto type = pairs[j++].value; const auto first = j;
                 while (j < end && pairs[j].code != 0) ++j;
                 entity(result, result.drawing, type, Record(pairs.data() + first, j - first),
-                       ++entity_ordinal, vertices, l);
+                       ++entity_ordinal, vertices, l, true, &pictures);
             }
         } else result.diagnostics.push_back({0, std::string(section), "unsupported_section"});
     }
@@ -438,10 +647,25 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
             result.diagnostics.push_back({0, "BLOCK", "unregistered_vertex_xdata"});
         }
     }
-    for (const auto& insert : result.drawing.inserts) {
-        const auto found = std::find_if(result.drawing.blocks.begin(), result.drawing.blocks.end(),
-            [&](const auto& block) { return block.name == insert.block_name; });
-        require(found != result.drawing.blocks.end());
+    std::map<std::string, std::size_t, std::less<>> block_indices;
+    for (std::size_t index = 0; index < result.drawing.blocks.size(); ++index)
+        require(block_indices.emplace(block_identity(result.drawing.blocks[index].name), index).second);
+    for (const auto& insert : result.drawing.inserts)
+        require(block_indices.contains(block_identity(insert.block_name)));
+    for (const auto& picture : pictures) {
+        const auto found = block_indices.find(block_identity(picture.name));
+        require(found != block_indices.end());
+        auto& block = result.drawing.blocks[found->second];
+        // Picture references are display data, never native semantic imports.
+        if (!block.vertex_entity_json.empty()) {
+            block.vertex_entity_json.clear();
+            result.diagnostics.push_back({picture.entity_index, picture.arc ? "ARC_DIMENSION" : "DIMENSION",
+                "dimension_picture_xdata_not_activated"});
+        }
+        if (block.labels.size() == 1) {
+            if (picture.arc) result.drawing.arc_dimensions[picture.dimension_index].text_height = block.labels.front().height;
+            else result.drawing.dimensions[picture.dimension_index].text_height = block.labels.front().height;
+        }
     }
     require(header && version && entities && eof);
     return result;
@@ -453,7 +677,7 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     // Incremental counts avoid overflow on caller-controlled containers.
     std::size_t count = 0;
     for (auto size : {d.lines.size(), d.arcs.size(), d.polylines.size(), d.dimensions.size(),
-                      d.hatches.size(), d.labels.size(), d.circles.size()}) {
+                      d.hatches.size(), d.labels.size(), d.circles.size(), d.arc_dimensions.size()}) {
         require(size <= l.max_entities - count); count += size;
     }
     require(d.blocks.size() <= l.max_entities - count); count += d.blocks.size();
@@ -461,15 +685,32 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     std::set<std::string, std::less<>> block_names;
     for (const auto& block : d.blocks) {
         printable(block.name, l);
-        require(!block.name.empty() && block_names.insert(block.name).second);
+        require(!block.name.empty() && block_names.insert(block_identity(block.name)).second);
         for (auto size : {block.lines.size(), block.arcs.size(), block.polylines.size(), block.labels.size(), block.circles.size()}) {
             require(size <= l.max_entities - count); count += size;
         }
     }
     for (const auto& insert : d.inserts) {
         printable(insert.block_name, l);
-        require(block_names.contains(insert.block_name));
+        require(block_names.contains(block_identity(insert.block_name)));
     }
+    std::vector<DxfBlock> pictures;
+    std::size_t picture_number = 0;
+    const auto add_picture = [&](const auto& dimension) {
+        // Count before construction/output. Each picture has a header, five
+        // primitives, and at most one text entity; suppression omits the text.
+        const std::size_t picture_count = dimension.text == " " ? 6 : 7;
+        require(picture_count <= l.max_entities - count);
+        auto block = dimension_picture(dimension, l);
+        do { block.name = "*D" + std::to_string(++picture_number); }
+        while (block_names.contains(block_identity(block.name)));
+        printable(block.name, l);
+        require(block_names.insert(block_identity(block.name)).second);
+        count += picture_count;
+        pictures.push_back(std::move(block));
+    };
+    for (const auto& dimension : d.dimensions) add_picture(dimension);
+    for (const auto& dimension : d.arc_dimensions) add_picture(dimension);
     Writer w(l);
     const auto write_line = [&](const DxfLine& v) {
         w.begin("LINE", v.layer, "AcDbLine"); w.xy(v.start); w.put(30, 0.0);
@@ -513,11 +754,11 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
         w.put(100, "AcDbRegAppTableRecord"); w.put(2, vertex_appid); w.put(70, "0");
         w.put(0, "ENDTAB"); w.put(0, "ENDSEC");
     }
-    if (!d.blocks.empty()) {
+    if (!d.blocks.empty() || !pictures.empty()) {
         w.put(0, "SECTION"); w.put(2, "BLOCKS");
-        for (const auto& block : d.blocks) {
+        const auto write_block = [&](const DxfBlock& block, bool anonymous) {
             w.begin("BLOCK", "0", "AcDbBlockBegin"); w.put(2, block.name); w.put(3, block.name);
-            w.xy(block.base); w.put(30, 0.0); w.put(70, "0");
+            w.xy(block.base); w.put(30, 0.0); w.put(70, anonymous ? "1" : "0");
             if (!block.vertex_entity_json.empty()) {
                 const auto& payload = block.vertex_entity_json;
                 require(utf8_string(payload));
@@ -538,7 +779,9 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
             for (const auto& v : block.polylines) write_polyline(v);
             for (const auto& v : block.labels) write_label(v);
             w.begin("ENDBLK", "0", "AcDbBlockEnd");
-        }
+        };
+        for (const auto& block : d.blocks) write_block(block, false);
+        for (const auto& block : pictures) write_block(block, true);
         w.put(0, "ENDSEC");
     }
     w.put(0, "SECTION"); w.put(2, "ENTITIES");
@@ -546,19 +789,41 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     for (const auto& v : d.arcs) write_arc(v);
     for (const auto& v : d.circles) write_circle(v);
     for (const auto& v : d.polylines) write_polyline(v);
+    std::size_t picture_index = 0;
+    const auto write_dimension_common = [&](const char* type, const std::string& entity_layer,
+        DxfPoint definition, DxfPoint text_position, int kind, double text_rotation, const std::string& text) {
+        w.begin(type, entity_layer, "AcDbDimension");
+        w.put(280, "0"); w.put(2, pictures[picture_index++].name); w.put(3, "Standard");
+        w.xy(definition); w.put(30, 0.0);
+        w.xy(text_position, 11, 21); w.put(31, 0.0);
+        // All retained text positions are explicit, including automatic
+        // placements already computed by the authoritative native document.
+        w.put(70, std::to_string(kind | 128)); w.put(71, "5"); w.put(1, text); w.put(53, text_rotation);
+    };
     for (const auto& v : d.dimensions) {
         require(std::isfinite(v.rotation_degrees) && std::abs(v.rotation_degrees) <= 1e12);
         require(v.text.find('\n') == std::string::npos && v.text.find('\r') == std::string::npos);
         printable(v.text, l);
-        w.begin("DIMENSION", v.layer, "AcDbDimension");
-        w.put(10, v.dimension_line.x); w.put(20, v.dimension_line.y); w.put(30, 0.0);
-        w.xy(v.text_position, 11, 21); w.put(31, 0.0);
-        w.put(70, "0"); w.put(1, v.text);
+        write_dimension_common("DIMENSION", v.layer, v.dimension_line, v.text_position,
+            v.aligned ? 33 : 32, v.text_rotation_degrees, v.text);
         w.put(100, "AcDbAlignedDimension");
         w.xy(v.extension_start, 13, 23); w.put(33, 0.0);
         w.xy(v.extension_end, 14, 24); w.put(34, 0.0);
         w.put(50, v.rotation_degrees);
-        w.put(100, "AcDbRotatedDimension");
+        if (!v.aligned) {
+            w.put(100, "AcDbRotatedDimension");
+        }
+    }
+    for (const auto& v : d.arc_dimensions) {
+        write_dimension_common("ARC_DIMENSION", v.layer, v.dimension_arc, v.text_position,
+            37, v.text_rotation_degrees, v.text);
+        w.put(100, "AcDbArcDimension");
+        w.xy(v.extension_start, 13, 23); w.put(33, 0.0);
+        w.xy(v.extension_end, 14, 24); w.put(34, 0.0);
+        w.xy(v.center, 15, 25); w.put(35, 0.0);
+        // Reserved undocumented angles have no measurement authority.
+        w.put(40, 0.0); w.put(41, 0.0); w.put(70, "0"); w.put(71, "0");
+        w.xy({}, 16, 26); w.put(36, 0.0); w.xy({}, 17, 27); w.put(37, 0.0);
     }
     std::size_t hatch_vertices = vertices;
     for (const auto& v : d.hatches) {

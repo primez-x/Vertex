@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -38,6 +39,13 @@ using Json = nlohmann::json;
 constexpr double kGeometryTolerance = 1e-7;
 constexpr double kFullTurn = 2.0 * std::numbers::pi;
 constexpr const char* kManufacturedDepiction = "MANUFACTURED_PLAN_V1";
+
+std::string block_identity(std::string_view name) {
+    std::string result(name);
+    for (auto& character : result)
+        if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
+    return result;
+}
 
 void diagnostic(std::vector<DxfProjectDiagnostic>& output, std::string id,
                 std::string kind, std::string code) {
@@ -170,6 +178,63 @@ double normalized_degrees(double radians) {
     degrees = std::fmod(degrees, 360.0);
     if (degrees < 0.0) degrees += 360.0;
     return degrees == 0.0 ? 0.0 : degrees;
+}
+
+std::string dimension_quantity_text(double quantity, std::string_view suffix,
+                                    std::string override_text = {}) {
+    if (!std::isfinite(quantity) || quantity < 0.0)
+        throw std::invalid_argument("DXF dimension measurement must be finite and nonnegative");
+    char buffer[64];
+    const auto converted = std::to_chars(buffer, buffer + sizeof(buffer),
+        quantity == 0.0 ? 0.0 : quantity, std::chars_format::general, 12);
+    if (converted.ec != std::errc{})
+        throw std::invalid_argument("DXF dimension measurement is not representable");
+    const std::string measurement(buffer, converted.ptr);
+    if (override_text.empty()) return measurement + std::string(suffix);
+    const auto max_text = DxfExchangeLimits{}.max_string_bytes;
+    if (override_text.size() > max_text)
+        throw std::invalid_argument("DXF dimension text exceeds its transport limit");
+    for (std::size_t position = 0; (position = override_text.find("<>", position)) != std::string::npos;) {
+        if (measurement.size() > max_text - (override_text.size() - 2))
+            throw std::invalid_argument("DXF dimension text exceeds its transport limit");
+        override_text.replace(position, 2, measurement);
+        position += measurement.size();
+    }
+    return override_text;
+}
+
+std::string dimension_length_text(double metres, std::string override_text = {}) {
+    return dimension_quantity_text(metres, " m", std::move(override_text));
+}
+
+std::string imported_dimension_text(double metres, const std::string& original,
+                                    double source_metres_per_unit) {
+    if (!std::isfinite(source_metres_per_unit) || source_metres_per_unit <= 0.0)
+        throw std::invalid_argument("DXF dimension source units are invalid");
+    // An authored suffix such as '<> ft' belongs to the original drawing
+    // units. Geometry becomes SI, but its source text must not relabel metres.
+    if (original.empty()) return dimension_length_text(metres);
+    return dimension_quantity_text(metres / source_metres_per_unit, "", original);
+}
+
+bool linear_dimension_chain(const BoundaryDimension& dimension, const Entity& owner,
+                            const BoundaryDimensionResolution& resolved) {
+    if (dimension.segment_chain_ids.empty()) return true;
+    const auto geometry = resolve_dimension_geometry_owner(owner);
+    const auto dx = resolved.segment.end.x - resolved.segment.start.x;
+    const auto dy = resolved.segment.end.y - resolved.segment.start.y;
+    const auto chord = std::hypot(dx, dy);
+    if (!(chord > kGeometryTolerance)) return false;
+    for (const auto& id : dimension.segment_chain_ids) {
+        const auto edge = std::find_if(geometry.segments.begin(), geometry.segments.end(),
+            [&](const auto& item) { return item.segment_id == id; });
+        if (edge == geometry.segments.end() || edge->segment.sweep_radians != 0.0) return false;
+        const auto ex = edge->segment.end.x - edge->segment.start.x;
+        const auto ey = edge->segment.end.y - edge->segment.start.y;
+        if ((ex * dx + ey * dy) / chord <= 0.0 ||
+            std::abs(ex * dy - ey * dx) / chord > kGeometryTolerance) return false;
+    }
+    return std::abs(chord - resolved.segment_length()) <= kGeometryTolerance;
 }
 
 std::optional<DxfArc> dxf_arc_from_segment(const Segment& segment, std::string layer) {
@@ -584,15 +649,6 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 diagnostic(result.diagnostics, entity.id, entity.type, "inactive_design_owner_not_exported");
                 return;
             }
-            // DxfDimension is deliberately limited to a linear measurement.
-            // Angle and area dimensions have different analytical semantics;
-            // exporting their first segment as a linear dimension would make
-            // a successful-looking file lie about the source document.
-            if (decoded.dimension->kind != BoundaryDimensionKind::segment_length) {
-                diagnostic(result.diagnostics, entity.id, entity.type,
-                           "dimension_semantics_not_representable");
-                return;
-            }
             if (decoded.dimension->presentation &&
                 !decoded.dimension->presentation->visible) {
                 // Visibility is presentation state. Keep hidden dimensions
@@ -609,13 +665,69 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             // resolution cannot admit physical-room targets or their holes.
             const auto resolved = resolve_current_boundary_dimension(*decoded.dimension, document);
             const auto text = entity.properties.value("display_text", std::string{});
+            const auto text_rotation = decoded.dimension->presentation
+                ? normalized_degrees(decoded.dimension->presentation->rotation_radians) : 0.0;
+            const auto callout = [&](std::string name, double quantity, std::string_view suffix,
+                                     const char* fidelity) {
+                if (text != " ") {
+                    name += ": " + dimension_quantity_text(quantity, suffix, text);
+                    if (name.size() > DxfExchangeLimits{}.max_string_bytes)
+                        throw std::invalid_argument("DXF dimension callout exceeds its transport limit");
+                    result.drawing.labels.push_back({{decoded.dimension->text_position.x,
+                        decoded.dimension->text_position.y}, 0.15, text_rotation, std::move(name), "Dimensions"});
+                }
+                diagnostic(result.diagnostics, entity.id, entity.type, fidelity);
+            };
+            if (resolved.kind == BoundaryDimensionKind::area) {
+                callout("Area", resolved.area(), " m2", "dimension_area_exported_as_quantity_callout");
+                return;
+            }
+            if (resolved.kind == BoundaryDimensionKind::angle) {
+                callout("Angle", resolved.angle() * 180.0 / std::numbers::pi, " deg",
+                    "dimension_angle_exported_as_quantity_callout");
+                return;
+            }
+            if (!linear_dimension_chain(*decoded.dimension, owner->second, resolved)) {
+                // A bent/curved multi-edge total has no single straight or
+                // circular dimension target. Keep its actual quantity as a
+                // clearly named callout instead of measuring its endpoint chord.
+                callout("Length", resolved.segment_length(), " m",
+                    "dimension_chain_exported_as_total_callout");
+                return;
+            }
+            if (resolved.segment.sweep_radians != 0.0) {
+                auto measured = resolved.segment;
+                if (measured.sweep_radians < 0.0) {
+                    std::swap(measured.start, measured.end);
+                    measured.sweep_radians = -measured.sweep_radians;
+                }
+                const auto arc = dxf_arc_from_segment(measured, "Dimensions");
+                if (!arc) {
+                    diagnostic(result.diagnostics, entity.id, entity.type, "dimension_arc_not_representable");
+                    return;
+                }
+                auto dimension_radius = std::hypot(decoded.dimension->text_position.x - arc->center.x,
+                                                   decoded.dimension->text_position.y - arc->center.y);
+                if (dimension_radius <= kGeometryTolerance) dimension_radius = arc->radius + 0.3;
+                // Keep the arc definition inside the actual measured CCW span.
+                // Manual text placement cannot select its complementary arc.
+                const auto midpoint_angle = arc->start_degrees * std::numbers::pi / 180.0 +
+                    measured.sweep_radians * 0.5;
+                const DxfPoint arc_position{arc->center.x + dimension_radius * std::cos(midpoint_angle),
+                                           arc->center.y + dimension_radius * std::sin(midpoint_angle)};
+                result.drawing.arc_dimensions.push_back({{measured.start.x, measured.start.y},
+                    {measured.end.x, measured.end.y}, arc->center, arc_position,
+                    {decoded.dimension->text_position.x, decoded.dimension->text_position.y},
+                    text_rotation, text, "Dimensions"});
+                return;
+            }
             result.drawing.dimensions.push_back({{resolved.segment.start.x, resolved.segment.start.y},
                 {resolved.segment.end.x, resolved.segment.end.y},
                 {decoded.dimension->text_position.x, decoded.dimension->text_position.y},
                 {decoded.dimension->text_position.x, decoded.dimension->text_position.y},
-                decoded.dimension->presentation
-                    ? normalized_degrees(decoded.dimension->presentation->rotation_radians) : 0.0,
-                text, "Dimensions"});
+                normalized_degrees(std::atan2(resolved.segment.end.y - resolved.segment.start.y,
+                                               resolved.segment.end.x - resolved.segment.start.x)),
+                text, "Dimensions", true, text_rotation});
         } catch (const std::exception&) {
             diagnostic(result.diagnostics, entity.id, entity.type, "dimension_not_representable");
         }
@@ -839,7 +951,7 @@ void import_labels(const std::vector<DxfLabel>& labels, AnnotationState& state,
 void import_dimensions(const std::vector<DxfDimension>& dimensions,
                        DxfProjectImportResult& result, AnnotationState& annotations,
                        std::size_t& boundary_counter, std::size_t& label_counter,
-                       Json& source_layers) {
+                       Json& source_layers, double source_metres_per_unit) {
     for (const auto& dimension : dimensions) {
         const Boundary extension{{{dimension.extension_start.x, dimension.extension_start.y},
                                   {dimension.extension_end.x, dimension.extension_end.y}, 0.0}};
@@ -853,20 +965,76 @@ void import_dimensions(const std::vector<DxfDimension>& dimensions,
                 {"text_position", Json::array({dimension.text_position.x,
                                                 dimension.text_position.y})},
                 {"rotation_degrees", dimension.rotation_degrees},
+                {"aligned", dimension.aligned},
+                {"text_rotation_degrees", dimension.text_rotation_degrees},
+                {"text_height", dimension.text_height},
+                {"source_metres_per_unit", source_metres_per_unit},
                 {"text", dimension.text},
                 {"annotation_id", label_id}}}}));
         LabelInstance label;
         label.id = label_id;
         label.template_id = "dxf-dimension";
-        label.content = dimension.text.empty() ? "Dimension" : dimension.text;
-        label.style.text_height_metres = 0.15;
+        const auto dx = dimension.extension_end.x - dimension.extension_start.x;
+        const auto dy = dimension.extension_end.y - dimension.extension_start.y;
+        const auto angle = radians_from_degrees(dimension.rotation_degrees);
+        const auto measurement = dimension.aligned ? std::hypot(dx, dy)
+            : std::abs(dx * std::cos(angle) + dy * std::sin(angle));
+        label.content = imported_dimension_text(measurement, dimension.text, source_metres_per_unit);
+        label.style.text_height_metres = dimension.text_height;
         label.style.stroke_color = "#263241";
         label.style.fill_color = "#FFFFFF";
         label.placement.position = {dimension.text_position.x, dimension.text_position.y};
-        label.placement.rotation_radians = radians_from_degrees(dimension.rotation_degrees);
+        label.placement.rotation_radians = radians_from_degrees(dimension.text_rotation_degrees);
         source_layers[label.id] = dimension.layer;
         annotations.labels.push_back(std::move(label));
         diagnostic(result.diagnostics, {}, "DIMENSION", "dimension_associativity_unbound");
+    }
+}
+
+void import_arc_dimensions(const std::vector<DxfArcDimension>& dimensions,
+                           DxfProjectImportResult& result, AnnotationState& annotations,
+                           std::size_t& boundary_counter, std::size_t& label_counter,
+                           Json& source_layers, double source_metres_per_unit) {
+    for (const auto& dimension : dimensions) {
+        const auto radius = std::hypot(dimension.extension_start.x - dimension.center.x,
+                                       dimension.extension_start.y - dimension.center.y);
+        const auto start_angle = std::atan2(dimension.extension_start.y - dimension.center.y,
+                                           dimension.extension_start.x - dimension.center.x);
+        const auto end_angle = std::atan2(dimension.extension_end.y - dimension.center.y,
+                                         dimension.extension_end.x - dimension.center.x);
+        auto sweep = end_angle - start_angle;
+        if (sweep <= 0.0) sweep += kFullTurn;
+        const Segment measured{{dimension.extension_start.x, dimension.extension_start.y},
+            {dimension.center.x + radius * std::cos(end_angle),
+             dimension.center.y + radius * std::sin(end_angle)}, sweep};
+        const auto measured_length = segment_length(measured);
+        const auto boundary_id = "dxf-boundary-" + std::to_string(++boundary_counter);
+        const auto label_id = "dxf-dimension-" + std::to_string(++label_counter);
+        result.entities.push_back(imported_boundary(boundary_id, Boundary{measured},
+            "dxf_arc_dimension_extension", dimension.layer, "ARC_DIMENSION",
+            Json{{"dxf_arc_dimension", Json{
+                {"center", Json::array({dimension.center.x, dimension.center.y})},
+                {"extension_start", Json::array({dimension.extension_start.x, dimension.extension_start.y})},
+                {"extension_end", Json::array({dimension.extension_end.x, dimension.extension_end.y})},
+                {"dimension_arc", Json::array({dimension.dimension_arc.x, dimension.dimension_arc.y})},
+                {"text_position", Json::array({dimension.text_position.x, dimension.text_position.y})},
+                {"text_rotation_degrees", dimension.text_rotation_degrees},
+                {"text_height", dimension.text_height},
+                {"source_metres_per_unit", source_metres_per_unit},
+                {"text", dimension.text},
+                {"annotation_id", label_id}}}}));
+        LabelInstance label;
+        label.id = label_id;
+        label.template_id = "dxf-dimension";
+        label.content = imported_dimension_text(measured_length, dimension.text, source_metres_per_unit);
+        label.style.text_height_metres = dimension.text_height;
+        label.style.stroke_color = "#263241";
+        label.style.fill_color = "#FFFFFF";
+        label.placement.position = {dimension.text_position.x, dimension.text_position.y};
+        label.placement.rotation_radians = radians_from_degrees(dimension.text_rotation_degrees);
+        source_layers[label.id] = dimension.layer;
+        annotations.labels.push_back(std::move(label));
+        diagnostic(result.diagnostics, boundary_id, "ARC_DIMENSION", "dimension_associativity_unbound");
     }
 }
 
@@ -878,7 +1046,7 @@ void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& nati
         if (native_inserts.contains(insert_index)) continue;
         const auto& insert = drawing.inserts[insert_index];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
-            [&](const auto& value) { return value.name == insert.block_name; });
+            [&](const auto& value) { return block_identity(value.name) == block_identity(insert.block_name); });
         if (block == drawing.blocks.end()) continue;
         const InsertTransform transform{{insert.insertion.x, insert.insertion.y}, insert.scale_x,
             insert.scale_y, radians_from_degrees(insert.rotation_degrees), block->base};
@@ -1076,7 +1244,7 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
     for (std::size_t i = 0; i < drawing.inserts.size(); ++i) {
         const auto& insert = drawing.inserts[i];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
-            [&](const auto& value) { return value.name == insert.block_name; });
+            [&](const auto& value) { return block_identity(value.name) == block_identity(insert.block_name); });
         if (block == drawing.blocks.end() || block->vertex_entity_json.empty()) continue;
         try {
             if (!source_is_metres || insert.insertion.x != 0 || insert.insertion.y != 0 ||
@@ -1165,6 +1333,15 @@ void normalize_drawing_to_metres(DxfDrawing& drawing, double factor) {
         point(dimension.extension_end);
         point(dimension.dimension_line);
         point(dimension.text_position);
+        length(dimension.text_height);
+    }
+    for (auto& dimension : drawing.arc_dimensions) {
+        point(dimension.extension_start);
+        point(dimension.extension_end);
+        point(dimension.center);
+        point(dimension.dimension_arc);
+        point(dimension.text_position);
+        length(dimension.text_height);
     }
     for (auto& hatch : drawing.hatches)
         for (auto& vertex : hatch.boundary) point(vertex);
@@ -1177,7 +1354,7 @@ void preflight_project_expansion(const DxfDrawing& drawing, const DxfExchangeLim
     // Transport budgets bound stored definitions, not their INSERT expansion.
     // The mapper separately caps work records (including annotation children)
     // and analytical geometry: one line/arc segment, two circle segments,
-    // polyline/hatch vertices, label anchors and four dimension anchors.
+    // polyline/hatch vertices, label anchors and four/five dimension anchors.
     struct Work {
         std::size_t records{};
         std::size_t geometry{};
@@ -1216,6 +1393,10 @@ void preflight_project_expansion(const DxfDrawing& drawing, const DxfExchangeLim
         (void)dimension;
         append({2, 4, true});
     }
+    for (const auto& dimension : drawing.arc_dimensions) {
+        (void)dimension;
+        append({2, 5, true});
+    }
     for (const auto& hatch : drawing.hatches)
         append({1, hatch.boundary.size(), false});
 
@@ -1228,10 +1409,10 @@ void preflight_project_expansion(const DxfDrawing& drawing, const DxfExchangeLim
             add(work.records, 1, std::numeric_limits<std::size_t>::max());
             add(work.geometry, 1, std::numeric_limits<std::size_t>::max());
         }
-        blocks.emplace(block.name, work);
+        blocks.emplace(block_identity(block.name), work);
     }
     for (const auto& insert : drawing.inserts) {
-        const auto block = blocks.find(insert.block_name);
+        const auto block = blocks.find(block_identity(insert.block_name));
         if (block == blocks.end()) throw std::invalid_argument("invalid_or_excessive_dxf");
         append(block->second);
     }
@@ -1326,7 +1507,8 @@ DxfProjectImportResult import_project_dxf(std::string_view bytes,
     Json annotation_layers = Json::object();
     std::size_t label_counter = 0;
     import_labels(parsed.drawing.labels, annotations, label_counter, annotation_layers);
-    import_dimensions(parsed.drawing.dimensions, result, annotations, boundary_counter, label_counter, annotation_layers);
+    import_dimensions(parsed.drawing.dimensions, result, annotations, boundary_counter, label_counter, annotation_layers, *factor);
+    import_arc_dimensions(parsed.drawing.arc_dimensions, result, annotations, boundary_counter, label_counter, annotation_layers, *factor);
     import_inserts(parsed.drawing, native_inserts, result, boundary_counter, label_counter, annotations, annotation_layers);
     if (!annotations.labels.empty()) {
         try {

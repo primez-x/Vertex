@@ -14,6 +14,36 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 analytical DXF dimension source implementation
+
+Single curved boundary/wall-axis lengths now map to analytical arc dimensions;
+clockwise source endpoints reverse for CCW exchange. The dimension-arc point
+stays inside the measured span independently of manual text placement. Straight
+lengths use aligned dimensions with separate measurement/text rotations. Bent
+multi-edge totals, areas and angles retain truthful named quantity callouts,
+with native association losses diagnosed. Current room quantities use the
+actual complete snapshot and net clear area rather than an entity-only check.
+
+The bounded AC1027 codec separates repeated arc subclass fields, generates
+visible anonymous dimension pictures from analytical primitives, and resolves
+block names/collisions without case sensitivity. Picture references cannot
+activate native metadata. Import reconstructs actual curved measurement
+geometry and useful measured text; metre normalization includes every anchor
+and text height. Project expansion reserves both reconstructed geometry and
+annotation children. Desktop import remaps both dimension annotation-ID lanes.
+The isolated adapter retains direct pictures and reports omitted transformed
+pictures rather than borrowing geometry from a different frame.
+
+Independent source review identified source-unit text substitution and the
+manual text-position flag as concrete defects. Import now substitutes authored
+`<>` text in original drawing units and retains the conversion metadata; export
+sets bit 128 and import admits only that additional documented type flag.
+Root integrated source review and focused independent review are complete;
+the reviewer found no additional actionable finding after those corrections. No
+builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation, round trips and external CAD rendering remain unverified;
+the installed candidate is unchanged.
+
 ### October 9 native click and current-room DXF source corrections
 
 Stationary 3D clicks now retain the press position for plain selection,

@@ -33,7 +33,7 @@ struct DxfLabel {
     std::string layer{"0"};
 };
 // A bounded linear dimension retains the two extension points, the dimension
-// line location, rotation, and an optional text override. Associative blocks,
+// line location, rotation, and an optional text override. Associativity,
 // tolerances, alternate units, and annotative styles are outside this subset.
 struct DxfDimension {
     DxfPoint extension_start;
@@ -43,6 +43,19 @@ struct DxfDimension {
     double rotation_degrees{};
     std::string text;
     std::string layer{"0"};
+    bool aligned{false};
+    double text_rotation_degrees{};
+    double text_height{0.15};
+};
+// A complete counterclockwise arc-length dimension in the XY plane. The
+// extension endpoints share a radius about center; dimension_arc sets the
+// radius of the displayed dimension arc, independently of the measured arc.
+struct DxfArcDimension {
+    DxfPoint extension_start, extension_end, center, dimension_arc, text_position;
+    double text_rotation_degrees{};
+    std::string text;
+    std::string layer{"0"};
+    double text_height{0.15};
 };
 // A solid hatch is represented by one closed planar polygon. Patterned,
 // multi-loop, associative, and edge-defined hatches are reported as
@@ -88,6 +101,7 @@ struct DxfDrawing {
     std::vector<DxfBlock> blocks;
     std::vector<DxfInsert> inserts;
     std::vector<DxfCircle> circles;
+    std::vector<DxfArcDimension> arc_dimensions;
 };
 struct DxfDiagnostic {
     std::size_t entity_index{}; // One-based ENTITIES ordinal; zero for a section.
@@ -111,7 +125,7 @@ struct DxfExchangeLimits {
 [[nodiscard]] DxfImportResult parse_dxf_ascii(
     std::string_view bytes, const DxfExchangeLimits& limits = {});
 // Canonical entity order: block definitions, lines, arcs, circles, polylines,
-// dimensions, hatches, labels, then INSERT references (vector order retained
+// linear and arc dimensions, hatches, labels, then INSERT references (vector order retained
 // within each family).
 // Unsupported style/3D information is not representable and is never synthesized.
 [[nodiscard]] std::string export_dxf_ascii(
