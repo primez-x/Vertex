@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete wall hosted removal source integration
+
+The wall Delete/Cut path now opts into complete ordinary hosted retirement and
+retains the existing detached room-review transaction. The source producer
+derives actual semantic openings and catalog-local components, preserves raw
+catalog survivors and aliases, and checks actual protected phase ownership.
+Rooms and their lineage remain available until explicit context/plane decisions.
+A new closed physical-wall deletion proof thirty-five records the complete
+consequence lane; historical singleton/group proofs retain their old meanings.
+Native 138/extraction 136 retains the new proof through single and batch room
+review and history. Complete cleanup distinguishes document owners from local
+view/sheet identities and preserves unrelated output-view presentation overrides.
+
+Independent source review approved after correcting presentation namespace
+cleanup; root integrated source review is complete. No builds, tests,
+probes, scripts, native jobs, launches, packages or installations ran. Compilation
+and runtime remain unverified; the installed candidate is unchanged. Shared
+baseline wall demolition, broader mixed wall/room cohorts and final production
+qualification remain unfinished scope.
+
 ### October 9 roof and mixed architectural removal source integration
 
 Roof Delete/Cut now opt into actual hosted-component retirement. Physically

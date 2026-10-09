@@ -2452,7 +2452,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
         throw std::invalid_argument("Room review requires one bounded direct physical-wall proof");
     const auto version=proof.at("version").get<int>();
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
-    if ((grouped_deletion && version!=31) || (!grouped_deletion &&
+    if ((grouped_deletion && version!=31 && version!=35) || (!grouped_deletion &&
         version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
@@ -2532,7 +2532,8 @@ static int room_review_geometry_dialect(const ApplyBoundaryConstraintChanges& co
     (void)completion;
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
     if (is_physical_wall_room_deletion_review_command(geometry))
-        return completion.room_review_geometry_proof.at("kind")=="physical_wall_deletion" ? 31 : 30;
+        return completion.room_review_geometry_proof.at("kind")=="physical_wall_deletion"
+            ? completion.room_review_geometry_proof.at("version").get<int>() : 30;
     if (is_physical_wall_room_rigid_review_command(geometry)) return 28;
     if (is_physical_wall_room_joint_review_command(geometry)) return 32;
 #endif
@@ -7279,7 +7280,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)

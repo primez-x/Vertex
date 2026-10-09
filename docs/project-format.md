@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v137
+# Vertex project formats v1 through v138
+
+## Complete hosted wall removal with room review (v138)
+
+Native reader 138 and JSON/assets extraction 136 retain physical-wall deletion
+proof thirty-five under single room-review dialect thirty-five or the existing
+batch twenty-seven. Its closed fields retain the historical grouped proof's
+version, kind, revision, message, sorted source wall IDs and canonical asset-free
+raw child, plus exactly `complete_hosted_removal: true`. One through 128 actual
+walls are permitted. The complete typed source producer independently derives
+all opening, hosted-component, reference and presentation consequences; the raw
+child must equal that full derivation. No arbitrary deletion authority follows
+from the marker.
+
+The capture encoder retains historical raw singleton or grouped thirty-one when
+the entire command equals the old producer. New consequences require independent
+complete-source qualification before selecting thirty-five. Historical retained
+proof replay continues to use the old producer. Complete removal protects actual
+inactive/shared-alternative ownership, raw catalog definitions and surviving
+qualified aliases. Room owners and physical lineage remain unchanged until the
+same context/plane review accepts their consequences.
+
+Current, retained and wrapped commands retain their respective floors; the
+source reader accepts the new single/batch room proof without changing older
+dialects. Source implementation and integration review are in progress.
+Compilation and runtime remain unverified.
 
 ## Coordinated ordinary roof removal (v137)
 

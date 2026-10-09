@@ -624,7 +624,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return version==5 ? 92U : version==4 ? 91U : version==3 ? 89U : version==2 ? 88U : 0U;
             };
             const auto profile_proof=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->std::uint32_t {
-                if (depth>2 || !proof.is_object() || proof.value("kind",std::string{})!="apply_boundary_constraint_changes") return 0;
+                if (depth>2 || !proof.is_object()) return 0;
+                if (proof.value("kind",std::string{})=="physical_wall_deletion" && proof.value("version",0)==35)
+                    return 138U;
+                if (proof.value("kind",std::string{})!="apply_boundary_constraint_changes") return 0;
                 if (proof.value("version",0)==34) {
                     const auto intent=proof.find("phase_constraint_authoring_intent");
                     return intent==proof.end() ? 0U : profile_intent(*intent);
@@ -2441,6 +2444,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 138 &&
          sqlite3_column_int(user_version.get(), 0) != 137 &&
          sqlite3_column_int(user_version.get(), 0) != 136 &&
          sqlite3_column_int(user_version.get(), 0) != 135 &&
@@ -3033,6 +3037,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=138)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 138 for complete hosted wall removal with room review");
         if (required_format>=137)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 137 for coordinated ordinary roof and hosted component removal");
         if (required_format>=136)

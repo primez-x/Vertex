@@ -1,4 +1,8 @@
 #include "sketch/physical_wall_room_review.hpp"
+#include "sketch/architecture.hpp"
+#include "sketch/architectural_object_removal.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/boundary_integrity.hpp"
@@ -24,6 +28,12 @@ namespace {
 using Json=nlohmann::json;
 using Entities=std::map<std::string,Entity,std::less<>>;
 [[noreturn]] void invalid(const std::string& reason) { throw std::invalid_argument("Physical room review: "+reason); }
+// Only this expected legacy qualification refusal permits trying the new
+// producer. Malformed source, codec and native failures never become fallback.
+struct WallDeletionReferenceRefusal final : std::invalid_argument {
+    explicit WallDeletionReferenceRefusal(const std::string& reason)
+        : std::invalid_argument("Physical room review: "+reason) {}
+};
 void keys(const Json& value,std::initializer_list<const char*> expected) {
     if (!value.is_object() || value.size()!=expected.size()) invalid("unsupported intent fields");
     for (const auto* key:expected) if (!value.contains(key)) invalid("missing intent field");
@@ -187,7 +197,8 @@ Json retain_registry_metadata(const Json& original,const Json& canonical) {
     }
     return canonical;
 }
-Entities remove_known_object_memberships(Entities result,const std::set<std::string>& removed) {
+Entities remove_known_object_memberships(Entities result,const std::set<std::string>& removed,
+    bool preserve_presentation_namespaces=false) {
     if (removed.empty()) return result;
     const auto filter_ids=[&](Json& values) {
         values.erase(std::remove_if(values.begin(),values.end(),[&](const auto& value) {
@@ -234,6 +245,7 @@ Entities remove_known_object_memberships(Entities result,const std::set<std::str
             if (!entity.properties.at("state").contains("overrides")) continue;
             auto& overrides=entity.properties.at("state").at("overrides");
             overrides.erase(std::remove_if(overrides.begin(),overrides.end(),[&](const auto& record) {
+                if (preserve_presentation_namespaces && record.at("target_kind")=="output_view") return false;
                 return removed.contains(record.at("target_id").template get<std::string>());
             }),overrides.end());
             validate_annotation_entity(entity);
@@ -242,12 +254,27 @@ Entities remove_known_object_memberships(Entities result,const std::set<std::str
     return result;
 }
 void refuse_unresolved_wall_deletion_references(const Entities& original,const Entities& candidate,
-    const std::set<std::string>& removed) {
+    const std::set<std::string>& removed,bool complete_hosted_removal=false) {
     // Receipt containers may deliberately retain historical source identities.
     // Admit only supported, independently validated and unchanged evidence;
     // vendor metadata elsewhere never acquires that exemption by its name.
     if (const auto unsupported=validate_boundary_integrity(candidate)) invalid(*unsupported);
     const auto organization=organize_project(candidate);
+    std::set<std::string> retained_output_views;
+    if (complete_hosted_removal) for (const auto& [owner,entity]:candidate) {
+        (void)owner;
+        if (entity.type!=kSheetViewEntityType) continue;
+        const auto model=decode_sheet_view_entity(entity);
+        for (const auto& view:model.views()) retained_output_views.insert(view.id);
+    }
+    std::map<std::string,AssemblyModel,std::less<>> catalog_models;
+    const auto catalog_model=[&](const std::string& catalog_id)->const AssemblyModel& {
+        const auto previous=catalog_models.find(catalog_id);
+        if (previous!=catalog_models.end()) return previous->second;
+        const auto catalog=original.find(catalog_id);
+        if (catalog==original.end() || catalog->second.type!="assembly_model") invalid("retained material assignment lacks actual catalog");
+        return catalog_models.emplace(catalog_id,AssemblyModel::from_json(catalog->second.properties.at("model"))).first->second;
+    };
     for (const auto& [entity_id,entity]:candidate) {
         auto properties=entity.properties,extensions=entity.extensions;
         const auto previous=original.find(entity_id);
@@ -284,8 +311,84 @@ void refuse_unresolved_wall_deletion_references(const Entities& original,const E
                 }
             }
         }
+        if (complete_hosted_removal && entity.type=="assembly_model") {
+            // These validated catalog-local slots are declarations, never
+            // document owner references. Preserve their authoritative bytes.
+            (void)catalog_model(entity_id);
+            auto& model=properties.at("model");
+            for (auto& row:model.at("materials")) row.erase("id");
+            for (auto& row:model.at("types")) {
+                row.erase("id");row.erase("materials");
+                if (row.contains("profiles")) for (auto& child:row.at("profiles")) {
+                    child.erase("id");child.erase("material_slot");
+                }
+                if (row.contains("parts")) for (auto& child:row.at("parts")) {
+                    child.erase("id");child.erase("type_id");child.erase("material_overrides");
+                }
+            }
+            for (auto& row:model.at("instances")) {
+                row.erase("id");row.erase("type_id");row.erase("material_overrides");
+                if (row.contains("nested_overrides")) for (auto& child:row.at("nested_overrides")) {
+                    child.erase("part_path");child.erase("material_overrides");
+                }
+            }
+        }
+        if (complete_hosted_removal) {
+            if (properties.contains("material_assignment")) {
+                auto& assignment=properties.at("material_assignment");
+                if (!assignment.is_object() || !assignment.at("version").is_number_integer() || assignment.at("version")!=1)
+                    invalid("unsupported retained material assignment");
+                const auto& model=catalog_model(assignment.at("catalog_id").get<std::string>());
+                const auto material_id=assignment.at("material_id").get<std::string>();
+                if (std::none_of(model.materials().begin(),model.materials().end(),[&](const auto& row){return row.id==material_id;}))
+                    invalid("retained material assignment lacks actual definition");
+                assignment.erase("material_id");
+            }
+            if (entity.type=="wall" && properties.contains("layers")) {
+                Wall wall;std::string error;
+                if (!read_document_wall(entity,{},wall,error)) invalid(error);
+                for (auto& layer:properties.at("layers")) {
+                    layer.erase("id");
+                    if (layer.contains("material") && !layer.at("material").is_null()) layer.at("material").erase("material_id");
+                }
+            } else if (entity.type==kSheetViewEntityType) {
+                (void)decode_sheet_view_entity(entity);
+                auto& model=properties.at("model");
+                for (auto& view:model.at("views")) {
+                    view.erase("id");
+                    if (view.contains("overlays")) for (auto& overlay:view.at("overlays")) overlay.erase("id");
+                }
+                // The validated sheet graph owns these local declarations and
+                // references. Their spelling never grants document-owner authority.
+                model.erase("sheet_order");
+                for (auto& sheet:model.at("sheets")) {
+                    sheet.erase("id");
+                    if (sheet.contains("revisions")) for (auto& revision:sheet.at("revisions")) revision.erase("id");
+                    if (sheet.contains("viewports")) for (auto& viewport:sheet.at("viewports")) {
+                        viewport.erase("id");viewport.erase("view_id");
+                    }
+                    if (sheet.contains("callouts")) for (auto& callout:sheet.at("callouts")) {
+                        callout.erase("id");callout.erase("target_sheet_id");callout.erase("target_viewport_id");
+                    }
+                    if (sheet.contains("schedules")) for (auto& schedule:sheet.at("schedules")) schedule.erase("id");
+                }
+            } else if (entity.type==kAnnotationEntityType) {
+                validate_annotation_entity(entity);
+                auto& state=properties.at("state");
+                if (state.contains("overrides")) for (auto& record:state.at("overrides")) {
+                    if (record.at("target_kind")!="output_view") continue;
+                    const auto target=record.at("target_id").get<std::string>();
+                    if (retained_output_views.contains(target)) record.erase("target_id");
+                }
+            } else if (entity.type=="model_phases") {
+                (void)ModelPhases::from_json(entity.properties.at("model"));
+                for (auto& alternative:properties.at("model").at("alternatives")) alternative.erase("id");
+                // Saved selection is local to the admitted alternatives.
+                properties.at("model").erase("active_alternative");
+            }
+        }
         if (mentions(properties,removed) || mentions(extensions,removed))
-            invalid("surviving object "+entity_id+" has an unsupported reference to a deleted wall or attached object");
+            throw WallDeletionReferenceRefusal("surviving object "+entity_id+" has an unsupported reference to a deleted wall or attached object");
     }
 }
 std::vector<EntityChange> physical_wall_deletion_changes(const Entities& source,const std::vector<std::string>& wall_ids) {
@@ -328,6 +431,378 @@ std::vector<EntityChange> physical_wall_deletion_changes(const Entities& source,
         if (after==candidate.end()) changes.push_back(EntityChange::erase(entity_id));
         else if (entity!=after->second || entity.properties.dump()!=after->second.properties.dump() ||
             entity.extensions.dump()!=after->second.extensions.dump()) changes.push_back(EntityChange::upsert(after->second));
+    }
+    return changes;
+}
+// Complete removal is a separate producer. The legacy producer above remains
+// the authority for every historical raw singleton and grouped v31 proof.
+struct WallDeletionSourceBudget {
+    static constexpr std::size_t node_limit=4*1024*1024,byte_limit=64*1024*1024;
+    std::size_t nodes{},bytes{};
+    void text(const std::string& value) {
+        if (value.size()>byte_limit-bytes) invalid("complete deletion source byte budget exceeded");
+        bytes+=value.size();
+    }
+    void read(const Json& root) {
+        std::vector<std::pair<const Json*,std::size_t>> pending{{&root,0}};
+        while (!pending.empty()) {
+            const auto [value,depth]=pending.back();pending.pop_back();
+            if (depth>64 || ++nodes>node_limit) invalid("complete deletion source node/nesting budget exceeded");
+            if (value->is_number_float() && !std::isfinite(value->get<double>())) invalid("nonfinite complete deletion source scalar");
+            if (value->is_string()) text(value->get_ref<const std::string&>());
+            if (value->is_binary()) {
+                if (value->get_binary().size()>byte_limit-bytes) invalid("complete deletion binary budget exceeded");
+                bytes+=value->get_binary().size();
+            }
+            if (!value->is_structured()) continue;
+            if (value->size()>node_limit-nodes || pending.size()>node_limit-nodes-value->size())
+                invalid("complete deletion pending-node budget exceeded");
+            if (value->is_object()) for (const auto& [key,child]:value->items()) {
+                text(key);pending.emplace_back(&child,depth+1);
+            } else for (const auto& child:*value) pending.emplace_back(&child,depth+1);
+        }
+    }
+};
+void bound_complete_wall_deletion_source(const Entities& source) {
+    if (source.size()>65536) invalid("complete deletion source entity budget exceeded");
+    WallDeletionSourceBudget budget;std::size_t phase_work{},catalog_rows{};
+    for (const auto& [entity_id,entity]:source) {
+        id(entity_id);
+        if (entity.id!=entity_id || !entity.properties.is_object() || !entity.extensions.is_object())
+            invalid("complete deletion requires actual identified entity envelopes");
+        budget.text(entity_id);budget.text(entity.type);budget.read(entity.properties);budget.read(entity.extensions);
+        if (entity.type=="model_phases") {
+            const auto& model=entity.properties.at("model");
+            const auto& members=model.at("entity_ids");const auto& alternatives=model.at("alternatives");
+            if (!members.is_array() || members.size()>65536 || !alternatives.is_array() || alternatives.size()>4096 ||
+                members.size()>(2000000-phase_work)/(alternatives.size()+1))
+                invalid("complete deletion phase inventory/work budget exceeded");
+            phase_work+=members.size()*(alternatives.size()+1);
+        } else if (entity.type=="assembly_model") {
+            const auto& model=entity.properties.at("model");
+            for (const auto* key:{"materials","types","instances"}) {
+                const auto& rows=model.at(key);
+                if (!rows.is_array() || rows.size()>65536-catalog_rows)
+                    invalid("complete deletion catalog inventory budget exceeded");
+                catalog_rows+=rows.size();
+            }
+        }
+    }
+}
+bool unqualified_wall_component_reference(const Json& root,const std::set<std::string>& locals,const Entities& source) {
+    if (root.is_object()) {
+        if (root.contains("instance_id") && root.at("instance_id").is_string() &&
+            locals.contains(root.at("instance_id").get<std::string>())) {
+            std::optional<std::string> qualified;
+            for (const auto* key:{"catalog_id","assembly_catalog_id"}) if (root.contains(key)) {
+                if (!root.at(key).is_string()) return true;
+                const auto catalog=root.at(key).get<std::string>();const auto found=source.find(catalog);
+                if (found==source.end() || found->second.type!="assembly_model" || (qualified && *qualified!=catalog)) return true;
+                qualified=catalog;
+            }
+            if (!qualified) return true;
+        }
+        for (const auto& child:root) if (unqualified_wall_component_reference(child,locals,source)) return true;
+    } else if (root.is_array())
+        for (const auto& child:root) if (unqualified_wall_component_reference(child,locals,source)) return true;
+    return false;
+}
+void refuse_retired_wall_overlay_references(const Entities& source,const Entities& candidate) {
+    using OverlayKeys=std::map<std::pair<std::string,std::string>,std::set<std::string>>;
+    OverlayKeys retired;
+    for (const auto& [entity_id,entity]:source) if (entity.type==kSheetViewEntityType) {
+        const auto before=decode_sheet_view_entity(entity);const auto& after_entity=candidate.at(entity_id);
+        const auto after=decode_sheet_view_entity(after_entity);
+        for (const auto& view:before.views()) {
+            const auto surviving=std::find_if(after.views().begin(),after.views().end(),[&](const auto& row){return row.id==view.id;});
+            if (surviving==after.views().end()) invalid("wall cleanup unexpectedly removed a saved view");
+            for (const auto& overlay:view.overlays)
+                if (std::none_of(surviving->overlays.begin(),surviving->overlays.end(),[&](const auto& row){return row.id==overlay.id;}))
+                    retired[{entity_id,view.id}].insert(overlay.id);
+        }
+    }
+    for (const auto& [entity_id,entity]:candidate) {
+        for (const auto* root:{&entity.properties,&entity.extensions}) {
+            std::vector<const Json*> pending{root};
+            while (!pending.empty()) {
+                const auto* value=pending.back();pending.pop_back();
+                if (value->is_object()) {
+                    if (value->contains("view_id") && value->at("view_id").is_string() &&
+                        value->contains("overlay_id") && value->at("overlay_id").is_string()) {
+                        auto owner=entity_id;
+                        for (const auto* key:{"sheet_view_entity_id","sheet_view_id","entity_id"})
+                            if (value->contains(key) && value->at(key).is_string()) { owner=value->at(key).get<std::string>();break; }
+                        const auto found=retired.find({owner,value->at("view_id").get<std::string>()});
+                        if (found!=retired.end() && found->second.contains(value->at("overlay_id").get<std::string>()))
+                            invalid("retained qualified reference to a deleted wall overlay");
+                    }
+                    for (const auto& child:*value) pending.push_back(&child);
+                } else if (value->is_array()) for (const auto& child:*value) pending.push_back(&child);
+            }
+        }
+        if (entity.type!=kSheetViewEntityType) continue;
+        for (auto view:entity.properties.at("model").at("views")) {
+            const auto children=retired.find({entity_id,view.at("id").get<std::string>()});
+            if (children==retired.end()) continue;
+            view.erase("id");view.erase("object_ids");
+            auto& presentation=view.at("presentation");
+            if (presentation.contains("appearance") && !presentation.at("appearance").is_null())
+                for (auto& row:presentation.at("appearance").at("objects")) row.erase("object_id");
+            if (view.contains("overlays")) for (auto& row:view.at("overlays")) {
+                row.erase("id");row.erase("object_id");
+                if (row.contains("dimension_binding") && !row.at("dimension_binding").is_null())
+                    row.at("dimension_binding").erase("object_id");
+            }
+            if (mentions(view,children->second)) invalid("saved view retains an opaque reference to a deleted wall overlay");
+        }
+    }
+}
+std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities& source,const std::vector<std::string>& wall_ids) {
+    bound_complete_wall_deletion_source(source);
+    if (wall_ids.empty() || wall_ids.size()>128) invalid("deletion requires one to 128 physical walls");
+    const auto scope=constraint_phase_scope(source);
+    const auto organization=organize_project(source);
+    std::map<std::string,ModelPhases,std::less<>> phases;
+    std::map<std::string,std::string,std::less<>> memberships;
+    for (const auto& registry:scope.registries) {
+        phases.emplace(registry.registry_id,ModelPhases::from_json(source.at(registry.registry_id).properties.at("model")));
+        for (const auto& member:registry.registered_entity_ids)
+            if (!memberships.emplace(member,registry.registry_id).second) invalid("overlapping complete deletion phase ownership");
+    }
+    const auto mutable_owner=[&](const std::string& owner) {
+        const auto found=source.find(owner);
+        if (found==source.end() || found->second.required) invalid("required or absent complete deletion owner: "+owner);
+        const auto& entity=found->second;
+        const bool scoped=entity.properties.contains("property_id") || entity.properties.contains("building_id") ||
+            entity.properties.contains("floor_id") || entity.properties.contains("layer_id") ||
+            entity.properties.contains("level_id") || entity.properties.contains("wall_id");
+        const auto node=organization.nodes.find(owner);
+        if (entity.type=="assembly_model" || entity.type=="door" || entity.type=="window") {
+            // Legacy host/catalog carriers are not placeable organization
+            // nodes. Resolve their actual reference fields directly.
+            for (const auto& [key,type]:{std::pair{"property_id","property"}, {"building_id","building"},
+                {"floor_id","floor"}, {"layer_id","layer"}, {"wall_id","wall"}}) {
+                if (!entity.properties.contains(key)) continue;
+                const auto& reference=entity.properties.at(key);
+                if (!reference.is_string()) invalid("malformed complete deletion carrier context: "+owner);
+                const auto target=source.find(reference.get<std::string>());
+                if (target==source.end() || target->second.type!=type)
+                    invalid("unresolved complete deletion carrier context: "+owner);
+            }
+        } else if (scoped && (node==organization.nodes.end() || !node->second.issues.empty()))
+            invalid("complete deletion owner has unresolved actual drawing context: "+owner);
+        if (scope.inactive_owner_ids.contains(owner)) invalid("complete deletion owner is inactive: "+owner);
+        const auto member=memberships.find(owner);if (member==memberships.end()) return;
+        const auto& model=phases.at(member->second);
+        const auto contains=[&](const auto& values) { return std::find(values.begin(),values.end(),owner)!=values.end(); };
+        if (contains(model.baseline_ids())) {
+            if (model.active_alternative() || !model.alternatives().empty())
+                invalid("shared baseline owner requires typed phase demolition: "+owner);
+            return;
+        }
+        if (!model.active_alternative()) invalid("complete deletion owner does not participate in saved baseline: "+owner);
+        std::size_t proposals{};
+        for (const auto& alternative:model.alternatives()) {
+            if (contains(alternative.demolished_ids)) invalid("complete deletion owner has protected demolition membership: "+owner);
+            if (!contains(alternative.proposed_ids)) continue;
+            ++proposals;
+            if (alternative.id!=*model.active_alternative()) invalid("complete deletion owner belongs to another alternative: "+owner);
+        }
+        if (proposals!=1) invalid("complete deletion owner lacks sole saved proposal membership: "+owner);
+    };
+    std::set<std::string> roots,removed;
+    for (const auto& wall_id:wall_ids) {
+        id(wall_id);mutable_owner(wall_id);
+        if (source.at(wall_id).type!="wall") invalid("complete deletion requires actual physical wall roots");
+        if (!roots.insert(wall_id).second) invalid("duplicate wall deletion identity");
+    }
+    removed=roots;
+    std::map<std::string,std::vector<const Entity*>,std::less<>> openings;
+    for (const auto& [entity_id,entity]:source) {
+        if (entity.type!="opening" && entity.type!="door" && entity.type!="window") continue;
+        std::string host,error;
+        if (!read_document_wall_id(entity,host,error)) invalid(error);
+        if (!roots.contains(host)) continue;
+        mutable_owner(entity_id);removed.insert(entity_id);openings[host].push_back(&entity);
+        if (removed.size()>4096) invalid("complete deletion attached owner budget exceeded");
+    }
+    for (const auto& [entity_id,entity]:source) {
+        bool attached=false;
+        if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            attached=decoded.supported() && removed.contains(decoded.dimension->boundary_id);
+        } else if (entity.type=="constraint") {
+            const auto decoded=decode_constraint_entity(entity);
+            attached=decoded.supported() && std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
+                [&](const auto& binding){return removed.contains(binding.owner_id);});
+            if (attached && !constraint_participates(*decoded.constraint,scope))
+                invalid("attached constraint belongs to retained inactive geometry: "+entity_id);
+        }
+        if (attached) {
+            mutable_owner(entity_id);removed.insert(entity_id);
+            if (removed.size()>4096) invalid("complete deletion attached reference budget exceeded");
+        }
+    }
+    std::map<std::string,AssemblyModel,std::less<>> catalogs;
+    std::map<std::string,std::map<std::string,std::size_t,std::less<>>,std::less<>> instance_indices;
+    std::map<std::string,std::set<std::string>,std::less<>> retired_rows;
+    std::vector<std::pair<std::string,std::string>> components;
+    std::set<std::string> locals;
+    for (const auto& [entity_id,entity]:source) if (entity.type=="assembly_model") {
+        const auto& model=catalogs.emplace(entity_id,AssemblyModel::from_json(entity.properties.at("model"))).first->second;
+        for (std::size_t index=0;index<model.instances().size();++index) {
+            const auto& row=model.instances()[index];instance_indices[entity_id].emplace(row.id,index);
+            if (!row.placement || !roots.contains(row.placement->host_entity_id)) continue;
+            mutable_owner(entity_id);
+            if (memberships.contains(entity_id) && (!memberships.contains(row.placement->host_entity_id) ||
+                memberships.at(entity_id)!=memberships.at(row.placement->host_entity_id)))
+                invalid("hosted catalog and removed wall have foreign phase ownership");
+            if (components.size()>=4096) invalid("complete deletion hosted instance budget exceeded");
+            components.emplace_back(entity_id,row.id);locals.insert(row.id);retired_rows[entity_id].insert(row.id);
+        }
+    }
+    std::sort(components.begin(),components.end());
+    const auto aliases=embedded_assembly_presentation_ids(source);
+    auto cleanup_names=removed;
+    for (const auto& key:components) cleanup_names.insert(aliases.at(key));
+    // These aliases are derived presentation consequences of qualified rows,
+    // never selectable wall roots or catalog retirement authority.
+    for (const auto& [entity_id,entity]:source) if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+        const auto decoded=decode_boundary_dimension_entity(entity);
+        if (!decoded.supported() || !cleanup_names.contains(decoded.dimension->boundary_id)) continue;
+        mutable_owner(entity_id);removed.insert(entity_id);cleanup_names.insert(entity_id);
+        if (removed.size()>4096) invalid("complete deletion attached reference budget exceeded");
+    }
+    for (const auto& [entity_id,entity]:source) {
+        (void)entity_id;
+        if (unqualified_wall_component_reference(entity.properties,locals,source) ||
+            unqualified_wall_component_reference(entity.extensions,locals,source))
+            invalid("affected unqualified component reference has no retirement codec");
+    }
+    // Decode and bound all selected source geometry and expansion together,
+    // before either producer can call native builders. Source hosts stay whole.
+    std::size_t work{};std::map<std::string,std::size_t,std::less<>> costs;
+    std::map<std::string,Wall,std::less<>> walls;
+    struct OpeningSource {
+        std::string wall_id;
+        std::size_t index{};
+        OpeningAssembly assembly;
+        std::optional<DoorOperation> operation;
+    };
+    std::vector<OpeningSource> manufactured_openings;
+    const auto add=[&](std::size_t count) {
+        if (count>262144-work) invalid("aggregate complete wall/hosted geometry work budget exceeded");
+        work+=count;
+    };
+    for (const auto& wall_id:roots) {
+        Wall wall;std::string error;
+        if (!read_document_wall(resolve_vertical_placement(source,source.at(wall_id)),openings[wall_id],wall,error)) invalid(error);
+        if (wall.layers.size()>1024) invalid("complete deletion wall layer budget exceeded");
+        validate_wall_semantics(wall);
+        const auto cost=1+wall.layers.size()+wall.openings.size();costs.emplace(wall_id,cost);add(cost*3);
+        const auto material=[&](const std::string& catalog,const std::string& local) {
+            const auto found=catalogs.find(catalog);
+            if (found==catalogs.end() || std::none_of(found->second.materials().begin(),found->second.materials().end(),
+                [&](const auto& row){return row.id==local;})) invalid("removed wall material lacks actual catalog definition");
+        };
+        for (const auto& layer:wall.layers) if (layer.material) material(layer.material->catalog_id,layer.material->material_id);
+        if (source.at(wall_id).properties.contains("material_assignment")) {
+            const auto& assignment=source.at(wall_id).properties.at("material_assignment");
+            if (!assignment.is_object() || !assignment.at("version").is_number_integer() || assignment.at("version")!=1)
+                invalid("unsupported removed wall material assignment");
+            material(assignment.at("catalog_id").get<std::string>(),assignment.at("material_id").get<std::string>());
+        }
+        for (std::size_t index=0;index<openings[wall_id].size();++index) {
+            const auto& entity=*openings[wall_id][index];const auto& p=entity.properties;
+            std::optional<OpeningAssembly> assembly;std::optional<DoorOperation> operation;
+            if (p.contains("opening_kind")) {
+                if (!p.at("opening_kind").is_string()) invalid("malformed removed opening family");
+                const auto family=parse_opening_assembly_kind(p.at("opening_kind").get<std::string>());
+                if (!family && p.at("opening_kind")!="opening") invalid("unsupported removed opening family");
+                if (family) assembly=default_opening_assembly(*family);
+            }
+            if (p.contains("opening_assembly")) {
+                if (entity.type!="opening") invalid("manufactured assembly requires an actual semantic opening");
+                const auto actual=parse_opening_assembly(p.at("opening_assembly"));
+                if (!assembly || assembly->kind!=actual.kind) invalid("removed opening assembly differs from its actual family");
+                assembly=actual;
+            }
+            if (p.contains("door_operation")) {
+                if (entity.type!="opening") invalid("door operation requires an actual semantic opening");
+                operation=decode_door_operation(p.at("door_operation"));
+                if (!assembly || assembly->kind!=OpeningAssemblyKind::door) invalid("door operation has a non-door opening family");
+            }
+            if (p.contains("material_assignment")) {
+                const auto& assignment=p.at("material_assignment");
+                if (!assignment.is_object() || !assignment.at("version").is_number_integer() || assignment.at("version")!=1)
+                    invalid("unsupported removed opening material assignment");
+                material(assignment.at("catalog_id").get<std::string>(),assignment.at("material_id").get<std::string>());
+            }
+            if (assembly) {
+                // Current manufactured families have at most three panels and
+                // a fixed frame; reserve their complete native construction.
+                add(32);manufactured_openings.push_back({wall_id,index,*assembly,operation});
+            }
+        }
+        walls.emplace(wall_id,std::move(wall));
+    }
+    AssemblyExpansionBudget expansion_budget;
+    for (const auto& [catalog,local]:components) {
+        const auto& model=catalogs.at(catalog);
+        const auto& row=model.instances().at(instance_indices.at(catalog).at(local));
+        const auto expansion=model.expand(row,expansion_budget);
+        if (expansion.profiles.empty()) add(costs.at(row.placement->host_entity_id));
+    }
+    add(expansion_budget.consumed_nodes);add(expansion_budget.consumed_profile_segments);
+    // Analytical preflight uses a complete source copy, never a native source.
+    auto preflight=source;
+    for (const auto& [catalog,retired]:retired_rows) {
+        auto& rows=preflight.at(catalog).properties.at("model").at("instances");
+        rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row){return retired.contains(row.at("id").template get<std::string>());}),rows.end());
+    }
+    for (const auto& owner:removed) preflight.erase(owner);
+    preflight=remove_known_object_memberships(std::move(preflight),cleanup_names,true);
+    refuse_unresolved_wall_deletion_references(source,preflight,removed,true);
+    refuse_retired_wall_overlay_references(source,preflight);
+    const auto preserve_aliases=[&](const Entities& result) {
+        const auto remaining=embedded_assembly_presentation_ids(result);
+        for (const auto& [key,alias]:aliases) {
+            const auto retired=retired_rows.find(key.first);
+            if (retired!=retired_rows.end() && retired->second.contains(key.second)) continue;
+            const auto found=remaining.find(key);
+            if (found==remaining.end() || found->second!=alias)
+                invalid("complete wall deletion changes a surviving component presentation alias");
+        }
+    };
+    preserve_aliases(preflight);
+    for (const auto& [entity_id,entity]:source) {
+        const auto after=preflight.find(entity_id);
+        if (after==preflight.end() || entity!=after->second || entity.properties.dump()!=after->second.properties.dump() ||
+            entity.extensions.dump()!=after->second.extensions.dump()) mutable_owner(entity_id);
+    }
+    auto candidate=components.empty() ? source : replay_architectural_object_removal(source,{},components);
+    for (const auto& owner:removed) candidate.erase(owner);
+    candidate=remove_known_object_memberships(std::move(candidate),removed,true);
+    refuse_unresolved_wall_deletion_references(source,candidate,removed,true);
+    refuse_retired_wall_overlay_references(source,candidate);
+    preserve_aliases(candidate);
+    bound_complete_wall_deletion_source(candidate);
+    if (constraint_phase_scope(candidate).inactive_owner_ids!=scope.inactive_owner_ids)
+        invalid("complete deletion changes retained inactive ownership");
+    std::vector<EntityChange> changes;
+    for (const auto& [entity_id,entity]:source) {
+        const auto after=candidate.find(entity_id);
+        const bool changed=after==candidate.end() || entity!=after->second ||
+            entity.properties.dump()!=after->second.properties.dump() || entity.extensions.dump()!=after->second.extensions.dump();
+        if (!changed) continue;
+        mutable_owner(entity_id);
+        if (after==candidate.end()) changes.push_back(EntityChange::erase(entity_id));
+        else changes.push_back(EntityChange::upsert(after->second));
+    }
+    for (const auto& [wall_id,wall]:walls) { (void)wall_id;(void)make_wall(wall); }
+    for (const auto& opening:manufactured_openings) {
+        const auto& wall=walls.at(opening.wall_id);
+        (void)make_opening_assembly_geometry(wall,wall.openings.at(opening.index),opening.assembly,opening.operation);
     }
     return changes;
 }
@@ -1091,9 +1566,13 @@ bool is_physical_wall_room_deletion_review_command(const Command& command) {
 }
 
 Command decode_physical_wall_deletion_review_proof(const Json& proof) {
-    keys(proof,{"version","kind","expected_revision","message","wall_ids","proof"});
-    if (proof.dump().size()>1024*1024 || proof.at("version")!=31 || proof.at("kind")!="physical_wall_deletion" ||
-        !proof.at("wall_ids").is_array() || proof.at("wall_ids").size()<2 || proof.at("wall_ids").size()>128)
+    const bool complete=proof.is_object() && proof.contains("version") && proof.at("version")==35;
+    if (complete) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal"});
+    else keys(proof,{"version","kind","expected_revision","message","wall_ids","proof"});
+    if (proof.dump().size()>1024*1024 || !proof.at("version").is_number_integer() ||
+        proof.at("version")!=(complete ? 35 : 31) || proof.at("kind")!="physical_wall_deletion" ||
+        (complete && (!proof.at("complete_hosted_removal").is_boolean() || proof.at("complete_hosted_removal")!=true)) ||
+        !proof.at("wall_ids").is_array() || proof.at("wall_ids").size()<(complete ? 1u : 2u) || proof.at("wall_ids").size()>128)
         invalid("unsupported grouped wall deletion proof");
     const auto wall_ids=proof.at("wall_ids").get<std::vector<std::string>>();
     ids(wall_ids);
@@ -1108,12 +1587,16 @@ Command decode_physical_wall_deletion_review_proof(const Json& proof) {
     const auto& ordinary=std::get<ApplyEntityChanges>(command);
     std::set<std::string> erased;
     for (const auto& change:ordinary.entity_changes)
-        if (change.kind==EntityChangeKind::erase) erased.insert(change.entity_id);
+        if (change.kind==EntityChangeKind::erase) {
+            const bool inserted=erased.insert(change.entity_id).second;
+            if (complete && !inserted) invalid("wall deletion child repeats an erased identity");
+        }
     for (const auto& wall_id:wall_ids)
         if (!erased.contains(wall_id)) invalid("declared physical wall is not erased by the grouped child");
-    const Json canonical{{"version",31},{"kind","physical_wall_deletion"},
+    Json canonical{{"version",complete ? 35 : 31},{"kind","physical_wall_deletion"},
         {"expected_revision",ordinary.expected_revision},{"message",ordinary.message},
         {"wall_ids",wall_ids},{"proof",command_to_json(command)}};
+    if (complete) canonical["complete_hosted_removal"]=true;
     if (canonical.dump()!=proof.dump()) invalid("grouped wall deletion proof is not canonical or differs from its child");
     return command;
 }
@@ -1129,10 +1612,25 @@ Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,c
     }
     if (wall_ids.empty() || wall_ids.size()>128) invalid("wall deletion proof requires one to 128 original physical walls");
     std::sort(wall_ids.begin(),wall_ids.end());ids(wall_ids);
-    if (wall_ids.size()==1) return command_to_json(command);
-    Json proof{{"version",31},{"kind","physical_wall_deletion"},
+    const auto raw_proof=command_to_json(command);
+    bool legacy_exact=false;
+    try {
+        const ApplyEntityChanges legacy{ordinary.expected_revision,physical_wall_deletion_changes(source.entities(),wall_ids),{},ordinary.message};
+        legacy_exact=command_to_json(Command{legacy}).dump()==raw_proof.dump();
+    } catch (const WallDeletionReferenceRefusal&) {
+        // The complete producer must still independently admit the entire
+        // actual source and exactly reproduce every supplied child change.
+    }
+    if (!legacy_exact) {
+        const ApplyEntityChanges complete{ordinary.expected_revision,complete_physical_wall_deletion_changes(source.entities(),wall_ids),{},ordinary.message};
+        if (command_to_json(Command{complete}).dump()!=raw_proof.dump())
+            invalid("complete wall deletion differs from exact original-source consequences");
+    }
+    if (legacy_exact && wall_ids.size()==1) return raw_proof;
+    Json proof{{"version",legacy_exact ? 31 : 35},{"kind","physical_wall_deletion"},
         {"expected_revision",ordinary.expected_revision},{"message",ordinary.message},
-        {"wall_ids",wall_ids},{"proof",command_to_json(command)}};
+        {"wall_ids",wall_ids},{"proof",raw_proof}};
+    if (!legacy_exact) proof["complete_hosted_removal"]=true;
     (void)decode_physical_wall_deletion_review_proof(proof);
     return proof;
 }
@@ -1151,17 +1649,21 @@ void validate_physical_wall_room_deletion_review_source(const Entities& source,c
     if (wall_ids.empty()) invalid("wall deletion proof has no original physical wall");
     std::sort(wall_ids.begin(),wall_ids.end());ids(wall_ids);
     const auto raw_proof=command_to_json(command);
+    bool complete_hosted_removal=false;
     if (!retained_proof.is_null() && retained_proof.is_object() && retained_proof.value("kind",std::string{})=="physical_wall_deletion") {
         const auto decoded=decode_physical_wall_deletion_review_proof(retained_proof);
         if (command_to_json(decoded).dump()!=raw_proof.dump() ||
             retained_proof.at("wall_ids").get<std::vector<std::string>>()!=wall_ids)
             invalid("grouped deletion proof differs from the exact original wall erasures");
+        complete_hosted_removal=retained_proof.at("version")==35;
     } else {
         if (wall_ids.size()!=1) invalid("one wall deletion review cannot remove several physical walls");
         if (!retained_proof.is_null() && retained_proof.dump()!=raw_proof.dump())
             invalid("single wall deletion retained proof differs from its raw child");
     }
-    const ApplyEntityChanges expected{ordinary.expected_revision,physical_wall_deletion_changes(source,wall_ids),{},ordinary.message};
+    const ApplyEntityChanges expected{ordinary.expected_revision,
+        complete_hosted_removal ? complete_physical_wall_deletion_changes(source,wall_ids) : physical_wall_deletion_changes(source,wall_ids),
+        {},ordinary.message};
     if (command_to_json(Command{expected}).dump()!=command_to_json(command).dump())
         invalid("wall deletion contains unrelated changes or differs from exact attached-object cleanup");
     auto replayed=source;
@@ -1172,15 +1674,16 @@ void validate_physical_wall_room_deletion_review_source(const Entities& source,c
     if (!exact_entities(candidate,replayed)) invalid("wall deletion candidate differs from its original source consequences");
 }
 
-ApplyEntityChanges prepare_physical_wall_deletion(const DocumentSnapshot& source,std::string_view wall_id) {
-    return prepare_physical_walls_deletion(source,{std::string(wall_id)});
+ApplyEntityChanges prepare_physical_wall_deletion(const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal) {
+    return prepare_physical_walls_deletion(source,{std::string(wall_id)},complete_hosted_removal);
 }
 
-ApplyEntityChanges prepare_physical_walls_deletion(const DocumentSnapshot& source,const std::vector<std::string>& wall_ids) {
+ApplyEntityChanges prepare_physical_walls_deletion(const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal) {
     if (!source.is_editable()) invalid("captured document is read-only");
     if (wall_ids.empty() || wall_ids.size()>128) invalid("deletion requires one to 128 physical walls");
     auto roots=wall_ids;std::sort(roots.begin(),roots.end());
-    ApplyEntityChanges command{source.revision(),physical_wall_deletion_changes(source.entities(),roots),{},
+    ApplyEntityChanges command{source.revision(),
+        complete_hosted_removal ? complete_physical_wall_deletion_changes(source.entities(),roots) : physical_wall_deletion_changes(source.entities(),roots),{},
         roots.size()==1 ? "Delete wall and attached objects" : "Delete walls and attached objects"};
     const auto proof=encode_physical_wall_deletion_review_proof(source,Command{command});
     const auto candidate=Document::preview_command(source,Command{command});

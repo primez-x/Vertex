@@ -99,17 +99,20 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // attached constraints are removed together. Known phase/view/presentation
 // memberships are reconstructed from the exact original source; room owners
 // remain unchanged until explicit context/plane review.
+// Opt-in complete removal includes actual semantic openings and qualified
+// hosted catalog rows. Only a closed v35 proof grants its additional replay
+// authority; historical raw singleton/v31 consequences retain their meaning.
 [[nodiscard]] ApplyEntityChanges prepare_physical_wall_deletion(
-    const DocumentSnapshot& source,std::string_view wall_id);
+    const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal=false);
 // Wall-only selections are sorted; duplicates and more than 128 roots refuse.
-// Singleton commands retain the original raw-v1 proof and message. Groups
-// require their explicit v31 qualification before acquiring room-review authority.
+// Legacy singleton commands retain their raw-v1 proof and message. Legacy
+// groups require explicit v31 qualification; complete consequences use v35.
 [[nodiscard]] ApplyEntityChanges prepare_physical_walls_deletion(
-    const DocumentSnapshot& source,const std::vector<std::string>& wall_ids);
+    const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal=false);
 [[nodiscard]] nlohmann::json encode_physical_wall_deletion_review_proof(
     const DocumentSnapshot& source,const Command& command);
-// Accepts only the bounded canonical grouped v31 envelope and returns its raw
-// child. The original source must independently validate all declared roots.
+// Accepts only bounded canonical grouped v31 or complete v35 envelopes and
+// returns their raw child. Actual source must validate all declared roots.
 [[nodiscard]] Command decode_physical_wall_deletion_review_proof(const nlohmann::json& proof);
 [[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);
 // Exclusive semantic active-design authoring, independently replayed from the

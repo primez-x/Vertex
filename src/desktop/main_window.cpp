@@ -31488,8 +31488,8 @@ public:
         }
         require_current();
         auto deletion = wall_ids.size() == 1
-            ? prepare_physical_wall_deletion(source, wall_ids.front())
-            : prepare_physical_walls_deletion(source, wall_ids);
+            ? prepare_physical_wall_deletion(source, wall_ids.front(),true)
+            : prepare_physical_walls_deletion(source, wall_ids,true);
         if (cut) deletion.message = "Cut walls and attached objects";
         const Command command = std::move(deletion);
         const auto candidate = preview_physical_wall_room_review_geometry(source, command);
