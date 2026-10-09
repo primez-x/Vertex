@@ -47,6 +47,7 @@
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/structural_hosted_components.hpp"
+#include "sketch/structural_clone.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
@@ -7780,6 +7781,16 @@ public:
         const ArchitecturalGroupTransform transform{{0.0,0.0,0.0},
             {gesture.x,gesture.y,gesture.z},gesture.rotation_z_radians,gesture.scale,
             flip_horizontal,flip_vertical};
+        if (clone && structuralObject(original)) {
+            StructuralCloneIdentityMap identities;
+            IndependentModelCopyCapture capture;
+            auto command = sourceDerivedStructuralCloneCommand(source, {{original.id, transform}},
+                "Copy transformed structural object", identities, &capture);
+            auto complete = augmentAuthoredCommand(command, source);
+            requireIndependentCopyRegistrations(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture);
+            return {std::move(complete), identities.at(original.id)};
+        }
         if (clone && original.type == "slab") {
             SlabCloneIdentityMap identities;
             IndependentModelCopyCapture capture;
@@ -9400,6 +9411,29 @@ public:
         std::size_t maximum_entities = kMaximumClipboardEntities,
         const std::function<PlanarTransform(const std::string&)>& owner_transform = {},
         IndependentModelCopyCapture* model_copy = nullptr) {
+        if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
+                return structuralObject(entity);
+            })) {
+            std::vector<ArchitecturalGroupTransformTarget> operations;
+            for (const auto& entity : seeds) {
+                const auto& actual = source.entities().at(entity.id);
+                if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
+                    actual.extensions.dump() != entity.extensions.dump())
+                    throw std::invalid_argument("The structural copy no longer matches its captured source.");
+                const auto operation = owner_transform ? owner_transform(entity.id) : transform;
+                operations.push_back({entity.id, {{operation.pivot.x, operation.pivot.y, 0.0},
+                    {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
+                    operation.flip_horizontal, operation.flip_vertical}});
+            }
+            if (!presentation.entity_changes.empty() || !presentation.asset_changes.empty() ||
+                presentation.expected_revision != source.revision())
+                throw std::invalid_argument("Copy structural objects separately from independent labels and references.");
+            auto command = sourceDerivedStructuralCloneCommand(source, operations,
+                "Copy structural objects", identities, model_copy);
+            if (command.entity_changes.size() > maximum_entities)
+                throw std::invalid_argument("The complete structural copy exceeds the selection entity limit.");
+            return command;
+        }
         if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
                 return entity.type == "slab";
             })) {
@@ -24251,6 +24285,21 @@ public:
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
         const Entity& original, const ArchitecturalTransaction& transaction) {
         const auto& operations=transaction.operations();
+        if (structuralObject(original) && operations.size() == 2 &&
+            operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
+            operations[1].action == ArchitecturalAction::transform &&
+            operations[1].object_id == operations[0].duplicate_id && operations[1].transform) {
+            const auto& movement = *operations[1].transform;
+            StructuralCloneIdentityMap identities{{original.id, operations[0].duplicate_id}};
+            IndependentModelCopyCapture capture;
+            auto command = sourceDerivedStructuralCloneCommand(source, {{original.id,
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
+                transaction.undo_label(), identities, &capture);
+            auto complete = augmentAuthoredCommand(command, source);
+            requireIndependentCopyRegistrations(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture);
+            return complete;
+        }
         if (original.type == "slab" && operations.size() == 2 &&
             operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
             operations[1].action == ArchitecturalAction::transform &&
@@ -42746,6 +42795,79 @@ private:
                 transform.rotation_z_radians, transform.scale, transform.flip_horizontal, transform.flip_vertical};
         }
         return intent;
+    }
+
+    static ApplyEntityChanges sourceDerivedStructuralCloneCommand(const DocumentSnapshot& source,
+        const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
+        StructuralCloneIdentityMap& identities, IndependentModelCopyCapture* capture = nullptr) {
+        std::vector<std::string> owners;
+        StructuralCloneAuthoring authoring;
+        for (const auto& operation : operations) {
+            owners.push_back(operation.entity_id);
+            StructuralObjectEditIntent edit;
+            edit.object_id = operation.entity_id;
+            edit.transform = operation.transform;
+            authoring.edits.push_back(std::move(edit));
+        }
+        const auto plan = inspect_structural_clone_plan(source.entities(), owners);
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons += '\n';
+                reasons += diagnostic.entity_id + ": " + diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons);
+        }
+        const std::set<std::string, std::less<>> required(
+            plan.required_entity_ids.begin(), plan.required_entity_ids.end());
+        auto occupied = retainedSlabIdentityNames(source, true);
+        for (const auto& [original, copied] : identities) {
+            if (!required.contains(original) || !occupied.insert(copied).second)
+                throw std::invalid_argument("A structural copy identity is unrequested or already reserved in source or history.");
+        }
+        const auto allocate = [&](const char* prefix) {
+            auto copied = new_id(prefix);
+            while (!occupied.insert(copied).second) copied = new_id(prefix);
+            return copied;
+        };
+        for (const auto& original : plan.required_entity_ids)
+            if (!identities.contains(original)) identities.emplace(original, allocate("structural-copy"));
+        authoring.identities = identities;
+        for (const auto& original : plan.required_overlay_ids)
+            authoring.overlay_identities.emplace(original, allocate("structural-overlay-copy"));
+        for (const auto& original : plan.required_hosted_instance_ids)
+            authoring.hosted_instance_identities.emplace(original, allocate("structural-component-copy"));
+        const auto candidate = replay_structural_clone_authoring(source.entities(), authoring);
+        if (!authoring.hosted_instance_identities.empty()) {
+            const auto aliases = embedded_assembly_presentation_ids(candidate);
+            for (const auto& [original, copied] : authoring.hosted_instance_identities) {
+                const auto& alias = aliases.at({identities.at(original.first), copied});
+                if (!occupied.insert(alias).second)
+                    throw std::invalid_argument("A copied component's canvas identity is reserved in source or history.");
+            }
+        }
+        ApplyEntityChanges creation{source.revision(), {}, {}, message};
+        for (const auto& [id, entity] : candidate) {
+            const auto before = source.entities().find(id);
+            if (before == source.entities().end() || before->second != entity ||
+                before->second.properties.dump() != entity.properties.dump() ||
+                before->second.extensions.dump() != entity.extensions.dump())
+                creation.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        for (const auto& id : plan.required_entity_ids) {
+            const auto& retained = candidate.at(id);
+            const auto& original = source.entities().at(id);
+            if (retained != original || retained.properties.dump() != original.properties.dump() ||
+                retained.extensions.dump() != original.extensions.dump())
+                throw std::invalid_argument("Copying a structural object would modify an original owner.");
+        }
+        const auto preview = Document::preview_command(source, creation);
+        validate_architectural_geometry_changes(source, preview);
+        if (capture) {
+            capture->source_digest = document_snapshot_digest(source);
+            capture->intent = creation;
+        }
+        return creation;
     }
 
     static ApplyEntityChanges sourceDerivedSlabCloneCommand(const DocumentSnapshot& source,

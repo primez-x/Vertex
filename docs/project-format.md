@@ -1,5 +1,27 @@
 # Vertex project formats v1 through v124
 
+## Independent structural copy authoring
+
+Independent column/beam copies use actual-source typed replay and ordinary
+atomic entity changes. No new persisted command dialect is introduced. An
+identity operation is explicit copy authority, separate from changed-target-only
+phase replacement authority. Physical originals and their catalogs remain
+exact; private catalogs contain only the copied hosts' selected component rows.
+Existing catalog-seven storage continues to require reader 124.
+
+The transient closed copy descriptor has exactly `version:1`, `edits`,
+`identities`, `overlay_identities` and `hosted_instance_identities`. Overlay rows
+use `{view_entity_id, saved_view_id, overlay_id, proposed_overlay_id}`;
+component rows use `{catalog_id, instance_id, proposed_instance_id}`. Actual
+source row namespaces stay qualified; computed canvas aliases are never authored
+keys. Known presentation rows append mapped copies, and explicit unbound
+overlay points transform in their actual view frame. The enclosing producer
+reserves retained history/assets and admits the candidate before phase/page
+enrollment. Unsupported affected reference families remain explicit gaps.
+
+Independent integrated source review approved. No runtime or storage qualification was
+performed under the source-only instruction.
+
 ## Source-derived structural hosted components (v124)
 
 Native format 124 and JSON/assets extraction version 122 retain structural

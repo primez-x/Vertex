@@ -56,7 +56,9 @@ struct StructuralHostedComponentCopyResult {
     std::vector<std::string> fresh_aliases;
 };
 
-// Host-map keys must equal the actual changed typed edit targets. Catalog and
+// Host-map keys must equal the actual changed typed edit targets. An explicit
+// independent copy may opt into unchanged targets; replacement callers retain
+// changed-target-only authority. Catalog and
 // qualified instance maps must equal the independently inspected hosted roster.
 // Scratch proposed hosts derive from typed replay; only selected hosted rows are
 // copied, preserving raw definitions, overrides, metadata and source row order.
@@ -65,7 +67,8 @@ struct StructuralHostedComponentCopyResult {
 [[nodiscard]] StructuralHostedComponentCopyResult copy_structural_hosted_components(
     const StructuralHostedEntities& actual, const std::vector<StructuralObjectEditIntent>& edits,
     const StructuralHostedIdentityMap& object_ids, const StructuralHostedIdentityMap& catalog_ids,
-    const StructuralHostedInstanceIdentityMap& hosted_instance_ids);
+    const StructuralHostedInstanceIdentityMap& hosted_instance_ids,
+    bool include_unchanged_hosts = false);
 
 // Admission scratch copy only. Validate the actual supported catalog, then omit
 // only known instance-ID and placement-host slots. Unknown siblings stay exact.

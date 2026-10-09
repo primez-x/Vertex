@@ -375,14 +375,15 @@ StructuralHostedEntities replay_structural_hosted_component_geometry(
 StructuralHostedComponentCopyResult copy_structural_hosted_components(
     const StructuralHostedEntities& actual, const std::vector<StructuralObjectEditIntent>& edits,
     const StructuralHostedIdentityMap& object_ids, const StructuralHostedIdentityMap& catalog_ids,
-    const StructuralHostedInstanceIdentityMap& hosted_instance_ids) {
+    const StructuralHostedInstanceIdentityMap& hosted_instance_ids, bool include_unchanged_hosts) {
     auto occupied = occupied_strings(actual);
     const auto physical = replay_structural_object_edit_entities(actual, edits);
-    const auto hosts = changed_hosts(actual, physical, edits);
-    if (object_ids.size() != hosts.size()) reject("requires exact changed-host mapping");
+    auto hosts = changed_hosts(actual, physical, edits);
+    if (include_unchanged_hosts) for (const auto& edit : edits) hosts.insert(edit.object_id);
+    if (object_ids.size() != hosts.size()) reject("requires exact authored-host mapping");
     for (const auto& [id, proposed] : object_ids) {
         (void)proposed;
-        if (!hosts.contains(id)) reject("host mapping contains an unchanged or unauthored target: " + id);
+        if (!hosts.contains(id)) reject("host mapping contains an unauthorized target: " + id);
     }
     const auto plan = inspect_structural_hosted_components(actual, {hosts.begin(), hosts.end()});
     require_ready(plan);

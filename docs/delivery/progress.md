@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 independent structural copies source integration
+
+Column and beam duplication now derives the complete copy from the captured
+source, including identity copies and XYZ movement, rotation, scaling and
+mirroring. Selected attached components receive private catalogs; original
+objects, catalogs and registries remain unchanged. Plan selection copies and
+numeric transformed copies use the same producer and existing scope enrollment.
+
+Saved-view membership, appearance, bound dimensions and model annotation
+overrides append copy rows. Unbound view-plane points follow the actual view
+frame without losing small movements at distant origins. Overlay identities
+are qualified by actual view entity and saved view; catalog-local component
+identities and computed canvas aliases retain their separate namespaces.
+Current/history/asset names remain reserved before actual Document admission.
+
+Independent integrated source review approved after correcting distant-origin
+overlay precision, retained catalog-local references and saved-view identity
+vocabulary. Root source review and the scoped whitespace check passed.
+Mixed structural/other-family copies and
+unsupported affected reference families remain unfinished source scope.
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, interactions, geometry, output and storage
+remain unverified; the installed candidate is unchanged.
+
 ### October 8 structural hosted components source integration
 
 Actual column and beam edits now carry hosted component placement through the
