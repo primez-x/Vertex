@@ -14,6 +14,46 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 combined stair edits and mixed transforms source integration
+
+The existing object editor now captures a complete related stair/railing cohort,
+admits profile changes, then applies anchored rigid position/orientation changes
+in one command. The ordinary and active-alternative producers share this path;
+source metadata and entered measurements remain under typed authority. Fresh
+alternative topology, hosted components and saved presentations derive from the
+actual source. Native 133/extraction 131 retains child-three compound proofs in
+direct, coordinated, retained and wrapped authoring.
+
+Coordinated inner four/outer fourteen adds stairs to mixed wall, roof,
+horizontal and structural transformations, including ordinary and baseline
+replacement lanes. Native 132/extraction 130 retains this captured meaning.
+Shared catalog rows compose from the same source and wall/room review remains
+required. The canvas preview resolves each family's actual physical geometry,
+private hosted catalog destinations and saved dimension bindings. Independent
+source reviews approved both integrations; root integrated source review is
+complete.
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran; compilation and runtime remain unverified. The installed
+candidate is unchanged. Remaining mixed demolition and topology retirement
+workflows are additional source scope.
+
+### October 8 mixed drawing and architectural copies source implementation
+
+One selection copy now composes walls, rooms, measurement boundaries,
+annotations, reference geometry and architectural objects from the same actual
+source. Physical owners retain their fresh qualified children and hosted
+components; drawing objects retain their measurement dependencies. Appearance
+settings follow copied annotation children and physical owners without being
+duplicated into unrelated carriers. Separately selected hosted components and
+derived callouts complete before the source-derived command is sealed and
+registered. Document/history/assets reservations remain required.
+
+Independent source review approved after correcting shared catalog destinations,
+carrier-local appearance ownership and command capture order. Root integrated
+source review is complete. No builds, tests, probes, scripts, native jobs,
+launches, packages or installations ran. Compilation and runtime remain
+unverified; the installed candidate is unchanged.
+
 ### October 8 independent stair and railing copies source implementation
 
 Independent stair copies now include actual active attached rails, fresh

@@ -490,9 +490,19 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==14) {
+                    const auto coordinated=intent.find("coordinated_replacements");
+                    if (coordinated!=intent.end() && coordinated->is_object()) {
+                        const auto stair=coordinated->find("stair_replacement");
+                        if (stair!=coordinated->end() && stair->is_object() && stair->value("version",0)==3)
+                            return 133U;
+                    }
+                    return 132U;
+                }
                 if (intent.is_object() && intent.value("version",0)==13) return 130U;
                 if (intent.is_object() && intent.value("version",0)==12) {
                     const auto stair=intent.find("stair_replacement");
+                    if (stair!=intent.end() && stair->is_object() && stair->value("version",0)==3) return 133U;
                     if (stair!=intent.end() && stair->is_object() && stair->value("version",0)==2) {
                         const auto transforms=stair->find("transforms");
                         if (transforms!=stair->end() && transforms->is_array() &&
@@ -2421,6 +2431,8 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 133 &&
+         sqlite3_column_int(user_version.get(), 0) != 132 &&
          sqlite3_column_int(user_version.get(), 0) != 131 &&
          sqlite3_column_int(user_version.get(), 0) != 130 &&
          sqlite3_column_int(user_version.get(), 0) != 129 &&
@@ -3007,6 +3019,10 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=133)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 133 for combined stair profile and placement edits");
+        if (required_format>=132)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 132 for coordinated stair and architectural authoring");
         if (required_format>=131)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 131 for entered stair and railing transform quantities");
         if (required_format>=130)

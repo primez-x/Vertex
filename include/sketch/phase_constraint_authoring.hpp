@@ -49,6 +49,11 @@ struct PhaseConstraintAuthoringIntent {
     // null and each absent ordinary list is []; at least two families are
     // required. Unlike historical inner one/two, actual-source ordinary lanes
     // may compose without a replacement, retaining typed wall room authority.
+    // Dialect fourteen selects closed inner version four, retaining all inner
+    // three keys and adding stair_replacement and ordinary_stair_transforms.
+    // The optional stair leaf keeps its own closed v1/v2/v3 codec; the exclusive
+    // ordinary list carries canonical StairTransformIntent v1/v2 rows. Every
+    // family independently replays the same actual captured source.
     nlohmann::json coordinated_replacements=nullptr;
     // Dialect nine: source-derived column/beam edits in one saved alternative.
     // Shared baseline owners remain exact; explicit structural intent alone
@@ -80,7 +85,7 @@ struct PhaseConstraintAuthoringIntent {
     const DocumentSnapshot& source, const ConstraintAuthoringIntent& intent);
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
-// Detached physical preview only for coordinated inner v2/v3 wall replacements.
+// Detached physical preview only for coordinated inner v2/v3/v4 wall replacements.
 // Pending room decisions remain pending; this map is not publication authority.
 [[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_coordinated_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);

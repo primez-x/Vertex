@@ -182,33 +182,52 @@ bool same_receipts(const Entity& before, const Entity& after) {
     return (!old && !current) || (old && current && *old == *current && old->dump() == current->dump());
 }
 template<class Intent>
+const std::string& intent_owner(const Intent& intent) { return intent.object_id; }
+const std::string& intent_owner(const StairCompoundEditIntent& intent) { return intent.profile_edit.object_id; }
+std::vector<StairObjectEditIntent> compound_profiles(const std::vector<StairCompoundEditIntent>& intents) {
+    if (intents.size() > identity_limit) reject("typed compound target budget exceeded");
+    std::size_t bytes{};
+    // Bound both lanes, including final coordinate receipts, before allocating
+    // a copied profile batch for topology or intermediate silhouette replay.
+    for (const auto& intent : intents) {
+        const auto size = encode_stair_compound_edit_intent(intent).dump().size();
+        if (size > proof_limit - bytes) reject("typed compound batch byte budget exceeded");
+        bytes += size;
+    }
+    std::vector<StairObjectEditIntent> result;
+    result.reserve(intents.size());
+    for (const auto& intent : intents) result.push_back(intent.profile_edit);
+    return result;
+}
+template<class Intent>
 std::optional<PhaseStairReplacementRequest> classify(const Entities& actual, const Entities& physical,
     const std::vector<Intent>& edits, const Memberships& scope) {
     std::optional<PhaseStairReplacementRequest> result;
     Ids registries;
     for (const auto& edit : edits) {
-        if (exact(actual.at(edit.object_id), physical.at(edit.object_id))) continue;
-        const auto member = scope.owners.find(edit.object_id);
+        const auto& owner = intent_owner(edit);
+        if (exact(actual.at(owner), physical.at(owner))) continue;
+        const auto member = scope.owners.find(owner);
         if (member == scope.owners.end()) continue;
         const auto& model = scope.models.at(member->second);
-        const auto state = model.active_state(); const auto owner_state = state.find(edit.object_id);
+        const auto state = model.active_state(); const auto owner_state = state.find(owner);
         if (owner_state == state.end() || owner_state->second == ModelPhase::demolished)
-            reject("changed owner is inactive in actual saved design: " + edit.object_id);
+            reject("changed owner is inactive in actual saved design: " + owner);
         registries.insert(member->second);
-        if (!baseline(model, edit.object_id) || !model.active_alternative()) continue;
-        if (canonical_profile(actual.at(edit.object_id)) == canonical_profile(physical.at(edit.object_id))) {
-            if (!same_receipts(actual.at(edit.object_id), physical.at(edit.object_id)))
-                reject("receipt-only baseline edit has no changed physical replacement authority: " + edit.object_id);
+        if (!baseline(model, owner) || !model.active_alternative()) continue;
+        if (canonical_profile(actual.at(owner)) == canonical_profile(physical.at(owner))) {
+            if (!same_receipts(actual.at(owner), physical.at(owner)))
+                reject("receipt-only baseline edit has no changed physical replacement authority: " + owner);
             continue; // No mathematical profile/topology/host change grants a copy.
         }
         if (result && result->registry_id != member->second) reject("baseline cohort spans foreign registries");
         if (!result) result = PhaseStairReplacementRequest{member->second, *model.active_alternative(), {}};
-        result->seed_object_ids.push_back(edit.object_id);
+        result->seed_object_ids.push_back(owner);
     }
     if (result) {
         // Ordinary/proposed-only batches retain their existing typed movement
-        // authority. A real baseline replacement grants profile authority only,
-        // including every ordinary member of a mixed replacement cohort.
+        // authority. Child one grants profile authority only, including every
+        // ordinary member of a mixed baseline replacement cohort.
         if constexpr (std::is_same_v<Intent, StairObjectEditIntent>)
             for (const auto& edit : edits) static_pose(actual.at(edit.object_id), physical.at(edit.object_id));
         for (const auto& id : registries) if (id != result->registry_id) reject("mixed cohort includes a foreign registry");
@@ -377,6 +396,9 @@ Entity catalog_local_remainder(Entity entity) {
 struct Derivation {
     PhaseStairReplacementPlan plan;
     Entities physical;
+    // Only child three needs an intermediate silhouette. It is independently
+    // replayed typed profile authority over actual, never supplied source bytes.
+    Entities profile_stage;
     Ids copied_owners;
     Ids catalogs;
     EmbeddedAssemblyPresentationIds original_aliases;
@@ -426,6 +448,11 @@ Derivation derive(const Entities& actual, const std::vector<Intent>& edits,
         if constexpr (std::is_same_v<Intent, StairObjectEditIntent>) {
             topology_dependencies(actual, edits);
             result.physical = replay_stair_object_edit_entities(actual, edits);
+        } else if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) {
+            const auto profiles = compound_profiles(edits);
+            topology_dependencies(actual, profiles);
+            result.physical = replay_stair_compound_edit_entities(actual, edits);
+            result.profile_stage = replay_stair_object_edit_entities(actual, profiles);
         } else result.physical = replay_stair_transform_entities(actual, edits);
         const auto scope = memberships(actual);
         const auto request = classify(actual, result.physical, edits, scope);
@@ -751,12 +778,16 @@ void transform_overlay(Json& row, const CoordinatedView& view, const Entities& a
     }
 }
 void presentation(Entities& candidate, const Entities& actual, const PhaseStairReplacementIdentityMap& mapping,
-    const PhaseStairReplacementOverlayIdentityMap& overlay_ids, const PresentationTransforms& transforms = {}) {
+    const PhaseStairReplacementOverlayIdentityMap& overlay_ids, const PresentationTransforms& transforms = {},
+    const Entities* profile_stage = nullptr) {
+    const auto& silhouette_source = profile_stage ? *profile_stage : actual;
     Ids owners; for (const auto& [old, proposed] : mapping) { (void)proposed; owners.insert(old); }
     EmbeddedAssemblyPresentationIds source_aliases, candidate_aliases;
     OverlayGeometryCache source_cache, candidate_cache;
     if (!transforms.empty() && std::any_of(mapping.begin(), mapping.end(), [&](const auto& row) { return !actual.contains(row.first); })) {
         source_aliases = embedded_assembly_presentation_ids(actual); candidate_aliases = embedded_assembly_presentation_ids(candidate);
+        if (profile_stage && embedded_assembly_presentation_ids(*profile_stage) != source_aliases)
+            reject("typed intermediate profiles changed actual qualified component aliases");
     }
     if (!transforms.empty()) {
         std::set<PhaseStairReplacementOverlayKey> projected;
@@ -772,7 +803,7 @@ void presentation(Entities& candidate, const Entities& actual, const PhaseStairR
                 if (!mapping.contains(owner)) reject("copied bound overlay refers to a source outside the copied transform cohort");
                 if (!projected.emplace(id, view.id, owner).second) continue;
                 const auto& proposed = mapping.at(owner);
-                if (!source_costs.contains(owner)) source_costs.emplace(owner, presentation_cost(actual, owner, source_aliases));
+                if (!source_costs.contains(owner)) source_costs.emplace(owner, presentation_cost(silhouette_source, owner, source_aliases));
                 if (!candidate_costs.contains(proposed)) candidate_costs.emplace(proposed, presentation_cost(candidate, proposed, candidate_aliases));
                 for (const auto cost : {source_costs.at(owner), candidate_costs.at(proposed)}) {
                     if (cost > geometry_limit - work) reject("aggregate bound saved-view native work budget exceeded");
@@ -807,14 +838,14 @@ void presentation(Entities& candidate, const Entities& actual, const PhaseStairR
                             // JSON framing keeps long/local view IDs qualified
                             // without inventing an ambiguous concatenated alias.
                             const auto qualified = Json::array({id, view_id}).dump();
-                            transform_overlay(row, *saved, actual, candidate, mapping, transforms, source_aliases, candidate_aliases,
+                            transform_overlay(row, *saved, silhouette_source, candidate, mapping, transforms, source_aliases, candidate_aliases,
                                 qualified, source_cache, candidate_cache);
                         }
                         row.at("id") = overlay_ids.at({id, view_id, row.at("id").get<std::string>()});
                         remap_field(row, "object_id", mapping);
                         if (row.contains("dimension_binding") && !row.at("dimension_binding").is_null()) remap_field(row.at("dimension_binding"), "object_id", mapping);
                         // The v1 profile variant retains source coordinates;
-                        // only closed v2 captured operators move copied rows.
+                        // closed v2/v3 captured operators move copied rows.
                         rows.push_back(std::move(row));
                     }
                 }
@@ -887,12 +918,30 @@ PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(const Entities& a
     const std::vector<StairTransformIntent>& transforms, const std::string& registry_id, const std::string& alternative_id) {
     return derive(actual, transforms, registry_id, alternative_id).plan;
 }
+std::optional<PhaseStairReplacementRequest> phase_stair_replacement_request(const Entities& actual,
+    const std::vector<StairCompoundEditIntent>& compound_edits) {
+    try {
+        (void)source_budget(actual);
+        if (compound_edits.size() > identity_limit) reject("typed compound target budget exceeded");
+        topology_dependencies(actual, compound_profiles(compound_edits));
+        const auto physical = replay_stair_compound_edit_entities(actual, compound_edits);
+        return classify(actual, physical, compound_edits, memberships(actual));
+    } catch (const Standard_Failure& error) {
+        const auto message = error.GetMessageString(); reject(std::string("native geometry admission failed: ") + (message ? message : "Open CASCADE failure"));
+    } catch (const Json::exception& error) { reject(std::string("malformed actual compound request: ") + error.what()); }
+}
+PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(const Entities& actual,
+    const std::vector<StairCompoundEditIntent>& compound_edits, const std::string& registry_id, const std::string& alternative_id) {
+    return derive(actual, compound_edits, registry_id, alternative_id).plan;
+}
 
 Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthoring& authoring) {
     identity(authoring.registry_id); identity(authoring.alternative_id);
     const bool transformed = !authoring.transforms.empty();
-    if ((transformed && !authoring.edits.empty()) || (!transformed && authoring.edits.empty()) ||
-        authoring.edits.size() > identity_limit || authoring.transforms.size() > identity_limit || authoring.identities.empty() ||
+    const bool compound = !authoring.compound_edits.empty();
+    const auto lanes = static_cast<unsigned>(!authoring.edits.empty()) + static_cast<unsigned>(transformed) + static_cast<unsigned>(compound);
+    if (lanes != 1 || authoring.edits.size() > identity_limit || authoring.transforms.size() > identity_limit ||
+        authoring.compound_edits.size() > identity_limit || authoring.identities.empty() ||
         authoring.identities.size() > identity_limit || authoring.child_identities.size() > identity_limit - authoring.identities.size() ||
         authoring.hosted_instance_identities.size() > identity_limit - authoring.identities.size() - authoring.child_identities.size() ||
         authoring.overlay_identities.size() > identity_limit - authoring.identities.size() - authoring.child_identities.size() - authoring.hosted_instance_identities.size())
@@ -911,6 +960,13 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
         auto value = encode_stair_transform_intent(transform);
         const auto size = value.dump().size();
         if (size > proof_limit - edit_bytes) reject("typed transform batch byte budget exceeded");
+        edit_bytes += size; edits.push_back(std::move(value));
+    }
+    for (const auto& edit : authoring.compound_edits) {
+        if (!targets.insert(intent_owner(edit)).second) reject("duplicate typed compound target");
+        auto value = encode_stair_compound_edit_intent(edit);
+        const auto size = value.dump().size();
+        if (size > proof_limit - edit_bytes) reject("typed compound batch byte budget exceeded");
         edit_bytes += size; edits.push_back(std::move(value));
     }
     const auto reserve = [&](const std::string& destination) {
@@ -940,8 +996,8 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
         overlays.push_back({{"view_entity_id", std::get<0>(key)}, {"saved_view_id", std::get<1>(key)},
             {"overlay_id", std::get<2>(key)}, {"proposed_overlay_id", proposed}});
     }
-    Json result{{"version", transformed ? 2 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
-        {transformed ? "transforms" : "edits", std::move(edits)}, {"identities", std::move(identities)}, {"child_identities", std::move(children)},
+    Json result{{"version", compound ? 3 : (transformed ? 2 : 1)}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+        {compound ? "compound_edits" : (transformed ? "transforms" : "edits"), std::move(edits)}, {"identities", std::move(identities)}, {"child_identities", std::move(children)},
         {"hosted_instance_identities", std::move(hosted)}, {"overlay_identities", std::move(overlays)}};
     proof_budget(result); return result;
 }
@@ -949,16 +1005,18 @@ PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Js
     try {
         proof_budget(value);
         if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2)) reject("unsupported authoring version");
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported authoring version");
         const bool transformed = value.at("version") == 2;
-        const auto* operations = transformed ? "transforms" : "edits";
+        const bool compound = value.at("version") == 3;
+        const auto* operations = compound ? "compound_edits" : (transformed ? "transforms" : "edits");
         keys(value, {"version", "registry_id", "alternative_id", operations, "identities", "child_identities", "hosted_instance_identities", "overlay_identities"});
         if (!value.at(operations).is_array() ||
             !value.at("identities").is_object() || !value.at("child_identities").is_array() ||
             !value.at("hosted_instance_identities").is_array() || !value.at("overlay_identities").is_array()) reject("unsupported authoring shape");
         PhaseStairReplacementAuthoring result;
         result.registry_id = identity(value.at("registry_id")); result.alternative_id = identity(value.at("alternative_id"));
-        if (transformed) for (const auto& transform : value.at(operations)) result.transforms.push_back(decode_stair_transform_intent(transform));
+        if (compound) for (const auto& edit : value.at(operations)) result.compound_edits.push_back(decode_stair_compound_edit_intent(edit));
+        else if (transformed) for (const auto& transform : value.at(operations)) result.transforms.push_back(decode_stair_transform_intent(transform));
         else for (const auto& edit : value.at(operations)) result.edits.push_back(decode_stair_object_edit_intent(edit));
         for (const auto& [old, proposed] : value.at("identities").items()) {
             identity(old); result.identities.emplace(old, identity(proposed));
@@ -989,9 +1047,11 @@ PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Js
 Entities replay_phase_stair_replacement_authoring(const Entities& actual, const PhaseStairReplacementAuthoring& authoring) {
     try {
         const auto proof = encode_phase_stair_replacement_authoring(authoring);
-        const bool transformed = !authoring.transforms.empty();
-        const auto derived = transformed ? derive(actual, authoring.transforms, authoring.registry_id, authoring.alternative_id)
-            : derive(actual, authoring.edits, authoring.registry_id, authoring.alternative_id);
+        const bool compound = !authoring.compound_edits.empty();
+        const bool transformed = !authoring.transforms.empty() || compound;
+        const auto derived = compound ? derive(actual, authoring.compound_edits, authoring.registry_id, authoring.alternative_id)
+            : (!authoring.transforms.empty() ? derive(actual, authoring.transforms, authoring.registry_id, authoring.alternative_id)
+                : derive(actual, authoring.edits, authoring.registry_id, authoring.alternative_id));
         const auto& plan = derived.plan;
         if (!plan.ready()) reject(plan.diagnostics.front().entity_id + ": " + plan.diagnostics.front().reason);
         const Ids entities(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
@@ -1011,6 +1071,7 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
         Strings source_frame;
         for (const auto& edit : authoring.edits) source_frame.read(encode_stair_object_edit_intent(edit));
         for (const auto& transform : authoring.transforms) source_frame.read(encode_stair_transform_intent(transform));
+        for (const auto& edit : authoring.compound_edits) source_frame.read(encode_stair_compound_edit_intent(edit));
         Ids fresh;
         const auto reserve = [&](const std::string& id) {
             if (occupied.values.contains(id) || source_frame.values.contains(id) || !fresh.insert(id).second)
@@ -1032,12 +1093,14 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
         Ids ordinary;
         for (const auto& edit : authoring.edits) ordinary.insert(edit.object_id);
         for (const auto& transform : authoring.transforms) ordinary.insert(transform.object_id);
+        for (const auto& edit : authoring.compound_edits) ordinary.insert(intent_owner(edit));
         if (transformed) {
             const auto active = constraint_phase_scope(actual);
+            const auto& placement_source = compound ? derived.profile_stage : actual;
             // A host operator may propagate to active attached rails. Inactive
             // alternatives never acquire authority from scratch geometry.
-            for (const auto& [id, entity] : actual) if (const auto host = host_id(entity); host && ordinary.contains(*host)) {
-                if (active.inactive_owner_ids.contains(id)) candidate.at(id) = entity;
+            for (const auto& [id, entity] : placement_source) if (const auto host = host_id(entity); host && ordinary.contains(*host)) {
+                if (active.inactive_owner_ids.contains(id)) candidate.at(id) = actual.at(id);
                 else ordinary.insert(id);
             }
         }
@@ -1049,6 +1112,8 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
             if (baseline(original_phases, edit.object_id)) candidate.at(edit.object_id) = actual.at(edit.object_id);
         for (const auto& transform : authoring.transforms)
             if (baseline(original_phases, transform.object_id)) candidate.at(transform.object_id) = actual.at(transform.object_id);
+        for (const auto& edit : authoring.compound_edits)
+            if (baseline(original_phases, intent_owner(edit))) candidate.at(intent_owner(edit)) = actual.at(intent_owner(edit));
         Ids physical_copies;
         for (const auto& id : derived.copied_owners) {
             auto copy = derived.physical.at(id); copy.id = authoring.identities.at(id);
@@ -1168,8 +1233,16 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
         if (transformed) {
             std::map<std::string, ArchitecturalGroupTransform, std::less<>> captured;
             for (const auto& transform : authoring.transforms) captured.emplace(transform.object_id, transform.transform);
-            for (const auto& [id, entity] : actual) if (const auto host = host_id(entity); host && captured.contains(*host))
+            for (const auto& edit : authoring.compound_edits)
+                captured.emplace(intent_owner(edit), edit.placement_edit.transform);
+            const auto active = constraint_phase_scope(actual);
+            const auto& placement_source = compound ? derived.profile_stage : actual;
+            for (const auto& [id, entity] : placement_source) if (const auto host = host_id(entity); host && captured.contains(*host)) {
+                if (compound && active.inactive_owner_ids.contains(id)) continue;
+                // A dependent rail uses its selected admitted host G once. Child
+                // three follows typed rehosting in the profile stage, matching O.
                 captured[id] = captured.at(*host);
+            }
             for (const auto& id : derived.copied_owners)
                 presentation_operations.emplace(id, presentation_transform(actual, id, captured.at(id)));
             for (const auto& key : hosted) {
@@ -1183,7 +1256,8 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
                     presentation_transform(actual, host, captured.at(host), world_authored));
             }
         }
-        presentation(candidate, actual, presentation_ids, authoring.overlay_identities, presentation_operations);
+        presentation(candidate, actual, presentation_ids, authoring.overlay_identities, presentation_operations,
+            compound ? &derived.profile_stage : nullptr);
         if (!hosted.empty() && embedded_assembly_presentation_ids(candidate) != before_presentation)
             reject("presentation append changed a qualified source or proposed component alias");
         (void)source_budget(candidate);

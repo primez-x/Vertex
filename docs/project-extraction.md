@@ -1,5 +1,34 @@
 # Portable project extraction
 
+Exchange version 131 requires native reader 133 for combined stair profile and
+placement edits. Stair replacement child three retains closed compound intents
+under direct authoring twelve or coordinated authoring fourteen. Neutral typed
+profiles precede anchored rigid placement against the same actual map. Current,
+retained and wrapped proofs retain this meaning; child one/two stay unchanged.
+
+Exchange version 130 requires native reader 132 for coordinated stair and
+architectural transforms. Closed coordinated inner four adds the exclusive
+stair replacement or ordinary stair transform lane. Actual-source composition,
+baseline preservation and full destination reservation remain required.
+
+Exchange version 129 requires native reader 131 for complete entered stair
+transform quantity maps in replacement child two. New receipts cannot move
+unchanged coordinates, and unchanged inherited evidence remains exact.
+
+Exchange version 128 requires native reader 130 for stair demolition with
+actual active proposed railing retirement. Typed closure determines retired
+owners, membership, hosted rows and known presentation references.
+
+Exchange version 127 requires native reader 129 for stair and railing
+alternative transforms. Typed operators, complete qualified mappings and saved
+presentation transforms remain actual-source replay authority.
+
+Exchange version 126 requires native reader 128 for stair and railing
+alternative profile replacement. Baseline envelopes stay exact while proposed
+owners, children, hosted instances and saved overlays receive fresh identities.
+Each floor covers current/history and wrapped proofs; ordinary copies persist
+their resulting entity dialects without a separate exchange command floor.
+
 Exchange version 125 requires native reader 127 for registry-only stair and
 railing demolition in active alternatives. It retains exclusive active-design
 authoring eleven and its selected-root intent one; actual hosted baseline

@@ -284,11 +284,17 @@ void final_presentation_owners(const ModelCopyEntities& actual, const ModelCopyE
             }
         } else if (entity.type == kAnnotationEntityType) {
             const auto state = decode_annotation_entity(entity);
+            // Child appearance belongs to this exact carrier. It does not
+            // introduce a physical host or saved-view owner namespace.
+            Ids carrier_children;
+            for (const auto& label:state.labels) carrier_children.insert(label.id);
+            for (const auto& symbol:state.symbols) carrier_children.insert(symbol.id);
             const auto retained = original == actual.end() ? 0 :
                 original->second.properties.at("state").at("overrides").size();
             std::size_t index{};
             for (const auto& row : state.overrides)
-                if (index++ >= retained && row.target_kind == "object" && !owners.contains(row.target_id))
+                if (index++ >= retained && row.target_kind == "object" &&
+                    !owners.contains(row.target_id) && !carrier_children.contains(row.target_id))
                     reject("final object annotation override references a missing owner");
         } else if (entity.type == "assembly_model") {
             // Native catalog admission owns placement decoding/geometry. Check

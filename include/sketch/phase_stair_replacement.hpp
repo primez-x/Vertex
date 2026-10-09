@@ -2,6 +2,7 @@
 
 #include "sketch/stair_object_edit.hpp"
 #include "sketch/stair_transform.hpp"
+#include "sketch/stair_compound_edit.hpp"
 
 #include <map>
 #include <optional>
@@ -65,6 +66,11 @@ struct PhaseStairReplacementPlan {
 [[nodiscard]] PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(
     const PhaseStairReplacementEntities& actual, const std::vector<StairTransformIntent>& transforms,
     const std::string& registry_id = {}, const std::string& alternative_id = {});
+[[nodiscard]] std::optional<PhaseStairReplacementRequest> phase_stair_replacement_request(
+    const PhaseStairReplacementEntities& actual, const std::vector<StairCompoundEditIntent>& compound_edits);
+[[nodiscard]] PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(
+    const PhaseStairReplacementEntities& actual, const std::vector<StairCompoundEditIntent>& compound_edits,
+    const std::string& registry_id = {}, const std::string& alternative_id = {});
 
 struct PhaseStairReplacementAuthoring {
     std::string registry_id;
@@ -76,6 +82,8 @@ struct PhaseStairReplacementAuthoring {
     PhaseStairReplacementOverlayIdentityMap overlay_identities;
     // Exclusive with edits. Nonempty transforms select the closed v2 proof.
     std::vector<StairTransformIntent> transforms;
+    // Exclusive with both existing lanes. Selects the closed v3 proof.
+    std::vector<StairCompoundEditIntent> compound_edits;
 };
 
 // Closed v1: version, registry_id, alternative_id, edits, identities,
@@ -85,6 +93,8 @@ struct PhaseStairReplacementAuthoring {
 // must remain semantically equal to the actual source on every typed edit.
 // Closed v2 replaces edits with transforms; all other qualified fields retain
 // their v1 meanings. Captured operators replay against the actual source only.
+// Closed v3 replaces edits with compound_edits. Typed actual-source profiles
+// precede anchored rigid placement, including complete entered-input receipts.
 [[nodiscard]] nlohmann::json encode_phase_stair_replacement_authoring(
     const PhaseStairReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(

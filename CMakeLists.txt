@@ -216,6 +216,7 @@ add_library(sketch_architectural_document_adapter
   src/core/structural_object_edit.cpp
   src/core/stair_object_edit.cpp
   src/core/stair_transform.cpp
+  src/core/stair_compound_edit.cpp
   src/core/architectural_footprint_edit.cpp)
 target_include_directories(sketch_architectural_document_adapter PUBLIC include)
 target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_architectural_workflow_contract sketch_document sketch_building_entities sketch_architecture)

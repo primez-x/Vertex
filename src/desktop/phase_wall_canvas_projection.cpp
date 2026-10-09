@@ -18,6 +18,7 @@
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <QPainterPath>
@@ -33,6 +34,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 
 namespace sketch::desktop {
@@ -139,11 +141,32 @@ Boundary project_solid(const TopoDS_Shape& shape,const ArchitecturalViewContext&
     if (!clipped.IsNull() && context.crop) clipped=clip_shape_to_view_crop(clipped,*context.crop);
     return clipped.IsNull() ? Boundary{} : project_shape_view(clipped,BuildingViewKind::plan,context.frame);
 }
+bool hosted_railing(const Entity& entity) {
+    const auto& p=entity.properties;
+    return entity.type=="railing" && p.is_object() && p.contains("version") &&
+        p.at("version").is_number_integer() && p.contains("form") &&
+        ((p.at("version")==2 && p.at("form")=="stair_flight_railing") ||
+         (p.at("version")==3 && p.at("form")=="stair_landing_railing"));
+}
+std::string railing_host(const Entity& entity) {
+    const auto rail=decode_railing_properties(entity.id,entity.properties);
+    if (rail.host) return rail.host->stair_id;
+    if (rail.landing_host) return rail.landing_host->stair_id;
+    throw std::invalid_argument("Coordinated canvas railing has no actual stair host.");
+}
+Entity effective_building_entity(const Entities& entities,const Entity& entity) {
+    // Hosted railing coordinates remain authored host-relative parameters.
+    // The shape builder resolves the stair once from the complete raw map.
+    return hosted_railing(entity) ? entity : resolve_vertical_placement(entities,entity);
+}
+bool coordinated_physical_type(std::string_view type) {
+    return can_recognize_building_entity_type(type) || type=="slab" || type=="roof_join";
+}
 TopoDS_Shape coordinated_shape(const Entities& entities,const std::string& id) {
     const auto& entity=entities.at(id);
     if (entity.id!=id) throw std::invalid_argument("Coordinated canvas owner identity differs from its actual map key.");
-    if (entity.type=="roof") return make_building_shape(
-        decode_building_entity(resolve_vertical_placement(entities,entity)),entities);
+    if (can_recognize_building_entity_type(entity.type)) return make_building_shape(
+        decode_building_entity(effective_building_entity(entities,entity)),entities);
     if (entity.type=="slab") {
         Slab slab;std::string error;
         if (!read_document_slab(resolve_vertical_placement(entities,entity),slab,error))
@@ -532,7 +555,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             const auto after=stage.find(proposed);
             if (after==stage.end() || after->second.id!=proposed || after->second.type!=before->second.type)
                 throw std::invalid_argument("Phase wall canvas preview lost a qualified replacement owner: "+original);
-            if (coordinated && (before->second.type=="wall" || before->second.type=="roof" || before->second.type=="slab") &&
+            if (coordinated && (before->second.type=="wall" || coordinated_physical_type(before->second.type)) &&
                 (!stage.contains(original) || stage.at(original)!=before->second))
                 throw std::invalid_argument("Coordinated canvas changed a retained baseline owner: "+original);
         }
@@ -587,12 +610,12 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         for (const auto& [id,before]:source.entities()) {
             if (aliases.contains(id)) continue;
             const auto after=stage.find(id);
-            if (before.type=="roof" || before.type=="slab" || before.type=="roof_join") {
+            if (coordinated_physical_type(before.type)) {
                 if (after==stage.end() || after->second.id!=id || after->second.type!=before.type)
                     throw std::invalid_argument("Coordinated canvas lost an actual physical owner: "+id);
                 bool changed=after->second!=before;
-                if (before.type=="roof" || before.type=="slab")
-                    changed=changed || resolve_vertical_placement(stage,after->second)!=resolve_vertical_placement(source.entities(),before);
+                if (before.type!="roof_join")
+                    changed=changed || effective_building_entity(stage,after->second)!=effective_building_entity(source.entities(),before);
                 else if (!changed) {
                     const auto join=parse_roof_join(after->second.properties,id);
                     for (const auto& member:join.roof_ids) {
@@ -615,6 +638,20 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                     affected.insert(id);
             }
         }
+        // Host geometry can change with an exact unchanged railing envelope.
+        // Resolve dependencies after all owners, independently of map order;
+        // inactive retained rails must not become new preview presentations.
+        for (const auto& [id,before]:source.entities()) {
+            if (aliases.contains(id) || !hosted_railing(before) ||
+                !semantic_visible.contains(id)) continue;
+            const auto& after=stage.at(id);
+            const auto old_host=railing_host(before),new_host=railing_host(after);
+            if (old_host!=new_host || affected.contains(old_host) || aliases.contains(old_host) ||
+                !source.entities().contains(old_host) || !stage.contains(new_host) ||
+                effective_building_entity(stage,stage.at(new_host))!=
+                    effective_building_entity(source.entities(),source.entities().at(old_host)))
+                affected.insert(id);
+        }
         // Dimension order in the entity map does not determine dependency order.
         for (const auto& [id,entity]:source.entities()) if (can_recognize_boundary_dimension_entity_type(entity.type) && !aliases.contains(id)) {
             const auto decoded=decode_boundary_dimension_entity(stage.at(id));
@@ -626,25 +663,44 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     std::map<std::string,AssemblyModel,std::less<>> source_catalogs,stage_catalogs;
     std::map<std::pair<std::string,std::string>,AssemblyExpansion> source_expansions,stage_expansions;
     AssemblyExpansionBudget source_assembly_budget,stage_assembly_budget;
+    std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> qualified_hosted;
+    EmbeddedAssemblyPresentationIds stage_embedded;
+    std::set<std::string,std::less<>> affected_components;
     if (coordinated) {
+        for (const auto& [owner,instance]:coordinated->original_to_hosted_instance_proposed)
+            qualified_hosted.emplace(owner,std::make_pair(proposed_id(owner.first),instance));
+        for (const auto& [owner,destination]:coordinated->original_to_hosted_destination_proposed) {
+            const auto [found,inserted]=qualified_hosted.emplace(owner,destination);
+            if (!inserted && found->second!=destination)
+                throw std::invalid_argument("Coordinated canvas has conflicting qualified catalog destinations.");
+        }
         for (const auto& [owner,render]:embedded_assembly_presentation_ids(source.entities()))
             if (!embedded.emplace(render,owner).second)
                 throw std::invalid_argument("Coordinated canvas has ambiguous source assembly aliases.");
         std::set<std::string,std::less<>> hosted_fresh;
-        for (const auto& [owner,proposed]:coordinated->original_to_hosted_instance_proposed) {
+        std::map<std::string,std::string,std::less<>> private_catalog_sources;
+        for (const auto& [owner,destination]:qualified_hosted) {
+            const auto& [catalog_id,proposed]=destination;
             if (proposed.empty() || fresh.contains(proposed) || source.entities().contains(proposed) ||
                 !hosted_fresh.insert(proposed).second || !source.entities().contains(owner.first) ||
                 source.entities().at(owner.first).type!="assembly_model")
                 throw std::invalid_argument("Coordinated canvas has invalid qualified hosted aliases.");
+            const auto legacy_catalog=aliases.find(owner.first);
+            if (catalog_id.empty() || source.entities().contains(catalog_id) || aliases.contains(catalog_id) ||
+                (fresh.contains(catalog_id) && (legacy_catalog==aliases.end() || legacy_catalog->second!=catalog_id)))
+                throw std::invalid_argument("Coordinated canvas has an invalid private catalog destination.");
+            const auto [catalog_source,inserted]=private_catalog_sources.emplace(catalog_id,owner.first);
+            if (!inserted && catalog_source->second!=owner.first)
+                throw std::invalid_argument("Coordinated canvas private catalog has conflicting source authority.");
             if (!source_catalogs.contains(owner.first)) source_catalogs.emplace(owner.first,
                 AssemblyModel::from_json(source.entities().at(owner.first).properties.at("model")));
             const auto& rows=source_catalogs.at(owner.first).instances();
             const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==owner.second;});
             if (row==rows.end() || !row->placement || !aliases.contains(row->placement->host_entity_id) ||
                 !source.entities().contains(row->placement->host_entity_id) ||
-                source.entities().at(row->placement->host_entity_id).type!="slab" || !aliases.contains(owner.first))
+                (source.entities().at(row->placement->host_entity_id).type!="slab" &&
+                 !can_recognize_building_entity_type(source.entities().at(row->placement->host_entity_id).type)))
                 throw std::invalid_argument("Coordinated canvas hosted alias has no actual replacement host.");
-            const auto catalog_id=proposed_id(owner.first);
             if (!stage.contains(catalog_id) || stage.at(catalog_id).id!=catalog_id || stage.at(catalog_id).type!="assembly_model")
                 throw std::invalid_argument("Coordinated canvas hosted alias lost its actual proposed catalog.");
             if (!stage_catalogs.contains(catalog_id)) stage_catalogs.emplace(catalog_id,
@@ -654,6 +710,24 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             if (proposed_row==proposed_rows.end() || !proposed_row->placement ||
                 proposed_row->placement->host_entity_id!=proposed_id(row->placement->host_entity_id))
                 throw std::invalid_argument("Coordinated canvas hosted alias lost its exact proposed host.");
+        }
+        for (const auto& [catalog_id,original]:private_catalog_sources) {
+            (void)original;
+            if (hosted_fresh.contains(catalog_id))
+                throw std::invalid_argument("Coordinated canvas private catalog overlaps a fresh hosted instance.");
+        }
+        stage_embedded=embedded_assembly_presentation_ids(stage);
+        const auto source_embedded=embedded_assembly_presentation_ids(source.entities());
+        for (const auto& [owner,destination]:qualified_hosted) {
+            const auto& original=source_embedded.at(owner);
+            const auto& proposed=stage_embedded.at(destination);
+            if (source.entities().contains(proposed) || aliases.contains(proposed) ||
+                !fresh.insert(proposed).second || hosted_fresh.contains(proposed))
+                throw std::invalid_argument("Coordinated canvas has an overlapping component presentation destination.");
+            const auto [found,inserted]=aliases.emplace(original,proposed);
+            if (!inserted && found->second!=proposed)
+                throw std::invalid_argument("Coordinated canvas has conflicting component presentation destinations.");
+            affected_components.insert(original);
         }
     }
     std::map<std::string,MeasurementLineworkReplay,std::less<>> strokes;
@@ -679,12 +753,12 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             const auto& source_rows=source_catalogs.at(catalog_id).instances();
             const auto original=std::find_if(source_rows.begin(),source_rows.end(),[&](const auto& value){return value.id==instance_id;});
             if (original==source_rows.end()) throw std::invalid_argument("Coordinated canvas lost an actual assembly source row.");
-            const auto copied=coordinated->original_to_hosted_instance_proposed.find({catalog_id,instance_id});
-            const auto target_catalog=copied==coordinated->original_to_hosted_instance_proposed.end() ? catalog_id : proposed_id(catalog_id);
-            const auto target_instance=copied==coordinated->original_to_hosted_instance_proposed.end() ? instance_id : copied->second;
+            const auto copied=qualified_hosted.find({catalog_id,instance_id});
+            const auto target_catalog=copied==qualified_hosted.end() ? catalog_id : copied->second.first;
+            const auto target_instance=copied==qualified_hosted.end() ? instance_id : copied->second.second;
             if (!stage.contains(target_catalog) || stage.at(target_catalog).type!="assembly_model")
                 throw std::invalid_argument("Coordinated canvas lost an actual assembly catalog.");
-            if (copied==coordinated->original_to_hosted_instance_proposed.end() &&
+            if (copied==qualified_hosted.end() &&
                 stage.at(target_catalog)==source.entities().at(catalog_id) &&
                 (!original->placement || !affected.contains(original->placement->host_entity_id))) continue;
             if (!stage_catalogs.contains(target_catalog)) stage_catalogs.emplace(target_catalog,
@@ -692,16 +766,18 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             const auto& rows=stage_catalogs.at(target_catalog).instances();
             const auto proposed=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==target_instance;});
             if (proposed==rows.end()) throw std::invalid_argument("Coordinated canvas lost a qualified assembly stage row.");
-            if (copied==coordinated->original_to_hosted_instance_proposed.end() && *proposed==*original &&
+            if (copied==qualified_hosted.end() && *proposed==*original &&
                 stage_catalogs.at(target_catalog).types()==source_catalogs.at(catalog_id).types() &&
                 stage_catalogs.at(target_catalog).materials()==source_catalogs.at(catalog_id).materials() &&
-                (!original->placement || (stage.contains(original->placement->host_entity_id) &&
+                (!original->placement || (!affected.contains(original->placement->host_entity_id) &&
+                    stage.contains(original->placement->host_entity_id) &&
                     source.entities().contains(original->placement->host_entity_id) &&
                     stage.at(original->placement->host_entity_id)==source.entities().at(original->placement->host_entity_id)))) continue;
             if (original->placement && (!proposed->placement ||
-                proposed->placement->host_entity_id!=(copied==coordinated->original_to_hosted_instance_proposed.end() ?
+                proposed->placement->host_entity_id!=(copied==qualified_hosted.end() ?
                     original->placement->host_entity_id : proposed_id(original->placement->host_entity_id))))
                 throw std::invalid_argument("Coordinated canvas assembly changed its qualified host.");
+            affected_components.insert(id);
             const auto stage_key=std::make_pair(target_catalog,target_instance);
             if (!stage_expansions.contains(stage_key)) stage_expansions.emplace(stage_key,
                 stage_catalogs.at(target_catalog).expand(*proposed,stage_assembly_budget));
@@ -742,14 +818,20 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 if (!expansion.profiles.empty() || !proposed->placement || !original->placement)
                     throw std::invalid_argument("Coordinated canvas host-copy assembly changed geometry ownership.");
                 const auto& host=stage.at(proposed->placement->host_entity_id);
-                if (host.type!="slab") throw std::invalid_argument("Coordinated canvas host-copy requires an actual slab owner.");
-                Slab slab;std::string error;
-                if (!read_document_slab(resolve_vertical_placement(stage,host),slab,error)) throw std::invalid_argument(error);
                 const auto transform=instance_transform(*proposed);
-                frame_paths=placed_path(slab.boundary,transform);
-                projected.thickness_metres=slab.thickness*transform.scale*transform.vertical_scale;
+                Boundary host_paths;
+                if (host.type=="slab") {
+                    Slab slab;std::string error;
+                    if (!read_document_slab(resolve_vertical_placement(stage,host),slab,error)) throw std::invalid_argument(error);
+                    host_paths=slab.boundary;
+                    projected.thickness_metres=slab.thickness*transform.scale*transform.vertical_scale;
+                } else if (can_recognize_building_entity_type(host.type)) {
+                    host_paths=project_building_plan(decode_building_entity(effective_building_entity(stage,host)),stage);
+                    projected.thickness_metres=0;
+                } else throw std::invalid_argument("Coordinated canvas host-copy requires an actual supported physical owner.");
+                frame_paths=placed_path(host_paths,transform);
                 if (view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context)) {
-                    projected.segments=project_solid(transform_assembly_shape(make_slab(slab),transform),*view_context);world=false;
+                    projected.segments=project_solid(transform_assembly_shape(coordinated_shape(stage,host.id),transform),*view_context);world=false;
                 } else projected.segments=frame_paths;
             }
             if (horizontal_plan && prototype.resize_frame && !frame_paths.empty()) {
@@ -842,6 +924,63 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 projected.hit_segments={span};
                 if (prototype.opening_width_controls) projected.opening_width_controls=CanvasOpeningWidthControls{
                     span.start,span.end,opening->width,opening->height,source.revision(),wall.baseline,opening->offset};
+            }
+        } else if (coordinated && can_recognize_building_entity_type(entity.type) && entity.type!="roof") {
+            const auto effective=effective_building_entity(stage,entity);
+            const auto object=decode_building_entity(effective);
+            const auto* beam=std::get_if<Beam>(&object);
+            const auto* rail=std::get_if<Railing>(&object);
+            const bool hosted=rail && (rail->host || rail->landing_host);
+            const bool custom=view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context);
+            if (semantic_visible.contains(target)) {
+                if (custom) {
+                    projected.segments=project_solid(make_building_shape(object,stage),*view_context);
+                    world=false;
+                } else projected.segments=project_building_plan(object,stage);
+            }
+            if (horizontal_plan && !projected.segments.empty()) {
+                const auto present=[&](Vec2 point){return !world && view_context ? project_point(point,view_context->frame) : point;};
+                // A vertical beam has valid native geometry, but no authored
+                // plan direction. Hosted rails inherit their stair frame.
+                if (prototype.resize_frame && !hosted && (!beam ||
+                    std::hypot(beam->end.x-beam->start.x,beam->end.y-beam->start.y)>default_geometry_tolerance_metres)) {
+                    projected.resize_frame=physical_frame(entity);
+                    if (!world && view_context) {
+                        auto& frame=*projected.resize_frame;
+                        frame.center=project_point(frame.center,view_context->frame);
+                        frame.rotation_radians=project_angle(frame.rotation_radians,view_context->frame);
+                        const auto right=right_axis(view_context->frame),up=up_axis(view_context->frame);
+                        frame.source_rotation_direction=right.x*up.y-right.y*up.x;
+                    }
+                }
+                for (const auto& handle:prototype.vertex_handles) {
+                    if (hosted) continue;
+                    Vec3 point;
+                    if (beam && handle.id==QStringLiteral("beam:start")) point=beam->start;
+                    else if (beam && handle.id==QStringLiteral("beam:end")) point=beam->end;
+                    else if (rail && handle.id==QStringLiteral("railing:start")) point=rail->base_position;
+                    else if (rail && handle.id==QStringLiteral("railing:end")) point={
+                        rail->base_position.x+rail->length*std::cos(rail->orientation_radians),
+                        rail->base_position.y+rail->length*std::sin(rail->orientation_radians),rail->base_position.z};
+                    else throw std::invalid_argument("Coordinated canvas has an unknown building endpoint handle.");
+                    // Axis endpoints are inside the section, not necessarily
+                    // on its outline. Test the actual 3D depth and crop instead
+                    // of requiring coincidence with a projected silhouette.
+                    if (view_context && std::isfinite(view_context->depth.far_depth_m)) {
+                        const auto& depth=view_context->depth;
+                        const auto distance=(point.x-depth.origin.x)*depth.direction.x+
+                            (point.y-depth.origin.y)*depth.direction.y+(point.z-depth.origin.z)*depth.direction.z-depth.far_depth_m;
+                        if (!std::isfinite(distance) || distance>0) continue;
+                    }
+                    if (view_context && view_context->crop &&
+                        !inside(project_point({point.x,point.y},view_context->frame),crop_bounds(*view_context->crop))) continue;
+                    projected.vertex_handles.push_back({handle.id,present({point.x,point.y}),handle.source_revision});
+                }
+                if (!prototype.snap_segments.empty()) projected.snap_segments=projected.segments;
+                if (!prototype.drawing_alignment_segments.empty()) projected.drawing_alignment_segments=projected.segments;
+                if (!prototype.snap_points.empty()) for (const auto& edge:projected.segments) {
+                    projected.snap_points.push_back(edge.start);projected.snap_points.push_back(edge.end);
+                }
             }
         } else if (coordinated && (entity.type=="roof" || entity.type=="slab" || entity.type=="roof_join")) {
             const auto shape=coordinated_shape(stage,target);
@@ -1040,29 +1179,104 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         } else throw std::invalid_argument("Phase wall canvas preview has an unsupported affected label owner: "+id);
         result.labels.push_back(std::move(projected));
     }
+    std::map<std::string,SectionOverlay,std::less<>> staged_overlays;
+    std::string overlay_owner;
+    if (view_context && coordinated) {
+        overlay_owner=view_context->sheet_view_entity_id;
+        if (overlay_owner.empty()) {
+            // Existing callers can omit the carrier. Infer it only from an
+            // exact qualified source overlay, refusing ambiguous saved views.
+            for (const auto& [key,proposed]:coordinated->original_to_overlay_proposed) {
+                (void)proposed;
+                if (std::get<1>(key)!=view_context->view_id ||
+                    std::none_of(view_context->overlays.begin(),view_context->overlays.end(),[&](const auto& row) {
+                        return row.id==std::get<2>(key);
+                    })) continue;
+                if (!overlay_owner.empty() && overlay_owner!=std::get<0>(key))
+                    throw std::invalid_argument("Coordinated canvas saved overlay carrier is ambiguous.");
+                overlay_owner=std::get<0>(key);
+            }
+        }
+        if (!overlay_owner.empty()) {
+            const auto saved=stage.find(overlay_owner);
+            if (saved==stage.end() || saved->second.type!=kSheetViewEntityType)
+                throw std::invalid_argument("Coordinated canvas lost its actual saved overlay carrier.");
+            const auto model=decode_sheet_view_entity(saved->second);
+            const auto view=std::find_if(model.views().begin(),model.views().end(),[&](const auto& value) {
+                return value.id==view_context->view_id;
+            });
+            if (view==model.views().end())
+                throw std::invalid_argument("Coordinated canvas lost its actual saved view.");
+            for (const auto& row:view->overlays) staged_overlays.emplace(row.id,row);
+        }
+    }
+    std::map<std::string,std::pair<std::string,std::string>,std::less<>> staged_component_owners;
+    for (const auto& [key,alias]:stage_embedded)
+        if (!staged_component_owners.emplace(alias,key).second)
+            throw std::invalid_argument("Coordinated canvas has ambiguous staged component aliases.");
     if (view_context) for (const auto& overlay:view_context->overlays) {
         if (overlay.kind!=SectionOverlayKind::dimension || !overlay.dimension_binding ||
-            !affected.contains(overlay.dimension_binding->object_id) ||
+            (!affected.contains(overlay.dimension_binding->object_id) &&
+                !affected_components.contains(overlay.dimension_binding->object_id)) ||
             !section_overlay_visible(overlay,view_context->presentation.detail)) continue;
-        const auto& binding=*overlay.dimension_binding;
+        const SectionOverlay* staged=&overlay;
+        if (coordinated && !staged_overlays.empty()) {
+            const auto qualified=coordinated->original_to_overlay_proposed.find(
+                {overlay_owner,view_context->view_id,overlay.id});
+            auto mapped=qualified==coordinated->original_to_overlay_proposed.end()
+                ? proposed_id(overlay.id) : qualified->second;
+            auto found=staged_overlays.find(mapped);
+            if (qualified!=coordinated->original_to_overlay_proposed.end() && found==staged_overlays.end())
+                throw std::invalid_argument("Coordinated canvas lost its qualified proposed dimension overlay.");
+            const auto expected=proposed_id(overlay.dimension_binding->object_id);
+            if (found!=staged_overlays.end() && found->second.kind==SectionOverlayKind::dimension &&
+                found->second.dimension_binding && found->second.dimension_binding->object_id==expected)
+                staged=&found->second;
+            else if (qualified!=coordinated->original_to_overlay_proposed.end())
+                throw std::invalid_argument("Coordinated canvas proposed dimension overlay lost its exact bound owner.");
+        }
+        const auto& binding=*staged->dimension_binding;
         const auto target=proposed_id(binding.object_id);
-        if (!stage.contains(target)) throw std::invalid_argument("Phase wall preview bound view dimension lost its owner.");
-        const auto& owner=stage.at(target);
         Boundary support;
-        if (owner.type=="wall" && walls.contains(target))
-            support=project_shape_view(make_wall(walls.at(target)),BuildingViewKind::plan,view_context->frame);
-        else if (owner.type=="opening") {
-            const auto host=owner.properties.at("wall_id").get<std::string>();
-            if (!walls.contains(host)) throw std::invalid_argument("Phase wall preview bound view dimension lost its opening host.");
-            const auto& wall=walls.at(host);
-            const auto opening=std::find_if(wall.openings.begin(),wall.openings.end(),[&](const auto& value){return value.id==target;});
-            if (opening==wall.openings.end()) throw std::invalid_argument("Phase wall preview bound view dimension lost its opening.");
-            support=project_shape_view(opening_solid(owner,wall,*opening),BuildingViewKind::plan,view_context->frame);
-        } else if (coordinated && (owner.type=="roof" || owner.type=="slab" || owner.type=="roof_join"))
-            support=project_shape_view(coordinated_shape(stage,target),BuildingViewKind::plan,view_context->frame);
-        else if (horizontal_plan && can_recognize_boundary_entity_type(owner.type))
-            support=project_path(boundary_geometry(decode_identified_boundary_entity(owner)),view_context->frame);
-        else throw std::invalid_argument("Phase wall preview has an unsupported affected bound view dimension owner: "+binding.object_id);
+        if (const auto component=staged_component_owners.find(target);component!=staged_component_owners.end()) {
+            const auto& [catalog_id,instance_id]=component->second;
+            if (!stage_catalogs.contains(catalog_id)) stage_catalogs.emplace(catalog_id,
+                AssemblyModel::from_json(stage.at(catalog_id).properties.at("model")));
+            const auto& rows=stage_catalogs.at(catalog_id).instances();
+            const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==instance_id;});
+            if (row==rows.end() || !row->placement)
+                throw std::invalid_argument("Coordinated bound dimension lost its actual hosted component row.");
+            const auto key=std::make_pair(catalog_id,instance_id);
+            if (!stage_expansions.contains(key)) stage_expansions.emplace(key,
+                stage_catalogs.at(catalog_id).expand(*row,stage_assembly_budget));
+            const auto& expansion=stage_expansions.at(key);
+            TopoDS_Shape shape;
+            if (!expansion.profiles.empty()) shape=make_assembly_geometry(expansion).shape;
+            else {
+                const auto& host=stage.at(row->placement->host_entity_id);
+                const auto host_shape=host.type=="wall" && walls.contains(host.id)
+                    ? make_wall(walls.at(host.id)) : coordinated_shape(stage,host.id);
+                shape=transform_assembly_shape(host_shape,instance_transform(*row));
+            }
+            support=project_shape_view(shape,BuildingViewKind::plan,view_context->frame);
+        } else {
+            if (!stage.contains(target)) throw std::invalid_argument("Phase wall preview bound view dimension lost its owner.");
+            const auto& owner=stage.at(target);
+            if (owner.type=="wall" && walls.contains(target))
+                support=project_shape_view(make_wall(walls.at(target)),BuildingViewKind::plan,view_context->frame);
+            else if (owner.type=="opening") {
+                const auto host=owner.properties.at("wall_id").get<std::string>();
+                if (!walls.contains(host)) throw std::invalid_argument("Phase wall preview bound view dimension lost its opening host.");
+                const auto& wall=walls.at(host);
+                const auto opening=std::find_if(wall.openings.begin(),wall.openings.end(),[&](const auto& value){return value.id==target;});
+                if (opening==wall.openings.end()) throw std::invalid_argument("Phase wall preview bound view dimension lost its opening.");
+                support=project_shape_view(opening_solid(owner,wall,*opening),BuildingViewKind::plan,view_context->frame);
+            } else if (coordinated && coordinated_physical_type(owner.type))
+                support=project_shape_view(coordinated_shape(stage,target),BuildingViewKind::plan,view_context->frame);
+            else if (horizontal_plan && can_recognize_boundary_entity_type(owner.type))
+                support=project_path(boundary_geometry(decode_identified_boundary_entity(owner)),view_context->frame);
+            else throw std::invalid_argument("Phase wall preview has an unsupported affected bound view dimension owner: "+binding.object_id);
+        }
         if (support.empty()) throw std::invalid_argument("Phase wall preview bound view dimension has no complete source silhouette.");
         const auto bounds=boundary_bounds(support);
         const bool along_horizontal=binding.axis==SectionDimensionAxis::horizontal;

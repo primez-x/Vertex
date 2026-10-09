@@ -6,6 +6,7 @@
 #include "plan_canvas.hpp"
 
 #include <utility>
+#include <tuple>
 
 namespace sketch::desktop {
 
@@ -37,6 +38,13 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
     PhaseWallReplacementIdentityMap original_to_proposed;
     std::map<std::pair<std::string, std::string>, std::string>
         original_to_hosted_instance_proposed;
+    // A shared source catalog can produce separate private catalogs for
+    // different family leaves. Destination is (catalog, instance); the older
+    // single-catalog input above remains supported for existing callers.
+    std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>>
+        original_to_hosted_destination_proposed;
+    std::map<std::tuple<std::string, std::string, std::string>, std::string>
+        original_to_overlay_proposed;
 };
 
 // Shared with settled canvas rendering: the default frame/default depth is
@@ -50,8 +58,10 @@ struct PhaseWallCanvasCoordinatedPhysicalInput {
 // Unsupported affected geometry throws std::invalid_argument; no stale source
 // presentation is silently substituted. Unreviewed physical room facts and
 // their room labels deliberately remain outside this physical-stage preview.
-// Supplying coordinated input additionally projects actual changed roof/slab
-// owners, their joins and hosted catalog presentations from edited_entities.
+// Supplying coordinated input additionally projects actual changed roof/slab,
+// stair/railing and column/beam owners, their joins and hosted catalog
+// presentations from edited_entities. Hosted railings use the complete raw
+// stage's stair placement, including when their own envelope is unchanged.
 // Retained/eligible presentations must come from the captured source visibility
 // and object roster. Their original IDs/keys remain gesture rendering aliases.
 [[nodiscard]] PhaseWallCanvasProjection project_phase_wall_canvas(

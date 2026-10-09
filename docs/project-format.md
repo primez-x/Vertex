@@ -1,4 +1,62 @@
-# Vertex project formats v1 through v131
+# Vertex project formats v1 through v133
+
+## Combined stair profile and placement edits (v133)
+
+Native reader 133 and JSON/assets extraction 131 retain stair replacement child
+three under direct active-design authoring twelve or coordinated authoring
+fourteen. The same eight closed keys replace the operations array with
+`compound_edits`. Each closed compound intent one contains `version`,
+`profile_edit` and `placement_edit`, naming the same actual owner.
+
+The complete edited cohort is admitted against the actual source before
+separating profile from pose. Profile replay retains source base, orientation
+and coordinate receipts; vertical bindings and nonplacement entered quantities
+remain profile authority. Rigid yaw and XYZ translation then anchor at the
+resolved intermediate profile. Active attached rails and hosted rows follow
+once. Final coordinate receipts use the existing typed transform policy.
+Ordinary commands persist resulting entity data without this internal proof.
+
+Alternative replay preserves original baseline owners and catalogs, reserves
+fresh owner-qualified topology/components/overlays, and rehosts active proposed
+dependents. Bound dimensions use the intermediate profile silhouette before
+placement; raw styles and opaque presentation fields remain retained. Existing
+child one/two meanings remain unchanged. Independent and integrated source
+review approved; compilation and runtime remain unverified.
+
+## Coordinated stair and architectural transforms (v132)
+
+Native reader 132 and JSON/assets extraction 130 retain active-design authoring
+fourteen with closed coordinated inner four. Its exact keys are `version`,
+`wall_authoring`, `roof_replacement`, `slab_replacement`,
+`structural_replacement`, `stair_replacement`, `ordinary_roof_edits`,
+`ordinary_slab_geometry`, `ordinary_structural_edits` and
+`ordinary_stair_transforms`. At least two families are required. Each family
+replays independently against the same complete actual source; the stair
+replacement and ordinary transform list are exclusive. Ordinary stair rows
+cannot borrow inactive or shared-baseline authority.
+
+Composition merges disjoint actual catalog placement changes and qualified
+presentation additions, while preserving retained baselines and other
+alternatives. Fresh entity, child, hosted, overlay and computed names remain
+subject to Document history/assets reservation. Wall and room review remains
+mandatory. Current, retained and wrapped proofs keep the floor; a nested stair
+child three raises it to 133. Earlier envelopes keep their meanings. Independent
+and integrated source review approved; compilation and runtime are unverified.
+
+## Mixed drawing and architectural copies
+
+Independent selection copy composes source-derived drawing and physical family
+candidates against the same complete source. Architectural children, hosted
+components and saved presentations retain qualified fresh identities. Drawing
+boundaries, rooms, annotation children and reference dependencies keep their
+own complete graph-copy authority. Carrier-local appearance rows may target
+their actual label or symbol children without creating physical host authority.
+
+Separately selected embedded components and callouts complete before command
+capture is sealed; captured scope enrollment must reproduce that exact command
+plus its derived registrations. This operation saves resulting entity dialects
+without a new project-format floor. Independent and integrated source review
+approved; compilation and runtime remain unverified.
 
 ## Source-derived independent stair and railing copies
 
