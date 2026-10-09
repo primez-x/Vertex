@@ -253,6 +253,60 @@ bool supported_catalog(const Json& model) {
     for (int v = 1; v <= 7; ++v) if (*schema == "sketch.assemblies.v" + std::to_string(v)) return true;
     return false;
 }
+bool sole_active_proposal(const ModelPhases& model, const std::string& id) {
+    if (!model.active_alternative() || contains(model.baseline_ids(), id)) return false;
+    std::size_t proposals{};
+    for (const auto& alternative : model.alternatives()) {
+        if (contains(alternative.demolished_ids, id)) return false;
+        if (!contains(alternative.proposed_ids, id)) continue;
+        if (alternative.id != *model.active_alternative()) return false;
+        ++proposals;
+    }
+    return proposals == 1;
+}
+bool unprotected_baseline(const ModelPhases& model, const std::string& id) {
+    if (!contains(model.baseline_ids(), id)) return false;
+    for (const auto& alternative : model.alternatives())
+        if (contains(alternative.proposed_ids, id) || contains(alternative.demolished_ids, id)) return false;
+    return true;
+}
+// Same actual-source rule for production admission and the coordinator's
+// analytical protected-row guard. No geometry factory or inferred choice.
+std::optional<std::string> complete_proposed_opening_wall(const Entities& source,
+    const Phases& phase, const Entity& catalog, const std::string& opening_id,
+    bool require_baseline_carrier = true) {
+    const auto carrier = phase.owners.find(catalog.id), opening_member = phase.owners.find(opening_id);
+    const auto opening = source.find(opening_id);
+    if (catalog.type != "assembly_model" || catalog.required || (require_baseline_carrier && carrier == phase.owners.end()) ||
+        opening == source.end() || opening->second.type != "opening" || opening->second.required ||
+        opening_member == phase.owners.end() || (carrier != phase.owners.end() && opening_member->second != carrier->second) ||
+        phase.scope.inactive_owner_ids.contains(catalog.id) || phase.scope.inactive_owner_ids.contains(opening_id) ||
+        !supported_catalog(catalog.properties.at("model"))) return std::nullopt;
+    const auto& model = phase.models.at(opening_member->second);
+    if (!model.active_alternative() ||
+        (require_baseline_carrier && !unprotected_baseline(model, catalog.id)) ||
+        (carrier != phase.owners.end() && !unprotected_baseline(model, catalog.id) && !sole_active_proposal(model, catalog.id)) ||
+        !sole_active_proposal(model, opening_id)) return std::nullopt;
+    std::string wall_id, error;
+    if (!read_document_wall_id(opening->second, wall_id, error)) return std::nullopt;
+    const auto wall = source.find(wall_id);
+    const auto wall_member = phase.owners.find(wall_id);
+    if (wall == source.end() || wall->second.type != "wall" || wall->second.required ||
+        wall_member == phase.owners.end() || wall_member->second != opening_member->second ||
+        phase.scope.inactive_owner_ids.contains(wall_id) ||
+        (!unprotected_baseline(model, wall_id) && !sole_active_proposal(model, wall_id))) return std::nullopt;
+    return wall_id;
+}
+Json retained_phase_membership(Json raw, const Ids& retained) {
+    const auto keep = [&](Json& values) {
+        filter(values, [&](const Json& value) { return retained.contains(value.get<std::string>()); });
+    };
+    keep(raw.at("entity_ids")); keep(raw.at("baseline_ids"));
+    for (auto& alternative : raw.at("alternatives")) {
+        keep(alternative.at("proposed_ids")); keep(alternative.at("demolished_ids"));
+    }
+    return raw;
+}
 void context(const Entities& source, const ProjectOrganization& organization, const Entity& entity) {
     if (entity.type == "assembly_model") {
         for (const auto& [key, type] :
@@ -656,7 +710,8 @@ void charge_candidate_geometry(const Entities& source, const Phases& phase,
 Entities derive(const Entities& source, const std::vector<std::string>& selection,
     const std::vector<std::pair<std::string, std::string>>& components,
     bool allow_manufactured_opening_hosts, std::size_t reserved_native_work = 0, bool analytical_only = false,
-    bool complete_hosted_catalog_consequences = false) {
+    bool complete_hosted_catalog_consequences = false,
+    bool complete_proposed_opening_catalog_consequences = false) {
     if (!allow_manufactured_opening_hosts && reserved_native_work)
         reject("external native reservation requires opening-host admission");
     bounds(source);
@@ -715,7 +770,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     assembly_integrity(source, allow_manufactured_opening_hosts ? &source_assembly_admission : nullptr);
     const auto aliases = embedded_assembly_presentation_ids(source);
     Entities result = source; retire_phases(result, source, phase, retired);
-    Ids retained_baseline_catalogs;
+    Ids retained_baseline_catalogs, retained_opening_bodies;
     const auto retained_baseline_catalog_row = [&](const Entity& catalog, const std::string& host_id) {
         if (!complete_hosted_catalog_consequences) return false;
         const auto host = source.find(host_id);
@@ -743,6 +798,13 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
             reject("complete retained catalog consequence requires an actual wall or semantic opening host: " + host_id);
         const auto wall = source.find(wall_id);
         const auto wall_member = phase.owners.find(wall_id);
+        if (host->second.type == "opening" && complete_proposed_opening_catalog_consequences) {
+            const auto admitted_wall = complete_proposed_opening_wall(source, phase, catalog, host_id);
+            if (!admitted_wall || *admitted_wall != wall_id)
+                reject("complete placed consequence requires an unprotected same-registry proposed opening and active wall: " + host_id);
+            retained_opening_bodies.insert(host_id); retained_opening_bodies.insert(wall_id);
+            return true;
+        }
         if (wall == source.end() || wall->second.type != "wall" || wall->second.required ||
             phase.scope.inactive_owner_ids.contains(wall_id) || wall_member == phase.owners.end() ||
             wall_member->second != carrier->second || !sole_active_proposals.contains(wall_id))
@@ -775,7 +837,15 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
                     std::string wall_id, error;
                     if (!read_document_wall_id(owner->second, wall_id, error)) reject(error);
                     if (source.at(wall_id).required) reject("opening component has a required wall owner: " + wall_id);
-                    removable(phase, wall_id);
+                    // The carrier can also be ordinary or a sole active
+                    // proposal. Its existing removable check above still
+                    // applies; the unchanged existing wall is never retired.
+                    const auto retained_wall = complete_proposed_opening_catalog_consequences ?
+                        complete_proposed_opening_wall(source, phase, entity, owner_id, false) : std::nullopt;
+                    if (retained_wall) {
+                        if (*retained_wall != wall_id) reject("placed opening consequence has an inconsistent actual wall host");
+                        retained_opening_bodies.insert(owner_id); retained_opening_bodies.insert(wall_id);
+                    } else removable(phase, wall_id);
                     const auto wall_registry = phase.owners.find(wall_id), opening_registry = phase.owners.find(owner_id);
                     if (wall_registry != phase.owners.end() && selected_registry && wall_registry->second != *selected_registry)
                         reject("opening component wall spans foreign phase registry: " + id + "/" + row.id);
@@ -898,6 +968,16 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     const auto after = phases(result);
     if (after.scope.inactive_owner_ids != phase.scope.inactive_owner_ids)
         reject("removal changed inactive baseline/other-alternative ownership");
+    for (const auto& id : retained_opening_bodies) {
+        const auto retained = result.find(id);
+        if (retained == result.end() || retained->second != source.at(id) ||
+            retained->second.properties.dump() != source.at(id).properties.dump() ||
+            retained->second.extensions.dump() != source.at(id).extensions.dump())
+            reject("complete placed consequence changed its actual opening or wall body: " + id);
+        const auto member = after.owners.find(id);
+        if (member == after.owners.end() || member->second != phase.owners.at(id))
+            reject("complete placed consequence changed its opening or wall registry: " + id);
+    }
     for (const auto& id : retained_baseline_catalogs) {
         const auto retained = result.find(id);
         if (retained == result.end()) reject("complete wall consequence erased its retained catalog: " + id);
@@ -912,24 +992,16 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (owner == after.owners.end() || owner->second != phase.owners.at(id))
             reject("complete wall consequence changed its retained catalog registry: " + id);
     }
-    if (!retained_baseline_catalogs.empty()) {
-        const auto membership_projection = [&](Json raw) {
-            const auto keep = [&](Json& values) {
-                filter(values, [&](const Json& value) { return retained_baseline_catalogs.contains(value.get<std::string>()); });
-            };
-            keep(raw.at("entity_ids")); keep(raw.at("baseline_ids"));
-            for (auto& alternative : raw.at("alternatives")) {
-                keep(alternative.at("proposed_ids")); keep(alternative.at("demolished_ids"));
-            }
-            return raw;
-        };
+    if (!retained_baseline_catalogs.empty() || !retained_opening_bodies.empty()) {
+        auto retained_members = retained_baseline_catalogs;
+        retained_members.insert(retained_opening_bodies.begin(), retained_opening_bodies.end());
         for (const auto& [registry, model] : phase.models) {
             (void)model;
             const auto retained = result.find(registry);
             if (retained == result.end() || retained->second.type != "model_phases" ||
-                membership_projection(source.at(registry).properties.at("model")).dump() !=
-                    membership_projection(retained->second.properties.at("model")).dump())
-                reject("complete wall consequence changed retained catalog phase membership: " + registry);
+                retained_phase_membership(source.at(registry).properties.at("model"), retained_members).dump() !=
+                    retained_phase_membership(retained->second.properties.at("model"), retained_members).dump())
+                reject("complete catalog consequence changed retained carrier/host phase membership: " + registry);
         }
     }
     // Complete bounded candidates and typed relationships precede native source
@@ -1004,9 +1076,10 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
-    bool allow_manufactured_opening_hosts, std::size_t reserved_native_work, bool complete_hosted_catalog_consequences) {
+    bool allow_manufactured_opening_hosts, std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
+    bool complete_proposed_opening_catalog_consequences) {
     try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts,
-        reserved_native_work, false, complete_hosted_catalog_consequences); }
+        reserved_native_work, false, complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();
@@ -1016,9 +1089,100 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
 void preflight_architectural_object_removal(const Entities& actual,
     const std::vector<std::string>& selected_object_ids,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
-    std::size_t reserved_native_work, bool complete_hosted_catalog_consequences) {
+    std::size_t reserved_native_work, bool complete_hosted_catalog_consequences,
+    bool complete_proposed_opening_catalog_consequences) {
     try { (void)derive(actual, selected_object_ids, explicit_components, true, reserved_native_work, true,
-        complete_hosted_catalog_consequences); }
+        complete_hosted_catalog_consequences, complete_proposed_opening_catalog_consequences); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
+}
+std::vector<std::pair<std::string, std::string>> complete_proposed_opening_catalog_consequence_keys(
+    const Entities& actual, const Entities& candidate,
+    const std::vector<std::pair<std::string, std::string>>& requested_components,
+    const std::string& registry_id, const std::string& alternative_id) {
+    try {
+        bounds(actual); bounds(candidate);
+        identity(registry_id); identity(alternative_id);
+        if (requested_components.size() > closure_limit) return {};
+        const auto phase = phases(actual), after = phases(candidate);
+        if (!phase.models.contains(registry_id)) return {};
+        const auto& model = phase.models.at(registry_id);
+        if (!model.active_alternative() || *model.active_alternative() != alternative_id) return {};
+        const auto organization = organize_project(actual);
+        const auto remaining_aliases = embedded_assembly_presentation_ids(candidate);
+        std::map<std::string, AssemblyModel, std::less<>> catalogs;
+        std::map<std::string, bool, std::less<>> carrier_admission;
+        std::map<std::string, bool, std::less<>> body_admission;
+        OpeningAdmission admission;
+        Keys eligible;
+        Ids retained_members;
+        const auto retained_body = [&](const std::string& id) {
+            if (const auto cached = body_admission.find(id); cached != body_admission.end()) return cached->second;
+            const auto retained = candidate.find(id), original = actual.find(id);
+            const bool valid = retained != candidate.end() && original != actual.end() &&
+                retained->second == original->second && retained->second.properties.dump() == original->second.properties.dump() &&
+                retained->second.extensions.dump() == original->second.extensions.dump();
+            body_admission.emplace(id, valid);
+            return valid;
+        };
+        for (const auto& key : requested_components) {
+            const auto& [catalog_id, instance_id] = key;
+            identity(catalog_id); identity(instance_id);
+            if (remaining_aliases.contains(key)) continue;
+            const auto catalog = actual.find(catalog_id), retained_catalog = candidate.find(catalog_id);
+            if (catalog == actual.end() || catalog->second.type != "assembly_model" ||
+                retained_catalog == candidate.end() || retained_catalog->second.type != "assembly_model") continue;
+            if (!carrier_admission.contains(catalog_id)) {
+                context(actual, organization, catalog->second);
+                const auto source_model = AssemblyModel::from_json(catalog->second.properties.at("model"));
+                const auto retained_model = AssemblyModel::from_json(retained_catalog->second.properties.at("model"));
+                Ids survivors;
+                for (const auto& survivor : retained_model.instances()) survivors.insert(survivor.id);
+                auto expected = catalog->second;
+                filter(expected.properties.at("model").at("instances"), [&](const Json& row) {
+                    return survivors.contains(row.at("id").get<std::string>());
+                });
+                const bool valid = retained_catalog->second == expected &&
+                    retained_catalog->second.properties.dump() == expected.properties.dump() &&
+                    retained_catalog->second.extensions.dump() == expected.extensions.dump();
+                catalogs.emplace(catalog_id, source_model);
+                carrier_admission.emplace(catalog_id, valid);
+            }
+            if (!carrier_admission.at(catalog_id)) continue;
+            const auto carrier = phase.owners.find(catalog_id);
+            const auto retained_carrier = after.owners.find(catalog_id);
+            if ((carrier == phase.owners.end()) != (retained_carrier == after.owners.end()) ||
+                (carrier != phase.owners.end() && (carrier->second != registry_id || retained_carrier->second != registry_id))) continue;
+            const auto& source_model = catalogs.at(catalog_id);
+            const auto row = std::find_if(source_model.instances().begin(), source_model.instances().end(),
+                [&](const auto& value) { return value.id == instance_id; });
+            if (row == source_model.instances().end() || !row->placement) continue;
+            const auto& opening_id = row->placement->host_entity_id;
+            const auto opening_member = phase.owners.find(opening_id);
+            if (opening_member == phase.owners.end() || opening_member->second != registry_id) continue;
+            const auto wall_id = complete_proposed_opening_wall(actual, phase, catalog->second, opening_id, false);
+            if (!wall_id || !retained_body(opening_id) || !retained_body(*wall_id)) continue;
+            bool same_members = true;
+            for (const auto& id : {opening_id, *wall_id}) {
+                const auto member = after.owners.find(id);
+                same_members = same_members && member != after.owners.end() && member->second == registry_id;
+            }
+            if (!same_members) continue;
+            opening_component_context(actual, organization, actual.at(opening_id));
+            (void)opening_host_work(actual, phase.scope, opening_id, false, admission);
+            if (carrier != phase.owners.end()) retained_members.insert(catalog_id);
+            retained_members.insert(opening_id); retained_members.insert(*wall_id);
+            eligible.insert(key);
+        }
+        if (eligible.empty()) return {};
+        const auto registry = candidate.find(registry_id);
+        if (registry == candidate.end() || registry->second.type != "model_phases" ||
+            retained_phase_membership(actual.at(registry_id).properties.at("model"), retained_members).dump() !=
+                retained_phase_membership(registry->second.properties.at("model"), retained_members).dump()) return {};
+        return {eligible.begin(), eligible.end()};
+    } catch (const Json::exception&) {
+        return {};
+    } catch (const std::invalid_argument&) {
+        return {};
+    }
 }
 } // namespace sketch

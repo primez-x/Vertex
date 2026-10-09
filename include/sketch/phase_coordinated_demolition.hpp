@@ -35,6 +35,11 @@ namespace sketch {
 // source-derived proposed-roof component retirement from a retained baseline
 // catalog in the same actual saved registry. No historical family is required;
 // replay derives the actual saved choice from opening/host and roof membership.
+// Closed inner v7 has the same nine fields as v5/v6, permits empty openings,
+// and requires a nonnull ordinary child v1 or v2 with explicit qualified rows.
+// Child v2 still requires an actual roof. Without historical families, actual
+// roots, carriers, placement hosts and opening walls bind one active saved choice.
+// It admits complete placed-row retirement while preserving physical hosts.
 [[nodiscard]] nlohmann::json encode_phase_coordinated_demolition(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
@@ -55,24 +60,29 @@ struct PhaseCoordinatedOrdinaryRemoval {
 // Validates the complete enclosure, including historical children and source
 // bindings. V1 and v4/v5 with null ordinary_removal return nullopt. V2 selections
 // are canonical ascending unique ASCII identities with aggregate size <=1000.
-// Inner v3/v4/v5/v6 child v2 destinations are bounded nonempty arrays of fresh IDs; slot
+// Inner v3/v4/v5/v6/v7 child v2 destinations are bounded nonempty arrays of fresh IDs; slot
 // order is authored join/overlay order rather than lexical identity order.
 [[nodiscard]] std::optional<PhaseCoordinatedOrdinaryRemoval> phase_coordinated_demolition_ordinary_removal(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
 // Validates the entire enclosure; empty for closed inner v1..v4. V5 identities
 // grant no wall or room authoring authority and replay the same actual source.
-// V6 returns the same validated list, which may be empty.
+// V6/v7 return the same validated list, which may be empty.
 [[nodiscard]] std::vector<std::string> phase_coordinated_demolition_ordinary_openings(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
-// Validates the entire enclosure; true exclusively for closed inner v4/v5/v6.
+// Validates the entire enclosure; true exclusively for closed inner v4..v7.
 [[nodiscard]] bool phase_coordinated_demolition_complete_hosted_catalog_consequences(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
-// True exclusively for closed inner v6. Historical/default roof producers keep
+// True exclusively for closed inner v6/v7. Historical/default roof producers keep
 // their refusal semantics; controller capture and Site admission use this flag.
 [[nodiscard]] bool phase_coordinated_demolition_complete_roof_hosted_catalog_consequences(
+    const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
+
+// True exclusively for closed inner v7; qualified rows grant no physical host
+// removal authority. Older complete producers retain their existing policies.
+[[nodiscard]] bool phase_coordinated_demolition_complete_placed_catalog_consequences(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
 // Every leaf independently replays the SAME actual source. Only the exported
@@ -89,6 +99,9 @@ struct PhaseCoordinatedOrdinaryRemoval {
 // other rows, baseline openings or unchanged original wall bodies.
 // V6 extends those consequences to actual proposed roofs, preserving the raw
 // baseline catalog envelope, surviving instance order and retained membership.
+// V7 authenticates every explicit row/root/host before historical replay and
+// permits only source-produced requested row retirement on an exact retained
+// proposed opening and its exact baseline wall in the same actual saved choice.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_phase_coordinated_demolition(
     const std::map<std::string, Entity, std::less<>>& source,
     const PhaseConstraintAuthoringIntent& enclosing);

@@ -209,7 +209,9 @@ public:
     // retained/undone history (coordinated demolition v6).
     // Complete mixed wall/opening/roof catalog consequences require v152
     // throughout retained/undone history (wall demolition authoring inner v3).
-    static constexpr std::uint32_t format_version = 152;
+    // Independent complete placed-component consequences require v153
+    // throughout retained/undone history (coordinated demolition inner v7).
+    static constexpr std::uint32_t format_version = 153;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

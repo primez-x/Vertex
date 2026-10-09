@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 independent placed-component source implementation
+
+Delete/Cut now reaches a complete typed command when only a placed component
+is selected. A component on a sole active proposed door/window can be removed
+while its actual opening and existing/proposed wall remain unchanged. An active
+original catalog retains its definitions, materials, raw remaining rows/order
+and saved membership. Ordinary/proposed carriers keep their existing admission.
+Required, inactive, foreign and protected owners remain preserved.
+
+Closed coordinated inner seven binds actual selected roots, qualified rows,
+carriers and opening walls to the real saved alternative before historical
+replay. Its protected-row proof is derived from the actual producer and checks
+raw carrier filtering plus exact retained bodies/membership. Shared analytical
+validation is batched across the selection rather than repeating full-source
+validation for every row. Controller source/selection/pending-placement and
+Site fences remain attached; Cut publication follows successful application.
+Native 153 / extraction 151 preserve the additive meaning through direct,
+wrapped, retained and undone history. Older dialects/default policies remain
+unchanged. Root integrated source review is complete; independent source review
+is pending. Compilation and runtime remain unverified.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. The installed candidate remains unchanged. Work continues on independent
+railing-retirement offers and other confirmed product gaps, without a goal loop.
+
 ### October 9 complete mixed-wall catalog source implementation
 
 Wall-demolition authoring inner three now completes ordinary proposed wall,
@@ -37,7 +62,8 @@ integrated source review is complete. Independent review of 7497252 found a
 dropped wall/component policy in the selection façade. The correction forwards
 a separate default-off wall policy through analytical admission and replay,
 while roof-only callers and non-wall host families retain their previous
-authority. Independent source review of the correction is pending.
+authority. Independent source review approved the correction at 3baca379 with
+no actionable findings; this does not establish compilation or runtime behavior.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or installations
 ran. Compilation and runtime remain unverified; the installed candidate is

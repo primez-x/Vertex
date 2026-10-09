@@ -127,7 +127,8 @@ EmbeddedAssemblyPresentationIds expected_aliases(const Entities& source, const s
 
 Entities replay_architectural_selection_removal(const Entities& actual,
     const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts,
-    bool complete_roof_hosted_catalog_consequences, bool complete_wall_hosted_catalog_consequences) {
+    bool complete_roof_hosted_catalog_consequences, bool complete_wall_hosted_catalog_consequences,
+    bool complete_placed_catalog_consequences) {
     try {
         bounds(actual);
         if (intent.object_ids.size() > selection_limit ||
@@ -154,6 +155,8 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         std::sort(roofs.begin(), roofs.end()); std::sort(objects.begin(), objects.end());
         if (roofs.empty() && !intent.roof_additional_identities.empty())
             reject("roof destinations require an actual selected roof");
+        const bool complete_generic_catalog = complete_wall_hosted_catalog_consequences || complete_placed_catalog_consequences;
+        const bool complete_composition_catalog = complete_roof_hosted_catalog_consequences || complete_generic_catalog;
 
         if (allow_manufactured_opening_hosts) {
             // Reserve the complete source's conservative shared 16-pass roof,
@@ -161,7 +164,8 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             validate_mixed_wall_removal_source_admission(actual, true);
             if (!objects.empty() || !selected_components.empty())
                 preflight_architectural_object_removal(actual, objects, intent.components, 0,
-                    complete_wall_hosted_catalog_consequences);
+                    complete_generic_catalog,
+                    complete_placed_catalog_consequences);
         }
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
@@ -183,9 +187,11 @@ Entities replay_architectural_selection_removal(const Entities& actual,
                 selected_components.begin(), selected_components.end());
             auto ordinary = allow_manufactured_opening_hosts ?
                 replay_architectural_object_removal(actual, objects, components, true, 0,
-                    complete_wall_hosted_catalog_consequences) :
+                    complete_generic_catalog,
+                    complete_placed_catalog_consequences) :
                 replay_architectural_object_removal(actual, objects, components, false, 0,
-                    complete_wall_hosted_catalog_consequences);
+                    complete_generic_catalog,
+                    complete_placed_catalog_consequences);
             bounds(ordinary);
             candidates.push_back(std::move(ordinary));
         }
@@ -202,8 +208,7 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         }
         auto result = candidates.size() == 1 ? std::move(candidates.front()) :
             compose_ordinary_architectural_removal_candidates(actual, candidates,
-                complete_roof_hosted_catalog_consequences || complete_wall_hosted_catalog_consequences,
-                complete_roof_hosted_catalog_consequences || complete_wall_hosted_catalog_consequences);
+                complete_composition_catalog, complete_composition_catalog);
         bounds(result);
         validate_document_assembly_instances(result);
         if (embedded_assembly_presentation_ids(result) != aliases)

@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v152
+# Vertex project formats v1 through v153
+
+## Independent placed-component removal (v153)
+
+Native reader 153 and JSON/assets extraction 151 retain coordinated demolition
+inner seven in direct, drawing-wrapped, retained and undone history. Its phase
+enclosure remains fifteen. The closed nine-field grammar matches inner five/six,
+permits empty `ordinary_opening_ids`, and requires a nonnull ordinary child with
+explicit qualified component keys. Child one keeps primitive roots; child two
+still requires an actual roof and source-derived destinations. Historical
+families are optional. Actual registered roots, carriers, placement hosts and
+opening walls must agree on one real active saved choice; unregistered objects
+remain ordinary without invented membership.
+
+Only inner seven enables the independent placed-row policy. A sole active
+proposed semantic opening may retain its exact physical body and same-registry
+active existing/proposed wall while its explicitly selected component row is
+removed. An active nonrequired original catalog may retain its envelope and
+membership. Ordinary/proposed carriers retain their existing removal admission.
+The final raw carrier must equal the original with only admitted rows filtered,
+including unchanged definitions, materials and surviving order. The opening and
+wall bodies and their retained phase membership remain exact. The protected-row
+exception is derived from the actual selection producer; it cannot be supplied
+by an alias, historical closure or a fabricated reduced source.
+
+Controller Delete/Cut now reaches the typed operation for component-only
+selections and includes actual opening walls in Site admission. Source,
+selection and pending-placement guards remain through application; Cut content
+publishes afterward. The separate roof, wall and placed policies reach both
+analytical admission and replay. Older inner versions and default callers keep
+their previous meaning and reader floors. No compilation or runtime acceptance
+is claimed.
 
 ## Complete mixed-wall hosted catalog consequences (v152)
 

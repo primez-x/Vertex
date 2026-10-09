@@ -43851,7 +43851,8 @@ private:
         const bool ordinary_roofs=std::any_of(ordinary_roots.begin(),ordinary_roots.end(),[&](const auto& id) {
             return source.entities().at(id).type=="roof";
         });
-        if ((families.empty() && ordinary_openings.empty() && !ordinary_roofs) || (!include_single_family && families.size()<2 &&
+        if ((families.empty() && ordinary_openings.empty() && !ordinary_roofs && ordinary_components.empty()) ||
+            (!include_single_family && families.size()<2 &&
                 ordinary_roots.empty() && ordinary_components.empty() && ordinary_openings.empty()))
             return std::nullopt;
         ConstraintAuthoringIntent semantic;semantic.message=message;
@@ -43863,7 +43864,7 @@ private:
             if (!captured) throw std::invalid_argument("The selected baseline objects have no complete demolition command.");
             intent=decode_phase_constraint_authoring_intent(captured->phase_constraint_authoring_intent);
         } else {
-            // A proposed opening or roof can own the complete typed operation
+            // A proposed opening, roof or placed component can own the operation
             // without manufacturing a historical demolition leaf. Ordinary
             // projects keep the existing non-phase producer.
             std::optional<PhysicalWallPhaseSelection> removal_choice;
@@ -43871,6 +43872,20 @@ private:
             auto choice_ids=ordinary_openings;
             for (const auto& id:ordinary_roots)
                 if (source.entities().at(id).type=="roof") choice_ids.push_back(id);
+            for (const auto& [catalog,instance]:ordinary_components) {
+                choice_ids.push_back(catalog);
+                const auto model=AssemblyModel::from_json(source.entities().at(catalog).properties.at("model"));
+                const auto row=std::find_if(model.instances().begin(),model.instances().end(),
+                    [&](const auto& value) { return value.id==instance; });
+                if (row==model.instances().end())
+                    throw std::invalid_argument("The selected component is absent from its actual catalog.");
+                if (row->placement) {
+                    const auto& host=row->placement->host_entity_id;
+                    choice_ids.push_back(host);
+                    if (source.entities().at(host).type=="opening")
+                        choice_ids.push_back(source.entities().at(host).properties.at("wall_id").get<std::string>());
+                }
+            }
             for (const auto& id:choice_ids) {
                 auto owner=owners.find(id);
                 if (owner==owners.end() && source.entities().at(id).type=="opening")
@@ -43894,9 +43909,9 @@ private:
         auto children=json{{"version",4},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
             {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr},
             {"ordinary_removal",nullptr},{"complete_hosted_catalog_consequences",true}};
-        if (!ordinary_openings.empty() || ordinary_roofs) {
+        if (!ordinary_openings.empty() || ordinary_roofs || !ordinary_components.empty()) {
             std::sort(ordinary_openings.begin(),ordinary_openings.end());
-            children["version"]=ordinary_roofs ? 6 : 5;
+            children["version"]=!ordinary_components.empty() ? 7 : ordinary_roofs ? 6 : 5;
             children["ordinary_opening_ids"]=ordinary_openings;
         }
         if (families.size()>1) {
@@ -52680,7 +52695,14 @@ private:
                                     [&](const auto& instance) { return instance.id==key.second; });
                                 if (row==catalog.instances().end())
                                     throw std::invalid_argument("The ordinary removal component is absent from its actual catalog.");
-                                if (row->placement) targets.insert(row->placement->host_entity_id);
+                                if (row->placement) {
+                                    const auto& host=row->placement->host_entity_id;
+                                    targets.insert(host);
+                                    if (phase_coordinated_demolition_complete_placed_catalog_consequences(
+                                            historical_demolition.coordinated_demolition,historical_demolition) &&
+                                        source.entities().at(host).type=="opening")
+                                        targets.insert(source.entities().at(host).properties.at("wall_id").get<std::string>());
+                                }
                             }
                         }
                     if (!intent.coordinated_replacements.is_null())

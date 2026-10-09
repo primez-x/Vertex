@@ -510,6 +510,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     return 147U;
                 if (intent.is_object() && intent.value("version",0)==15) {
                     const auto coordinated=intent.find("coordinated_demolition");
+                    if (coordinated!=intent.end() && coordinated->is_object() && coordinated->value("version",0)==7)
+                        return 153U;
                     if (coordinated!=intent.end() && coordinated->is_object() && coordinated->value("version",0)==6)
                         return 151U;
                     if (coordinated!=intent.end() && coordinated->is_object() && coordinated->value("version",0)==5)
@@ -2494,6 +2496,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 150 &&
          sqlite3_column_int(user_version.get(), 0) != 151 &&
          sqlite3_column_int(user_version.get(), 0) != 152 &&
+         sqlite3_column_int(user_version.get(), 0) != 153 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3092,6 +3095,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=153)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 153 for independent placed-component removal in complete coordinated phase authoring");
         if (required_format>=152)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 152 for complete hosted catalog consequences in mixed wall demolition");
         if (required_format>=151)

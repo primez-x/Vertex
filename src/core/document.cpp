@@ -2658,7 +2658,8 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
             return true;
         const auto coordinated=intent.find("coordinated_demolition");
         if (coordinated==intent.end() || !coordinated->is_object()) return false;
-        if (coordinated->value("version",0)==5 || coordinated->value("version",0)==6) return true;
+        if (coordinated->value("version",0)==5 || coordinated->value("version",0)==6 ||
+            coordinated->value("version",0)==7) return true;
         if ((coordinated->value("version",0)==2 || coordinated->value("version",0)==3 ||
              coordinated->value("version",0)==4) &&
             coordinated->contains("ordinary_removal") &&
@@ -3027,7 +3028,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 complete_hosted_demolition=true;
                 complete_opening_demolition=complete_opening_demolition ||
                     root_intent.coordinated_demolition.value("version",0)==5 ||
-                    root_intent.coordinated_demolition.value("version",0)==6;
+                    root_intent.coordinated_demolition.value("version",0)==6 ||
+                    root_intent.coordinated_demolition.value("version",0)==7;
                 structural_asset_reservation=true;
                 structural_hosted_alias_reservation=true;
             }
