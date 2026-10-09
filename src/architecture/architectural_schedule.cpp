@@ -1198,6 +1198,17 @@ DocumentScheduleProjection project_active_architectural_schedules(const Document
     for (const auto& [id, entity] : document.entities()) {
         if (phase_scope.inactive_owner_ids.contains(id) ||
             (visible_entity_ids && !visible_entity_ids->contains(id))) continue;
+        // Unregistered semantic openings inherit their actual wall's saved
+        // activity. A presentation selection cannot revive a demolished host.
+        // Keep malformed/unresolved hosts visible to the schedule diagnostics.
+        if (entity.type=="opening") {
+            const auto host_id=entity.properties.find("wall_id");
+            if (host_id!=entity.properties.end() && host_id->is_string()) {
+                const auto host=document.entities().find(host_id->get_ref<const std::string&>());
+                if (host!=document.entities().end() && host->second.type=="wall" &&
+                    host->second.id==host->first && phase_scope.inactive_owner_ids.contains(host->first)) continue;
+            }
+        }
         active_entity_ids.insert(id);
     }
     // Saved activity is authoritative for every schedule producer; a supplied

@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 baseline wall demolition source integration
+
+Wall Delete/Cut now distinguishes physical removal from demolition in the
+actual saved design alternative. The new bounded producer changes only that
+alternative's demolition list and preserves original walls, openings, rooms,
+catalogs, membership rosters and other alternatives. Registered baseline
+openings follow their host; unregistered semantic openings retain their source
+and inherit host inactivity. Existing phase-room review supplies explicit room
+dispositions before one command applies; canceled or failed edits do not publish
+Cut clipboard content. Saved-design schedules now also hide those inherited
+inactive openings and their hosted component rows.
+
+Independent source review approved after correcting inherited schedule activity;
+root integrated source review is complete. Existing phase/room proof grammars
+and native 138/extraction 136 floor are unchanged. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation and
+runtime remain unverified; the installed candidate is unchanged. Standalone
+opening removal, ordinary wall-join consequences, broader mixed wall/room
+cohorts and final production qualification remain unfinished scope.
+
 ### October 9 complete wall hosted removal source integration
 
 The wall Delete/Cut path now opts into complete ordinary hosted retirement and

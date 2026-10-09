@@ -44,6 +44,7 @@
 #include "sketch/phase_hosted_opening_family_edit.hpp"
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/phase_opening_demolition.hpp"
+#include "sketch/phase_wall_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
@@ -31487,25 +31488,33 @@ public:
             if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
         }
         require_current();
-        auto deletion = wall_ids.size() == 1
-            ? prepare_physical_wall_deletion(source, wall_ids.front(),true)
-            : prepare_physical_walls_deletion(source, wall_ids,true);
-        if (cut) deletion.message = "Cut walls and attached objects";
-        const Command command = std::move(deletion);
-        const auto candidate = preview_physical_wall_room_review_geometry(source, command);
-        const auto primary_wall_id = authority.context.selected_id.toStdString();
-        const auto groups = affectedPhysicalWallRoomGroups(source, candidate.entities(), primary_wall_id, true);
-        require_current();
-        if (!groups.empty()) {
-            const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
-                primary_wall_id, authority, owner, require_current);
-            if (!reviewed) { clearError(); refreshInspector(); return false; }
-            require_current();
-            if (!applyAuthoredCommand(*reviewed)) return false;
+        std::optional<Command> final_command;
+        if (const auto demolition=prepare_phase_wall_demolition(source,wall_ids,
+                cut ? "Cut baseline walls from active design" : "Demolish baseline walls in active design")) {
+            const auto& registry=demolition->entity_changes.front().entity;
+            const auto phases=ModelPhases::from_json(registry.properties.at("model"));
+            if (!phases.active_alternative())
+                throw std::invalid_argument("The active wall demolition design changed. Select the walls again.");
+            final_command=reviewRemodelingRoomChanges(source,*demolition,
+                PhysicalWallPhaseSelection{registry.id,phases.active_alternative()},authority,owner);
         } else {
+            auto deletion = wall_ids.size() == 1
+                ? prepare_physical_wall_deletion(source, wall_ids.front(),true)
+                : prepare_physical_walls_deletion(source, wall_ids,true);
+            if (cut) deletion.message = "Cut walls and attached objects";
+            const Command command = std::move(deletion);
+            const auto candidate = preview_physical_wall_room_review_geometry(source, command);
+            const auto primary_wall_id = authority.context.selected_id.toStdString();
+            const auto groups = affectedPhysicalWallRoomGroups(source, candidate.entities(), primary_wall_id, true);
             require_current();
-            if (!applyAuthoredCommand(command)) return false;
+            if (!groups.empty())
+                final_command=reviewPhysicalWallRoomsAfterGeometry(source,candidate,command,
+                    primary_wall_id,authority,owner,require_current);
+            else final_command=command;
         }
+        if (!final_command) { clearError(); refreshInspector(); return false; }
+        require_current();
+        if (!applyAuthoredCommand(*final_command)) return false;
         if (cut) clipboard->setText(clipboard_text, QClipboard::Clipboard);
         m_selected_id.clear();
         m_selected_ids.clear();
