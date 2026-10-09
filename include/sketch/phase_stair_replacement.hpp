@@ -57,12 +57,22 @@ struct PhaseStairReplacementDependencyPlan {
 };
 // Analytical discovery from actual source and closed typed profiles. No caller
 // entity-map, registry or child mapping grants dependency authority.
+// Retirement offers can be conditional on retiring the complete affected
+// eligible proposed cohort; retirement_reason explains that requirement.
 [[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
     const PhaseStairReplacementEntities& actual, const std::vector<StairObjectEditIntent>& edits);
 [[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
     const PhaseStairReplacementEntities& actual, const std::vector<StairCompoundEditIntent>& edits);
 [[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
     const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities);
+
+// Analytical dialog admission only: exactly one explicit choice per actual
+// affected owner, with the precise retirement subset checked jointly against
+// the immutable source and saved registry/alternative. Throws on invalid
+// choices; never constructs native bodies or adds unchosen retirement owners.
+void validate_phase_stair_dependency_dispositions(
+    const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities,
+    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions);
 
 struct PhaseStairReplacementRequest {
     std::string registry_id;

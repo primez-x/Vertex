@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 joint baseline stair attachment source implementation
+
+Baseline stair replacement now makes the matching conditional group-retirement
+offers for affected railings belonging exclusively to the actual active
+proposal. Individually valid choices remain available. Concurrently edited,
+shared, inactive and foreign owners cannot enter the offered retirement group.
+The complete affected eligible cohort must pass analytical saved-design
+admission before a conditional offer appears.
+
+The phase inspector, dialog callback and typed producer share exact decision
+resolution. Every actual affected owner needs an explicit choice; the precise
+submitted retirement subset is jointly validated before retirement replay or
+geometry construction. Invalid combinations stay in the dialog for correction.
+Existing child-five witness/decisions and historical children one through four
+keep their grammars and saved ownership protections; no new reader floor is
+introduced.
+
+Independent source review approved; root integrated source review is complete.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations ran. Compilation and runtime remain
+unverified; the installed candidate is unchanged. Conservative complete-cohort
+offers may still miss a valid subgroup when another affected owner blocks the
+group. Mixed shared-baseline wall cohorts and production qualification remain
+unfinished.
+
 ### October 9 joint ordinary stair retirement source implementation
 
 Ordinary stair attachment review keeps individually available removal choices

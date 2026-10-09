@@ -45000,7 +45000,10 @@ private:
                 throw std::invalid_argument("The project or drawing context changed. Reopen the stair edit.");
             return authoringSnapshot();
         },owner);
-        if (!shared) dialog.setDispositionValidator([source,edited](const auto& choices) {
+        if (shared) dialog.setDispositionValidator([source,edited](const auto& choices) {
+            validate_phase_stair_dependency_dispositions(source.entities(),edited,choices);
+        });
+        else dialog.setDispositionValidator([source,edited](const auto& choices) {
             validate_ordinary_stair_dependency_dispositions(source.entities(),edited,choices);
         });
         styleDialog(dialog);

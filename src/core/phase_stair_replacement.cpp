@@ -451,6 +451,41 @@ Entity analytical_profile(Entity entity, const StairObjectEditIntent& edit) {
     }
     return entity;
 }
+std::string dependency_retirement_names(const PhaseStairReplacementDependencyPlan& plan,
+    const std::vector<std::string>& cohort) {
+    std::string names;
+    for (std::size_t i = 0; i < plan.dependencies.size(); ++i) {
+        const auto& row = plan.dependencies[i];
+        if (!std::binary_search(cohort.begin(), cohort.end(), row.rail_id)) continue;
+        if (!names.empty()) names += ", ";
+        const auto ordinal = "Railing " + std::to_string(i + 1);
+        // Bound the display requirement separately from source JSON budgets.
+        names += row.rail_name.empty() || row.rail_name.size() > 256 ? ordinal : row.rail_name + " (" + ordinal + ")";
+    }
+    return names;
+}
+void admit_joint_dependency_retirement(const Entities& actual,
+    const std::vector<std::string>& cohort, PhaseStairReplacementDependencyPlan& plan) {
+    const bool needs_joint_offer = std::any_of(plan.dependencies.begin(), plan.dependencies.end(), [&](const auto& row) {
+        return !row.retirement_eligible && std::binary_search(cohort.begin(), cohort.end(), row.rail_id);
+    });
+    if (!needs_joint_offer || cohort.size() < 2) return;
+    // One more complete-source analytical pass; capacity refusal preserves
+    // every individually admitted offer. No subset search expands authority.
+    if (actual.size() > 2000000 / (plan.dependencies.size() + 1)) return;
+    try {
+        const auto retirement = inspect_phase_stair_proposed_rail_retirement_plan(
+            actual, plan.registry_id, plan.alternative_id, cohort);
+        if (!retirement.ready()) return;
+    } catch (const std::exception&) { return; }
+    const auto requirement = "Group retirement is available. Choose Remove for all of these affected railings together: " +
+        dependency_retirement_names(plan, cohort) + ". The exact chosen removal group will be checked before applying the edit.";
+    for (auto& row : plan.dependencies) if (!row.retirement_eligible &&
+        std::binary_search(cohort.begin(), cohort.end(), row.rail_id)) {
+        row.retirement_eligible = true;
+        row.retirement_reason = requirement;
+    }
+}
 PhaseStairReplacementDependencyPlan dependency_plan(const Entities& actual,
     const std::vector<StairObjectEditIntent>& edits) {
     PhaseStairReplacementDependencyPlan result;
@@ -461,7 +496,7 @@ PhaseStairReplacementDependencyPlan dependency_plan(const Entities& actual,
         const auto scope = memberships(actual);
         std::map<std::string, StairFlight, std::less<>> resulting;
         auto topology_descriptors = actual;
-        Ids targets; std::size_t bytes{}, work{};
+        Ids targets; std::vector<std::string> retirement_cohort; std::size_t bytes{}, work{};
         for (const auto& edit : edits) {
             const auto size = encode_stair_object_edit_intent(edit).dump().size();
             if (size > proof_limit - bytes) reject("dependency typed byte budget exceeded");
@@ -532,6 +567,9 @@ PhaseStairReplacementDependencyPlan dependency_plan(const Entities& actual,
                 }
             }
             exclusive = exclusive && proposals == 1;
+            // Only affected, solely active proposed owners may enter a group
+            // offer. A concurrently typed rail edit cannot also retire.
+            if (exclusive && !targets.contains(id)) retirement_cohort.push_back(id);
             const auto admit = [&](Railing changed, PhaseStairReplacementDependencyTarget target) {
                 try {
                     const auto layout = derive_hosted_railing_layout(changed, stair);
@@ -577,22 +615,27 @@ PhaseStairReplacementDependencyPlan dependency_plan(const Entities& actual,
                 admit(changed, {"top", "top", {}, changed.landing_host->incoming_flight_id, {}, Json::object()});
             }
             std::sort(row.valid_targets.begin(), row.valid_targets.end(), [](const auto& a, const auto& b) { return a.target_key < b.target_key; });
-            try {
+            if (targets.contains(id)) {
+                row.retirement_reason = "This railing is also being edited. Choose a resulting attachment; it cannot also be removed.";
+            } else try {
                 const auto retirement = inspect_phase_stair_proposed_rail_retirement_plan(actual, result.registry_id, result.alternative_id, {id});
                 row.retirement_eligible = retirement.ready();
                 if (!retirement.ready()) row.retirement_reason = retirement.diagnostics.front().reason;
             } catch (const std::exception& error) { row.retirement_reason = error.what(); }
             result.dependencies.push_back(std::move(row));
         }
+        admit_joint_dependency_retirement(actual, retirement_cohort, result);
     } catch (const std::exception& error) { result.diagnostics.push_back({{}, error.what(), true}); }
     return result;
 }
 struct DependencyPreparation { Entities source; PhaseStairReplacementAuthoring effective; };
-DependencyPreparation prepare_dependencies(const Entities& actual, const PhaseStairReplacementAuthoring& authoring) {
-    if (!authoring.transforms.empty() || (authoring.edits.empty() == authoring.compound_edits.empty()))
-        reject("dependency dispositions require exactly one profile or compound lane");
-    const auto profiles = authoring.compound_edits.empty() ? authoring.edits : compound_profiles(authoring.compound_edits);
-    const auto plan = dependency_plan(actual, profiles);
+struct DependencyResolution {
+    PhaseStairReplacementAuthoring effective;
+    std::vector<std::string> retired;
+};
+DependencyResolution resolve_dependency_dispositions(const Entities& actual,
+    const PhaseStairReplacementAuthoring& authoring, const std::vector<StairObjectEditIntent>& profiles,
+    const PhaseStairReplacementDependencyPlan& plan) {
     if (!plan.ready()) reject(plan.diagnostics.front().reason);
     if ((!authoring.registry_id.empty() && plan.registry_id != authoring.registry_id) ||
         (!authoring.alternative_id.empty() && plan.alternative_id != authoring.alternative_id))
@@ -601,11 +644,12 @@ DependencyPreparation prepare_dependencies(const Entities& actual, const PhaseSt
     for (const auto& row : plan.dependencies) witness.push_back(row.rail_id);
     if (witness.empty() || witness != authoring.dependency_rail_ids || authoring.dependency_dispositions.size() != witness.size())
         reject("dependency witness/decisions differ from actual affected rails");
-    DependencyPreparation result{actual, authoring};
+    DependencyResolution result{authoring, {}};
     result.effective.registry_id = plan.registry_id; result.effective.alternative_id = plan.alternative_id;
-    std::vector<std::string> retired;
+    auto& retired = result.retired;
     for (std::size_t i = 0; i < witness.size(); ++i) {
         const auto& row = plan.dependencies[i]; const auto& decision = authoring.dependency_dispositions[i];
+        identity(decision.rail_id);
         if (decision.rail_id != row.rail_id) reject("dependency decisions must exactly follow ascending witness");
         if (decision.action == PhaseStairReplacementDependencyAction::retire) {
             if (!row.retirement_eligible || !decision.target_key.empty()) reject("dependency is not eligible for explicit retirement: " + row.rail_id);
@@ -614,6 +658,7 @@ DependencyPreparation prepare_dependencies(const Entities& actual, const PhaseSt
             retired.push_back(row.rail_id); continue;
         }
         if (decision.action != PhaseStairReplacementDependencyAction::rehost) reject("unsupported dependency action");
+        dependency_target_key(decision.target_key);
         const auto target = std::find_if(row.valid_targets.begin(), row.valid_targets.end(), [&](const auto& item) { return item.target_key == decision.target_key; });
         if (target == row.valid_targets.end()) reject("dependency target is not an actual resulting eligible child");
         auto changed = actual.at(row.rail_id);
@@ -638,8 +683,26 @@ DependencyPreparation prepare_dependencies(const Entities& actual, const PhaseSt
         if (!result.effective.compound_edits.empty()) add(result.effective.compound_edits);
         else add(result.effective.edits);
     }
-    if (!retired.empty()) result.source = replay_phase_stair_proposed_rail_retirement_entities(actual, plan.registry_id, plan.alternative_id, retired);
+    // Group eligibility is an offer only. Admit exactly the explicit subset
+    // from immutable source before any producer stages retirement or geometry.
+    if (!retired.empty()) {
+        const auto retirement = inspect_phase_stair_proposed_rail_retirement_plan(
+            actual, plan.registry_id, plan.alternative_id, retired);
+        if (!retirement.ready()) reject("the chosen railing removal group cannot be retired together (" +
+            dependency_retirement_names(plan, retired) + "). Choose Remove for the complete required group, "
+            "or choose valid resulting attachments. " + retirement.diagnostics.front().reason);
+    }
     result.effective.dependency_rail_ids.clear(); result.effective.dependency_dispositions.clear();
+    return result;
+}
+DependencyPreparation prepare_dependencies(const Entities& actual, const PhaseStairReplacementAuthoring& authoring) {
+    if (!authoring.transforms.empty() || (authoring.edits.empty() == authoring.compound_edits.empty()))
+        reject("dependency dispositions require exactly one profile or compound lane");
+    const auto profiles = authoring.compound_edits.empty() ? authoring.edits : compound_profiles(authoring.compound_edits);
+    auto resolved = resolve_dependency_dispositions(actual, authoring, profiles, dependency_plan(actual, profiles));
+    DependencyPreparation result{actual, std::move(resolved.effective)};
+    if (!resolved.retired.empty()) result.source = replay_phase_stair_proposed_rail_retirement_entities(actual,
+        result.effective.registry_id, result.effective.alternative_id, resolved.retired);
     return result;
 }
 void topology_dependencies(const Entities& actual, const std::vector<StairObjectEditIntent>& edits) {
@@ -1405,6 +1468,23 @@ PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies
     catch (const std::exception& error) {
         PhaseStairReplacementDependencyPlan result; result.diagnostics.push_back({{}, error.what(), true}); return result;
     }
+}
+void validate_phase_stair_dependency_dispositions(const Entities& actual,
+    const std::vector<Entity>& edited, const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions) {
+    PhaseStairReplacementAuthoring authoring;
+    authoring.edits = editor_profiles(actual, edited);
+    const auto plan = dependency_plan(actual, authoring.edits);
+    if (!plan.ready()) reject(plan.diagnostics.front().reason);
+    if (plan.dependencies.empty()) {
+        if (!dispositions.empty()) reject("dependency decisions supplied without actual affected rails");
+        return;
+    }
+    authoring.registry_id = plan.registry_id; authoring.alternative_id = plan.alternative_id;
+    for (const auto& row : plan.dependencies) authoring.dependency_rail_ids.push_back(row.rail_id);
+    authoring.dependency_dispositions = dispositions;
+    // Share typed decision capture and exact joint retirement admission with
+    // replay, but never call retirement replay or any native/body factory.
+    (void)resolve_dependency_dispositions(actual, authoring, authoring.edits, plan);
 }
 std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
     const Entities& actual, const std::vector<Entity>& edited_entities) {
