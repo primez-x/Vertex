@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v136
+# Vertex project formats v1 through v137
+
+## Coordinated ordinary roof removal (v137)
+
+Native reader 137 and JSON/assets extraction 135 retain coordinated demolition
+inner three under exclusive active-design authoring fifteen. The closed seven
+fields retain the five full historical family envelopes and `ordinary_removal`.
+At least one historical family and an actual ordinary roof are required.
+Ordinary child two has exactly `version`, `object_ids`, `components` and
+`roof_additional_identities`; the latter maps actual join or bound-overlay slots
+to bounded nonempty fresh identity arrays. Actual roof contact and presentation
+derivation must independently reproduce every supplied slot. No entity-map,
+geometry or arbitrary retirement payload is accepted.
+
+Roof and primitive/component lanes independently admit the same complete actual
+source. Hosted retirement applies only to physically removed roofs; source
+retention preserves original hosted rows. Shared catalogs retain raw definitions,
+survivors, row order and aliases. Registered affected roofs, joins, component
+carriers/hosts and actual retained-roof registry changes must match the same
+historical saved choice; other alternatives remain protected. Source shared
+baseline joins cannot mutate even in saved baseline. Composition merges only
+known roster/presentation rows and exact catalog retirement consequences.
+
+Declared join/overlay destinations remain reserved across Undo, abandoned
+history, wrapped proofs and retained assets. Current and retained commands retain
+the new reader floor. Inner one/two and ordinary child one keep their original
+wire and replay meanings. Roof source review approved; mixed integration review
+approved after closing generic retention and enrollment findings. Root integrated
+source review is complete. Compilation and runtime remain unverified.
 
 ## Stair replacement with retained inactive topology (v136)
 

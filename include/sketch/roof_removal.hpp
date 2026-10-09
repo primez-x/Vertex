@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sketch {
@@ -24,7 +25,7 @@ struct RoofRemovalPlan {
     // Physically removed selected roofs and old joins with no surviving
     // supported surviving component; excludes phase-retained selected roofs.
     std::vector<std::string> removed_owner_ids;
-    // Includes supported associative dimensions actually targeting removed owners.
+    // Includes supported dimensions targeting removed owners or retired component aliases.
     std::vector<std::string> removed_entity_ids;
     // Actual native-contact components, including singleton survivors. Each
     // component and the component sequence retain the old join's authored order.
@@ -37,6 +38,10 @@ struct RoofRemovalPlan {
     // joins. Its actual registry enrolls it as baseline if needed and demolishes
     // it only in that registry's saved active alternative.
     std::map<std::string, std::string, std::less<>> retained_roof_registry_ids;
+    // Opt-in consequences derived only from physically removed actual roofs.
+    // Catalog-local identities are qualified; aliases come from the full source.
+    std::vector<std::pair<std::string, std::string>> retired_hosted_component_keys;
+    std::vector<std::string> retired_hosted_component_alias_ids;
     // An actual selected member of a preserved qualified join requires this
     // path even when retention admission fails. Failure cannot fall back to
     // baseline demolition in another registry.
@@ -58,9 +63,12 @@ struct RoofRemovalResult {
 // retained roofs and their owned geometry/presentation remain physically exact.
 // Singleton material preservation keeps an actual material-bearing join as a
 // version-three relationship instead of transferring its binding onto a roof.
+// Hosted retirement is a separate opt-in; historical replay retains its original
+// refusal semantics. Only actual hosted rows of physically removed roofs retire.
 [[nodiscard]] RoofRemovalPlan inspect_roof_removal_plan(
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
-    bool preserve_phase_references = false, bool preserve_singleton_material = false);
+    bool preserve_phase_references = false, bool preserve_singleton_material = false,
+    bool retire_hosted_components = false);
 
 // Rederives the entire operation from source and explicit selection. Supplied
 // identities must exactly fill actual additional join/overlay slots and must
@@ -68,6 +76,7 @@ struct RoofRemovalResult {
 [[nodiscard]] RoofRemovalResult replay_roof_removal(
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
     const RoofRemovalAdditionalIdentities& additional_identities,
-    bool preserve_phase_references = false, bool preserve_singleton_material = false);
+    bool preserve_phase_references = false, bool preserve_singleton_material = false,
+    bool retire_hosted_components = false);
 
 } // namespace sketch

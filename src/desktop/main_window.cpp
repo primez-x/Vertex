@@ -58,7 +58,7 @@
 #include "sketch/structural_hosted_components.hpp"
 #include "sketch/structural_clone.hpp"
 #include "sketch/model_copy_composition.hpp"
-#include "sketch/architectural_object_removal.hpp"
+#include "sketch/architectural_selection_removal.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
@@ -30053,18 +30053,61 @@ public:
         }
     }
 
+    static RoofRemovalAdditionalIdentities captureRoofRemovalIdentities(
+        const DocumentSnapshot& source, const RoofRemovalPlan& plan) {
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons+='\n';
+                reasons+=diagnostic.entity_id+": "+diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons.empty() ? "The selected roofs have an unresolved removal dependency." : reasons);
+        }
+        auto occupied=retainedSlabIdentityNames(source,true);
+        RoofRemovalAdditionalIdentities additional;
+        for (const auto& [original,count]:plan.additional_identity_counts) {
+            auto& copies=additional[original];
+            for (std::size_t index=0;index<count;++index) {
+                auto proposed=new_id("roof");
+                while (!occupied.insert(proposed).second) proposed=new_id("roof");
+                copies.push_back(std::move(proposed));
+            }
+        }
+        return additional;
+    }
+
+    static ArchitecturalSelectionRemovalIntent captureArchitecturalSelectionRemoval(
+        const DocumentSnapshot& source, std::vector<std::string> object_ids,
+        std::vector<std::pair<std::string,std::string>> components={}) {
+        std::sort(object_ids.begin(),object_ids.end());
+        std::sort(components.begin(),components.end());
+        ArchitecturalSelectionRemovalIntent intent{std::move(object_ids),std::move(components),{}};
+        std::vector<std::string> roofs;
+        for (const auto& id:intent.object_ids)
+            if (source.entities().at(id).type=="roof") roofs.push_back(id);
+        if (!roofs.empty()) intent.roof_additional_identities=captureRoofRemovalIdentities(source,
+            inspect_roof_removal_plan(source.entities(),roofs,true,true,true));
+        return intent;
+    }
+
     std::vector<EntityChange> selectionRemovalChanges(
         const DocumentSnapshot& snapshot, const std::vector<Entity>& graph,
         const std::vector<std::pair<std::string,std::string>>& components={}) const {
         std::vector<std::string> physical_roots;
         for (const auto& entity:graph)
-            if (entity.type=="stair" || entity.type=="railing" || entity.type=="slab" || structuralObject(entity))
+            if (entity.type=="stair" || entity.type=="railing" || entity.type=="slab" ||
+                entity.type=="roof" || structuralObject(entity))
                 physical_roots.push_back(entity.id);
+        const std::set<std::string,std::less<>> typed_roots(physical_roots.begin(),physical_roots.end());
         auto candidate=physical_roots.empty() && components.empty() ? snapshot.entities() :
-            replay_architectural_object_removal(snapshot.entities(),physical_roots,components);
+            replay_architectural_selection_removal(snapshot.entities(),
+                captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components));
         for (const auto& entity : graph) {
             const auto surviving=candidate.find(entity.id);
             if (surviving==candidate.end()) continue;
+            // The typed producer owns both retirement and intentional phase
+            // retention. Drawing cleanup must not erase a retained roof.
+            if (typed_roots.contains(entity.id)) continue;
             if (entity.type == kAnnotationEntityType &&
                 !m_selected_ids.contains(id_from(entity.id))) {
                 std::set<std::string, std::less<>> child_ids;
@@ -31484,6 +31527,7 @@ public:
             if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Cut selected stairs and railings");
             if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Cut selected horizontal assemblies");
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Cut selected roofs");
+            if (!demolition) demolition = mixedRoofRemovalCommand(source, selected_ids, "Cut selected architectural objects");
             if (demolition) {
                 const auto encoded = clipboardSelectionPayload(source);
                 const auto clipboard_text = QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size()));
@@ -31525,7 +31569,7 @@ public:
                     throw std::invalid_argument("Select the area's deductions, supporting walls and measured lines to cut them together, or use Copy to preserve the originals.");
             const ApplyEntityChanges command{
                 source.revision(), selectionRemovalChanges(source, entities), {}, "Cut selection"};
-            const auto authored = augmentAuthoredCommand(Command{command},source);
+            const auto authored = augmentRemovalCommand(Command{command},source);
             const auto candidate=Document::preview_command(source, authored);
             preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
             const auto encoded = clipboardSelectionPayload(source);
@@ -32015,6 +32059,7 @@ public:
             if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Demolish selected stairs and railings");
             if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Delete selected horizontal assemblies");
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs");
+            if (!demolition) demolition = mixedRoofRemovalCommand(source, selected_ids, "Delete selected architectural objects");
             if (demolition) {
                 if (!sourceEditAuthorityUnchanged(authority))
                     throw std::invalid_argument("The selected objects or active design changed before demolition.");
@@ -32046,7 +32091,7 @@ public:
                 const auto ordinary_graph = clipboardSelectionGraph(source, true, &ordinary_ids);
                 auto changes = selectionRemovalChanges(source, ordinary_graph, components);
                 const Command command = ApplyEntityChanges{source.revision(), std::move(changes), {}, "Delete selected embedded assemblies"};
-                const auto authored=augmentAuthoredCommand(command,source);
+                const auto authored=augmentRemovalCommand(command,source);
                 const auto candidate = Document::preview_command(source, authored); validate_document_assembly_instances(candidate.entities());
                 preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
                 if (!sourceEditAuthorityUnchanged(authority))
@@ -32062,7 +32107,7 @@ public:
             }
             const ApplyEntityChanges command{
                 source.revision(), selectionRemovalChanges(source, entities), {}, "Delete selection"};
-            const auto authored = augmentAuthoredCommand(Command{command},source);
+            const auto authored = augmentRemovalCommand(Command{command},source);
             const auto candidate=Document::preview_command(source, authored);
             preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
             if (!sourceEditAuthorityUnchanged(authority))
@@ -42311,7 +42356,8 @@ private:
         return augmentAuthoredCommand(command, authoringSnapshot());
     }
 
-    static void registerNewObjectMemberships(const DocumentSnapshot& source, ApplyEntityChanges& command) {
+    static void registerNewObjectMemberships(const DocumentSnapshot& source, ApplyEntityChanges& command,
+        const std::set<std::string,std::less<>>& admitted_destinations={}) {
         auto* changes = &command;
         // Imported page views retain explicit ownership as new content is
         // authored. The same command registers new layer-owned objects,
@@ -42328,7 +42374,8 @@ private:
                     const auto page=std::find_if(page_records.begin(),page_records.end(),[&](const auto& record){return record.view_id==view.id;});
                     if (page==page_records.end()) continue;
                     for (const auto& change:authored) {
-                        if (change.kind!=EntityChangeKind::upsert || change.entity.id==id || source.entities().contains(change.entity.id)) continue;
+                        if (change.kind!=EntityChangeKind::upsert || change.entity.id==id || source.entities().contains(change.entity.id) ||
+                            admitted_destinations.contains(change.entity.id)) continue;
                         const auto layer=change.entity.properties.value("layer_id",std::string{});
                         if (layer!=page->calculation_layer_id && layer!=page->interior_layer_id) continue;
                         if (std::find(view.object_ids.begin(),view.object_ids.end(),change.entity.id)==view.object_ids.end()) {
@@ -42380,6 +42427,7 @@ private:
             for (const auto& change : changes->entity_changes) {
                 if (change.kind != EntityChangeKind::upsert ||
                     source.entities().contains(change.entity.id) ||
+                    admitted_destinations.contains(change.entity.id) ||
                     !is_phase_model_entity(change.entity.type) ||
                     hosted_stair_railing(change.entity) ||
                     change.entity.type == "building" || change.entity.type == "floor" ||
@@ -42400,7 +42448,8 @@ private:
             // demolished host, including alternatives that are inactive.
             for (const auto& change : changes->entity_changes) {
                 if (change.kind != EntityChangeKind::upsert ||
-                    source.entities().contains(change.entity.id) || !hosted_stair_railing(change.entity) ||
+                    source.entities().contains(change.entity.id) || admitted_destinations.contains(change.entity.id) ||
+                    !hosted_stair_railing(change.entity) ||
                     std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
                 const auto rail = decode_railing_properties(change.entity.id, change.entity.properties);
                 if (std::find(ids.begin(), ids.end(), stair_railing_host_id(rail)) == ids.end())
@@ -42477,7 +42526,18 @@ private:
         }
     }
 
-    static Command augmentAuthoredCommand(const Command& command, const DocumentSnapshot& source) {
+    static Command augmentRemovalCommand(const Command& command, const DocumentSnapshot& source) {
+        std::set<std::string,std::less<>> admitted_destinations;
+        if (const auto* changes=std::get_if<ApplyEntityChanges>(&command))
+            for (const auto& change:changes->entity_changes)
+                if (change.kind==EntityChangeKind::upsert && change.entity.type=="roof_join" &&
+                    !source.entities().contains(change.entity.id))
+                    admitted_destinations.insert(change.entity.id);
+        return augmentAuthoredCommand(command,source,admitted_destinations);
+    }
+
+    static Command augmentAuthoredCommand(const Command& command, const DocumentSnapshot& source,
+        const std::set<std::string,std::less<>>& admitted_destinations={}) {
         // Register only newly authored geometry. Existing unregistered objects
         // retain their legacy visibility; editing them must not change ownership.
         auto authored_command = command;
@@ -42559,7 +42619,7 @@ private:
                     changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
                 }
             }
-            registerNewObjectMemberships(source,*changes);
+            registerNewObjectMemberships(source,*changes,admitted_destinations);
         }
         // Constraint authoring completed its physical/exterior consequences
         // before sealing the candidate. Never change that admitted command.
@@ -42652,34 +42712,58 @@ private:
         return Command{std::move(command)};
     }
 
+    std::optional<Command> mixedRoofRemovalCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& selected_ids, const std::string& message) {
+        if (selected_ids.empty()) return std::nullopt;
+        std::vector<std::string> roots;
+        std::vector<std::pair<std::string,std::string>> components;
+        bool has_roof=false;
+        for (const auto& id:selected_ids) {
+            const auto found=source.entities().find(id);
+            if (found==source.entities().end()) {
+                const auto component=geometric_assembly_for_child(source,id);
+                if (!component) return std::nullopt;
+                components.emplace_back(component->assembly_catalog_id,component->instance.id);
+            } else {
+                const auto& entity=found->second;
+                if (entity.type!="roof" && entity.type!="stair" && entity.type!="railing" &&
+                    entity.type!="slab" && !structuralObject(entity)) return std::nullopt;
+                has_roof=has_roof || entity.type=="roof";
+                roots.push_back(id);
+            }
+        }
+        if (!has_roof) return std::nullopt;
+        const auto candidate=replay_architectural_selection_removal(source.entities(),
+            captureArchitecturalSelectionRemoval(source,std::move(roots),std::move(components)));
+        ApplyEntityChanges command{source.revision(),{},{},message};
+        for (const auto& [id,entity]:source.entities()) {
+            const auto after=candidate.find(id);
+            if (after==candidate.end()) command.entity_changes.push_back(EntityChange::erase(id));
+            else if (entity!=after->second || entity.properties.dump()!=after->second.properties.dump() ||
+                entity.extensions.dump()!=after->second.extensions.dump())
+                command.entity_changes.push_back(EntityChange::upsert(after->second));
+        }
+        for (const auto& [id,entity]:candidate)
+            if (!source.entities().contains(id)) command.entity_changes.push_back(EntityChange::upsert(entity));
+        // Each family already supplies its complete actual registry changes.
+        // Generic authoring must not enroll split joins into another registry.
+        (void)Document::preview_command(source,Command{command});
+        return Command{std::move(command)};
+    }
+
     std::optional<Command> roofRemovalCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& selected_ids, const std::string& message) {
         if (selected_ids.empty() || !std::all_of(selected_ids.begin(), selected_ids.end(), [&](const auto& id) {
                 const auto found = source.entities().find(id);
                 return found != source.entities().end() && found->second.type == "roof";
             })) return alternativeRoofDemolitionCommand(source, selected_ids, message);
-        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true, true);
+        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true, true, true);
         // Retained members must enter the phase-preserving removal producer
         // before the older complete-baseline demolition path sees them.
         if (!plan.phase_retention_required)
             if (const auto alternative = alternativeRoofDemolitionCommand(source, selected_ids, message)) return alternative;
-        if (!plan.ready()) {
-            QStringList reasons;
-            for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
-                reasons.push_back(id_from(diagnostic.entity_id) + QStringLiteral(": ") + QString::fromStdString(diagnostic.reason));
-            throw std::invalid_argument(reasons.join(QStringLiteral("\n")).toStdString());
-        }
-        auto occupied = retainedSlabIdentityNames(source);
-        RoofRemovalAdditionalIdentities additional;
-        for (const auto& [original, count] : plan.additional_identity_counts) {
-            auto& copies = additional[original];
-            for (std::size_t index = 0; index < count; ++index) {
-                auto proposed = new_id("roof");
-                while (!occupied.insert(proposed).second) proposed = new_id("roof");
-                copies.push_back(std::move(proposed));
-            }
-        }
-        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true, true);
+        const auto additional=captureRoofRemovalIdentities(source,plan);
+        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true, true, true);
         ApplyEntityChanges command{source.revision(), {}, {}, message};
         for (const auto& [id, entity] : source.entities()) {
             const auto after = replay.entities.find(id);
@@ -43022,7 +43106,8 @@ private:
             const bool baseline=owner!=owners.end() && owner->second->alternative_id &&
                 owner->second->states.at(id)==ModelPhase::existing;
             if (baseline) families[slot].push_back(id);
-            else if (object.type=="stair" || object.type=="railing" || object.type=="slab" || structuralObject(object))
+            else if (object.type=="stair" || object.type=="railing" || object.type=="slab" ||
+                object.type=="roof" || structuralObject(object))
                 ordinary_roots.push_back(id);
             else return std::nullopt;
         }
@@ -43078,6 +43163,14 @@ private:
                 rows.push_back({{"catalog_id",catalog},{"instance_id",instance}});
             children["version"]=2;
             children["ordinary_removal"]={{"version",1},{"object_ids",ordinary_roots},{"components",std::move(rows)}};
+            if (std::any_of(ordinary_roots.begin(),ordinary_roots.end(),[&](const auto& id) {
+                    return source.entities().at(id).type=="roof";
+                })) {
+                const auto ordinary=captureArchitecturalSelectionRemoval(source,ordinary_roots,ordinary_components);
+                children["version"]=3;
+                children["ordinary_removal"]["version"]=2;
+                children["ordinary_removal"]["roof_additional_identities"]=ordinary.roof_additional_identities;
+            }
         } else if (families.size()==1) return only_child;
         intent.coordinated_demolition=std::move(children);
         ApplyBoundaryConstraintChanges command;
@@ -51693,6 +51786,21 @@ private:
                         if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(intent.coordinated_demolition,intent)) {
                             targets.insert(ordinary->object_ids.begin(),ordinary->object_ids.end());
                             const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                            if (ordinary->version==2) {
+                                std::vector<std::string> roofs;
+                                for (const auto& id:ordinary->object_ids)
+                                    if (source.entities().at(id).type=="roof") roofs.push_back(id);
+                                const auto removal=inspect_roof_removal_plan(source.entities(),roofs,true,true,true);
+                                if (!removal.ready())
+                                    throw std::invalid_argument("The coordinated roof removal no longer has complete source authority.");
+                                targets.insert(removal.removed_entity_ids.begin(),removal.removed_entity_ids.end());
+                                for (const auto& [join,parts]:removal.surviving_join_components) {
+                                    (void)parts; targets.insert(join);
+                                }
+                                for (const auto& [catalog,instance]:removal.retired_hosted_component_keys) {
+                                    targets.insert(catalog); targets.insert(aliases.at({catalog,instance}));
+                                }
+                            }
                             for (const auto& key:ordinary->components) {
                                 targets.insert(key.first);
                                 targets.insert(aliases.at(key));

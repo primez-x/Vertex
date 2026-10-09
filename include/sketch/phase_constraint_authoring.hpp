@@ -110,7 +110,15 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_phase_demolition_candidates(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::vector<std::map<std::string,Entity,std::less<>>>& candidates,
-    bool include_ordinary_removal=false);
+    bool include_ordinary_removal=false,
+    bool complete_roof_removal=false);
+
+// Complete ordinary removal leaves may retire baseline-only registries with
+// no alternatives. Shared baseline owners stay protected. Roof contact splits
+// and hosted retirements still require independent typed leaf admission.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_ordinary_architectural_removal_candidates(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& candidates);
 
 // Independently evaluated saved selections, including the empty-registry case.
 [[nodiscard]] nlohmann::json phase_constraint_authoring_selections(

@@ -44,6 +44,7 @@
 #include "sketch/joint_translation_replay.hpp"
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_roof_transform.hpp"
@@ -2594,7 +2595,8 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
             return true;
         const auto coordinated=intent.find("coordinated_demolition");
         if (coordinated==intent.end() || !coordinated->is_object()) return false;
-        if (coordinated->value("version",0)==2 && coordinated->contains("ordinary_removal") &&
+        if ((coordinated->value("version",0)==2 || coordinated->value("version",0)==3) &&
+            coordinated->contains("ordinary_removal") &&
             coordinated->at("ordinary_removal").is_object()) return true;
         const auto stair=coordinated->find("stair_authoring");
         return stair!=coordinated->end() && stair->is_object() &&
@@ -2811,6 +2813,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool structural_asset_reservation=false;
     bool structural_hosted_alias_reservation=false;
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
+    std::set<std::string,std::less<>> ordinary_roof_destinations;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -2823,6 +2826,14 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             // joins. The new enclosure always reserves every destination
             // against retained assets, independently of the child's dialect.
             roof_mixed_asset_reservation=true;
+            if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(root_intent.coordinated_demolition,root_intent);
+                ordinary && ordinary->version==2)
+                for (const auto& [original,ids]:ordinary->roof_additional_identities) {
+                    (void)original;
+                    for (const auto& id:ids)
+                        if (!ordinary_roof_destinations.insert(id).second)
+                            throw std::invalid_argument("A coordinated roof split repeats a declared destination: "+id);
+                }
         }
         if (!root_intent.coordinated_replacements.is_null()) {
             complete_envelope_reservation=true;
@@ -2977,6 +2988,11 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
 #endif
     }
+    for (const auto& id:ordinary_roof_destinations) {
+        if (!nested_fresh.insert(id).second)
+            throw std::invalid_argument("A coordinated ordinary roof split overlaps another fresh identity: "+id);
+        fresh.insert(id);
+    }
     if (!proposed_hosted_instances.empty()) {
         const auto presentations=embedded_assembly_presentation_ids(candidate);
         for (const auto& qualified:proposed_hosted_instances) {
@@ -3003,6 +3019,19 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             }
         // A deliberately omitted fresh relationship copy is still a declared
         // identity in the recorded semantic operation. Undo cannot release it.
+        if (record.boundary_constraint_changes) {
+            for (const auto& encoded:phase_constraint_authoring_proofs(*record.boundary_constraint_changes)) {
+                const auto root=decode_phase_constraint_authoring_intent(encoded);
+                if (root.coordinated_demolition.is_null()) continue;
+                if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(root.coordinated_demolition,root);
+                    ordinary && ordinary->version==2)
+                    for (const auto& [original,ids]:ordinary->roof_additional_identities) {
+                        (void)original;
+                        for (const auto& id:ids) if (fresh.contains(id))
+                            throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);
+                    }
+            }
+        }
         if (record.boundary_constraint_changes)
             for (const auto& intent : phase_constraint_authoring_components(*record.boundary_constraint_changes)) {
                 const auto require_unused=[&](const auto& identities) {

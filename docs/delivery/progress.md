@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 roof and mixed architectural removal source integration
+
+Roof Delete/Cut now opt into actual hosted-component retirement. Physically
+removed roofs retire their qualified catalog rows, dimensions and known saved
+presentations; retained roofs keep their hosted rows. Shared catalog definitions,
+raw survivors and render aliases remain intact. Affected shared-baseline joins
+are protected even while the saved selection is baseline. Contact, component
+expansion and native work remain bounded; preflight decodes each catalog once.
+
+Mixed roof/stair/railing/slab/structural/component selections independently replay
+the same source and compose one complete removal candidate. Baseline-only
+registries without alternatives can retire members; preserved alternative
+owners remain protected. Canvas Delete/Cut publish those complete candidates
+without enrolling fresh split joins into an unrelated registry. A baseline
+demolition combined with ordinary roofs captures closed inner three/ordinary
+child two, including actual join/overlay identity slots. Native 137/extraction
+135 preserves its floor through current, retained and wrapped commands and
+reserves declared destinations against history and assets.
+
+Independent roof source review approved after correcting shared-baseline join
+mutation. Mixed integration source review approved after protecting retained
+typed roots and excluding admitted split joins from generic phase/page enrollment;
+root integrated source review is complete. No builds, tests, probes, scripts,
+native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged. Broader wall/room and drawing removal cohorts and final
+production qualification remain unfinished scope.
+
 ### October 9 retained stair topology replacement source integration
 
 Active-alternative stair replacement now has an actual-source staging path for

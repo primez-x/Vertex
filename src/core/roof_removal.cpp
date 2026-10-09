@@ -2,6 +2,8 @@
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/architecture.hpp"
+#include "sketch/architectural_object_removal.hpp"
+#include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -17,6 +19,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -135,6 +138,83 @@ void admit_assignment(const RoofRemovalEntities& source, const Json& assignment)
     })) reject("source material assignment references a missing catalog material");
 }
 
+bool supported_catalog(const Json& model) {
+    if (!model.is_object() || !model.contains("schema") || !model.at("schema").is_string()) return false;
+    for (int version = 1; version <= 7; ++version)
+        if (model.at("schema") == "sketch.assemblies.v" + std::to_string(version)) return true;
+    return false;
+}
+
+// Bound the combined actual roof/contact/hosted expansion before either producer
+// enters native geometry. Expansions here are analytical, sharing one budget.
+void bound_hosted_removal_work(const RoofRemovalEntities& source, const Ids& roofs,
+    const Ids& joins, const std::vector<std::pair<std::string, std::string>>& keys) {
+    constexpr std::size_t limit = 262144;
+    std::size_t work{};
+    const auto add = [&](std::size_t count) {
+        if (count > limit - work) reject("aggregate roof/hosted geometry work budget exceeded");
+        work += count;
+    };
+    std::map<std::string, std::size_t, std::less<>> costs;
+    for (const auto& id : roofs) {
+        (void)decode_roof_entity(source.at(id));
+        const auto& p = source.at(id).properties;
+        const auto cost = std::size_t{4} + (p.contains("roof_openings") ? p.at("roof_openings").size() : 0);
+        // Actual source, hosted source, and final roof admission may each build it.
+        add(cost * 3); costs.emplace(id, cost);
+    }
+    for (const auto& id : joins) {
+        const auto count = parse_roof_join(source.at(id).properties, id).roof_ids.size();
+        if (count > limit || count > (limit - work) / std::max<std::size_t>(1, count))
+            reject("aggregate roof contact work budget exceeded");
+        add(count * count);
+    }
+    AssemblyExpansionBudget budget;
+    std::map<std::string, AssemblyModel, std::less<>> models;
+    std::map<std::string, std::map<std::string, std::size_t, std::less<>>, std::less<>> instance_indices;
+    for (const auto& [catalog, local] : keys) {
+        auto found_model = models.find(catalog);
+        if (found_model == models.end()) {
+            found_model = models.emplace(catalog, AssemblyModel::from_json(source.at(catalog).properties.at("model"))).first;
+            auto& indices = instance_indices[catalog];
+            const auto& rows = found_model->second.instances();
+            for (std::size_t index = 0; index < rows.size(); ++index) indices.emplace(rows[index].id, index);
+        }
+        const auto& indices = instance_indices.at(catalog);
+        const auto found_row = indices.find(local);
+        if (found_row == indices.end()) reject("hosted retirement key lacks its actual admitted roof");
+        const auto& row = found_model->second.instances().at(found_row->second);
+        if (!row.placement || !costs.contains(row.placement->host_entity_id))
+            reject("hosted retirement key lacks its actual admitted roof");
+        const auto expansion = found_model->second.expand(row, budget);
+        if (expansion.profiles.empty()) add(costs.at(row.placement->host_entity_id));
+    }
+    add(budget.consumed_nodes); add(budget.consumed_profile_segments);
+}
+
+// A bare local instance reference has no catalog-qualified retirement meaning.
+// A different explicit catalog remains a separate namespace.
+bool unqualified_instance_reference(const Json& value, const Ids& locals, const RoofRemovalEntities& source) {
+    if (value.is_object()) {
+        if (value.contains("instance_id") && value.at("instance_id").is_string() &&
+            locals.contains(value.at("instance_id").get<std::string>())) {
+            std::optional<std::string> qualified;
+            for (const auto* key : {"catalog_id", "assembly_catalog_id"}) if (value.contains(key)) {
+                if (!value.at(key).is_string()) return true;
+                const auto catalog_id = value.at(key).get<std::string>();
+                const auto catalog = source.find(catalog_id);
+                if (catalog == source.end() || catalog->second.type != "assembly_model" ||
+                    (qualified && *qualified != catalog_id)) return true;
+                qualified = catalog_id;
+            }
+            if (!qualified) return true;
+        }
+        for (const auto& child : value) if (unqualified_instance_reference(child, locals, source)) return true;
+    } else if (value.is_array())
+        for (const auto& child : value) if (unqualified_instance_reference(child, locals, source)) return true;
+    return false;
+}
+
 // Remove only codec-qualified reference fields for dependency inspection.
 // Unknown affected data refuses instead of acquiring deletion/remapping authority.
 Entity opaque_remainder(Entity entity, const Ids& retained_roofs) {
@@ -194,13 +274,60 @@ Entity opaque_remainder(Entity entity, const Ids& retained_roofs) {
     return entity;
 }
 
+// Inspection only: preserve the raw catalog while recognizing its validated
+// catalog-local declarations and references. Hosts remain document identities.
+Entity hosted_reference_remainder(Entity entity, const Ids& retained_roofs) {
+    // Validate roof receipts before masking any material-local identity.
+    if (entity.type != kAnnotationEntityType) entity = opaque_remainder(std::move(entity), retained_roofs);
+    if (entity.type == "assembly_model" && entity.properties.contains("model") &&
+        supported_catalog(entity.properties.at("model"))) {
+        (void)AssemblyModel::from_json(entity.properties.at("model"));
+        auto& model = entity.properties.at("model");
+        for (auto& row : model.at("materials")) row.erase("id");
+        for (auto& row : model.at("types")) {
+            row.erase("id"); row.erase("materials");
+            if (row.contains("profiles")) for (auto& child : row.at("profiles")) {
+                child.erase("id"); child.erase("material_slot");
+            }
+            if (row.contains("parts")) for (auto& child : row.at("parts")) {
+                child.erase("id"); child.erase("type_id"); child.erase("material_overrides");
+            }
+        }
+        for (auto& row : model.at("instances")) {
+            if (row.contains("placement") && !row.at("placement").is_null() &&
+                retained_roofs.contains(row.at("placement").at("host_entity_id").get<std::string>()))
+                row.at("placement").erase("host_entity_id");
+            row.erase("id"); row.erase("type_id"); row.erase("material_overrides");
+            if (row.contains("nested_overrides")) for (auto& child : row.at("nested_overrides")) {
+                child.erase("part_path"); child.erase("material_overrides");
+            }
+        }
+    }
+    // Only object overrides are admitted as document-owner references.
+    if (entity.type == kAnnotationEntityType) {
+        validate_annotation_entity(entity);
+        for (auto& row : entity.properties.at("state").at("overrides"))
+            if (row.at("target_kind") == "object") row.erase("target_id");
+        return entity;
+    }
+    if (entity.properties.contains("material_assignment")) {
+        const auto& assignment = entity.properties.at("material_assignment");
+        if (assignment.is_object() && assignment.contains("version") && assignment.at("version") == 1 &&
+            assignment.contains("catalog_id") && assignment.at("catalog_id").is_string() &&
+            assignment.contains("material_id") && assignment.at("material_id").is_string())
+            entity.properties.at("material_assignment").erase("material_id");
+    }
+    return entity;
+}
+
 struct Derivation {
     RoofRemovalPlan plan;
     std::map<std::string, std::string, std::less<>> memberships;
     std::map<std::string, Json, std::less<>> singleton_assignments;
+    std::optional<RoofRemovalEntities> hosted_candidate;
 };
 Derivation derive(const RoofRemovalEntities& source, const std::vector<std::string>& selected,
-    bool preserve_phase_references, bool preserve_singleton_material) {
+    bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components) {
     Derivation result;
     auto& plan = result.plan;
     plan.selected_roof_ids = selected;
@@ -294,9 +421,86 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
         Ids admitted_roofs = seeds, admitted_joins;
         for (const auto& [id, join] : joins)
             if (std::any_of(join.roof_ids.begin(), join.roof_ids.end(), [&](const auto& roof) { return seeds.contains(roof); })) {
+                if (retire_hosted_components && !membership(id).empty()) {
+                    const auto model = ModelPhases::from_json(source.at(membership(id)).properties.at("model"));
+                    // Qualified membership does not imply a saved alternative or
+                    // enroll ordinary roof members. The baseline relationship is
+                    // nevertheless inherited by every retained alternative.
+                    if (!model.alternatives().empty() &&
+                        std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end())
+                        reject("affected baseline join is shared with preserved alternatives: " + id);
+                }
                 admitted_joins.insert(id);
                 admitted_roofs.insert(join.roof_ids.begin(), join.roof_ids.end());
             }
+        if (retire_hosted_components) {
+            for (const auto& roof : removed) {
+                if (source.at(roof).required) reject("required actual roof cannot be deleted: " + roof);
+                if (!membership(roof).empty()) {
+                    const auto model = ModelPhases::from_json(source.at(membership(roof)).properties.at("model"));
+                    if (!model.alternatives().empty() &&
+                        std::find(model.baseline_ids().begin(), model.baseline_ids().end(), roof) != model.baseline_ids().end())
+                        reject("shared baseline roof requires typed phase demolition: " + roof);
+                    for (const auto& alternative : model.alternatives()) {
+                        if (model.active_alternative() == std::optional<std::string>{alternative.id}) continue;
+                        if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), roof) != alternative.proposed_ids.end() ||
+                            std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), roof) != alternative.demolished_ids.end())
+                            reject("removed roof has protected other-alternative usage: " + roof);
+                    }
+                }
+            }
+            for (const auto& [id, entity] : source) if (entity.type == "assembly_model" &&
+                entity.properties.contains("model") && supported_catalog(entity.properties.at("model"))) {
+                const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+                bool carrier_admitted = false;
+                for (const auto& row : model.instances()) if (row.placement && removed.contains(row.placement->host_entity_id)) {
+                    if (!carrier_admitted) {
+                        mutable_owner(id);
+                        if (!membership(id).empty()) {
+                            const auto phases = ModelPhases::from_json(source.at(membership(id)).properties.at("model"));
+                            if (!phases.alternatives().empty() &&
+                                std::find(phases.baseline_ids().begin(), phases.baseline_ids().end(), id) != phases.baseline_ids().end())
+                                reject("hosted catalog is shared with preserved alternatives: " + id);
+                            for (const auto& alternative : phases.alternatives()) {
+                                if (phases.active_alternative() == std::optional<std::string>{alternative.id}) continue;
+                                if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), id) != alternative.proposed_ids.end() ||
+                                    std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id) != alternative.demolished_ids.end())
+                                    reject("hosted catalog has protected other-alternative usage: " + id);
+                            }
+                        }
+                        carrier_admitted = true;
+                    }
+                    // An ordinary unregistered catalog can carry active proposed
+                    // hosts. A registered carrier cannot borrow a foreign registry.
+                    if (!membership(id).empty() && membership(id) != membership(row.placement->host_entity_id))
+                        reject("hosted catalog and removed roof have foreign phase ownership: " + id);
+                    if (plan.retired_hosted_component_keys.size() >= maximum_identities)
+                        reject("hosted component retirement budget exceeded");
+                    plan.retired_hosted_component_keys.emplace_back(id, row.id);
+                }
+            }
+            bound_hosted_removal_work(source, admitted_roofs, admitted_joins, plan.retired_hosted_component_keys);
+            if (!plan.retired_hosted_component_keys.empty()) {
+                const auto aliases = embedded_assembly_presentation_ids(source);
+                Ids locals;
+                for (const auto& key : plan.retired_hosted_component_keys) {
+                    locals.insert(key.second);
+                    plan.retired_hosted_component_alias_ids.push_back(aliases.at(key));
+                }
+                for (const auto& [id, entity] : source)
+                    if (unqualified_instance_reference(entity.properties, locals, source) ||
+                        unqualified_instance_reference(entity.extensions, locals, source))
+                        reject("affected unqualified component reference has no retirement codec: " + id);
+                // This producer receives the complete actual source and no physical
+                // selection. It cannot acquire roof or join deletion authority.
+                result.hosted_candidate = replay_architectural_object_removal(source, {}, plan.retired_hosted_component_keys);
+            }
+        }
+        const auto& reference_source = result.hosted_candidate ? *result.hosted_candidate : source;
+        Ids presentation_aliases;
+        if (retire_hosted_components) for (const auto& [key, alias] : embedded_assembly_presentation_ids(reference_source)) {
+            (void)key; presentation_aliases.insert(alias);
+        }
         const auto shapes = admit_roofs_and_joins(source, admitted_roofs, admitted_joins);
         for (const auto& [id, join] : joins) {
             if (std::none_of(join.roof_ids.begin(), join.roof_ids.end(), [&](const auto& roof) { return seeds.contains(roof); })) continue;
@@ -350,7 +554,12 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
             }
         }
         Ids erased = removed;
-        for (const auto& [id, entity] : source) if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+        for (const auto& [id, entity] : source) if (!reference_source.contains(id)) {
+            if (!can_recognize_boundary_dimension_entity_type(entity.type))
+                reject("hosted component producer erased an unsupported source owner: " + id);
+            erased.insert(id);
+        }
+        for (const auto& [id, entity] : reference_source) if (can_recognize_boundary_dimension_entity_type(entity.type)) {
             try {
                 const auto decoded = decode_boundary_dimension_entity(entity);
                 if (decoded.supported() && removed.contains(decoded.dimension->boundary_id)) erased.insert(id);
@@ -359,8 +568,22 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
             }
         }
         plan.removed_entity_ids.assign(erased.begin(), erased.end());
-        for (const auto& id : erased) if (source.at(id).required)
-            diagnostic(plan, id, "required project entities cannot be deleted");
+        for (const auto& id : erased) {
+            if (source.at(id).required) diagnostic(plan, id, "required project entities cannot be deleted");
+            if (!retire_hosted_components) continue;
+            if (scope.inactive_owner_ids.contains(id)) diagnostic(plan, id, "retired dependent owner is inactive");
+            if (membership(id).empty()) continue;
+            const auto model = ModelPhases::from_json(source.at(membership(id)).properties.at("model"));
+            if (!model.alternatives().empty() &&
+                std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end())
+                diagnostic(plan, id, "retired dependent owner is shared with preserved alternatives");
+            for (const auto& alternative : model.alternatives()) {
+                if (model.active_alternative() == std::optional<std::string>{alternative.id}) continue;
+                if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), id) != alternative.proposed_ids.end() ||
+                    std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id) != alternative.demolished_ids.end())
+                    diagnostic(plan, id, "retired dependent owner has protected other-alternative usage");
+            }
+        }
         affected.insert(erased.begin(), erased.end()); affected.insert(removed_children.begin(), removed_children.end());
         affected.insert(retained_children.begin(), retained_children.end());
         // Actual child uniqueness matters when a retained overlay is copied.
@@ -370,7 +593,7 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
             if (source.contains(id) || !children.insert(id).second) ambiguous.insert(id);
         };
         const auto join_counts = plan.additional_identity_counts;
-        for (const auto& [id, entity] : source) {
+        for (const auto& [id, entity] : reference_source) {
             if (entity.type == "roof" && entity.properties.contains("roof_openings"))
                 for (const auto& child : entity.properties.at("roof_openings")) reserve_child(child.at("id").get<std::string>());
             if (entity.type == kAnnotationEntityType) {
@@ -403,13 +626,13 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
         // Child IDs have no admitted owner-removal semantics in these typed
         // fields. A reference to an erased owner's opening/overlay therefore
         // cannot hide behind the qualification of a view or override field.
-        for (const auto& [id, entity] : source) if (!erased.contains(id)) {
+        for (const auto& [id, entity] : reference_source) if (!erased.contains(id)) {
             try {
                 if (entity.type == kSheetViewEntityType) {
                     const auto model = decode_sheet_view_entity(entity);
                     const bool relevant = touches(entity.properties, affected) || touches(entity.extensions, affected);
                     const auto actual_owner = [&](const std::string& owner) {
-                        if (relevant && !owner.empty() && !source.contains(owner))
+                        if (relevant && !owner.empty() && !source.contains(owner) && !presentation_aliases.contains(owner))
                             diagnostic(plan, id, "affected view has a dangling source-object reference: " + owner);
                     };
                     for (const auto& view : model.views()) {
@@ -444,10 +667,11 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
         }
         for (const auto& id : ambiguous) if (affected.contains(id))
             diagnostic(plan, id, "affected identity aliases another retained child or entity");
-        for (const auto& [id, entity] : source) {
+        for (const auto& [id, entity] : reference_source) {
             if (erased.contains(id)) continue;
             try {
-                const auto remainder = opaque_remainder(entity, retained_roofs);
+                const auto remainder = retire_hosted_components ? hosted_reference_remainder(entity, retained_roofs)
+                    : opaque_remainder(entity, retained_roofs);
                 if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                     diagnostic(plan, id, "affected retained reference has no qualified removal codec");
             } catch (const std::exception& error) {
@@ -469,7 +693,7 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
 
 void complete_presentation(RoofRemovalEntities& candidate, const RoofRemovalEntities& source,
     const Ids& removed, const RoofRemovalAdditionalIdentities& copies,
-    const RoofRemovalAdditionalIdentities& identities) {
+    const RoofRemovalAdditionalIdentities& identities, bool retire_hosted_components) {
     Ids affected = removed;
     for (const auto& [id, destinations] : copies) { (void)destinations; affected.insert(id); }
     for (const auto& [id, original] : source) {
@@ -536,6 +760,9 @@ void complete_presentation(RoofRemovalEntities& candidate, const RoofRemovalEnti
             auto additions = Json::array();
             for (const auto& row : rows) {
                 const auto owner = row.at("target_id").get<std::string>();
+                if (retire_hosted_components && row.at("target_kind") != "object") {
+                    result.push_back(row); continue;
+                }
                 if (removed.contains(owner)) continue;
                 result.push_back(row);
                 if (copies.contains(owner)) for (const auto& copy : copies.at(owner)) {
@@ -601,20 +828,24 @@ bool RoofRemovalPlan::ready() const noexcept {
 }
 
 RoofRemovalPlan inspect_roof_removal_plan(const RoofRemovalEntities& source,
-    const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references, bool preserve_singleton_material) {
-    return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material).plan;
+    const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references, bool preserve_singleton_material,
+    bool retire_hosted_components) {
+    return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material, retire_hosted_components).plan;
 }
 
 RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, const RoofRemovalAdditionalIdentities& additional_identities,
-    bool preserve_phase_references, bool preserve_singleton_material) {
+    bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components) {
     try {
-        const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material);
+        const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material, retire_hosted_components);
         if (!derived.plan.ready()) {
             for (const auto& item : derived.plan.diagnostics) if (item.blocking) reject(item.entity_id + ": " + item.reason);
         }
         if (additional_identities.size() != derived.plan.additional_identity_counts.size()) reject("requires exact additional join/overlay identity keys");
-        const auto occupied = occupied_strings(source);
+        auto occupied = occupied_strings(source);
+        if (retire_hosted_components) for (const auto& [key, alias] : embedded_assembly_presentation_ids(source)) {
+            (void)key; occupied.values.insert(alias);
+        }
         Ids fresh;
         std::size_t total = selected_roof_ids.size();
         for (const auto& [old_id, destinations] : additional_identities) {
@@ -628,7 +859,7 @@ RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
                 if (occupied.values.contains(id) || !fresh.insert(id).second) reject("fresh identity collision: " + id);
             }
         }
-        RoofRemovalResult result{source, {}};
+        RoofRemovalResult result{derived.hosted_candidate ? *derived.hosted_candidate : source, {}};
         const Ids removed(derived.plan.removed_entity_ids.begin(), derived.plan.removed_entity_ids.end());
         for (const auto& id : removed) result.entities.erase(id);
         RoofRemovalAdditionalIdentities copies;
@@ -653,9 +884,45 @@ RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
         for (const auto& [id, assignment] : derived.singleton_assignments)
             result.entities.at(id).properties["material_assignment"] = assignment;
         complete_registries(result.entities, source, derived, removed, copies);
-        complete_presentation(result.entities, source, removed, copies, additional_identities);
+        // Presentation rows compose from actual component-retirement consequences,
+        // never from pre-cleanup source arrays that would resurrect deleted aliases.
+        complete_presentation(result.entities, derived.hosted_candidate ? *derived.hosted_candidate : source,
+            removed, copies, additional_identities, retire_hosted_components);
         if (result.entities.size() > maximum_entities) reject("final entity budget exceeded");
         (void)occupied_strings(result.entities);
+        if (retire_hosted_components) {
+            validate_document_assembly_instances(result.entities);
+            for (const auto& [id, entity] : result.entities) if (entity.type == "assembly_model") {
+                const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+                for (const auto& row : model.instances()) if (row.placement && !result.entities.contains(row.placement->host_entity_id))
+                    reject("retained hosted row has a dangling actual owner: " + id + "/" + row.id);
+            }
+            const auto aliases = embedded_assembly_presentation_ids(source);
+            const auto remaining_aliases = embedded_assembly_presentation_ids(result.entities);
+            const std::set<std::pair<std::string, std::string>> retired(
+                derived.plan.retired_hosted_component_keys.begin(), derived.plan.retired_hosted_component_keys.end());
+            for (const auto& [key, alias] : aliases) if (!retired.contains(key)) {
+                const auto remaining = remaining_aliases.find(key);
+                if (remaining == remaining_aliases.end() || remaining->second != alias)
+                    reject("removal changes surviving computed component alias: " + key.first + "/" + key.second);
+            }
+            for (const auto& [id, entity] : source) if (entity.type == "roof" && !removed.contains(id)) {
+                bool baseline = false;
+                if (derived.memberships.contains(id)) {
+                    const auto model = ModelPhases::from_json(source.at(derived.memberships.at(id)).properties.at("model"));
+                    baseline = std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end();
+                }
+                if ((baseline || derived.plan.retained_roof_registry_ids.contains(id)) && result.entities.at(id) != entity)
+                    reject("retained baseline/phase-retained roof envelope changed: " + id);
+            }
+            for (const auto& [id, entity] : source) if (entity.type == "roof_join" && derived.memberships.contains(id)) {
+                const auto model = ModelPhases::from_json(source.at(derived.memberships.at(id)).properties.at("model"));
+                if (!model.alternatives().empty() &&
+                    std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end() &&
+                    (!result.entities.contains(id) || result.entities.at(id) != entity))
+                    reject("retained shared-baseline join envelope changed: " + id);
+            }
+        }
         validate_roof_join_ownership(result.entities);
         Ids admitted_roofs, admitted_joins;
         for (const auto& [roof, registry] : derived.plan.retained_roof_registry_ids) {

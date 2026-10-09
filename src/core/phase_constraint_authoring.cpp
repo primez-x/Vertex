@@ -463,12 +463,17 @@ bool exact_json(const Json& a,const Json& b) { return a==b && a.dump()==b.dump()
 // Explicit paths only. Removing these arrays from each independently replayed
 // envelope must leave the exact source envelope. This is not JSON merge authority.
 struct AppendPath { Json::json_pointer path; const char* identity_key; };
-std::vector<AppendPath> append_paths(const Entity& source) {
+std::vector<AppendPath> append_paths(const Entity& source, bool ordinary_removal_rosters=false) {
     std::vector<AppendPath> result;
     if (source.type=="model_phases") {
         const auto model=ModelPhases::from_json(source.properties.at("model"));
         result.push_back({Json::json_pointer("/model/entity_ids"),nullptr});
-        if (!model.active_alternative()) invalid("Shared phase append requires an actual saved active alternative");
+        if (ordinary_removal_rosters)
+            result.push_back({Json::json_pointer("/model/baseline_ids"),nullptr});
+        if (!model.active_alternative()) {
+            if (ordinary_removal_rosters) return result;
+            invalid("Shared phase append requires an actual saved active alternative");
+        }
         const auto& alternatives=source.properties.at("model").at("alternatives");
         for (std::size_t i=0;i<alternatives.size();++i) if (alternatives[i].at("id")==*model.active_alternative()) {
             const auto prefix="/model/alternatives/"+std::to_string(i);
@@ -540,8 +545,9 @@ Entity merge_append_container(const Entity& source,const Entity& roof,const Enti
 // fields. Each retained row can have only one family consequence (including
 // removal); all other source rows keep their exact order and bytes. Fresh rows
 // remain disjoint suffixes in wall/roof/horizontal order.
-Entity merge_source_row_container(const Entity& source,const std::vector<const Entity*>& candidates) {
-    auto paths=append_paths(source);
+Entity merge_source_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
+    bool ordinary_removal_rosters=false) {
+    auto paths=append_paths(source,ordinary_removal_rosters);
     if (source.type==kAnnotationEntityType) {
         paths.push_back({Json::json_pointer("/state/labels"),"id"});
         paths.push_back({Json::json_pointer("/state/symbols"),"id"});
@@ -751,8 +757,9 @@ Entity merge_demolition_catalog(const Entity& source,const std::vector<const Ent
     return result;
 }
 
-Entity merge_demolition_row_container(const Entity& source,const std::vector<const Entity*>& candidates) {
-    if (source.type!=kSheetViewEntityType) return merge_source_row_container(source,candidates);
+Entity merge_demolition_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
+    bool ordinary_removal_rosters=false) {
+    if (source.type!=kSheetViewEntityType) return merge_source_row_container(source,candidates,ordinary_removal_rosters);
     std::vector<Entity> normalized;
     normalized.reserve(candidates.size());
     const auto& source_views=source.properties.at("model").at("views");
@@ -1441,8 +1448,9 @@ Entities compose_architectural_family_candidates(const Entities& source,const st
     return result;
 }
 
-Entities compose_phase_demolition_candidates(const Entities& source,const std::vector<Entities>& candidates,
-    bool include_ordinary_removal) {
+namespace {
+Entities compose_removal_candidates(const Entities& source,const std::vector<Entities>& candidates,
+    bool include_ordinary_removal, bool complete_roof_removal, bool preserve_all_baselines) {
     coordinated_map_budget(source);
     if (candidates.size()<2 || candidates.size()>(include_ordinary_removal ? 6u : 5u))
         invalid("Coordinated demolition exceeds its complete family candidate bounds");
@@ -1451,7 +1459,8 @@ Entities compose_phase_demolition_candidates(const Entities& source,const std::v
     for (const auto& [key,entity]:source) if (entity.type=="model_phases") {
         (void)key;
         const auto model=ModelPhases::from_json(entity.properties.at("model"));
-        baseline.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+        if (preserve_all_baselines || model.active_alternative() || !model.alternatives().empty())
+            baseline.insert(model.baseline_ids().begin(),model.baseline_ids().end());
     }
     auto result=source;
     for (const auto& [key,entity]:source) {
@@ -1466,6 +1475,8 @@ Entities compose_phase_demolition_candidates(const Entities& source,const std::v
             (!include_ordinary_removal || entity.type!="assembly_model"))))
             invalid("Coordinated demolition cannot change retained baseline physical owners");
         if (erased) {
+            if (complete_roof_removal && entity.required)
+                invalid("Complete architectural removal cannot erase a required source entity");
             if (erased!=1 || !changed.empty())
                 invalid("Coordinated demolition has overlapping retirement consequences");
             result.erase(key);
@@ -1473,7 +1484,7 @@ Entities compose_phase_demolition_candidates(const Entities& source,const std::v
             result.at(key)=merge_demolition_catalog(entity,changed);
         else if (changed.size()==1) result.at(key)=*changed.front();
         else if (changed.size()>1) result.at(key)=entity.type=="assembly_model"
-            ? merge_demolition_catalog(entity,changed) : merge_demolition_row_container(entity,changed);
+            ? merge_demolition_catalog(entity,changed) : merge_demolition_row_container(entity,changed,complete_roof_removal);
     }
     for (const auto& candidate:candidates) for (const auto& [key,entity]:candidate) {
         if (source.contains(key)) continue;
@@ -1493,5 +1504,17 @@ Entities compose_phase_demolition_candidates(const Entities& source,const std::v
     validate_document_assembly_instances(result);
     validate_stair_attachment_state(result);
     return result;
+}
+} // namespace
+
+Entities compose_phase_demolition_candidates(const Entities& source,const std::vector<Entities>& candidates,
+    bool include_ordinary_removal, bool complete_roof_removal) {
+    if (complete_roof_removal && !include_ordinary_removal)
+        invalid("Complete roof removal requires its ordinary removal lane");
+    return compose_removal_candidates(source,candidates,include_ordinary_removal,complete_roof_removal,true);
+}
+
+Entities compose_ordinary_architectural_removal_candidates(const Entities& source,const std::vector<Entities>& candidates) {
+    return compose_removal_candidates(source,candidates,true,true,false);
 }
 } // namespace sketch
