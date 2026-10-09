@@ -4,6 +4,7 @@
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_wall_demolition.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
+#include "sketch/wall_join_removal.hpp"
 
 namespace sketch {
 
@@ -13,10 +14,13 @@ struct PhaseWallDemolitionAuthoring {
     ArchitecturalSelectionRemovalIntent ordinary;
     std::vector<std::string> opening_ids;
     nlohmann::json room_review_intent=nullptr;
+    std::vector<std::string> ordinary_wall_ids;
+    PhysicalWallJoinRemovalAdditionalIdentities wall_additional_identities;
 };
 
-// Closed inner one. Historical children retain their exact source-bound wire
-// authority; neither arbitrary changes nor ordinary wall removal are admitted.
+// Closed inner one retains its exact six-field authority. Closed inner two
+// adds actual ordinary wall roots and their source-derived join destinations;
+// historical children retain their exact source-bound wire authority.
 [[nodiscard]] nlohmann::json encode_phase_wall_demolition_authoring(
     const PhaseWallDemolitionAuthoring& intent);
 [[nodiscard]] PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(

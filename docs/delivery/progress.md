@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed original and ordinary/proposed wall source implementation
+
+Delete/Cut now classifies selected walls from their actual saved membership,
+keeping the historical baseline-only producer unchanged. A new inner-two stage
+combines retained original-wall demolition with complete ordinary/proposed wall
+removal from the same captured source. Wall-only selections and broader mixed
+selections route through the same complete room dialog. Hosted opening/component
+selections already covered by an admitted wall leaf collapse after actual source
+ownership checks, and known reference retirement composes once.
+
+Wall, roof and room destinations reserve their identities together. Snapshot
+inspection and current/retained Document source admission check join lifetime
+before native inference, including assets, retained/undone proofs and aliases.
+Retained admission receives an explicit preceding record index. Native 148 /
+extraction 146 preserve inner two; inner one retains 147 / 145. Root integrated
+source review is complete; targeted independent source review remains pending.
+No runtime acceptance is claimed.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged. Broader active-design/drawing combinations, remaining
+authoring relationships and production qualification remain unfinished.
+
 ### October 9 complete mixed wall demolition source implementation
 
 The complete active-design wall-removal path now carries independently replayed

@@ -2843,11 +2843,15 @@ static void validate_phase_constraint_authoring_source(const DocumentSnapshot& s
             intent.source_entities_digest!=entity_map_digest(source.entities()) ||
             intent.phase_selections!=phase_constraint_authoring_selections(source.entities()))
             document_error(DocumentErrorCode::stale_revision,"Active design authoring source snapshot changed");
+        if (!intent.wall_demolition.is_null()) {
+            const auto demolition=decode_phase_wall_demolition_authoring(intent.wall_demolition);
+            validate_physical_wall_join_removal_identity_lifetime(source,demolition.wall_additional_identities);
+        }
     }
 }
 
 static void validate_retained_phase_constraint_authoring_source(const DocumentSnapshot& snapshot,
-    const RevisionRecord& source, const ApplyBoundaryConstraintChanges& command) {
+    const RevisionRecord& source, const ApplyBoundaryConstraintChanges& command,std::size_t preceding_records) {
     for (const auto& encoded : phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (intent.expected_revision!=source.revision ||
@@ -2856,6 +2860,11 @@ static void validate_retained_phase_constraint_authoring_source(const DocumentSn
             intent.source_entities_digest!=entity_map_digest(source.entities) ||
             intent.phase_selections!=phase_constraint_authoring_selections(source.entities))
             throw std::invalid_argument("Active design authoring retained source authority changed");
+        if (!intent.wall_demolition.is_null()) {
+            const auto demolition=decode_phase_wall_demolition_authoring(intent.wall_demolition);
+            validate_physical_wall_join_removal_identity_lifetime(source.entities,snapshot.history(),preceding_records,
+                demolition.wall_additional_identities);
+        }
     }
 }
 
@@ -2939,6 +2948,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
     std::set<std::string,std::less<>> wall_demolition_room_destinations;
+    std::set<std::string,std::less<>> wall_demolition_join_destinations;
     bool complete_wall_demolition=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
@@ -2971,6 +2981,14 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             structural_hosted_alias_reservation=true;
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
             const auto demolition=decode_phase_wall_demolition_authoring(root_intent.wall_demolition);
+            for (const auto& [original,ids]:demolition.wall_additional_identities) {
+                (void)original;
+                for (const auto& id:ids) {
+                    if (!wall_demolition_join_destinations.insert(id).second)
+                        throw std::invalid_argument("Wall demolition repeats a declared join destination: "+id);
+                    fresh.insert(id);
+                }
+            }
             if (!demolition.room_review_intent.is_null()) {
                 validate_phase_room_review_lifetime(demolition.room_review_intent,history,preceding_records);
                 const auto rooms=decode_physical_wall_phase_room_review_intent(demolition.room_review_intent);
@@ -3153,6 +3171,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
 #endif
     }
+    for (const auto& id:wall_demolition_join_destinations)
+        if (!nested_fresh.insert(id).second)
+            throw std::invalid_argument("An ordinary wall join destination overlaps another declared identity: "+id);
     for (const auto& id:wall_demolition_room_destinations)
         if (!nested_fresh.insert(id).second)
             throw std::invalid_argument("A wall demolition room destination overlaps another declared identity: "+id);
@@ -3170,7 +3191,16 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             nested_fresh.insert(alias);
         }
     }
-    if (complete_wall_demolition) nested_fresh.insert(fresh.begin(),fresh.end());
+    if (complete_wall_demolition) {
+        nested_fresh.insert(fresh.begin(),fresh.end());
+        for (const auto* token:{"version","wall_demolition","other_authoring","ordinary","opening_ids",
+            "room_review_intent","registry_id","alternative_id","wall_ids","ordinary_wall_ids",
+            "wall_additional_identities","object_ids","components","catalog_id","instance_id",
+            "roof_additional_identities","expected_revision","source_snapshot_digest","source_authoring_digest",
+            "source_entities_digest","source_saved_revision","phase_selections","intent"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A fresh wall demolition destination borrows a semantic proof field: "+std::string(token));
+    }
     if (phase_drawing_enclosure) {
         // The complete new enclosure reserves every resulting or declared
         // destination against both stage vocabularies, even for older phase
@@ -3212,6 +3242,14 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 for (const auto& id:phase_demolition_ordinary_roof_destinations(root))
                     if (fresh.contains(id))
                         throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);
+                if (!root.wall_demolition.is_null()) {
+                    const auto demolition=decode_phase_wall_demolition_authoring(root.wall_demolition);
+                    for (const auto& [original,ids]:demolition.wall_additional_identities) {
+                        (void)original;
+                        for (const auto& id:ids) if (fresh.contains(id))
+                            throw std::invalid_argument("Fresh identity was already reserved by retained ordinary wall split intent: "+id);
+                    }
+                }
             }
         }
         if (record.boundary_constraint_changes)
@@ -8909,7 +8947,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 try {
                     if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history(),index);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                    validate_retained_phase_constraint_authoring_source(snapshot,previous,proof);
+                    validate_retained_phase_constraint_authoring_source(snapshot,previous,proof,index);
 #endif
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     if (has_phase_room_review_completion(proof)) {

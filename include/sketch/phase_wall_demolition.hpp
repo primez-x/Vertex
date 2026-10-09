@@ -11,6 +11,19 @@ struct PhaseWallDemolitionIntent {
     bool operator==(const PhaseWallDemolitionIntent&) const = default;
 };
 
+struct PhaseWallDemolitionSelection {
+    PhaseWallDemolitionIntent baseline;
+    std::vector<std::string> ordinary_wall_ids;
+};
+
+// Classify actual wall roots without changing the historical baseline-only
+// producer. A shared-baseline cohort retains its exact saved choice; other
+// walls need independent complete ordinary admission in the enclosing command.
+// Null means the selection contains no active-alternative baseline walls.
+[[nodiscard]] std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_selection(
+    const std::map<std::string,Entity,std::less<>>& actual,
+    const std::vector<std::string>& selected_wall_ids);
+
 // Closed semantic selection: the actual saved registry/alternative and an
 // ascending unique inventory of retained baseline walls. No entity payloads
 // or unrelated membership changes can borrow this authority.

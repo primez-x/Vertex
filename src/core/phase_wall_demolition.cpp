@@ -305,6 +305,38 @@ PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const Json& value)
     } catch (const Json::exception& error) { reject(std::string("malformed semantic wall intent: ")+error.what()); }
 }
 
+std::optional<PhaseWallDemolitionSelection> inspect_phase_wall_demolition_selection(
+    const Entities& actual,const std::vector<std::string>& selected_wall_ids) {
+    if (selected_wall_ids.empty()) return std::nullopt;
+    if (selected_wall_ids.size()>root_limit) reject("selected wall count exceeds 128");
+    bounds(actual);
+    const auto scope=constraint_phase_scope(actual);
+    std::map<std::string,bool,std::less<>> owners;
+    for (const auto& registry:scope.registries) {
+        const auto model=ModelPhases::from_json(actual.at(registry.registry_id).properties.at("model"));
+        for (const auto& id:registry.registered_entity_ids)
+            if (!owners.emplace(id,registry.alternative_id.has_value() && contains(model.baseline_ids(),id)).second)
+                reject("overlapping actual phase ownership: "+id);
+    }
+    Ids unique,baseline,ordinary;
+    for (const auto& id:selected_wall_ids) {
+        identity(id);
+        if (!unique.insert(id).second) reject("selected wall identity is duplicated: "+id);
+        const auto found=actual.find(id);
+        if (found==actual.end() || found->second.type!="wall") reject("selection requires actual physical wall roots: "+id);
+        const auto owner=owners.find(id);
+        (owner!=owners.end() && owner->second ? baseline : ordinary).insert(id);
+    }
+    if (baseline.empty()) return std::nullopt;
+    std::vector<std::string> baseline_ids(baseline.begin(),baseline.end());
+    const auto registry=prepare_registry(actual,baseline_ids);
+    if (!registry) reject("baseline selection no longer has an actual saved choice");
+    const auto model=ModelPhases::from_json(registry->properties.at("model"));
+    if (!model.active_alternative()) reject("baseline selection no longer has an active alternative");
+    return PhaseWallDemolitionSelection{{registry->id,*model.active_alternative(),std::move(baseline_ids)},
+        std::vector<std::string>(ordinary.begin(),ordinary.end())};
+}
+
 Entities replay_phase_wall_demolition_entities(const Entities& actual,const PhaseWallDemolitionIntent& intent) {
     (void)encode_phase_wall_demolition_intent(intent);
     const auto registry=prepare_registry(actual,intent.wall_ids);

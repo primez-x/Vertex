@@ -15,7 +15,9 @@
 #include "sketch/phase_stair_demolition.hpp"
 #include "sketch/phase_stair_demolition_retirement.hpp"
 #include "sketch/phase_structural_replacement.hpp"
+#include "sketch/physical_wall_room_review.hpp"
 #include "sketch/roof_join_semantics.hpp"
+#include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/stair_semantics.hpp"
 
 #include <algorithm>
@@ -191,6 +193,34 @@ void sorted_ids(const std::vector<std::string>& ids,std::size_t limit) {
     for (std::size_t i=0;i<ids.size();++i) {
         identity(ids[i]);if (i && ids[i-1]>=ids[i]) invalid("identities must be ascending and unique");
     }
+}
+Json wall_destinations_wire(const PhaseWallDemolitionAuthoring& intent) {
+    sorted_ids(intent.ordinary_wall_ids,128);
+    if (intent.ordinary_wall_ids.empty()) {
+        if (!intent.wall_additional_identities.empty()) invalid("wall destinations require ordinary wall roots");
+    } else {
+        if (intent.wall_demolition.wall_ids.size()>128-intent.ordinary_wall_ids.size())
+            invalid("combined wall selection budget exceeded");
+        for (const auto& id:intent.ordinary_wall_ids)
+            if (std::find(intent.wall_demolition.wall_ids.begin(),intent.wall_demolition.wall_ids.end(),id)!=
+                intent.wall_demolition.wall_ids.end()) invalid("baseline and ordinary wall roots overlap");
+    }
+    if (intent.wall_additional_identities.size()>4096) invalid("wall destination key budget exceeded");
+    Json additional=Json::object();Ids fresh;std::size_t count{};
+    for (const auto& [owner,rows]:intent.wall_additional_identities) {
+        identity(owner);
+        if (rows.empty() || rows.size()>4096-count) invalid("wall destination slot budget exceeded");
+        count+=rows.size();
+        for (const auto& id:rows) {
+            identity(id);
+            if (!fresh.insert(id).second) invalid("repeated wall destination");
+        }
+        additional[owner]=rows;
+    }
+    for (const auto& [owner,rows]:intent.wall_additional_identities) {
+        (void)rows;if (fresh.contains(owner)) invalid("wall destination borrows a source join identity");
+    }
+    return additional;
 }
 Json ordinary_wire(const ArchitecturalSelectionRemovalIntent& ordinary) {
     sorted_ids(ordinary.object_ids,1000);
@@ -462,10 +492,45 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
                 invalid("selected ordinary owner/host/carrier has a foreign saved phase: "+id);
         }
     };
+    // Root authority precedes every native-capable leaf, including join
+    // inference. Saved active visibility alone cannot erase a shared baseline
+    // or an owner also used by another preserved alternative.
+    Ids retained_baseline,protected_alternatives;
+    if (!edit.ordinary_wall_ids.empty()) {
+        validate_stair_attachment_state(actual);
+        for (const auto& registry:source_scope.registries) {
+            const auto model=ModelPhases::from_json(actual.at(registry.registry_id).properties.at("model"));
+            retained_baseline.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+            for (const auto& alternative:model.alternatives()) {
+                protected_alternatives.insert(alternative.demolished_ids.begin(),alternative.demolished_ids.end());
+                if (registry.registry_id!=edit.wall_demolition.registry_id || alternative.id!=edit.wall_demolition.alternative_id)
+                    protected_alternatives.insert(alternative.proposed_ids.begin(),alternative.proposed_ids.end());
+            }
+        }
+    }
+    for (const auto& id:edit.ordinary_wall_ids) {
+        selected_owner(id);
+        if (actual.at(id).type!="wall") invalid("ordinary wall selection requires an actual physical wall");
+        if (retained_baseline.contains(id)) invalid("ordinary wall root has retained baseline authority: "+id);
+        if (protected_alternatives.contains(id)) invalid("ordinary wall root has protected alternative usage: "+id);
+    }
     const auto wall_candidate=replay_phase_wall_demolition_entities(actual,edit.wall_demolition);
     const auto other=historical(edit.other_authoring,edit.wall_demolition,&root);
     std::vector<Entities> candidates;
     candidates.push_back(wall_candidate);
+    std::optional<std::size_t> ordinary_wall_lane;
+    Ids ordinary_wall_retired_owners;
+    if (!edit.ordinary_wall_ids.empty()) {
+        preflight_physical_walls_deletion_join_inference(actual,edit.ordinary_wall_ids,true);
+        auto candidate=replay_complete_physical_walls_deletion(
+            actual,edit.ordinary_wall_ids,edit.wall_additional_identities,true);
+        retain_registry_order(actual,candidate,edit.wall_demolition);
+        ordinary_authority(actual,candidate,edit.wall_demolition);
+        for (const auto& [id,entity]:actual) {
+            (void)entity;if (!candidate.contains(id)) ordinary_wall_retired_owners.insert(id);
+        }
+        ordinary_wall_lane=candidates.size();candidates.push_back(std::move(candidate));
+    }
     Ids historical_retired_owners;
     for (const auto& leaf:other.leaves) {
         auto candidate=replay_phase_constraint_authoring(actual,encode_phase_constraint_authoring_intent(leaf));
@@ -501,6 +566,9 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
         selected_owner(host.get<std::string>());
         if (std::binary_search(edit.wall_demolition.wall_ids.begin(),edit.wall_demolition.wall_ids.end(),host.get<std::string>())) {
             if (!wall_candidate.contains(id) || !exact(found->second,wall_candidate.at(id))) invalid("wall leaf failed to retain original hosted opening");
+        } else if (std::binary_search(edit.ordinary_wall_ids.begin(),edit.ordinary_wall_ids.end(),host.get<std::string>())) {
+            if (!ordinary_wall_lane || candidates[*ordinary_wall_lane].contains(id))
+                invalid("ordinary wall leaf failed to retire its actual hosted opening");
         } else independent.push_back(id);
     }
     if (!independent.empty()) {
@@ -523,6 +591,12 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
         // Validate every explicit source selection before any closure collapse.
         for (const auto& id:selection.object_ids) {
             selected_owner(id);
+            if (!edit.ordinary_wall_ids.empty()) {
+                const auto& type=actual.at(id).type;
+                if (type!="roof" && type!="slab" && type!="column" && type!="beam" &&
+                    type!="stair" && type!="railing")
+                    invalid("ordinary architectural roots cannot borrow a covered wall or reference lane");
+            }
             if (!ordinary_roots.insert(id).second) invalid("ordinary lanes repeat an explicit actual owner");
         }
         for (const auto& key:selection.components) {
@@ -543,9 +617,11 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
                 }
             }
         }
-        // Only independently authenticated historical closures can subsume an
-        // explicit ordinary owner. Unrelated ordinary duplicate erasures refuse.
-        std::erase_if(selection.object_ids,[&](const auto& id) {return historical_retired_owners.contains(id);});
+        // Only independently authenticated historical and complete wall
+        // closures subsume explicit roots after original owner/host admission.
+        std::erase_if(selection.object_ids,[&](const auto& id) {
+            return historical_retired_owners.contains(id) || ordinary_wall_retired_owners.contains(id);
+        });
         const auto aliases=embedded_assembly_presentation_ids(actual);
         for (const auto& key:selection.components) if (!aliases.contains(key)) invalid("selected component is absent from actual source");
         // A selection on a retained host follows that host's independently
@@ -659,6 +735,7 @@ Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& 
     proof_bound(intent.other_authoring);proof_bound(intent.room_review_intent);
     (void)historical(intent.other_authoring,intent.wall_demolition);
     sorted_ids(intent.opening_ids,1000);
+    auto wall_additional=wall_destinations_wire(intent);
     if (!intent.room_review_intent.is_null()) {
         const auto room=decode_physical_wall_phase_room_review_intent(intent.room_review_intent);
         if (!exact_json(encode_physical_wall_phase_room_review_intent(room),intent.room_review_intent)) invalid("room review is not canonical");
@@ -666,12 +743,22 @@ Json encode_phase_wall_demolition_authoring(const PhaseWallDemolitionAuthoring& 
     Json result{{"version",1},{"wall_demolition",encode_phase_wall_demolition_intent(intent.wall_demolition)},
         {"other_authoring",intent.other_authoring},{"ordinary",ordinary_wire(intent.ordinary)},
         {"opening_ids",intent.opening_ids},{"room_review_intent",intent.room_review_intent}};
+    if (!intent.ordinary_wall_ids.empty()) {
+        result["version"]=2;result["ordinary_wall_ids"]=intent.ordinary_wall_ids;
+        result["wall_additional_identities"]=std::move(wall_additional);
+    }
     proof_bound(result);return result;
 }
 PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(const Json& value) try {
-    proof_bound(value);keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent"});
-    if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
-        !value.at("opening_ids").is_array() || value.at("opening_ids").size()>1000) invalid("unsupported inner demolition version/selection");
+    proof_bound(value);
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version")!=1 && value.at("version")!=2)) invalid("unsupported inner demolition version");
+    const bool ordinary_walls=value.at("version")==2;
+    if (ordinary_walls) keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+        "ordinary_wall_ids","wall_additional_identities"});
+    else keys(value,{"version","wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent"});
+    if (!value.at("opening_ids").is_array() || value.at("opening_ids").size()>1000)
+        invalid("unsupported inner demolition version/selection");
     PhaseWallDemolitionAuthoring result;
     result.wall_demolition=decode_phase_wall_demolition_intent(value.at("wall_demolition"));
     result.other_authoring=value.at("other_authoring");result.ordinary=ordinary_from_wire(value.at("ordinary"));
@@ -680,6 +767,24 @@ PhaseWallDemolitionAuthoring decode_phase_wall_demolition_authoring(const Json& 
         result.opening_ids.push_back(row.get<std::string>());
     }
     result.room_review_intent=value.at("room_review_intent");
+    if (ordinary_walls) {
+        const auto& roots=value.at("ordinary_wall_ids");const auto& additional=value.at("wall_additional_identities");
+        if (!roots.is_array() || roots.empty() || roots.size()>128 || !additional.is_object() || additional.size()>4096)
+            invalid("unsupported ordinary wall selection/destinations");
+        for (const auto& row:roots) {
+            if (!row.is_string()) invalid("ordinary wall identity must be a string");
+            result.ordinary_wall_ids.push_back(row.get<std::string>());
+        }
+        std::size_t slots{};
+        for (const auto& [owner,rows]:additional.items()) {
+            if (!rows.is_array() || rows.empty() || rows.size()>4096-slots) invalid("invalid wall destination slots");
+            slots+=rows.size();
+            for (const auto& row:rows) {
+                if (!row.is_string()) invalid("wall destination must be a string");
+                result.wall_additional_identities[owner].push_back(row.get<std::string>());
+            }
+        }
+    }
     if (!exact_json(encode_phase_wall_demolition_authoring(result),value)) invalid("demolition authoring is not canonical");
     return result;
 } catch (const Json::exception& error) {invalid(std::string("malformed demolition authoring: ")+error.what());}
@@ -694,6 +799,9 @@ PhaseWallDemolitionAuthoringPreview inspect_phase_wall_demolition_authoring(
         intent.source_authoring_digest!=document_authoring_source_digest_v2(actual) ||
         intent.source_saved_revision!=actual.saved_revision_optional()) invalid("original actual capture changed");
     const auto edit=decode_phase_wall_demolition_authoring(intent.wall_demolition);
+    // Direct preview consumers reserve against the same complete actual
+    // lifetime before the ordinary lane can invoke native join inference.
+    validate_physical_wall_join_removal_identity_lifetime(actual,edit.wall_additional_identities);
     auto stage=physical_stage(actual.entities(),intent,edit);
     auto inventory=inspect_physical_wall_phase_room_review_entities(stage,room_binding(intent,edit,stage));
     const bool needed=requires_rooms(inventory);
@@ -712,6 +820,7 @@ Entities replay_phase_wall_demolition_authoring(const Entities& actual,const Pha
         stage=replay_physical_wall_phase_room_review(stage,edit.room_review_intent,true).entities;
     }
     protected_source(actual,stage,edit.wall_demolition);
+    if (!edit.ordinary_wall_ids.empty()) validate_stair_attachment_state(stage);
     if (const auto error=validate_active_phase_constraint_integrity(stage)) invalid(*error);
     return stage;
 }

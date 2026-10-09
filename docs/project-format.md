@@ -1,4 +1,36 @@
-# Vertex project formats v1 through v147
+# Vertex project formats v1 through v148
+
+## Mixed original and ordinary/proposed wall removal (v148)
+
+Native reader 148 and JSON/assets extraction 146 retain inner-two complete wall
+demolition, including wrapped, retained and undone history. The enclosing
+phase-authoring dialect remains sixteen. Inner one keeps its exact six fields
+and native 147 / extraction 145 meaning. Inner two adds exactly
+`ordinary_wall_ids` and `wall_additional_identities`; it requires nonempty,
+ascending unique ordinary walls, disjoint baseline roots, at most 128 combined
+wall roots and at most 4,096 unique declared split-join destinations.
+
+The baseline lane retains the original walls and hosted records while changing
+the actual saved alternative. The ordinary lane independently derives complete
+physical removal from the same original map, including semantic openings, hosted
+catalog rows, joins and known references. Shared baseline, required, inactive and
+foreign saved owners cannot enter the ordinary lane. Actual qualified selection
+admission precedes collapse of already covered opening or component consequences.
+Exact known reference retirements compose once; physical or join conflicts refuse.
+
+Snapshot inspection and current/retained Document source admission reserve
+ordinary split identities before native inference. Retained replay uses its
+explicit preceding history prefix; current preparation also reserves retained
+undone records, assets, metadata and component aliases. Final complete admission
+checks the combined wall, roof and room destinations and reserves the new proof
+vocabulary. The complete stage supplies the existing explicit phase-room review;
+no intermediate Snapshot or family preview becomes authority.
+
+Wall-only and broader Delete/Cut selections use this path when originals and
+ordinary/proposed walls are selected together. Site authority includes both
+wall inventories and changed component aliases. Independent drawing removal can
+complete the same operation, and Cut publishes its clipboard after application.
+Compilation and runtime remain unverified under the source-only instruction.
 
 ## Complete baseline wall demolition authoring (v147)
 

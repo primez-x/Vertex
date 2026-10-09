@@ -31831,10 +31831,8 @@ public:
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="opening";}))
                 throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
         const std::string message=cut ? "Cut selected walls and objects" : "Delete selected walls and objects";
-        if (const auto walls_demolition=prepare_phase_wall_demolition(source,intent.wall_ids,message)) {
-            const auto& walls_registry=walls_demolition->entity_changes.front().entity;
-            const auto walls_phases=ModelPhases::from_json(walls_registry.properties.at("model"));
-            const PhysicalWallPhaseSelection destination{walls_registry.id,walls_phases.active_alternative()};
+        if (const auto wall_selection=inspect_phase_wall_demolition_selection(source.entities(),intent.wall_ids)) {
+            const PhysicalWallPhaseSelection destination{wall_selection->baseline.registry_id,wall_selection->baseline.alternative_id};
             if (!destination.alternative_id)
                 throw std::invalid_argument("The active wall demolition design changed. Select the objects again.");
             const auto scope=constraint_phase_scope(source.entities());
@@ -31851,7 +31849,8 @@ public:
                 return false;
             };
             PhaseWallDemolitionAuthoring demolition;
-            demolition.wall_demolition={destination.registry_id,*destination.alternative_id,intent.wall_ids};
+            demolition.wall_demolition=wall_selection->baseline;
+            demolition.ordinary_wall_ids=wall_selection->ordinary_wall_ids;
             std::vector<std::string> baseline_ids,ordinary_ids;
             for (const auto& id:other_ids) (baseline(id) ? baseline_ids : ordinary_ids).push_back(id);
             const std::set<std::string,std::less<>> selected_walls(intent.wall_ids.begin(),intent.wall_ids.end());
@@ -31869,6 +31868,7 @@ public:
             // their names before independently allocated ordinary roof splits.
             auto occupied=retainedSlabIdentityNames(source,true);
             for (const auto* token:{"wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+                "ordinary_wall_ids","wall_additional_identities",
                 "independent_drawing_removal_completion","independent_drawing_removal_intent","owner_ids",
                 "annotations","owner_id","child_id","proof"}) occupied.insert(token);
             std::vector<const json*> pending{&demolition.other_authoring};
@@ -31882,6 +31882,27 @@ public:
             for (auto& [original,ids]:demolition.ordinary.roof_additional_identities) {
                 (void)original;
                 for (auto& id:ids) while (!occupied.insert(id).second) id=new_id("roof");
+            }
+            if (!demolition.ordinary_wall_ids.empty()) {
+                require_current();
+                preflight_physical_walls_deletion_join_inference(source.entities(),demolition.ordinary_wall_ids,true);
+                const auto joins=inspect_physical_wall_join_removal(source.entities(),demolition.ordinary_wall_ids);
+                if (!joins.ready()) {
+                    std::string reasons;
+                    for (const auto& diagnostic:joins.diagnostics) if (diagnostic.blocking) {
+                        if (!reasons.empty()) reasons+='\n';
+                        reasons+=diagnostic.entity_id+": "+diagnostic.reason;
+                    }
+                    throw std::invalid_argument(reasons.empty() ? "The selected walls have an unresolved removal dependency." : reasons);
+                }
+                for (const auto& [original,count]:joins.additional_identity_counts)
+                    for (std::size_t index=0;index<count;++index) {
+                        auto id=new_id("wall_join");
+                        while (!occupied.insert(id).second) id=new_id("wall_join");
+                        demolition.wall_additional_identities[original].push_back(std::move(id));
+                    }
+                validate_physical_wall_join_removal_identity_lifetime(source,demolition.wall_additional_identities);
+                require_current();
             }
             ConstraintAuthoringIntent semantic;semantic.message=message;
             auto phase=make_phase_constraint_authoring_intent(source,semantic);
@@ -32047,6 +32068,12 @@ public:
                 throw std::invalid_argument("Select unambiguous physical walls to remove together.");
             wall_ids.push_back(found->first);
         }
+        // A wall-only selection can still mix retained originals with active
+        // proposed or ordinary walls. Use the complete typed room stage rather
+        // than passing that cohort to the historical baseline-only producer.
+        if (const auto demolition=inspect_phase_wall_demolition_selection(source.entities(),wall_ids);
+            demolition && !demolition->ordinary_wall_ids.empty())
+            return removeSelectedMixedPhysicalWalls(source,cut);
         const bool site = siteCanvas(m_architecturalCanvas);
         const auto site_generation = m_site_publication_generation;
         const auto require_current = [&] {
@@ -52457,6 +52484,7 @@ private:
                     if (!intent.wall_demolition.is_null()) {
                         const auto demolition=decode_phase_wall_demolition_authoring(intent.wall_demolition);
                         targets.insert(demolition.wall_demolition.wall_ids.begin(),demolition.wall_demolition.wall_ids.end());
+                        targets.insert(demolition.ordinary_wall_ids.begin(),demolition.ordinary_wall_ids.end());
                         targets.insert(demolition.opening_ids.begin(),demolition.opening_ids.end());
                         targets.insert(demolition.ordinary.object_ids.begin(),demolition.ordinary.object_ids.end());
                         const auto aliases=embedded_assembly_presentation_ids(source.entities());
