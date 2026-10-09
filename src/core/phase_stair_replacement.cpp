@@ -6,11 +6,13 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/phase_stair_demolition_retirement.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/stair_clone.hpp"
 #include "sketch/site_frame.hpp"
+#include "sketch/vertical_levels.hpp"
 
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -52,6 +54,12 @@ void local_identity(const std::string& id, std::size_t limit = 128) {
     if (id.empty() || id.size() > limit || std::all_of(id.begin(), id.end(), [](unsigned char c) {
         return std::isspace(c);
     })) reject("qualified source local identity must be bounded and nonblank");
+}
+void dependency_target_key(const std::string& key) {
+    if (key == "top") return;
+    const auto prefix = key.starts_with("flight:") ? 7u : (key.starts_with("landing:") ? 8u : 0u);
+    if (!prefix) reject("unsupported dependency target key");
+    identity(key.substr(prefix));
 }
 const Json* field(const Json& value, const char* key) {
     if (!value.is_object()) return nullptr;
@@ -414,6 +422,226 @@ struct Derivation {
     Ids catalogs;
     EmbeddedAssemblyPresentationIds original_aliases;
 };
+std::vector<StairObjectEditIntent> editor_profiles(const Entities& actual, const std::vector<Entity>& edited) {
+    (void)source_budget(actual);
+    if (edited.size() > maximum_architectural_group_targets) reject("dependency editor target budget exceeded");
+    Strings budget; Ids owners; std::vector<StairObjectEditIntent> result;
+    for (const auto& entity : edited) {
+        budget.text(entity.id); budget.text(entity.type); budget.read(entity.properties); budget.read(entity.extensions);
+        if (!owners.insert(entity.id).second) reject("duplicate dependency editor owner");
+        const auto original = actual.find(entity.id);
+        if (original == actual.end() || !physical_owner(original->second)) reject("dependency editor requires actual owner");
+        if (const auto edit = capture_stair_object_edit(original->second, entity)) result.push_back(*edit);
+    }
+    return result;
+}
+Entity analytical_profile(Entity entity, const StairObjectEditIntent& edit) {
+    // Inspection descriptors only. Closed typed profile admission precedes this
+    // projection; no projected map is ever passed to a physical producer.
+    (void)encode_stair_object_edit_intent(edit);
+    for (const auto& [key, value] : edit.profile_fields.items()) {
+        if (value.is_null() && key != "top_landing") entity.properties.erase(key);
+        else entity.properties[key] = value;
+        if ((key == "flights" || key == "landings") && value.is_array())
+            for (auto& row : entity.properties.at(key)) {
+                std::vector<std::string> absent;
+                for (const auto& [name, item] : row.items()) if (item.is_null()) absent.push_back(name);
+                for (const auto& name : absent) row.erase(name);
+            }
+    }
+    return entity;
+}
+PhaseStairReplacementDependencyPlan dependency_plan(const Entities& actual,
+    const std::vector<StairObjectEditIntent>& edits) {
+    PhaseStairReplacementDependencyPlan result;
+    try {
+        (void)source_budget(actual);
+        if (edits.size() > identity_limit) reject("dependency typed target budget exceeded");
+        validate_stair_attachment_state(actual);
+        const auto scope = memberships(actual);
+        std::map<std::string, StairFlight, std::less<>> resulting;
+        auto topology_descriptors = actual;
+        Ids targets; std::size_t bytes{}, work{};
+        for (const auto& edit : edits) {
+            const auto size = encode_stair_object_edit_intent(edit).dump().size();
+            if (size > proof_limit - bytes) reject("dependency typed byte budget exceeded");
+            bytes += size;
+            if (!targets.insert(edit.object_id).second) reject("duplicate dependency typed owner");
+            const auto found = actual.find(edit.object_id);
+            if (found == actual.end() || !physical_owner(found->second)) reject("dependency requires actual physical owner");
+            if (found->second.type != "stair") continue;
+            const auto member = scope.owners.find(edit.object_id);
+            if (member == scope.owners.end()) continue;
+            const auto& model = scope.models.at(member->second);
+            if (!model.active_alternative() || !baseline(model, edit.object_id) ||
+                model.active_state().at(edit.object_id) != ModelPhase::existing) continue;
+            const auto descriptor = analytical_profile(found->second, edit);
+            if (canonical_profile(descriptor) == canonical_profile(found->second)) continue;
+            if (!result.registry_id.empty() && result.registry_id != member->second) reject("dependency hosts span registries");
+            result.registry_id = member->second; result.alternative_id = *model.active_alternative();
+            auto stair = decode_stair_properties(edit.object_id, resolve_vertical_placement(actual, descriptor).properties);
+            // Aggregate all resulting topology before enumerating attachments.
+            if (stair.flights.empty()) {
+                if (stair.riser_count > geometry_limit - work) reject("dependency resulting geometry budget exceeded");
+                work += stair.riser_count;
+            }
+            for (const auto& flight : stair.flights) {
+                if (flight.riser_count > geometry_limit - work) reject("dependency resulting geometry budget exceeded");
+                work += flight.riser_count;
+            }
+            resulting.emplace(edit.object_id, std::move(stair));
+            topology_descriptors.at(edit.object_id) = descriptor;
+        }
+        // Full private topology descriptors check source child ownership/role
+        // and retained namespace before any target can be offered. This map is
+        // never physical producer authority; Document retains history fences.
+        validate_stair_identity_transition(actual, topology_descriptors, std::span<const RevisionRecord>{});
+        const auto saved_states = result.registry_id.empty() ?
+            std::map<std::string, ModelPhase, std::less<>>{} :
+            scope.models.at(result.registry_id).active_state();
+        for (const auto& [id, entity] : actual) {
+            const auto host = host_id(entity);
+            if (!host || !resulting.contains(*host)) continue;
+            const auto member = scope.owners.find(id);
+            if (member == scope.owners.end() || member->second != result.registry_id) reject("dependency lacks host registry");
+            const auto state = saved_states.find(id);
+            if (state == saved_states.end() || state->second != ModelPhase::proposed) continue;
+            const auto rail = decode_railing_properties(id, entity.properties);
+            const auto& stair = resulting.at(*host);
+            std::optional<HostedRailingLayout> retained;
+            try { retained = derive_hosted_railing_layout(rail, stair); }
+            catch (const std::invalid_argument&) {} // Exact old binding needs a reviewed disposition.
+            if (retained) {
+                if (retained->posts.size() + 1 > geometry_limit - work) reject("dependency retained geometry budget exceeded");
+                work += retained->posts.size() + 1; continue;
+            }
+            if (result.dependencies.size() >= 128 || actual.size() > 2000000 / (result.dependencies.size() + 1))
+                reject("dependency complete-source inspection work budget exceeded");
+            PhaseStairReplacementDependency row;
+            row.rail_id = id; row.stair_id = *host; row.current_host = entity.properties.at("host");
+            if (const auto name = field(entity.properties, "name"); name && name->is_string()) row.rail_name = name->get<std::string>();
+            row.host_role = rail.host ? "flight" : (rail.landing_host->role == StairLandingRole::top ? "top" : "landing");
+            row.current_child_id = rail.host ? rail.host->flight_id : rail.landing_host->landing_id;
+            const auto& phases = scope.models.at(member->second);
+            bool exclusive = !baseline(phases, id); std::size_t proposals{};
+            for (const auto& alternative : phases.alternatives()) {
+                if (std::binary_search(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id)) exclusive = false;
+                if (std::binary_search(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), id)) {
+                    ++proposals;
+                    if (alternative.id != result.alternative_id) exclusive = false;
+                }
+            }
+            exclusive = exclusive && proposals == 1;
+            const auto admit = [&](Railing changed, PhaseStairReplacementDependencyTarget target) {
+                try {
+                    const auto layout = derive_hosted_railing_layout(changed, stair);
+                    if (layout.posts.size() + 1 > geometry_limit - work) reject("dependency target geometry budget exceeded");
+                    work += layout.posts.size() + 1;
+                    target.host = encode_railing_properties(changed).at("host");
+                    if (target.role == "top") target.display_name = "Stair top";
+                    else {
+                        const auto* rows = field(actual.at(*host).properties, target.role == "flight" ? "flights" : "landings");
+                        if (rows && rows->is_array()) for (const auto& child : *rows)
+                            if (child.at("id") == target.child_id) {
+                                const auto name = field(child, "name");
+                                if (name && name->is_string()) target.display_name = name->get<std::string>();
+                            }
+                        if (target.display_name.empty()) {
+                            std::size_t ordinal{};
+                            if (target.role == "flight") for (const auto& child : stair.flights) { ++ordinal; if (child.id == target.child_id) break; }
+                            else for (const auto& child : stair.landings) { ++ordinal; if (child.id == target.child_id) break; }
+                            target.display_name = (target.role == "flight" ? "Flight " : "Landing ") + std::to_string(ordinal);
+                        }
+                    }
+                    row.valid_targets.push_back(std::move(target));
+                } catch (const std::invalid_argument& error) {
+                    // Invalid target is absent; aggregate refusal cannot become
+                    // eligibility merely because a later target is smaller.
+                    if (work >= geometry_limit || std::string(error.what()).find("dependency target geometry budget") != std::string::npos) throw;
+                }
+            };
+            if (exclusive && rail.host) for (const auto& child : stair.flights) {
+                auto changed = rail; changed.host->flight_id = child.id;
+                admit(changed, {"flight:" + child.id, "flight", child.id, {}, {}, Json::object()});
+            } else if (exclusive && rail.landing_host && rail.landing_host->role == StairLandingRole::connecting) {
+                for (std::size_t i = 0; i < stair.landings.size(); ++i) {
+                    auto changed = rail; auto& binding = *changed.landing_host;
+                    binding.landing_id = stair.landings[i].id;
+                    binding.incoming_flight_id = stair.flights.at(i).id;
+                    binding.outgoing_flight_id = stair.flights.at(i + 1).id;
+                    admit(changed, {"landing:" + binding.landing_id, "landing", binding.landing_id,
+                        binding.incoming_flight_id, binding.outgoing_flight_id, Json::object()});
+                }
+            } else if (exclusive && rail.landing_host && !stair.flights.empty() && stair.top_landing) {
+                auto changed = rail; changed.landing_host->incoming_flight_id = stair.flights.back().id;
+                admit(changed, {"top", "top", {}, changed.landing_host->incoming_flight_id, {}, Json::object()});
+            }
+            std::sort(row.valid_targets.begin(), row.valid_targets.end(), [](const auto& a, const auto& b) { return a.target_key < b.target_key; });
+            try {
+                const auto retirement = inspect_phase_stair_proposed_rail_retirement_plan(actual, result.registry_id, result.alternative_id, {id});
+                row.retirement_eligible = retirement.ready();
+                if (!retirement.ready()) row.retirement_reason = retirement.diagnostics.front().reason;
+            } catch (const std::exception& error) { row.retirement_reason = error.what(); }
+            result.dependencies.push_back(std::move(row));
+        }
+    } catch (const std::exception& error) { result.diagnostics.push_back({{}, error.what(), true}); }
+    return result;
+}
+struct DependencyPreparation { Entities source; PhaseStairReplacementAuthoring effective; };
+DependencyPreparation prepare_dependencies(const Entities& actual, const PhaseStairReplacementAuthoring& authoring) {
+    if (!authoring.transforms.empty() || (authoring.edits.empty() == authoring.compound_edits.empty()))
+        reject("dependency dispositions require exactly one profile or compound lane");
+    const auto profiles = authoring.compound_edits.empty() ? authoring.edits : compound_profiles(authoring.compound_edits);
+    const auto plan = dependency_plan(actual, profiles);
+    if (!plan.ready()) reject(plan.diagnostics.front().reason);
+    if ((!authoring.registry_id.empty() && plan.registry_id != authoring.registry_id) ||
+        (!authoring.alternative_id.empty() && plan.alternative_id != authoring.alternative_id))
+        reject("dependency destination differs from actual edited host membership");
+    std::vector<std::string> witness;
+    for (const auto& row : plan.dependencies) witness.push_back(row.rail_id);
+    if (witness.empty() || witness != authoring.dependency_rail_ids || authoring.dependency_dispositions.size() != witness.size())
+        reject("dependency witness/decisions differ from actual affected rails");
+    DependencyPreparation result{actual, authoring};
+    result.effective.registry_id = plan.registry_id; result.effective.alternative_id = plan.alternative_id;
+    std::vector<std::string> retired;
+    for (std::size_t i = 0; i < witness.size(); ++i) {
+        const auto& row = plan.dependencies[i]; const auto& decision = authoring.dependency_dispositions[i];
+        if (decision.rail_id != row.rail_id) reject("dependency decisions must exactly follow ascending witness");
+        if (decision.action == PhaseStairReplacementDependencyAction::retire) {
+            if (!row.retirement_eligible || !decision.target_key.empty()) reject("dependency is not eligible for explicit retirement: " + row.rail_id);
+            if (std::any_of(profiles.begin(), profiles.end(), [&](const auto& edit) { return edit.object_id == row.rail_id; }))
+                reject("retired dependency cannot also have a typed edit");
+            retired.push_back(row.rail_id); continue;
+        }
+        if (decision.action != PhaseStairReplacementDependencyAction::rehost) reject("unsupported dependency action");
+        const auto target = std::find_if(row.valid_targets.begin(), row.valid_targets.end(), [&](const auto& item) { return item.target_key == decision.target_key; });
+        if (target == row.valid_targets.end()) reject("dependency target is not an actual resulting eligible child");
+        auto changed = actual.at(row.rail_id);
+        for (const auto& [name, value] : target->host.items()) changed.properties.at("host")[name] = value;
+        const auto captured = capture_stair_object_edit(actual.at(row.rail_id), changed);
+        if (!captured) reject("dependency rehost did not change actual binding");
+        const auto add = [&](auto& lane) {
+            auto existing = std::find_if(lane.begin(), lane.end(), [&](const auto& edit) { return intent_owner(edit) == row.rail_id; });
+            if (existing != lane.end()) {
+                const auto& profile = [&]() -> const StairObjectEditIntent& {
+                    if constexpr (std::is_same_v<typename std::decay_t<decltype(lane)>::value_type, StairCompoundEditIntent>) return existing->profile_edit;
+                    else return *existing;
+                }();
+                if (profile.profile_fields.at("host") != target->host) reject("typed rail edit conflicts with explicit dependency rehost");
+            } else if constexpr (std::is_same_v<typename std::decay_t<decltype(lane)>::value_type, StairCompoundEditIntent>) {
+                const auto host_edit = std::find_if(lane.begin(), lane.end(), [&](const auto& edit) { return intent_owner(edit) == row.stair_id; });
+                if (host_edit == lane.end()) reject("dependency lacks edited host operator");
+                auto placement = host_edit->placement_edit; placement.object_id = row.rail_id; placement.quantity_entries = nullptr;
+                lane.push_back({*captured, std::move(placement)});
+            } else lane.push_back(*captured);
+        };
+        if (!result.effective.compound_edits.empty()) add(result.effective.compound_edits);
+        else add(result.effective.edits);
+    }
+    if (!retired.empty()) result.source = replay_phase_stair_proposed_rail_retirement_entities(actual, plan.registry_id, plan.alternative_id, retired);
+    result.effective.dependency_rail_ids.clear(); result.effective.dependency_dispositions.clear();
+    return result;
+}
 void topology_dependencies(const Entities& actual, const std::vector<StairObjectEditIntent>& edits) {
     std::map<std::string, const StairObjectEditIntent*, std::less<>> targets;
     std::size_t bytes{};
@@ -1163,6 +1391,21 @@ void admit_physical(const Entities& candidate, const Ids& owners) {
 bool PhaseStairReplacementPlan::ready() const noexcept {
     return std::none_of(diagnostics.begin(), diagnostics.end(), [](const auto& row) { return row.blocking; });
 }
+PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
+    const Entities& actual, const std::vector<StairObjectEditIntent>& edits) {
+    return dependency_plan(actual, edits);
+}
+PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
+    const Entities& actual, const std::vector<StairCompoundEditIntent>& edits) {
+    return dependency_plan(actual, compound_profiles(edits));
+}
+PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
+    const Entities& actual, const std::vector<Entity>& edited) {
+    try { return dependency_plan(actual, editor_profiles(actual, edited)); }
+    catch (const std::exception& error) {
+        PhaseStairReplacementDependencyPlan result; result.diagnostics.push_back({{}, error.what(), true}); return result;
+    }
+}
 std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
     const Entities& actual, const std::vector<Entity>& edited_entities) {
     (void)source_budget(actual);
@@ -1183,6 +1426,47 @@ std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_ed
     if (!stage_retained_topology(actual, profiles, memberships(actual), physical, intermediate, &result))
         return capture_stair_compound_edits(actual, edited_entities);
     return result;
+}
+std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
+    const Entities& actual, const std::vector<Entity>& edited,
+    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions) {
+    if (dispositions.empty()) return capture_phase_stair_replacement_compound_edits(actual, edited);
+    PhaseStairReplacementAuthoring preparation;
+    preparation.edits = editor_profiles(actual, edited);
+    const auto plan = dependency_plan(actual, preparation.edits);
+    if (!plan.ready()) reject(plan.diagnostics.front().reason);
+    preparation.registry_id = plan.registry_id; preparation.alternative_id = plan.alternative_id;
+    for (const auto& row : plan.dependencies) preparation.dependency_rail_ids.push_back(row.rail_id);
+    preparation.dependency_dispositions = dispositions;
+    const auto prepared = prepare_dependencies(actual, preparation);
+    auto complete_edited = edited;
+    for (const auto& decision : dispositions) {
+        if (decision.action == PhaseStairReplacementDependencyAction::retire) continue;
+        const auto profile = std::find_if(prepared.effective.edits.begin(), prepared.effective.edits.end(),
+            [&](const auto& edit) { return edit.object_id == decision.rail_id; });
+        const auto supplied = std::find_if(complete_edited.begin(), complete_edited.end(),
+            [&](const auto& entity) { return entity.id == decision.rail_id; });
+        if (supplied == complete_edited.end()) {
+            auto entity = actual.at(decision.rail_id);
+            for (const auto& [name, value] : profile->profile_fields.at("host").items()) entity.properties.at("host")[name] = value;
+            complete_edited.push_back(std::move(entity));
+        }
+    }
+    return capture_phase_stair_replacement_compound_edits(prepared.source, complete_edited);
+}
+PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(const Entities& actual,
+    const PhaseStairReplacementAuthoring& authoring) {
+    try {
+        if (!authoring.dependency_dispositions.empty() || !authoring.dependency_rail_ids.empty()) {
+            const auto prepared = prepare_dependencies(actual, authoring);
+            return inspect_phase_stair_replacement_plan(prepared.source, prepared.effective);
+        }
+        if (!authoring.compound_edits.empty()) return derive(actual, authoring.compound_edits, authoring.registry_id, authoring.alternative_id).plan;
+        if (!authoring.transforms.empty()) return derive(actual, authoring.transforms, authoring.registry_id, authoring.alternative_id).plan;
+        return derive(actual, authoring.edits, authoring.registry_id, authoring.alternative_id).plan;
+    } catch (const std::exception& error) {
+        PhaseStairReplacementPlan result; diagnostic(result, {}, error.what()); return result;
+    }
 }
 std::optional<PhaseStairReplacementRequest> phase_stair_replacement_request(const Entities& actual,
     const std::vector<StairObjectEditIntent>& edits) {
@@ -1247,6 +1531,29 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
     const bool transformed = !authoring.transforms.empty();
     const bool compound = !authoring.compound_edits.empty();
     const bool retained = !authoring.preserved_inactive_rail_ids.empty();
+    const bool dependencies = !authoring.dependency_dispositions.empty() || !authoring.dependency_rail_ids.empty();
+    Json decisions = Json::array();
+    if (dependencies) {
+        if (transformed || authoring.dependency_rail_ids.empty() || authoring.dependency_rail_ids.size() > 128 ||
+            authoring.dependency_dispositions.size() != authoring.dependency_rail_ids.size())
+            reject("v5 requires bounded exact dependencies in a profile or compound lane");
+        std::string previous_dependency;
+        for (std::size_t i = 0; i < authoring.dependency_rail_ids.size(); ++i) {
+            const auto& id = authoring.dependency_rail_ids[i]; identity(id);
+            if (!previous_dependency.empty() && id <= previous_dependency) reject("dependency witness must be ascending and unique");
+            previous_dependency = id;
+            const auto& decision = authoring.dependency_dispositions[i];
+            if (decision.rail_id != id) reject("dependency decisions must follow exact witness order");
+            Json row{{"rail_id", id}};
+            if (decision.action == PhaseStairReplacementDependencyAction::retire) {
+                if (!decision.target_key.empty()) reject("retirement cannot carry a rehost target");
+                row["action"] = "retire";
+            } else if (decision.action == PhaseStairReplacementDependencyAction::rehost) {
+                dependency_target_key(decision.target_key); row["action"] = "rehost"; row["target_key"] = decision.target_key;
+            } else reject("unsupported dependency disposition action");
+            decisions.push_back(std::move(row));
+        }
+    }
     if (authoring.preserved_inactive_rail_ids.size() > identity_limit) reject("inactive rail witness budget exceeded");
     std::string previous;
     for (const auto& id : authoring.preserved_inactive_rail_ids) {
@@ -1311,23 +1618,29 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
         overlays.push_back({{"view_entity_id", std::get<0>(key)}, {"saved_view_id", std::get<1>(key)},
             {"overlay_id", std::get<2>(key)}, {"proposed_overlay_id", proposed}});
     }
-    Json result{{"version", retained ? 4 : (compound ? 3 : (transformed ? 2 : 1))}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+    Json result{{"version", dependencies ? 5 : (retained ? 4 : (compound ? 3 : (transformed ? 2 : 1)))}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
         {compound ? "compound_edits" : (transformed ? "transforms" : "edits"), std::move(edits)}, {"identities", std::move(identities)}, {"child_identities", std::move(children)},
         {"hosted_instance_identities", std::move(hosted)}, {"overlay_identities", std::move(overlays)}};
-    if (retained) result["preserved_inactive_rail_ids"] = authoring.preserved_inactive_rail_ids;
+    if (retained || dependencies) result["preserved_inactive_rail_ids"] = authoring.preserved_inactive_rail_ids;
+    if (dependencies) {
+        result["dependency_rail_ids"] = authoring.dependency_rail_ids;
+        result["dependency_dispositions"] = std::move(decisions);
+    }
     proof_budget(result); return result;
 }
 PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Json& value) {
     try {
         proof_budget(value);
         if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4)) reject("unsupported authoring version");
-        const bool retained = value.at("version") == 4;
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5)) reject("unsupported authoring version");
+        const bool dependencies = value.at("version") == 5;
+        const bool retained = value.at("version") == 4 || dependencies;
         const bool transformed = value.at("version") == 2 || (retained && value.contains("transforms"));
         const bool compound = value.at("version") == 3 || (retained && value.contains("compound_edits"));
         const auto* operations = compound ? "compound_edits" : (transformed ? "transforms" : "edits");
         Ids expected{"version", "registry_id", "alternative_id", operations, "identities", "child_identities", "hosted_instance_identities", "overlay_identities"};
         if (retained) expected.insert("preserved_inactive_rail_ids");
+        if (dependencies) { expected.insert("dependency_rail_ids"); expected.insert("dependency_dispositions"); }
         keys(value, expected);
         if (!value.at(operations).is_array() ||
             !value.at("identities").is_object() || !value.at("child_identities").is_array() ||
@@ -1336,8 +1649,27 @@ PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Js
         result.registry_id = identity(value.at("registry_id")); result.alternative_id = identity(value.at("alternative_id"));
         if (retained) {
             const auto& witness = value.at("preserved_inactive_rail_ids");
-            if (!witness.is_array() || witness.empty() || witness.size() > identity_limit) reject("v4 requires a bounded nonempty inactive rail witness");
+            if (!witness.is_array() || (!dependencies && witness.empty()) || witness.size() > identity_limit) reject("requires a bounded inactive rail witness (nonempty in v4)");
             for (const auto& id : witness) result.preserved_inactive_rail_ids.push_back(identity(id));
+        }
+        if (dependencies) {
+            const auto& witness = value.at("dependency_rail_ids"); const auto& decisions = value.at("dependency_dispositions");
+            if (!witness.is_array() || witness.empty() || witness.size() > 128 || !decisions.is_array() || decisions.size() != witness.size())
+                reject("v5 requires bounded exact dependency arrays");
+            for (const auto& id : witness) result.dependency_rail_ids.push_back(identity(id));
+            for (const auto& row : decisions) {
+                const auto action = field(row, "action");
+                if (!action || !action->is_string()) reject("dependency action must be a supported string");
+                if (*action == "retire") {
+                    keys(row, {"rail_id", "action"});
+                    result.dependency_dispositions.push_back({identity(row.at("rail_id")), PhaseStairReplacementDependencyAction::retire, {}});
+                } else if (*action == "rehost") {
+                    keys(row, {"rail_id", "action", "target_key"});
+                    if (!row.at("target_key").is_string()) reject("dependency target key must be a string");
+                    const auto target = row.at("target_key").get<std::string>(); dependency_target_key(target);
+                    result.dependency_dispositions.push_back({identity(row.at("rail_id")), PhaseStairReplacementDependencyAction::rehost, target});
+                } else reject("unsupported dependency action");
+            }
         }
         if (compound) for (const auto& edit : value.at(operations)) result.compound_edits.push_back(decode_stair_compound_edit_intent(edit));
         else if (transformed) for (const auto& transform : value.at(operations)) result.transforms.push_back(decode_stair_transform_intent(transform));
@@ -1371,6 +1703,35 @@ PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Js
 Entities replay_phase_stair_replacement_authoring(const Entities& actual, const PhaseStairReplacementAuthoring& authoring) {
     try {
         const auto proof = encode_phase_stair_replacement_authoring(authoring);
+        if (!authoring.dependency_dispositions.empty()) {
+            // Reserve against the ORIGINAL complete source, including retired
+            // rows/aliases. Retirement is actual-source authority, never a way
+            // to make historical names available to replacement destinations.
+            auto original_names = source_budget(actual);
+            const auto aliases = embedded_assembly_presentation_ids(actual);
+            for (const auto& [key, alias] : aliases) { (void)key; original_names.text(alias); }
+            const auto reserve = [&](const auto& mapping) {
+                for (const auto& [key, destination] : mapping) {
+                    (void)key;
+                    if (original_names.values.contains(destination)) reject("v5 fresh destination collides with original retirement source: " + destination);
+                }
+            };
+            reserve(authoring.identities); reserve(authoring.child_identities);
+            reserve(authoring.hosted_instance_identities); reserve(authoring.overlay_identities);
+            const auto prepared = prepare_dependencies(actual, authoring);
+            auto candidate = replay_phase_stair_replacement_authoring(prepared.source, prepared.effective);
+            (void)source_budget(candidate);
+            validate_stair_identity_transition(actual, candidate, std::span<const RevisionRecord>{});
+            const auto final_aliases = embedded_assembly_presentation_ids(candidate);
+            const auto retained_aliases = embedded_assembly_presentation_ids(prepared.source);
+            for (const auto& [key, alias] : retained_aliases)
+                if (!final_aliases.contains(key) || final_aliases.at(key) != alias)
+                    reject("dependency replacement changed a surviving original component alias");
+            for (const auto& [key, alias] : final_aliases)
+                if (!retained_aliases.contains(key) && original_names.values.contains(alias))
+                    reject("dependency replacement introduced an alias colliding with original retirement source");
+            return candidate;
+        }
         const bool compound = !authoring.compound_edits.empty();
         const bool transformed = !authoring.transforms.empty() || compound;
         const bool retained = !authoring.preserved_inactive_rail_ids.empty();

@@ -169,6 +169,7 @@ struct Derivation {
     InstanceKeys instances;
     Ids rails;
 };
+enum class RetirementMode { demolition_closure, selected_proposals };
 
 std::optional<StairDemolitionRetirementIntent> discover(const Entities& source,
     const std::vector<std::string>& selection) {
@@ -245,6 +246,76 @@ std::optional<StairDemolitionRetirementIntent> discover(const Entities& source,
         {baseline_selected.begin(), baseline_selected.end()}, {retired.begin(), retired.end()}};
     (void)encode_stair_demolition_retirement_intent(intent);
     return intent;
+}
+
+StairDemolitionRetirementIntent discover_selected_proposals(const Entities& source,
+    const std::string& registry_id, const std::string& alternative_id,
+    const std::vector<std::string>& rail_ids) {
+    identity(registry_id); identity(alternative_id);
+    if (rail_ids.empty() || rail_ids.size() > retirement_limit ||
+        !std::is_sorted(rail_ids.begin(), rail_ids.end()) ||
+        std::adjacent_find(rail_ids.begin(), rail_ids.end()) != rail_ids.end())
+        invalid("selected proposed rails must be nonempty, bounded, sorted and unique");
+    for (const auto& id : rail_ids) identity(id);
+    source_bounds(source);
+    const auto found_registry = source.find(registry_id);
+    if (found_registry == source.end() || found_registry->second.type != "model_phases")
+        invalid("selective retirement requires its actual phase registry");
+    const auto model = ModelPhases::from_json(found_registry->second.properties.at("model"));
+    if (!model.active_alternative() || *model.active_alternative() != alternative_id)
+        invalid("selective retirement must name the actual saved active alternative");
+    // Registry pointers below borrow this complete saved scope, whose lifetime
+    // spans every selection/host check. No shortened map or supplied visibility
+    // list establishes phase or attachment authority.
+    const auto scope = constraint_phase_scope(source);
+    std::map<std::string, const PhysicalWallPhaseState*, std::less<>> owners;
+    const PhysicalWallPhaseState* destination = nullptr;
+    for (const auto& registry : scope.registries) {
+        if (registry.registry_id == registry_id) destination = &registry;
+        for (const auto& id : registry.registered_entity_ids)
+            if (!owners.emplace(id, &registry).second) invalid("overlapping actual phase ownership: " + id);
+    }
+    if (!destination || !destination->alternative_id || *destination->alternative_id != alternative_id)
+        invalid("selective retirement has no exact actual saved registry/alternative scope");
+    validate_stair_attachment_state(source);
+    Ids hosts;
+    for (const auto& id : rail_ids) {
+        const auto found = source.find(id);
+        if (found == source.end() || found->second.type != "railing" || !supported(found->second))
+            invalid("selected proposal is not an actual supported rail: " + id);
+        const auto member = owners.find(id);
+        const auto state = destination->states.find(id);
+        if (member == owners.end() || member->second != destination ||
+            scope.inactive_owner_ids.contains(id) || state == destination->states.end() ||
+            state->second != ModelPhase::proposed || baseline(model, id))
+            invalid("selected rail is not active-only proposed in the exact saved registry: " + id);
+        std::size_t proposals{};
+        for (const auto& alternative : model.alternatives()) {
+            if (std::binary_search(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id))
+                invalid("selected proposed rail participates in demolition membership: " + id);
+            if (!std::binary_search(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), id)) continue;
+            ++proposals;
+            if (alternative.id != alternative_id)
+                invalid("selected proposed rail is shared with another alternative: " + id);
+        }
+        if (proposals != 1) invalid("selected rail must be solely proposed in the actual active alternative: " + id);
+        const auto host = host_id(found->second);
+        if (!host) invalid("selected proposed rail has no actual stair attachment: " + id);
+        const auto stair = source.find(*host);
+        const auto host_member = owners.find(*host);
+        const auto host_state = destination->states.find(*host);
+        if (stair == source.end() || stair->second.type != "stair" || !supported(stair->second) ||
+            host_member == owners.end() || host_member->second != destination || !baseline(model, *host) ||
+            scope.inactive_owner_ids.contains(*host) || host_state == destination->states.end() ||
+            host_state->second != ModelPhase::existing)
+            invalid("selected proposed rail requires an actual active baseline stair in the same saved registry: " + id);
+        hosts.insert(*host);
+        if (hosts.size() > target_limit) invalid("derived baseline host evidence budget exceeded");
+    }
+    StairDemolitionRetirementIntent result{registry_id, alternative_id,
+        {hosts.begin(), hosts.end()}, rail_ids};
+    (void)encode_stair_demolition_retirement_intent(result);
+    return result;
 }
 
 void retire_registry(Derivation& derived, const Entities& source) {
@@ -390,10 +461,14 @@ void retire_presentations(Derivation& derived, const Entities& source, const Ids
     }
 }
 
-Derivation derive(const Entities& source, const StairDemolitionRetirementIntent& intent) {
+Derivation derive(const Entities& source, const StairDemolitionRetirementIntent& intent, RetirementMode mode) {
     (void)encode_stair_demolition_retirement_intent(intent);
-    const auto discovered = discover(source, intent.selected_object_ids);
-    if (!discovered || *discovered != intent) invalid("proof differs from actual active baseline/proposed attachment inventory");
+    if (mode == RetirementMode::demolition_closure) {
+        const auto discovered = discover(source, intent.selected_object_ids);
+        if (!discovered || *discovered != intent) invalid("proof differs from actual active baseline/proposed attachment inventory");
+    } else if (discover_selected_proposals(source, intent.registry_id, intent.alternative_id,
+        intent.retired_proposed_rail_ids) != intent)
+        invalid("selective host evidence differs from actual selected proposed attachments");
     Derivation result;
     result.plan.intent = intent; result.retired = source;
     result.rails.insert(intent.retired_proposed_rail_ids.begin(), intent.retired_proposed_rail_ids.end());
@@ -597,7 +672,7 @@ std::optional<StairDemolitionRetirementIntent> phase_stair_demolition_retirement
 StairDemolitionRetirementPlan inspect_phase_stair_demolition_retirement_plan(
     const Entities& source, const StairDemolitionRetirementIntent& intent) {
     try {
-        auto derived = derive(source, intent);
+        auto derived = derive(source, intent, RetirementMode::demolition_closure);
         if (derived.plan.ready()) {
             try { (void)prepare_retired_geometry(source, derived); }
             catch (const std::exception& error) {
@@ -614,7 +689,7 @@ StairDemolitionRetirementPlan inspect_phase_stair_demolition_retirement_plan(
 Entities replay_phase_stair_demolition_retirement_entities(const Entities& source,
     const StairDemolitionRetirementIntent& intent) {
     try {
-        auto derived = derive(source, intent);
+        auto derived = derive(source, intent, RetirementMode::demolition_closure);
         if (!derived.plan.ready()) {
             const auto& diagnostic = derived.plan.diagnostics.front();
             invalid("blocked at " + diagnostic.entity_id + ": " + diagnostic.reason);
@@ -642,6 +717,56 @@ Entities replay_phase_stair_demolition_retirement_entities(const Entities& sourc
             if (!exact(result.at(id), entity)) invalid("unrelated organization/property/level envelope changed: " + id);
         return result;
     } catch (const Json::exception& error) { invalid(std::string("malformed actual replay source: ") + error.what()); }
+    catch (const Standard_Failure& error) {
+        const auto* message = error.GetMessageString(); invalid(std::string("native admission failed: ") + (message ? message : "Open CASCADE failure"));
+    }
+}
+
+StairDemolitionRetirementPlan inspect_phase_stair_proposed_rail_retirement_plan(
+    const Entities& source, const std::string& registry_id, const std::string& alternative_id,
+    const std::vector<std::string>& rail_ids) {
+    try {
+        const auto intent = discover_selected_proposals(source, registry_id, alternative_id, rail_ids);
+        auto derived = derive(source, intent, RetirementMode::selected_proposals);
+        if (derived.plan.ready()) {
+            try { (void)prepare_retired_geometry(source, derived); }
+            catch (const std::exception& error) {
+                diagnostic(derived.plan, registry_id, std::string("actual retirement analytical admission refused: ") + error.what());
+            }
+        }
+        return std::move(derived.plan);
+    } catch (const Json::exception& error) { invalid(std::string("malformed actual selective inspection source: ") + error.what()); }
+    catch (const Standard_Failure& error) {
+        const auto* message = error.GetMessageString(); invalid(std::string("native admission failed: ") + (message ? message : "Open CASCADE failure"));
+    }
+}
+Entities replay_phase_stair_proposed_rail_retirement_entities(
+    const Entities& source, const std::string& registry_id, const std::string& alternative_id,
+    const std::vector<std::string>& rail_ids) {
+    try {
+        const auto intent = discover_selected_proposals(source, registry_id, alternative_id, rail_ids);
+        auto derived = derive(source, intent, RetirementMode::selected_proposals);
+        if (!derived.plan.ready()) {
+            const auto& diagnostic = derived.plan.diagnostics.front();
+            invalid("blocked at " + diagnostic.entity_id + ": " + diagnostic.reason);
+        }
+        const auto prepared = prepare_retired_geometry(source, derived);
+        // Baseline hosts are evidence only. This candidate deliberately omits
+        // the demolition composer used by the historical closure lane.
+        admit_retired_geometry(source, prepared);
+        validate_stair_attachment_state(derived.retired);
+        if (derived.retired.size() != source.size() - derived.rails.size())
+            invalid("selective retirement changed another actual entity's lifetime");
+        for (const auto& [id, entity] : source) if (!derived.rails.contains(id)) {
+            const auto found = derived.retired.find(id);
+            if (found == derived.retired.end()) invalid("selective retirement removed another actual owner: " + id);
+            if (id != registry_id && entity.type != "assembly_model" &&
+                entity.type != kSheetViewEntityType && entity.type != kAnnotationEntityType &&
+                !exact(found->second, entity))
+                invalid("selective retirement changed a retained physical/organization/property/level envelope: " + id);
+        }
+        return std::move(derived.retired);
+    } catch (const Json::exception& error) { invalid(std::string("malformed actual selective replay source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString(); invalid(std::string("native admission failed: ") + (message ? message : "Open CASCADE failure"));
     }

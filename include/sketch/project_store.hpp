@@ -189,7 +189,9 @@ public:
     // wrapped room/selection commands and an undone or abandoned edit.
     // Complete mixed-wall removal with manufactured opening-hosted components
     // requires v142 throughout retained single and batch room-review history.
-    static constexpr std::uint32_t format_version = 142;
+    // Explicit proposed-railing rehost/retirement in stair replacements
+    // requires v143 throughout direct, coordinated and wrapped history.
+    static constexpr std::uint32_t format_version = 143;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

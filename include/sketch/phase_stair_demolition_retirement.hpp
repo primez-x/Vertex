@@ -57,4 +57,25 @@ replay_phase_stair_demolition_retirement_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const StairDemolitionRetirementIntent& intent);
 
+// Explicit selective lane for stair replacement. rail_ids is a nonempty,
+// bounded, sorted unique subset of actual active-only proposed attached rails
+// in the exact saved registry/alternative. The inspected intent's selected
+// object IDs are derived baseline host stair evidence, never demolition roots.
+// This lane does not extend the closed v1 demolition-retirement proof grammar.
+[[nodiscard]] StairDemolitionRetirementPlan inspect_phase_stair_proposed_rail_retirement_plan(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::string& registry_id, const std::string& alternative_id,
+    const std::vector<std::string>& rail_ids);
+
+// Returns the complete source-derived selective retirement candidate without
+// demolishing its host stairs. Every other physical envelope and alternative,
+// catalog definition, raw survivor order and surviving alias is preserved.
+// Actual qualified hosted rows and supported presentation bindings retire with
+// the selected rails; opaque/unqualified retained references remain blocking.
+[[nodiscard]] std::map<std::string, Entity, std::less<>>
+replay_phase_stair_proposed_rail_retirement_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::string& registry_id, const std::string& alternative_id,
+    const std::vector<std::string>& rail_ids);
+
 } // namespace sketch

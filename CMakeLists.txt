@@ -1090,6 +1090,7 @@ if(SKETCH_BUILD_DESKTOP)
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/physical_wall_room_review_dialog.cpp
     src/desktop/physical_wall_phase_room_review_dialog.cpp
+    src/desktop/stair_dependency_review_dialog.cpp
     src/desktop/horizontal_profile_dialog.cpp
     src/desktop/horizontal_layer_stack_dialog.cpp
     src/desktop/wall_profile_dialog.cpp src/desktop/wall_layer_stack_dialog.cpp

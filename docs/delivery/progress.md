@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 explicit stair attachment source implementation
+
+Editing a baseline stair in an active alternative now discovers proposed
+railings whose attachments no longer resolve. A captured-source dialog offers
+admitted resulting flights/landings or selective retirement. The typed command
+retains the exact affected-owner witness and chosen actions; cancellation or a
+changed source does not publish an edit.
+
+Selective retirement keeps the baseline host and retires only active-only
+proposed rails, their actual catalog rows and known references. Coordinated
+replacement admits only those qualified row omissions, preserves source raw
+survivors and definitions, and rejects overlapping consequences. Original and
+inactive topology, other alternatives, surviving aliases and retired namespaces
+remain protected. Closed stair child five requires native 143/extraction 141
+through direct, coordinated, retained and wrapped history; children one through
+four keep their prior meanings. Independent source review approved after
+skipping absent inactive proposal states during dependency discovery. Root
+integrated source review also keeps typed retirement policy behind its existing
+architectural feature flag; compilation and runtime are not established.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged. Jointly valid mutually referring retirement closures,
+ordinary stair dependency dispositions, broader authoring and production
+qualification remain unfinished. The next source batch addresses mixed wall
+and independently selected opening removal.
+
 ### October 9 opening-hosted mixed component source implementation
 
 Standalone component removal and mixed opening/architectural removal now use

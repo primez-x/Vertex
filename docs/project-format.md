@@ -1,4 +1,47 @@
-# Vertex project formats v1 through v141
+# Vertex project formats v1 through v143
+
+## Reviewed proposed railing attachments in stair replacement (v143)
+
+Native reader 143 and JSON/assets extraction 141 retain stair-replacement
+child five in direct, coordinated and wrapped authoring, including undone
+history. It adds `dependency_rail_ids` and `dependency_dispositions` to the
+existing profile or compound replacement fields. `preserved_inactive_rail_ids`
+is present even when empty. The dependency witness is a nonempty, ascending
+inventory of actual affected proposed rail owners, with one canonical decision
+per owner in the same order. Transform-only authoring cannot borrow this lane.
+
+Rehost decisions choose actual resulting flights or landings, including their
+incident-flight pair. Retirement removes only actual active-only proposed
+railings in the saved alternative, plus their admitted hosted catalog rows and
+known references. Original baseline stairs, inactive attachments, other
+alternatives and catalog definitions remain retained. Complete-source replay
+checks the decision witness and derives every consequence; supplied entity maps
+or inferred geometry grant no authority.
+
+Fresh destinations remain reserved against the original source and its retired
+aliases, retained history and assets. Coordinated candidates preserve exact raw
+catalog survivors and refuse overlapping changes. The editor's decisions bind
+the complete captured source before one command applies. Older children one
+through four retain their original meanings. Compilation and runtime remain
+unverified under the source-only instruction.
+
+## Mixed wall removal with manufactured opening hosts (v142)
+
+Native reader 142 and JSON/assets extraction 140 retain mixed-wall deletion
+child thirty-nine in single or batch room review. Its seven fields are the
+closed thirty-seven fields plus exactly `complete_opening_hosted_removal: true`.
+The existing five-field intent remains unchanged. This explicit lane admits
+actual manufactured opening hosts for qualified catalog components and removes
+the rows hosted on openings retired with selected walls.
+
+Every leaf reads the same complete source. The raw child and whole candidate
+must equal independent replay, with exact surviving aliases, protected phase
+ownership and retained room lineage. Analytical admission and reserved proof
+names precede native leaves; fresh wall and roof destinations share complete
+snapshot/history reservation. Historical thirty-seven retains its original
+admission and is preferred only when the entire command independently qualifies.
+Independent and root source reviews are complete; compilation and runtime remain
+unverified.
 
 ## Wall removal with opening-hosted components (v141)
 

@@ -29,6 +29,41 @@ struct PhaseStairReplacementDiagnostic {
     bool operator==(const PhaseStairReplacementDiagnostic&) const = default;
 };
 
+enum class PhaseStairReplacementDependencyAction { rehost, retire };
+struct PhaseStairReplacementDependencyDisposition {
+    std::string rail_id;
+    PhaseStairReplacementDependencyAction action{PhaseStairReplacementDependencyAction::rehost};
+    // Exact actual-derived choice key. Empty only for retirement.
+    std::string target_key;
+    bool operator==(const PhaseStairReplacementDependencyDisposition&) const = default;
+};
+struct PhaseStairReplacementDependencyTarget {
+    std::string target_key, role, child_id, incoming_flight_id, outgoing_flight_id;
+    nlohmann::json host = nlohmann::json::object();
+    std::string display_name;
+};
+struct PhaseStairReplacementDependency {
+    std::string rail_id, rail_name, stair_id, host_role, current_child_id;
+    nlohmann::json current_host = nlohmann::json::object();
+    std::vector<PhaseStairReplacementDependencyTarget> valid_targets;
+    bool retirement_eligible{};
+    std::string retirement_reason;
+};
+struct PhaseStairReplacementDependencyPlan {
+    std::string registry_id, alternative_id;
+    std::vector<PhaseStairReplacementDependency> dependencies;
+    std::vector<PhaseStairReplacementDiagnostic> diagnostics;
+    [[nodiscard]] bool ready() const noexcept { return diagnostics.empty(); }
+};
+// Analytical discovery from actual source and closed typed profiles. No caller
+// entity-map, registry or child mapping grants dependency authority.
+[[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
+    const PhaseStairReplacementEntities& actual, const std::vector<StairObjectEditIntent>& edits);
+[[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
+    const PhaseStairReplacementEntities& actual, const std::vector<StairCompoundEditIntent>& edits);
+[[nodiscard]] PhaseStairReplacementDependencyPlan inspect_phase_stair_replacement_dependencies(
+    const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities);
+
 struct PhaseStairReplacementRequest {
     std::string registry_id;
     std::string alternative_id;
@@ -81,6 +116,9 @@ struct PhaseStairReplacementPlan {
 // sources retain the existing compound capture and admission contract.
 [[nodiscard]] std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
     const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities);
+[[nodiscard]] std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
+    const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities,
+    const std::vector<PhaseStairReplacementDependencyDisposition>& dispositions);
 
 struct PhaseStairReplacementAuthoring {
     std::string registry_id;
@@ -97,7 +135,14 @@ struct PhaseStairReplacementAuthoring {
     // Nonempty, ascending actual-source witness selects v4 for any one lane.
     // Empty preserves the original v1/v2/v3 staging and replay meanings.
     std::vector<std::string> preserved_inactive_rail_ids;
+    // Closed v5 only: exact ascending actual affected dependency witness and
+    // one explicit ascending decision for each owner. Neither supplies rows.
+    std::vector<std::string> dependency_rail_ids;
+    std::vector<PhaseStairReplacementDependencyDisposition> dependency_dispositions;
 };
+
+[[nodiscard]] PhaseStairReplacementPlan inspect_phase_stair_replacement_plan(
+    const PhaseStairReplacementEntities& actual, const PhaseStairReplacementAuthoring& authoring);
 
 // Closed v1: version, registry_id, alternative_id, edits, identities,
 // child_identities, hosted_instance_identities, overlay_identities. Qualified
@@ -111,6 +156,11 @@ struct PhaseStairReplacementAuthoring {
 // Closed v4 adds preserved_inactive_rail_ids to exactly one existing lane.
 // The nonempty ascending witness must equal independently discovered inactive
 // actual rails; typed edits stage on additive copies before final replacement.
+// Closed v5 adds dependency_rail_ids and dependency_dispositions, and always
+// carries preserved_inactive_rail_ids (possibly empty). Decisions are exactly
+// {rail_id, action:"retire"} or {rail_id, action:"rehost", target_key}. The
+// actual complete-source retirement producer precedes edited staging; rehost
+// targets retain attachment shape and derive resulting child/incident witnesses.
 [[nodiscard]] nlohmann::json encode_phase_stair_replacement_authoring(
     const PhaseStairReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(

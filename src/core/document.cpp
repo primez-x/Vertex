@@ -2597,6 +2597,21 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
 static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryConstraintChanges& command) {
     const auto proofs=phase_constraint_authoring_proofs(command);
     return std::any_of(proofs.begin(), proofs.end(), [](const auto& intent) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+        const auto replacement_retires=[](const nlohmann::json& value) {
+            if (!value.is_object() || value.value("version",0)!=5) return false;
+            const auto replacement=decode_phase_stair_replacement_authoring(value);
+            return std::any_of(replacement.dependency_dispositions.begin(),replacement.dependency_dispositions.end(),
+                [](const auto& decision) { return decision.action==PhaseStairReplacementDependencyAction::retire; });
+        };
+        const auto replacement=intent.find("stair_replacement");
+        if (replacement!=intent.end() && replacement_retires(*replacement)) return true;
+        const auto replacements=intent.find("coordinated_replacements");
+        if (replacements!=intent.end() && replacements->is_object()) {
+            const auto stair=replacements->find("stair_replacement");
+            if (stair!=replacements->end() && replacement_retires(*stair)) return true;
+        }
+#endif
         if (intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null())
             return true;
         const auto coordinated=intent.find("coordinated_demolition");

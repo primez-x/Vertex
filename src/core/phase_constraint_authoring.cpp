@@ -639,13 +639,15 @@ Entity merge_source_row_container(const Entity& source,const std::vector<const E
 // Hosted transformation codecs may promote a legacy whole-catalog dialect.
 // Omit only the defaults that promotion adds, then retain actual raw rows under
 // v7. Definitions, identity namespaces and every other envelope field are exact.
-Entity merge_hosted_instance_placements(const Entity& source,const std::vector<const Entity*>& candidates) {
+Entity merge_hosted_instance_placements(const Entity& source,const std::vector<const Entity*>& candidates,
+    const std::set<std::string,std::less<>>& permitted_retirements={}) {
     const auto& original=source.properties.at("model");
     (void)AssemblyModel::from_json(original);
     const auto& retained=original.at("instances");
     auto merged=source;
     auto rows=retained;
     std::set<std::string,std::less<>> changed;
+    std::set<std::string,std::less<>> retired;
     bool promoted=false;
     for (const auto* candidate:candidates) {
         const auto& model=candidate->properties.at("model");
@@ -672,10 +674,21 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
                     types[i].at(field).is_array() && types[i].at(field).empty()) types[i].erase(field);
         }
         auto& instances=normalized.at("instances");
-        if (instances.size()!=retained.size()) invalid("Coordinated hosted catalogs require exact source instance membership");
+        if (permitted_retirements.empty() && instances.size()!=retained.size())
+            invalid("Coordinated hosted catalogs require exact source instance membership");
+        std::size_t next=0;
         for (std::size_t i=0;i<retained.size();++i) {
-            auto row=instances[i];
             const auto& original_row=retained[i];
+            const auto local_id=original_row.at("id").get<std::string>();
+            if (next==instances.size() || instances[next].at("id")!=original_row.at("id")) {
+                if (!permitted_retirements.contains(local_id))
+                    invalid("Coordinated hosted catalog changed source instance order or identity");
+                if (!changed.insert(local_id).second)
+                    invalid("Coordinated families overlap hosted instance retirement or placement");
+                retired.insert(local_id);
+                continue;
+            }
+            auto row=instances[next++];
             if (row.at("id")!=original_row.at("id")) invalid("Coordinated hosted catalog changed source instance order or identity");
             if (promotion && !original_row.contains("root_transform") && row.contains("root_transform") &&
                 row.at("root_transform").is_null() && row.contains("nested_overrides") &&
@@ -696,15 +709,20 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
                 if (!exact_json(row_envelope,original_row))
                     invalid("Coordinated hosted catalog changed fields outside placement authority");
                 if (!exact_json(placed,before)) {
-                    const auto local_id=original_row.at("id").get<std::string>();
                     if (!changed.insert(local_id).second) invalid("Coordinated families change the same hosted instance placement");
                     rows[i]=std::move(row);
                 }
             } else if (!exact_json(row,original_row))
                 invalid("Coordinated hosted catalog changed an unhosted instance");
         }
+        if (next!=instances.size()) invalid("Coordinated hosted catalog added or reordered source instances");
         normalized.at("instances")=retained;
         if (!exact(source,envelope)) invalid("Coordinated hosted catalog changed definitions or its retained envelope");
+    }
+    if (!retired.empty()) {
+        Json survivors=Json::array();
+        for (const auto& row:rows) if (!retired.contains(row.at("id").get<std::string>())) survivors.push_back(row);
+        rows=std::move(survivors);
     }
     merged.properties.at("model").at("instances")=std::move(rows);
     if (promoted && !changed.empty()) merged.properties.at("model").at("schema")="sketch.assemblies.v7";
@@ -712,8 +730,9 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
     return merged;
 }
 
-Entity compose_source_container(const Entity& source,const std::vector<const Entity*>& candidates) {
-    return source.type=="assembly_model" ? merge_hosted_instance_placements(source,candidates) :
+Entity compose_source_container(const Entity& source,const std::vector<const Entity*>& candidates,
+    const std::set<std::string,std::less<>>& permitted_retirements={}) {
+    return source.type=="assembly_model" ? merge_hosted_instance_placements(source,candidates,permitted_retirements) :
         merge_source_row_container(source,candidates);
 }
 
@@ -862,6 +881,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
     std::vector<Entities> candidates;
     std::vector<std::vector<std::string>> family_fresh;
     std::set<std::string,std::less<>> retained_baselines;
+    std::map<std::string,std::set<std::string,std::less<>>,std::less<>> permitted_catalog_retirements;
     if (lanes.wall) {
         const auto& child=*lanes.wall;
         const auto requests=phase_wall_replacement_requests(source,child.intent);
@@ -958,6 +978,17 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         // Successful replay verifies that identities are exactly its discovered
         // required owner inventory; a second native plan replay is unnecessary.
         auto candidate=replay_phase_stair_replacement_authoring(source,leaf);
+        // Only a successfully replayed closed dependency leaf grants omission
+        // authority, qualified by the actual catalog and actual placement host.
+        std::set<std::string,std::less<>> retired_rails;
+        for (const auto& disposition:leaf.dependency_dispositions)
+            if (disposition.action==PhaseStairReplacementDependencyAction::retire)
+                retired_rails.insert(disposition.rail_id);
+        for (const auto& [catalog,entity]:source) if (entity.type=="assembly_model")
+            for (const auto& row:entity.properties.at("model").at("instances"))
+                if (row.contains("placement") && retired_rails.contains(
+                    row.at("placement").at("host_entity_id").get<std::string>()))
+                    permitted_catalog_retirements[catalog].insert(row.at("id").get<std::string>());
         std::vector<std::string> destinations;
         for (const auto& [original,proposed]:leaf.identities) {
             retained_baselines.insert(original); destinations.push_back(proposed);
@@ -1003,6 +1034,9 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
     }
     auto result=source;
     for (const auto& [key,original]:source) {
+        const std::set<std::string,std::less<>> no_retirements;
+        const auto permission=permitted_catalog_retirements.find(key);
+        const auto& permitted=permission==permitted_catalog_retirements.end() ? no_retirements : permission->second;
         std::vector<const Entity*> changes;
         bool removed=false;
         for (const auto& candidate:candidates) {
@@ -1017,10 +1051,10 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             if (!changes.empty()) invalid("Coordinated family removal overlaps another physical consequence");
             result.erase(key);
         } else if (changes.size()==1) result.at(key)=lanes.version>=3 && original.type=="assembly_model" ?
-            merge_hosted_instance_placements(original,changes) : *changes.front();
+            merge_hosted_instance_placements(original,changes,permitted) : *changes.front();
         else if (changes.size()>1)
             result.at(key)=lanes.version==1 ? merge_append_container(original,*changes[0],*changes[1]) :
-                lanes.version>=3 ? compose_source_container(original,changes) : merge_source_row_container(original,changes);
+                lanes.version>=3 ? compose_source_container(original,changes,permitted) : merge_source_row_container(original,changes);
     }
     for (std::size_t lane=0;lane<candidates.size();++lane) {
         const std::set<std::string,std::less<>> destinations(family_fresh[lane].begin(),family_fresh[lane].end());
@@ -1044,21 +1078,35 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         for (const auto& [key,entity]:source) if (entity.type=="assembly_model") {
             const auto& before=entity.properties.at("model").at("instances");
             const auto& after=result.at(key).properties.at("model").at("instances");
-            for (std::size_t i=0;i<before.size();++i) if (before[i].contains("placement") &&
-                retained_baselines.contains(before[i].at("placement").at("host_entity_id").get<std::string>()) &&
-                !exact_json(before[i],after.at(i)))
-                invalid("Coordinated replacement changed a retained baseline hosted row");
+            std::map<std::string,const Json*,std::less<>> survivors;
+            for (const auto& row:after)
+                if (!survivors.emplace(row.at("id").get<std::string>(),&row).second)
+                    invalid("Coordinated replacement has ambiguous surviving hosted rows");
+            for (const auto& row:before) if (row.contains("placement") &&
+                retained_baselines.contains(row.at("placement").at("host_entity_id").get<std::string>())) {
+                const auto found=survivors.find(row.at("id").get<std::string>());
+                if (found==survivors.end() || !exact_json(row,*found->second))
+                    invalid("Coordinated replacement changed a retained baseline hosted row");
+            }
         }
         // A second family can force a different computed fallback alias. That
         // must refuse rather than silently retarget a leaf's saved references.
         const auto original_aliases=embedded_assembly_presentation_ids(source);
         const auto final_aliases=embedded_assembly_presentation_ids(result);
-        for (const auto& [key,alias]:original_aliases)
-            if (final_aliases.at(key)!=alias || fresh.contains(alias))
+        const auto permitted_missing_alias=[&](const auto& key) {
+            const auto catalog=permitted_catalog_retirements.find(key.first);
+            return catalog!=permitted_catalog_retirements.end() && catalog->second.contains(key.second);
+        };
+        for (const auto& [key,alias]:original_aliases) {
+            const auto found=final_aliases.find(key);
+            if (fresh.contains(alias) || (found==final_aliases.end() ? !permitted_missing_alias(key) : found->second!=alias))
                 invalid("Coordinated replacement changed or reused an actual source render alias");
-        for (const auto& candidate:candidates) for (const auto& [key,alias]:embedded_assembly_presentation_ids(candidate))
-            if (final_aliases.at(key)!=alias)
+        }
+        for (const auto& candidate:candidates) for (const auto& [key,alias]:embedded_assembly_presentation_ids(candidate)) {
+            const auto found=final_aliases.find(key);
+            if (found==final_aliases.end() ? !permitted_missing_alias(key) : found->second!=alias)
                 invalid("Coordinated complete candidate changed a leaf's computed render alias");
+        }
         validate_document_assembly_instances(result);
     }
     coordinated_map_budget(result);

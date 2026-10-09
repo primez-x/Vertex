@@ -501,6 +501,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     const auto coordinated=intent.find("coordinated_replacements");
                     if (coordinated!=intent.end() && coordinated->is_object()) {
                         const auto stair=coordinated->find("stair_replacement");
+                        if (stair!=coordinated->end() && stair->is_object() && stair->value("version",0)==5)
+                            return 143U;
                         if (stair!=coordinated->end() && stair->is_object() && stair->value("version",0)==4)
                             return 136U;
                         if (stair!=coordinated->end() && stair->is_object() && stair->value("version",0)==3)
@@ -511,6 +513,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (intent.is_object() && intent.value("version",0)==13) return 130U;
                 if (intent.is_object() && intent.value("version",0)==12) {
                     const auto stair=intent.find("stair_replacement");
+                    if (stair!=intent.end() && stair->is_object() && stair->value("version",0)==5) return 143U;
                     if (stair!=intent.end() && stair->is_object() && stair->value("version",0)==4) return 136U;
                     if (stair!=intent.end() && stair->is_object() && stair->value("version",0)==3) return 133U;
                     if (stair!=intent.end() && stair->is_object() && stair->value("version",0)==2) {
@@ -2452,6 +2455,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
          sqlite3_column_int(user_version.get(), 0) != 140 &&
@@ -3049,6 +3053,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=143)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 143 for stair replacement with explicit railing attachment dispositions");
         if (required_format>=142)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 142 for mixed wall removal with opening-hosted components and room review");
         if (required_format>=141)
