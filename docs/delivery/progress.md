@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 typed stair and railing profiles source integration
+
+The building-object editor now replays stair/railing profile edits and related
+straight-stair upgrades together against the actual source map. Known geometry
+and topology fields have a closed descriptor; surviving child metadata,
+unchanged numeric representation and opaque properties remain source-owned.
+Known entered dimensions follow surviving child identities, while changed
+dimensions lose stale receipts unless a valid replacement input is supplied.
+Actual hosted geometry, connected levels and current child roles are admitted
+before the ordinary command is staged. History reservation remains Document's
+responsibility.
+
+Current authoring also retains baseline stair/railing physical records while an
+alternative is active; an ordinary upsert cannot silently change other designs.
+Independent integrated source review approved after preserving source-derived
+host context completion and receipt metadata by surviving child identity.
+Root review and the scoped whitespace check passed. Baseline stair/railing profile replacement,
+transforms and their wider mixed-family lifecycle remain additional alternative
+scope. No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; installed
+candidate is unchanged.
+
+### October 8 stair and railing demolition source integration
+
+Delete and Cut now derive active-alternative demolition for existing stairs and
+railings. Selecting a stair includes its actual baseline flight/landing rails;
+selecting a railing alone retains its host. Original physical owners, catalogs,
+views and other alternatives stay exact. The active demolition membership is
+the only changed record. A newly proposed attached rail is reported explicitly
+for retirement before host demolition.
+
+Source-bound authoring eleven and native 127/extraction 125 retain the typed
+decision across current/history and wrapped proofs. Actual organization,
+attachment, levels and supported geometry are admitted before publication.
+Unsupported affected forms and ambiguous ownership refuse. Independent
+integrated source review approved after retaining opaque connection metadata;
+root review and the scoped whitespace check passed. Proposed dependent retirement and broader stair replacement
+editing remain additional source scope. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Runtime, geometry and
+storage remain unverified; the installed candidate is unchanged.
+
 ### October 8 Site-aware horizontal components source implementation
 
 Floor/ceiling/deck component movement now distinguishes type-owned world

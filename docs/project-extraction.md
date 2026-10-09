@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version 125 requires native reader 127 for registry-only stair and
+railing demolition in active alternatives. It retains exclusive active-design
+authoring eleven and its selected-root intent one; actual hosted baseline
+railing closure remains replay-derived. Physical records and other alternatives
+stay exact. Direct and wrapped proofs retain the floor through Undo/Redo and
+retained history; earlier authoring meanings remain unchanged.
+
 Exchange version 124 requires native reader 126 for Site-aware horizontal
 hosted components. It retains closed slab geometry intent three and derivation
 archive three, including older unchanged records. The floor covers direct,

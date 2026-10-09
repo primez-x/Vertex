@@ -54,6 +54,10 @@ struct PhaseConstraintAuthoringIntent {
     // Shared baseline owners remain exact; explicit structural intent alone
     // creates proposed replacements and their known presentation references.
     nlohmann::json structural_replacement=nullptr;
+    // Dialect eleven: registry-only stair/railing demolition. Explicit roots
+    // retain their physical records; actual attached baseline rails follow
+    // their host into the saved alternative's demolition membership.
+    nlohmann::json stair_demolition=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

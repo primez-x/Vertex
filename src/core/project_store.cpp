@@ -490,6 +490,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==11) return 127U;
                 if (coordinated_slab_intent(coordinated_slab_intent, intent, 0)) return 126U;
                 if (intent.is_object() && intent.value("version",0)==10) return 125U;
                 if (intent.is_object() && intent.value("version",0)==9) {
@@ -2407,6 +2408,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 127 &&
          sqlite3_column_int(user_version.get(), 0) != 126 &&
          sqlite3_column_int(user_version.get(), 0) != 125 &&
          sqlite3_column_int(user_version.get(), 0) != 124 &&
@@ -2988,6 +2990,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=127)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 127 for stair and railing alternative demolition");
         if (required_format>=126)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 126 for Site-aware horizontal hosted components");
         if (required_format>=125)

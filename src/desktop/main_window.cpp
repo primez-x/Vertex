@@ -45,6 +45,8 @@
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
+#include "sketch/phase_stair_demolition.hpp"
+#include "sketch/stair_object_edit.hpp"
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/structural_hosted_components.hpp"
 #include "sketch/structural_clone.hpp"
@@ -5192,20 +5194,8 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
     if (!entries->is_object()) throw std::invalid_argument("Quantity entries must be an object.");
     json result = json::object();
     for (const auto& [pointer, receipt] : entries->items()) {
-        if (quantity_entry_matches(receipt, canonical_properties, pointer)) {
-            if (original && (original->type=="column" || original->type=="beam") &&
-                old_entries && old_entries->is_object() && old_entries->contains(pointer) &&
-                old_entries->at(pointer).is_object() && receipt.is_object() &&
-                old_entries->at(pointer).value("version",json{})==1 && receipt.value("version",json{})==1) {
-                auto retained=old_entries->at(pointer);
-                for (const auto* key:{"version","original_expression","entered_unit"}) retained[key]=receipt.at(key);
-                for (const auto* key:{"numerator","denominator"})
-                    retained["exact_metres"][key]=receipt.at("exact_metres").at(key);
-                result[pointer]=std::move(retained);
-            } else result[pointer] = receipt;
-            continue;
-        }
         auto original_pointer = pointer;
+        bool has_original_binding = true;
         const auto child_key = pointer.starts_with("/flights/") ? "flights" : "landings";
         const auto child_prefix = std::string("/") + child_key + "/";
         if (original && pointer.starts_with(child_prefix) && is_building_quantity_path(pointer) &&
@@ -5214,16 +5204,34 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
             const auto row = static_cast<std::size_t>(std::stoul(pointer.substr(child_prefix.size(), separator - child_prefix.size())));
             const auto& next = canonical_properties.at(child_key);
             const auto& before = original->properties.at(child_key);
+            has_original_binding = false;
             if (next.is_array() && row < next.size() && before.is_array()) {
                 const auto id = next.at(row).at("id");
                 for (std::size_t old_row = 0; old_row < before.size(); ++old_row)
                     if (before.at(old_row).is_object() && before.at(old_row).value("id", json{}) == id) {
                         original_pointer = child_prefix + std::to_string(old_row) + pointer.substr(separator);
+                        has_original_binding = true;
                         break;
                     }
             }
         }
-        const bool inherited = old_entries && old_entries->is_object() && old_entries->contains(original_pointer) &&
+        if (original && original->type=="stair" && pointer.starts_with(child_prefix) &&
+            is_building_quantity_path(pointer) && !original->properties.contains(child_key)) has_original_binding = false;
+        const json* prior = has_original_binding && old_entries && old_entries->is_object() &&
+            old_entries->contains(original_pointer) ? &old_entries->at(original_pointer) : nullptr;
+        if (quantity_entry_matches(receipt, canonical_properties, pointer)) {
+            if (original && (original->type=="column" || original->type=="beam" ||
+                    original->type=="stair" || original->type=="railing") && prior && prior->is_object() && receipt.is_object() &&
+                prior->value("version",json{})==1 && receipt.value("version",json{})==1) {
+                auto retained=*prior;
+                for (const auto* key:{"version","original_expression","entered_unit"}) retained[key]=receipt.at(key);
+                for (const auto* key:{"numerator","denominator"})
+                    retained["exact_metres"][key]=receipt.at("exact_metres").at(key);
+                result[pointer]=std::move(retained);
+            } else result[pointer] = receipt;
+            continue;
+        }
+        const bool inherited = has_original_binding && old_entries && old_entries->is_object() && old_entries->contains(original_pointer) &&
             old_entries->at(original_pointer) == receipt;
         if (!inherited)
             throw std::invalid_argument("Quantity entry does not match its canonical dimension: " + pointer);
@@ -23218,6 +23226,7 @@ public:
             if (snapshot.revision() != expected_revision)
                 throw std::runtime_error("The project changed. Reopen the object editor.");
             std::vector<EntityChange> changes;
+            std::map<std::string, json, std::less<>> related_context_completions;
             for (auto& related : related_candidates) {
                 const auto source = snapshot.entities().find(related.id);
                 if (source == snapshot.entities().end() || related.id == candidate.id ||
@@ -23339,14 +23348,8 @@ public:
                     // Persist their already-resolved hierarchy in the same
                     // command as the hosted rail, including an explicit v1
                     // upgrade when one is being applied.
-                    const auto host_change = std::find_if(changes.begin(), changes.end(),
-                        [&](const EntityChange& change) { return change.entity.id == host->first; });
-                    auto explicit_host = host_change == changes.end() ? host->second : host_change->entity;
                     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
-                        explicit_host.properties[key] = candidate.properties.at(key);
-                    if (host_change != changes.end()) host_change->entity = std::move(explicit_host);
-                    else if (explicit_host != host->second)
-                        changes.push_back(EntityChange::upsert(std::move(explicit_host)));
+                        related_context_completions[host->first][key] = candidate.properties.at(key);
                     if (host->second.properties.contains("phase_id"))
                         candidate.properties["phase_id"] = host->second.properties.at("phase_id");
                     else candidate.properties.erase("phase_id");
@@ -23367,6 +23370,52 @@ public:
                         ? organize_project(snapshot).drawing_context(*layer_id)
                         : std::nullopt;
                     if (context) add_default_level_placement(candidate.properties, *context);
+                }
+            }
+            // Related straight-stair upgrades and the edited stair/railing
+            // profile share one actual-map replay. The source owns metadata,
+            // host topology and connected levels; the dialog owns entered fields.
+            std::vector<StairObjectEditIntent> stair_edits;
+            for (const auto& change : changes) {
+                const auto& original = snapshot.entities().at(change.entity.id);
+                if (const auto edit=capture_stair_object_edit(original, change.entity)) stair_edits.push_back(*edit);
+            }
+            const bool edited_stair_profile=replace_selected && (candidate.type=="stair" || candidate.type=="railing");
+            if (edited_stair_profile)
+                if (const auto edit=capture_stair_object_edit(snapshot.entities().at(candidate.id), candidate))
+                    stair_edits.push_back(*edit);
+            if (!stair_edits.empty()) {
+                const auto replay=replay_stair_object_edit_entities(snapshot.entities(), stair_edits);
+                changes.clear();
+                for (const auto& [entity_id, entity] : replay) {
+                    const auto& before=snapshot.entities().at(entity_id);
+                    if (entity_id!=candidate.id && (before!=entity || before.properties.dump()!=entity.properties.dump() ||
+                            before.extensions.dump()!=entity.extensions.dump())) changes.push_back(EntityChange::upsert(entity));
+                }
+                if (edited_stair_profile) candidate=replay.at(candidate.id);
+            } else if (edited_stair_profile) candidate=snapshot.entities().at(candidate.id);
+            if (edited_stair_profile && changes.empty()) {
+                const auto& original=snapshot.entities().at(candidate.id);
+                if (candidate==original && candidate.properties.dump()==original.properties.dump() &&
+                    candidate.extensions.dump()==original.extensions.dump()) {
+                    clearError();
+                    refresh();
+                    return id_from(candidate.id);
+                }
+            }
+            // This source-derived hierarchy completion has separate authority
+            // from profile input; apply it after replay, alongside the new rail.
+            for (const auto& [host_id, context] : related_context_completions) {
+                const auto existing=std::find_if(changes.begin(), changes.end(), [&](const auto& change) {
+                    return change.kind==EntityChangeKind::upsert && change.entity.id==host_id;
+                });
+                auto explicit_host=existing==changes.end() ? snapshot.entities().at(host_id) : existing->entity;
+                for (const auto& [key, value] : context.items()) explicit_host.properties[key]=value;
+                const auto& original=snapshot.entities().at(host_id);
+                if (explicit_host!=original || explicit_host.properties.dump()!=original.properties.dump() ||
+                    explicit_host.extensions.dump()!=original.extensions.dump()) {
+                    if (existing==changes.end()) changes.push_back(EntityChange::upsert(std::move(explicit_host)));
+                    else existing->entity=std::move(explicit_host);
                 }
             }
             auto id = id_from(candidate.id);
@@ -31128,7 +31177,9 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            auto demolition = slabRemovalCommand(source, selected_ids, "Cut selected horizontal assemblies");
+            auto demolition = structuralDemolitionCommand(source, selected_ids, "Cut selected structural objects");
+            if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Cut selected stairs and railings");
+            if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Cut selected horizontal assemblies");
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Cut selected roofs");
             if (demolition) {
                 const auto encoded = clipboardSelectionPayload(source);
@@ -31648,6 +31699,7 @@ public:
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
             auto demolition=structuralDemolitionCommand(source,selected_ids,"Demolish selected structural objects");
+            if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Demolish selected stairs and railings");
             if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Delete selected horizontal assemblies");
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs");
             if (demolition) {
@@ -42652,6 +42704,27 @@ private:
         command.phase_constraint_authoring_completion=true;
         command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
         (void)Document::preview_command(source,Command{command});
+        return Command{std::move(command)};
+    }
+
+    static std::optional<Command> stairDemolitionCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& ids, const std::string& message) {
+        if (ids.empty() || !std::all_of(ids.begin(), ids.end(), [&](const auto& id) {
+            const auto found=source.entities().find(id);
+            return found!=source.entities().end() && (found->second.type=="stair" || found->second.type=="railing");
+        })) return std::nullopt;
+        const auto request=phase_stair_demolition_request(source.entities(), ids);
+        if (!request) return std::nullopt;
+        ConstraintAuthoringIntent semantic;
+        semantic.message=message;
+        auto intent=make_phase_constraint_authoring_intent(source, semantic);
+        intent.stair_demolition=encode_stair_demolition_intent(*request);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();
+        command.message=message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source, Command{command});
         return Command{std::move(command)};
     }
 

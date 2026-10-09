@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v126
+# Vertex project formats v1 through v127
+
+## Typed ordinary stair and railing profile authoring
+
+Current authoring captures a closed internal intent one with `version`,
+`object_id`, `profile_fields` and `quantity_entries`. The complete known family
+profile uses explicit null tombstones for optional connection, topology,
+placement and host fields. Surviving child metadata is taken from the actual
+same typed child identity. Unchanged source numeric encodings remain exact;
+known quantity pointers follow child identity across reorder and invalidated
+receipts are removed. Opaque bindings cannot acquire changed geometry authority.
+
+The intent itself is not persisted in ordinary entity commands and introduces
+no additional reader floor. Existing stair/railing entity dialects remain
+authoritative. Actual attachment, levels and native geometry are admitted before
+staging; retained-history child reservation remains the enclosing Document's
+responsibility. Baseline profile replacement is separate unfinished scope.
+
+## Stair and railing alternative demolition (v127)
+
+Native reader 127 and JSON/assets extraction 125 retain active-design authoring
+eleven: the eight common source-binding fields plus the exclusive
+`stair_demolition` child. The child has exactly `version:1`, `registry_id`,
+`alternative_id` and sorted unique `selected_object_ids`. It grants no physical
+geometry, replacement, profile or relationship mutation authority.
+
+Replay derives attached baseline flight/landing railings from actual selected
+stairs, retaining the physical model, catalogs, views and other alternatives.
+Only the saved active alternative's demolition list changes. Selecting a
+railing alone leaves its stair intact. Proposed attached rails must be retired
+before host demolition; unsupported affected forms or ambiguous ownership
+remain explicit refusals. Delete and Cut use the same source-bound intent.
+Current/history and wrapped room-review proofs retain this reader floor.
+Independent integrated source review approved; no runtime acceptance is claimed.
 
 ## Site-aware horizontal hosted components (v126)
 

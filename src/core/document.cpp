@@ -3029,7 +3029,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
 }
 #endif
 
-// Current authoring cannot silently rewrite a baseline roof or structural object while an
+// Current authoring cannot silently rewrite a baseline architectural object while an
 // alternative is active. Historical ordinary records retain their original
 // meaning: this guard is deliberately outside restore/replay validation.
 static void validate_current_baseline_physical_preservation(
@@ -3043,7 +3043,8 @@ static void validate_current_baseline_physical_preservation(
         for (const auto& id:model.baseline_ids()) {
             const auto original=source.find(id);
             if (original==source.end() || (original->second.type!="roof" && original->second.type!="roof_join" &&
-                original->second.type!="column" && original->second.type!="beam")) continue;
+                original->second.type!="column" && original->second.type!="beam" &&
+                original->second.type!="stair" && original->second.type!="railing")) continue;
             const auto after=candidate.find(id);
             if (after==candidate.end() || !exact_entity_payload(original->second,after->second))
                 document_error(DocumentErrorCode::invalid_entity,
