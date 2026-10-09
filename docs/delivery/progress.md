@@ -14,6 +14,16 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 CAD block identity source correction
+
+The isolated normalizer now uses case-insensitive keys for native block
+membership, dimension pictures, recursion/cycle checks and expansion caching.
+A case-only reference spelling no longer changes native wall/opening admission
+or repeats the same graph work. Serialized source names remain unchanged.
+Root source review covers every affected membership and graph-key use. No
+builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran; compilation and observed import behavior remain unverified.
+
 ### October 9 analytical DXF dimension source implementation
 
 Single curved boundary/wall-axis lengths now map to analytical arc dimensions;

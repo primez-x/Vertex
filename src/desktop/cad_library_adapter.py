@@ -138,7 +138,9 @@ def normalize_dxf(data: bytes) -> dict:
         info = dxf_stream_info(io.StringIO(data.decode("latin1")))
         doc = ezdxf.read(io.StringIO(data.decode(info.encoding, errors="strict")))
     diagnostics = []
-    native = {block.name for block in doc.blocks
+    # DXF block identity is case insensitive. Preserve source spelling in the
+    # transport, but use one key for native admission and graph accounting.
+    native = {block.name.lower() for block in doc.blocks
               if block.block.has_xdata(NATIVE_DXF_APPID)}
     entity_count = 0
     # Preflight every source block, even if unused. No external/clipped sources
@@ -170,12 +172,13 @@ def normalize_dxf(data: bytes) -> dict:
     memo = {}
 
     def block_cost(name, path):
-        if name in path:
+        key = name.lower()
+        if key in path:
             raise ValueError("dxf_insert_cycle")
         if len(path) >= MAX_INSERT_DEPTH:
             raise ValueError("dxf_insert_depth_limit")
-        if name in memo:
-            cost, height = memo[name]
+        if key in memo:
+            cost, height = memo[key]
             if len(path) + height > MAX_INSERT_DEPTH:
                 raise ValueError("dxf_insert_depth_limit")
             return cost, height
@@ -185,7 +188,7 @@ def normalize_dxf(data: bytes) -> dict:
         cost, height = 1, 1
         for entity in block:
             if entity.dxftype() == "INSERT":
-                child_cost, child_height = block_cost(entity.dxf.name, path + (name,))
+                child_cost, child_height = block_cost(entity.dxf.name, path + (key,))
                 cost += grid_count(entity) * child_cost
                 height = max(height, child_height + 1)
                 # The library recursively explodes sheared nested references,
@@ -198,7 +201,7 @@ def normalize_dxf(data: bytes) -> dict:
                 cost += 1
             if cost > MAX_DXF_ENTITIES:
                 raise ValueError("dxf_entity_limit")
-        memo[name] = cost, height
+        memo[key] = cost, height
         return cost, height
 
     for block in doc.blocks:
@@ -224,7 +227,7 @@ def normalize_dxf(data: bytes) -> dict:
     # pictures cannot be reused after virtual-entity transformation.
     dimension_pictures = set()
     dimension_containers = [(doc.modelspace(), True)]
-    dimension_containers.extend((block, block.name in native) for block in doc.blocks)
+    dimension_containers.extend((block, block.name.lower() in native) for block in doc.blocks)
     for container, direct in dimension_containers:
         for entity in container:
             if entity.dxftype() not in {"DIMENSION", "ARC_DIMENSION"}:
@@ -235,7 +238,7 @@ def normalize_dxf(data: bytes) -> dict:
                 if block is None:
                     raise ValueError("dxf_missing_block")
                 if direct:
-                    dimension_pictures.add(block.name)
+                    dimension_pictures.add(block.name.lower())
 
     writer = _DxfWriter()
     writer.section("HEADER")
@@ -260,7 +263,7 @@ def normalize_dxf(data: bytes) -> dict:
     if native or dimension_pictures:
         writer.section("BLOCKS")
         for block in doc.blocks:
-            if block.name in native or block.name in dimension_pictures:
+            if block.name.lower() in native or block.name.lower() in dimension_pictures:
                 serialized_entities += 2  # BLOCK and ENDBLK records.
                 if serialized_entities > MAX_DXF_ENTITIES:
                     raise ValueError("dxf_entity_limit")
@@ -305,7 +308,7 @@ def normalize_dxf(data: bytes) -> dict:
             # Retain native INSERTs, expanding MINSERT into individual placements.
             instances = entity.multi_insert() if grid_count(entity) > 1 else (entity,)
             for instance in instances:
-                if entity.dxf.name in native:
+                if entity.dxf.name.lower() in native:
                     writer.entity(instance)
                     continue
                 child_block = instance.block()
