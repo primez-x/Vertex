@@ -7,7 +7,9 @@
 namespace sketch {
 
 // Captures only a supported edit of this exact existing opening. Authored input
-// is a single-field hint; its exact entered quantity is retained. Unsupported
+// is a single-field hint; its exact entered quantity is retained. The sole atomic
+// exception materializes an implicit door's unchanged default assembly together
+// with an overhead operation, preserving every other source field. Unsupported
 // changes throw, and an exact unchanged record returns nullopt without copying.
 // Supported source-equivalent scalar/profile encodings also return nullopt,
 // retaining source representation; an absent door operation is never inferred.

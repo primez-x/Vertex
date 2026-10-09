@@ -11,8 +11,9 @@ enum class HostedOpeningFamily { door, window, opening };
 
 // Conversion of one existing cut only. The host, dimensions, exact receipts,
 // drawing context, layer and opaque owner data remain the source's authority.
-// The final door/window assembly is explicit and must match target_family.
-// A bare opening has no assembly or operation. An absent door operation is
+// The final assembly is explicit and must match target_family. Passage framing
+// is an opt-in transition within the opening family; a bare opening has no
+// assembly or operation. An absent door operation is
 // distinct from an explicitly authored default operation.
 struct HostedOpeningFamilyEditIntent {
     std::string opening_id;
@@ -20,10 +21,13 @@ struct HostedOpeningFamilyEditIntent {
     HostedOpeningFamily target_family{HostedOpeningFamily::opening};
     std::optional<OpeningAssembly> assembly;
     std::optional<DoorOperation> door_operation;
+    bool framed_passage_transition = false;
 };
 
 // Strict bounded version-1 schema: exactly version, opening_id, wall_id,
 // target_family, assembly and door_operation. Optional values are explicit nulls.
+// Version two adds exactly framed_passage_transition:true for explicit framing
+// or removal of passage framing; version one retains its bare-opening grammar.
 [[nodiscard]] nlohmann::json encode_hosted_opening_family_edit_intent(
     const HostedOpeningFamilyEditIntent& intent);
 [[nodiscard]] HostedOpeningFamilyEditIntent decode_hosted_opening_family_edit_intent(

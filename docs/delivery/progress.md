@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 framed-passage and legacy-overhead source implementation
+
+Cased-opening library placement now produces real two-jamb/head framing on
+straight or curved walls. Preview, plans, elevations, sections and 3D use the
+actual frame. Its assembly editor exposes frame width/depth/inset and hides
+nonexistent leaf/glazing controls. The opening Type list distinguishes cased
+from bare and supports explicit conversion while preserving the original cut,
+host, dimensions, receipts, context and opaque data. Bare historical cuts remain
+bare. Removal admission and geometry-work budgeting recognize explicit frames.
+Schedules show truthful generic passage assembly rows. IFC uses an actual frame
+proxy filling the cut, with strict profile, placement and mesh reconstruction.
+
+Independent review of b93d541 found a P2: a retained implicit door's overhead
+conversion was blocked by the one-field authored-hint rule and implicit-default
+normalization. The correction adds a closed, default-off atomic materialization
+intent, independently binds the retained door and complete source host, and
+preserves all other fields. Ordinary hints and equal-value legacy no-ops keep
+their original contracts. Native 155 / extraction 153 preserve explicit passage
+version four and both additive version-two edit meanings through retained and
+undone history. Integrated root source review is complete; independent source
+review of this combined batch is pending.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran in this batch. Compilation, output and runtime remain unverified. The
+installed candidate is unchanged; source implementation continues without a
+goal loop or turn-boundary build directories.
+
 ### October 9 door-library and overhead-operation source implementation
 
 Seven distinct first-party SVG entries add French double, single/double garage,
@@ -33,8 +60,9 @@ dialog with their explanation. Document requires an explicit door assembly and
 straight wall; the fallback linework API requires actual height. Schedules and
 IFC retain the mechanism and pose. Native 154 / extraction 152 preserve new
 operation version three throughout retained/undone history; earlier operations
-keep their exact grammar and meaning. Root integrated source review is complete;
-independent source review is pending.
+keep their exact grammar and meaning. Root integrated source review is complete.
+Independent review of b93d541 requested the legacy implicit-door conversion
+correction recorded above; it found no other actionable source issue.
 
 No builds, tests, probes, native jobs, launches, packages or installations ran.
 Only source/artwork/catalog generation and inspection were performed.

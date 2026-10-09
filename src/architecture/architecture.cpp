@@ -654,6 +654,8 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
     if (door_operation) {
         (void)encode_door_operation(*door_operation);
         if (window) throw std::invalid_argument("Window assembly cannot carry a door operation");
+        if (assembly.kind == OpeningAssemblyKind::passage)
+            throw std::invalid_argument("Passage assembly cannot carry a door operation");
     }
     const bool overhead = door_operation && door_operation->kind == DoorOperationKind::overhead_tilt_up;
     if (overhead && wall.baseline.sweep_radians != 0.0)
@@ -748,7 +750,7 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
     }
 
     const double panel_depth = assembly.panel_thickness_m;
-    if (!window) {
+    if (assembly.kind == OpeningAssemblyKind::door) {
         auto leaf_frame = frame;
         double leaf_start = frame_width;
         double leaf_width = clear_width;
@@ -944,7 +946,7 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
                 add(*glazing);
             }
         }
-    } else if (assembly.window_layout == WindowLayoutKind::fixed) {
+    } else if (window && assembly.window_layout == WindowLayoutKind::fixed) {
         // Keep the v1 construction arithmetic and operation order unchanged:
         // existing IFC native-profile admission compares the exact mesh.
         const double sash_bar = std::min(frame_width * 0.6, clear_width * 0.2);
@@ -971,7 +973,7 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
                         clear_height - 2.0 * sash_bar,
                         base_elevation + frame_width + sash_bar,
                         "Window assembly glazing construction failed"));
-    } else {
+    } else if (window) {
         const int fixed_count = assembly.window_layout == WindowLayoutKind::double_fixed ? 2
                               : assembly.window_layout == WindowLayoutKind::triple_fixed ? 3 : 1;
         const int sash_count = window_sliding ? 2 : fixed_count;

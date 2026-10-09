@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v154
+# Vertex project formats v1 through v155
+
+## Framed passages and atomic overhead conversion (v155)
+
+Native reader 155 and JSON/assets extraction 153 retain explicit passage
+frames and the new atomic edit meanings throughout retained/undone history.
+Opening assembly version four has exactly the original seven profile keys:
+`version:4`, `kind:"opening"`, positive `frame_width_m`, positive `frame_depth_m`,
+`panel_thickness_m:0`, `glazing_thickness_m:0`, and finite `inset_m`.
+It constructs two jambs and a head with no sill, leaf, sash or glazing. It
+accepts straight or fitted curved hosts. The unversioned entity kind parser
+still leaves `"opening"` bare; historical cuts do not acquire a frame.
+
+Hosted family-edit version two adds exactly `framed_passage_transition:true`
+to the six version-one keys. Only the opening target family can carry this
+flag. Its explicit assembly must be a passage or null for removal of framing.
+The only new same-family conversion is bare cut to/from framed passage; editing
+an existing frame still uses the profile-edit command. Host, dimensions,
+quantity receipts, layers, metadata and unrelated owners remain authoritative.
+
+Hosted profile-edit version two adds exactly
+`materialize_default_door_assembly:true` to the ten version-one keys. It
+requires an unchanged default door assembly and an overhead operation, null
+dimensional edits and no clearing. Independent replay admits the actual
+implicit retained door and complete source host before atomically materializing
+its assembly. Ordinary single-field hints and same-value source representation
+rules retain their prior meanings.
+
+IFC exports a passage frame as a marked `IFCBUILDINGELEMENTPROXY` filling its
+actual void. Import requires complete matching native profile/host/void
+metadata, unique fill ownership, placement and regenerated mesh. Bare voids
+remain unfilled. Passage schedules use generic assembly rows with frame fields,
+without leaf, glazing or movement columns. These are source contracts;
+compilation, output and runtime qualification remain open.
 
 ## Overhead tilt-up door operation (v154)
 

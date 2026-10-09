@@ -118,7 +118,8 @@ void admit_opening(const Entity& opening) {
     }
     if (const auto raw = field(opening.properties, "opening_assembly")) {
         const auto assembly = parse_opening_assembly(*raw);
-        if (opening.properties.contains("opening_kind") && (!family || *family != assembly.kind))
+        if (const auto kind = field(opening.properties, "opening_kind");
+            kind && kind->get_ref<const std::string&>() != opening_assembly_kind_name(assembly.kind))
             reject("opening kind and assembly disagree: " + opening.id);
         family = assembly.kind;
     }

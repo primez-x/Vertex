@@ -60,15 +60,23 @@ HostedOpeningFamily family(OpeningAssemblyKind value) {
     switch (value) {
     case OpeningAssemblyKind::door: return HostedOpeningFamily::door;
     case OpeningAssemblyKind::window: return HostedOpeningFamily::window;
+    case OpeningAssemblyKind::passage: return HostedOpeningFamily::opening;
     }
     invalid("Hosted opening assembly family is unsupported");
 }
 
 void admit_final_profile(const HostedOpeningFamilyEditIntent& intent) {
     (void)family_name(intent.target_family);
+    if (intent.framed_passage_transition && intent.target_family != HostedOpeningFamily::opening)
+        invalid("Passage framing conversion requires the opening family");
     if (intent.target_family == HostedOpeningFamily::opening) {
-        if (intent.assembly || intent.door_operation)
-            invalid("A bare opening cannot carry an assembly or door operation");
+        if (intent.door_operation)
+            invalid("An opening cannot carry a door operation");
+        if (intent.assembly) {
+            if (!intent.framed_passage_transition || intent.assembly->kind != OpeningAssemblyKind::passage)
+                invalid("Only an explicit passage transition can frame an opening");
+            (void)opening_assembly_json(*intent.assembly);
+        }
         return;
     }
     if (!intent.assembly || family(intent.assembly->kind) != intent.target_family)
@@ -151,23 +159,31 @@ nlohmann::json encode_hosted_opening_family_edit_intent(const HostedOpeningFamil
     (void)identity(intent.opening_id);
     (void)identity(intent.wall_id);
     admit_final_profile(intent);
-    Json result{{"version", 1}, {"opening_id", intent.opening_id}, {"wall_id", intent.wall_id},
+    Json result{{"version", intent.framed_passage_transition ? 2 : 1}, {"opening_id", intent.opening_id}, {"wall_id", intent.wall_id},
         {"target_family", family_name(intent.target_family)},
         {"assembly", intent.assembly ? opening_assembly_json(*intent.assembly) : Json(nullptr)},
         {"door_operation", intent.door_operation ? encode_door_operation(*intent.door_operation) : Json(nullptr)}};
+    if (intent.framed_passage_transition) result["framed_passage_transition"] = true;
     if (result.dump().size() > proof_limit) invalid("Hosted opening family proof byte budget exceeded");
     return result;
 }
 
 HostedOpeningFamilyEditIntent decode_hosted_opening_family_edit_intent(const nlohmann::json& value) {
-    keys(value, {"version", "opening_id", "wall_id", "target_family", "assembly", "door_operation"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1)
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2))
         invalid("Hosted opening family edit version is unsupported");
+    const bool passage_transition = value.at("version") == 2;
+    if (passage_transition) {
+        keys(value, {"version", "opening_id", "wall_id", "target_family", "assembly", "door_operation", "framed_passage_transition"});
+        if (!value.at("framed_passage_transition").is_boolean() || value.at("framed_passage_transition") != true)
+            invalid("Passage transition flag must be true");
+    } else keys(value, {"version", "opening_id", "wall_id", "target_family", "assembly", "door_operation"});
     if (value.dump().size() > proof_limit) invalid("Hosted opening family proof byte budget exceeded");
     HostedOpeningFamilyEditIntent result;
     result.opening_id = identity(value.at("opening_id"));
     result.wall_id = identity(value.at("wall_id"));
     result.target_family = family(value.at("target_family"));
+    result.framed_passage_transition = passage_transition;
     if (!value.at("assembly").is_null()) result.assembly = parse_opening_assembly(value.at("assembly"));
     if (!value.at("door_operation").is_null()) result.door_operation = decode_door_operation(value.at("door_operation"));
     if (encode_hosted_opening_family_edit_intent(result).dump() != value.dump())
@@ -188,7 +204,11 @@ Entity replay_hosted_opening_family_entity(const Entity& source, const HostedOpe
     if (intent.target_family == original.family) {
         if (intent.assembly == original.assembly && intent.door_operation == original.operation)
             return source;
-        invalid("Same-family opening changes must use the existing hosted opening profile edit command");
+        // Bare cut <-> framed passage is the only same-family conversion. A
+        // change between two framed profiles still uses the profile-edit API.
+        if (!intent.framed_passage_transition || original.family != HostedOpeningFamily::opening ||
+            original.assembly.has_value() == intent.assembly.has_value())
+            invalid("Same-family opening changes must use the existing hosted opening profile edit command");
     }
 
     auto result = source;

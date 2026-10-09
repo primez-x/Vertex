@@ -21,10 +21,15 @@ struct HostedOpeningProfileEditIntent {
     std::optional<OpeningAssembly> assembly;
     std::optional<DoorOperation> door_operation;
     bool clear_door_operation = false;
+    // Atomic conversion of a retained implicit door to an overhead operation:
+    // materialize only its unchanged default assembly, with no other edit.
+    bool materialize_default_door_assembly = false;
 };
 
-// Strict bounded version-1 schema; every optional field is an explicit null or
-// its canonical quantity/assembly/operation record. Offset and sill admit zero.
+// Strict bounded version-1 schema remains unchanged. Only explicit atomic
+// materialization emits closed version 2 with materialize_default_door_assembly
+// true. Every optional field is null or its canonical record; zero is admitted
+// for offset and sill.
 [[nodiscard]] nlohmann::json encode_hosted_opening_profile_edit_intent(
     const HostedOpeningProfileEditIntent& intent);
 [[nodiscard]] HostedOpeningProfileEditIntent decode_hosted_opening_profile_edit_intent(
@@ -37,7 +42,8 @@ void validate_hosted_opening_profile_entity(const Entity& source);
 
 // Detached replay for captured desktop edits. Checks exact target/host, scalar
 // aliases, retained known receipts and assembly family. A same-value edit keeps
-// the exact source record, including its representation and opaque metadata.
+// the exact source record, except explicit default-door materialization required
+// by atomic overhead conversion. Opaque metadata remains intact.
 [[nodiscard]] Entity replay_hosted_opening_profile_entity(
     const Entity& source, const HostedOpeningProfileEditIntent& intent);
 

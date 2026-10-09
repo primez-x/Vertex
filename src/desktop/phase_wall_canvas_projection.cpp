@@ -230,11 +230,12 @@ bool supported_point(const CanvasEntity& entity,Vec2 point) {
 }
 TopoDS_Shape opening_solid(const Entity& entity,const Wall& wall,const HostedOpening& opening) {
     const auto kind=entity.properties.at("opening_kind").get<std::string>();
-    if (kind=="opening") return make_wall(Wall{entity.id,
+    if (kind=="opening" && !entity.properties.contains("opening_assembly")) return make_wall(Wall{entity.id,
         hosted_opening_span(wall.baseline,opening.offset,opening.width),wall.thickness,
         opening.height,wall.elevation+opening.sill,{}});
     const auto parsed=parse_opening_assembly_kind(kind);
-    if (!parsed) throw std::invalid_argument("Phase wall preview has an unsupported opening kind.");
+    if (!parsed && !entity.properties.contains("opening_assembly"))
+        throw std::invalid_argument("Phase wall preview has an unsupported opening kind.");
     const auto assembly=entity.properties.contains("opening_assembly") ?
         parse_opening_assembly(entity.properties.at("opening_assembly")) : default_opening_assembly(*parsed);
     if (opening_assembly_kind_name(assembly.kind)!=kind) throw std::invalid_argument("Phase wall preview opening assembly kind differs from its owner.");

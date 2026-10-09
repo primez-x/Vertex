@@ -54,7 +54,8 @@ void admit_descriptor(const Entity& opening) {
     }
     if (opening.properties.contains("opening_assembly")) {
         const auto assembly = parse_opening_assembly(opening.properties.at("opening_assembly"));
-        if (kind != opening.properties.end() && (!family || *family != assembly.kind))
+        if (kind != opening.properties.end() &&
+            kind->get_ref<const std::string&>() != opening_assembly_kind_name(assembly.kind))
             invalid("opening " + opening.id + " kind and assembly disagree");
         family = assembly.kind;
     }

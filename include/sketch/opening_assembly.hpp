@@ -9,10 +9,10 @@ namespace sketch {
 
 // A hosted opening keeps its wall cut as the authoritative geometry.  This
 // profile describes the replaceable manufactured parts presented inside that
-// cut.  The same schema serves doors and windows; `panel_thickness_m` is the
-// door leaf thickness or the window sash depth, while a positive glazing
-// thickness adds a real pane to either family.
-enum class OpeningAssemblyKind { door, window };
+// cut. The same schema serves doors, windows and framed passages. The
+// `panel_thickness_m` is the door leaf thickness or window sash depth; positive glazing
+// thickness adds a real pane to a door or window. A passage has only a frame.
+enum class OpeningAssemblyKind { door, window, passage };
 enum class WindowLayoutKind { fixed, double_fixed, triple_fixed, casement, sliding, bay };
 
 struct OpeningAssembly {
@@ -41,6 +41,8 @@ struct OpeningAssembly {
 
 void validate_opening_assembly(const OpeningAssembly& value);
 [[nodiscard]] std::string_view opening_assembly_kind_name(OpeningAssemblyKind kind) noexcept;
+// Legacy entity family inference intentionally leaves "opening" bare. A framed
+// passage is admitted only by an explicit version-four assembly profile.
 [[nodiscard]] std::optional<OpeningAssemblyKind>
 parse_opening_assembly_kind(std::string_view value) noexcept;
 [[nodiscard]] std::string_view window_layout_kind_name(WindowLayoutKind kind) noexcept;

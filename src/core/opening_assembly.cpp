@@ -32,12 +32,20 @@ bool canonical_window_descriptor(const OpeningAssembly& value) {
 
 void validate_opening_assembly(const OpeningAssembly& value) {
     if (value.kind != OpeningAssemblyKind::door &&
-        value.kind != OpeningAssemblyKind::window) {
+        value.kind != OpeningAssemblyKind::window &&
+        value.kind != OpeningAssemblyKind::passage) {
         reject("Opening assembly kind is unsupported");
     }
     positive(value.frame_width_m, "Opening assembly frame width must be positive");
     positive(value.frame_depth_m, "Opening assembly frame depth must be positive");
-    positive(value.panel_thickness_m, "Opening assembly panel thickness must be positive");
+    if (value.kind == OpeningAssemblyKind::passage) {
+        if (value.panel_thickness_m != 0.0 || value.glazing_thickness_m != 0.0)
+            reject("Passage assembly cannot carry a panel or glazing");
+        if (!canonical_window_descriptor(value))
+            reject("Passage assembly cannot carry a window descriptor");
+    } else {
+        positive(value.panel_thickness_m, "Opening assembly panel thickness must be positive");
+    }
     nonnegative(value.glazing_thickness_m,
                 "Opening assembly glazing thickness must be nonnegative");
     if (!std::isfinite(value.inset_m) || std::abs(value.inset_m) > 10.0) {
@@ -123,6 +131,8 @@ std::string_view opening_assembly_kind_name(OpeningAssemblyKind kind) noexcept {
         return "door";
     case OpeningAssemblyKind::window:
         return "window";
+    case OpeningAssemblyKind::passage:
+        return "opening";
     }
     return "invalid";
 }
@@ -138,6 +148,10 @@ OpeningAssembly default_opening_assembly(OpeningAssemblyKind kind) {
     OpeningAssembly result;
     result.kind = kind;
     result.glazing_thickness_m = kind == OpeningAssemblyKind::window ? 0.02 : 0.0;
+    if (kind == OpeningAssemblyKind::passage) {
+        result.frame_width_m = 0.06;
+        result.panel_thickness_m = 0.0;
+    }
     validate_opening_assembly(result);
     return result;
 }
@@ -152,11 +166,12 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
     }
     const auto& version = value.at("version");
     if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
-        (version != 1 && version != 2 && version != 3)) {
-        reject("Opening assembly version must be 1, 2 or 3");
+        (version != 1 && version != 2 && version != 3 && version != 4)) {
+        reject("Opening assembly version must be 1, 2, 3 or 4");
     }
+    const bool passage = version == 4;
     const bool bay_descriptor = version == 3;
-    const bool descriptor = version != 1;
+    const bool descriptor = version == 2 || bay_descriptor;
     if ((!descriptor && value.size() != 7) ||
         (descriptor && (value.size() != (bay_descriptor ? 14 : 12) || !value.contains("window_layout") ||
          !value.contains("window_hinge_at_end") || !value.contains("window_open_left") ||
@@ -166,7 +181,11 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
         reject("Opening assembly properties must match the exact versioned schema");
     const auto& kind = value.at("kind");
     if (!kind.is_string()) reject("Opening assembly kind must be a string");
-    const auto parsed_kind = parse_opening_assembly_kind(kind.get<std::string>());
+    const auto kind_text = kind.get<std::string>();
+    if (passage && kind_text != "opening")
+        reject("Version-four opening assemblies require a passage");
+    const auto parsed_kind = passage ? std::optional{OpeningAssemblyKind::passage}
+                                    : parse_opening_assembly_kind(kind_text);
     if (!parsed_kind.has_value()) reject("Opening assembly kind is unsupported");
     if (descriptor && *parsed_kind != OpeningAssemblyKind::window)
         reject("Versioned opening assembly descriptors require a window");
@@ -209,7 +228,7 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
 
 nlohmann::json opening_assembly_json(const OpeningAssembly& value) {
     validate_opening_assembly(value);
-    nlohmann::json result{{"version", 1},
+    nlohmann::json result{{"version", value.kind == OpeningAssemblyKind::passage ? 4 : 1},
             {"kind", opening_assembly_kind_name(value.kind)},
             {"frame_width_m", value.frame_width_m},
             {"frame_depth_m", value.frame_depth_m},

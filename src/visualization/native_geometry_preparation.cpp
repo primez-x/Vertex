@@ -480,7 +480,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 }
                 auto presentation_color = assembly.kind == OpeningAssemblyKind::door
                     ? Quantity_Color(0.92, 0.58, 0.28, Quantity_TOC_RGB)
-                    : Quantity_Color(0.30, 0.78, 0.88, Quantity_TOC_RGB);
+                    : assembly.kind == OpeningAssemblyKind::window
+                        ? Quantity_Color(0.30, 0.78, 0.88, Quantity_TOC_RGB)
+                        : Quantity_Color(0.88, 0.86, 0.82, Quantity_TOC_RGB);
                 if (material_color) {
                     const QColor color(QString::fromStdString(*material_color));
                     if (color.isValid()) {

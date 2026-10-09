@@ -2645,7 +2645,8 @@ std::optional<DoorOperation> catalog_door_operation(
 
 OpeningAssembly catalog_opening_assembly(const QString& kind, const QString& symbol_id) {
     auto profile = default_opening_assembly(kind == QStringLiteral("door")
-        ? OpeningAssemblyKind::door : OpeningAssemblyKind::window);
+        ? OpeningAssemblyKind::door : kind == QStringLiteral("opening")
+            ? OpeningAssemblyKind::passage : OpeningAssemblyKind::window);
     if (symbol_id == QStringLiteral("svg-v2-09_doors-door-sliding-glass") ||
         symbol_id == QStringLiteral("svg-v2-09_doors-door-french-double"))
         profile.glazing_thickness_m = 0.012;
@@ -4545,7 +4546,7 @@ TopoDS_Shape make_opening_view_shape(const Entity& entity, const Wall& wall) {
     const auto opening = read_hosted_opening(entity);
     const auto kind = read_string(entity.properties, "opening_kind").value_or("");
     if (!opening) throw std::invalid_argument("opening geometry is incomplete");
-    if (kind == "opening") {
+    if (kind == "opening" && !entity.properties.contains("opening_assembly")) {
         const auto length = segment_length(wall.baseline);
         const Segment span{
             point_at_segment(wall.baseline, opening->offset / length).value(),
@@ -4555,10 +4556,13 @@ TopoDS_Shape make_opening_view_shape(const Entity& entity, const Wall& wall) {
                               wall.elevation + opening->sill, {}});
     }
     const auto parsed_kind = parse_opening_assembly_kind(kind);
-    if (!parsed_kind) throw std::invalid_argument("opening kind is incomplete");
+    if (!parsed_kind && !entity.properties.contains("opening_assembly"))
+        throw std::invalid_argument("opening kind is incomplete");
     const auto assembly = entity.properties.contains("opening_assembly")
         ? parse_opening_assembly(entity.properties.at("opening_assembly"))
         : default_opening_assembly(*parsed_kind);
+    if (opening_assembly_kind_name(assembly.kind) != kind)
+        throw std::invalid_argument("Opening assembly does not match its kind.");
     std::optional<DoorOperation> operation;
     if (assembly.kind == OpeningAssemblyKind::door && entity.properties.contains("door_operation"))
         operation = decode_door_operation(entity.properties.at("door_operation"));
@@ -23752,7 +23756,8 @@ public:
                                              {"height_m", height},
                                              {"opening_kind", normalized_kind.toStdString()},
                                              {"classification", normalized_kind.toStdString()}};
-                if (normalized_kind != QStringLiteral("opening")) {
+                if (normalized_kind != QStringLiteral("opening") || placement_profile ||
+                    catalog_symbol_id == QStringLiteral("svg-v2-16_walls_openings-cased-opening")) {
                     const auto assembly = placement_profile.value_or(
                         catalog_opening_assembly(normalized_kind, catalog_symbol_id));
                     if (opening_assembly_kind_name(assembly.kind) != normalized_kind.toStdString())
@@ -34258,7 +34263,7 @@ public:
                                      std::optional<OpeningAssembly> edited_profile = std::nullopt) {
         const auto entity = selectedEntity();
         if (!entity.has_value() || entity->type != "opening") {
-            setError(QStringLiteral("Select a hosted door or window to edit its assembly."));
+            setError(QStringLiteral("Select a hosted door, window or framed opening to edit its assembly."));
             return false;
         }
         if (!m_document->is_editable()) {
@@ -34274,10 +34279,14 @@ public:
         try {
             const auto kind_text = read_string(entity->properties, "opening_kind")
                 .value_or(read_string(entity->properties, "classification").value_or("door"));
-            const auto kind = parse_opening_assembly_kind(kind_text);
+            const auto kind = entity->properties.contains("opening_assembly")
+                ? std::optional<OpeningAssemblyKind>{parse_opening_assembly(entity->properties.at("opening_assembly")).kind}
+                : parse_opening_assembly_kind(kind_text);
             if (!kind.has_value()) {
-                throw std::invalid_argument("Opening kind must be Door or Window.");
+                throw std::invalid_argument("A bare opening has no frame. Change its type to Cased opening first.");
             }
+            if (opening_assembly_kind_name(*kind) != kind_text)
+                throw std::invalid_argument("Opening assembly does not match its kind.");
             OpeningAssembly assembly = edited_profile.value_or(entity->properties.contains("opening_assembly")
                 ? parse_opening_assembly(entity->properties.at("opening_assembly"))
                 : default_opening_assembly(*kind));
@@ -34301,10 +34310,10 @@ public:
             };
             assembly.frame_width_m = read_dimension(frame_width_expression, "Frame width", false);
             assembly.frame_depth_m = read_dimension(frame_depth_expression, "Frame depth", false);
-            assembly.panel_thickness_m = read_dimension(
-                panel_thickness_expression, "Panel or sash depth", false);
-            assembly.glazing_thickness_m = read_dimension(
-                glazing_thickness_expression, "Glazing depth", true);
+            assembly.panel_thickness_m = assembly.kind == OpeningAssemblyKind::passage ? 0.0 :
+                read_dimension(panel_thickness_expression, "Panel or sash depth", false);
+            assembly.glazing_thickness_m = assembly.kind == OpeningAssemblyKind::passage ? 0.0 :
+                read_dimension(glazing_thickness_expression, "Glazing depth", true);
             const auto inset_text = inset_expression.trimmed();
             if (inset_text.isEmpty()) {
                 throw std::invalid_argument("Inset is required.");
@@ -40364,7 +40373,7 @@ public:
             if (!std::isfinite(input.width) || input.width<=0 || !std::isfinite(input.height) || input.height<=0 ||
                 !std::isfinite(input.sill) || input.sill<0)
                 throw std::invalid_argument("Width and height must be positive; sill cannot be negative.");
-            input.bare_opening=m_pending_opening_kind==QStringLiteral("opening");
+            input.bare_opening=m_pending_opening_kind==QStringLiteral("opening") && !m_pending_opening_profile;
             if (!input.bare_opening) {
                 input.assembly=m_pending_opening_profile.value_or(
                     catalog_opening_assembly(m_pending_opening_kind,m_pending_opening_symbol_id));
@@ -40431,11 +40440,11 @@ public:
                 if (site) input.site_frames=m_site_plan_frames;
                 const auto kind=catalog_opening_kind(*definition);
                 const bool window=kind==QStringLiteral("window");
-                input.bare_opening=kind==QStringLiteral("opening");
                 input.width=catalog_opening_width(*definition)*scale;
                 input.sill=window ? .9 : 0.0;input.height=window ? 1.2 : 2.1;
                 input.station_increment=canvas->placementLengthIncrementMetres();
                 input.assembly=catalog_opening_assembly(kind,id);
+                input.bare_opening=kind==QStringLiteral("opening") && input.assembly.kind!=OpeningAssemblyKind::passage;
                 if (input.assembly.window_layout==WindowLayoutKind::bay) input.assembly.window_bay_projection_m*=scale;
                 input.operation=catalog_door_operation(*definition);
                 input.plan_cache=std::make_shared<std::pair<std::string,Boundary>>();
@@ -42728,14 +42737,20 @@ private:
             } else if (family == QStringLiteral("window")) {
                 intent.target_family = HostedOpeningFamily::window;
                 intent.assembly = default_opening_assembly(OpeningAssemblyKind::window);
+            } else if (family == QStringLiteral("passage")) {
+                intent.assembly = default_opening_assembly(OpeningAssemblyKind::passage);
+                intent.framed_passage_transition = true;
             } else if (family != QStringLiteral("opening")) {
-                throw std::invalid_argument("Choose Door, Window or Opening.");
+                throw std::invalid_argument("Choose Door, Window, Cased opening or Bare opening.");
             }
             auto current_kind = read_string(found->second.properties, "opening_kind").value_or("opening");
             if (found->second.properties.contains("opening_assembly")) {
                 const auto current = parse_opening_assembly(found->second.properties.at("opening_assembly"));
-                current_kind = current.kind == OpeningAssemblyKind::door ? "door" : "window";
+                current_kind = current.kind == OpeningAssemblyKind::passage ? "passage" :
+                    std::string(opening_assembly_kind_name(current.kind));
             }
+            if (family == QStringLiteral("opening") && current_kind == "passage")
+                intent.framed_passage_transition = true;
             if (current_kind == family.toStdString()) {
                 // Choosing the current type never resets a custom assembly or
                 // invents an absent swing. Typed replay preserves the exact owner.
@@ -46148,8 +46163,15 @@ private:
             if (original == source.entities().end() || original->second.type != "opening") return false;
             const auto before = original->second.properties.find("opening_kind");
             const auto after = change.entity.properties.find("opening_kind");
-            return before == original->second.properties.end() ? after != change.entity.properties.end() :
-                after == change.entity.properties.end() || *before != *after;
+            const bool family_changed = before == original->second.properties.end() ?
+                after != change.entity.properties.end() : after == change.entity.properties.end() || *before != *after;
+            if (family_changed) return true;
+            if (after == change.entity.properties.end() || *after != "opening") return false;
+            const auto framed = [](const Entity& opening) {
+                return opening.properties.contains("opening_assembly") &&
+                    parse_opening_assembly(opening.properties.at("opening_assembly")).kind == OpeningAssemblyKind::passage;
+            };
+            return framed(original->second) != framed(change.entity);
         };
         if (std::none_of(raw->entity_changes.begin(), raw->entity_changes.end(), changed_kind)) return requested;
         if (handled) *handled = true;
@@ -46178,6 +46200,12 @@ private:
             else if (*kind != "opening") throw std::invalid_argument("The opening type is unsupported.");
             if (change.entity.properties.contains("opening_assembly"))
                 intent.assembly = parse_opening_assembly(change.entity.properties.at("opening_assembly"));
+            if (intent.target_family == HostedOpeningFamily::opening) {
+                const bool originally_framed = original->second.properties.contains("opening_assembly") &&
+                    parse_opening_assembly(original->second.properties.at("opening_assembly")).kind == OpeningAssemblyKind::passage;
+                intent.framed_passage_transition = originally_framed ||
+                    (intent.assembly && intent.assembly->kind == OpeningAssemblyKind::passage);
+            }
             if (change.entity.properties.contains("door_operation"))
                 intent.door_operation = decode_door_operation(change.entity.properties.at("door_operation"));
             const auto expected = replay_hosted_opening_family_entity(original->second, intent);
@@ -56512,7 +56540,9 @@ private:
         const bool opening = entity.has_value() && entity->type == "opening";
         m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
         m_door_swing_button->setEnabled(m_document->is_editable());
-        m_opening_assembly_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) != "opening");
+        m_opening_assembly_button->setVisible(opening &&
+            (entity->properties.value("opening_kind", std::string{}) != "opening" ||
+                entity->properties.contains("opening_assembly")));
         m_opening_assembly_button->setEnabled(opening && m_document->is_editable());
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
@@ -57110,15 +57140,19 @@ private:
             if (entity->type == "opening") {
                 if (!value && entity->properties.contains("opening_assembly")) {
                     try {
-                        classification = parse_opening_assembly(entity->properties.at("opening_assembly")).kind ==
-                            OpeningAssemblyKind::door ? QStringLiteral("door") : QStringLiteral("window");
+                        classification = QString::fromStdString(std::string(opening_assembly_kind_name(
+                            parse_opening_assembly(entity->properties.at("opening_assembly")).kind)));
                     } catch (const std::exception&) { classification.clear(); }
                 } else if (!value) classification = QStringLiteral("opening");
+                if (entity->properties.contains("opening_assembly") &&
+                    parse_opening_assembly(entity->properties.at("opening_assembly")).kind == OpeningAssemblyKind::passage)
+                    classification = QStringLiteral("passage");
                 m_classification_combo->clear();
                 m_classification_combo->setEditable(false);
                 m_classification_combo->addItem(QStringLiteral("Door"), QStringLiteral("door"));
                 m_classification_combo->addItem(QStringLiteral("Window"), QStringLiteral("window"));
-                m_classification_combo->addItem(QStringLiteral("Opening"), QStringLiteral("opening"));
+                m_classification_combo->addItem(QStringLiteral("Cased opening"), QStringLiteral("passage"));
+                m_classification_combo->addItem(QStringLiteral("Bare opening"), QStringLiteral("opening"));
                 m_classification_combo->setCurrentIndex(m_classification_combo->findData(classification));
                 m_opening_classification_choices = true;
             } else {
@@ -57344,7 +57378,11 @@ private:
                 const auto kind = found->second.properties.value("opening_kind", std::string{});
                 if (kind == "door") return QStringLiteral("Selected: Door");
                 if (kind == "window") return QStringLiteral("Selected: Window");
-                if (kind == "opening") return QStringLiteral("Selected: Doorway");
+                if (kind == "opening") {
+                    const bool framed = found->second.properties.contains("opening_assembly") &&
+                        parse_opening_assembly(found->second.properties.at("opening_assembly")).kind == OpeningAssemblyKind::passage;
+                    return framed ? QStringLiteral("Selected: Cased opening") : QStringLiteral("Selected: Bare opening");
+                }
             }
             auto type = QString::fromStdString(found->second.type);
             type.replace(QLatin1Char('_'), QLatin1Char(' '));
@@ -62371,7 +62409,7 @@ private:
         const auto context = captureModalContext();
         const auto source = selectedEntity();
         if (!source || source->type != "opening") {
-            setError(QStringLiteral("Select a hosted door or window first."));
+            setError(QStringLiteral("Select a hosted door, window or framed opening first."));
             return;
         }
         if (!m_document->is_editable()) {
@@ -62381,10 +62419,14 @@ private:
         try {
             const auto kind_text = read_string(source->properties, "opening_kind")
                 .value_or(read_string(source->properties, "classification").value_or("door"));
-            const auto kind = parse_opening_assembly_kind(kind_text);
+            const auto kind = source->properties.contains("opening_assembly")
+                ? std::optional<OpeningAssemblyKind>{parse_opening_assembly(source->properties.at("opening_assembly")).kind}
+                : parse_opening_assembly_kind(kind_text);
             if (!kind.has_value()) {
-                throw std::invalid_argument("Opening kind must be Door or Window.");
+                throw std::invalid_argument("A bare opening has no frame. Change its type to Cased opening first.");
             }
+            if (opening_assembly_kind_name(*kind) != kind_text)
+                throw std::invalid_argument("Opening assembly does not match its kind.");
             const auto assembly = source->properties.contains("opening_assembly")
                 ? parse_opening_assembly(source->properties.at("opening_assembly"))
                 : default_opening_assembly(*kind);
@@ -62413,6 +62455,10 @@ private:
             form->addRow(QStringLiteral("Panel / sash depth"), panel);
             form->addRow(QStringLiteral("Glazing depth"), glazing);
             form->addRow(QStringLiteral("Inset"), inset);
+            if (assembly.kind == OpeningAssemblyKind::passage) {
+                form->setRowVisible(panel, false);
+                form->setRowVisible(glazing, false);
+            }
             QComboBox* window_layout = nullptr;
             QComboBox* window_jamb = nullptr;
             QComboBox* window_side = nullptr;

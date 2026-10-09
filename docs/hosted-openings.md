@@ -42,9 +42,18 @@ encoded as the original four-field version 1, preserving existing records.
 The library now separates French double doors, interior/exterior hinged doors,
 opaque sliding doors, and single/double garage widths. French doors create two
 glazed physical leaves; the opaque slider keeps the same two-track mechanism
-without glazing. Cased openings route to an actual bare wall cut. Each placed
+without glazing. Cased openings route to an actual wall cut with two physical
+jambs and a head; they have no leaf, sill or glazing. Each placed
 opening retains its library name for selection and schedules. All preset sizes
 remain editable design defaults.
+
+The selected opening's **Type** list distinguishes **Cased opening** from
+**Bare opening**. Switching between them adds or removes the frame while
+retaining the actual cut, host, dimensions and drawing context. **Opening
+assembly** edits the cased frame width, depth and inset; leaf/glazing controls
+are omitted. Plans, elevations, sections, 3D and IFC use the same physical frame.
+Bare historical openings remain bare. These additions are source-only and have
+not been compiled or exercised in the installed application.
 
 **Overhead tilt-up** garage doors use a rigid panel hinging along its top edge.
 **Open** at 0% is closed, at 50% is halfway through a 90-degree lift, and at 100%
@@ -58,6 +67,12 @@ solid. Save/history preserve the strict four-field operation version three:
 `version`, `kind:overhead_tilt_up`, `side`, and `opening_fraction`.
 Schedules display top hinge and open percentage. Compilation and runtime
 qualification of these additions remain open.
+
+Switching a retained implicit door to **Overhead tilt-up** materializes its
+unchanged default assembly together with the new operation in one typed edit.
+The original complete host must remain valid; the conversion preserves every
+other source field. Existing single-field measurement edits and equal-value
+legacy profile edits retain their prior behavior.
 
 The **Double** catalog door creates two physical half-width leaves and two
 analytic swings. The first leaf's jamb follows `hinge`; the second uses the

@@ -368,6 +368,28 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     const auto typed_edit=[&](const BoundaryGeometryEdit& edit) {
         return (edit.arc_construction && edit.arc_construction->chord_input) || typed_authoring(edit.replacement_authoring);
     };
+    const auto opening_edit_reader_floor=[](const nlohmann::json& root) {
+        std::uint64_t nodes{};
+        std::vector<const nlohmann::json*> pending{&root};
+        while (!pending.empty()) {
+            const auto& value=*pending.back(); pending.pop_back();
+            if (++nodes>ProjectStore::maximum_json_values)
+                storage_error(StorageErrorCode::resource_limit,"Opening edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json())==2 &&
+                value.contains("opening_id") && value.at("opening_id").is_string() &&
+                value.contains("wall_id") && value.at("wall_id").is_string() &&
+                value.contains("assembly") && value.contains("door_operation")) {
+                if ((value.size()==11 && value.value("materialize_default_door_assembly",nlohmann::json())==true &&
+                     value.contains("offset") && value.contains("width") && value.contains("sill") &&
+                     value.contains("height") && value.contains("clear_door_operation")) ||
+                    (value.size()==7 && value.value("framed_passage_transition",nlohmann::json())==true &&
+                     value.value("target_family",nlohmann::json())=="opening")) return 155U;
+            }
+            if (value.is_array() || value.is_object())
+                for (const auto& child:value) pending.push_back(&child);
+        }
+        return 0U;
+    };
     const auto typed_receipt=[](const nlohmann::json& value) { return value.is_object() && value.contains("version") &&
         value.at("version").is_number_integer() && value.at("version")==2 && value.contains("chord_input"); };
     std::map<Revision,const RevisionRecord*> retained_revisions;
@@ -398,6 +420,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         return false;
     };
     for (const auto& revision : snapshot.history()) {
+        if (required<155 && revision.boundary_geometry_edit)
+            required=std::max(required,opening_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
+        if (required<155 && revision.boundary_constraint_changes)
+            required=std::max(required,opening_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
         if (required<122 && revision.boundary_constraint_changes)
@@ -805,6 +831,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             if (entity.type == "opening" && entity.properties.is_object()) {
+                const auto assembly = entity.properties.find("opening_assembly");
+                if (assembly != entity.properties.end() && assembly->is_object() &&
+                    assembly->value("version", nlohmann::json()) == 4)
+                    required = std::max(required, 155U);
                 const auto operation = entity.properties.find("door_operation");
                 if (operation != entity.properties.end() && operation->is_object() &&
                     operation->value("version", nlohmann::json()) == 3)
@@ -2504,6 +2534,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 152 &&
          sqlite3_column_int(user_version.get(), 0) != 153 &&
          sqlite3_column_int(user_version.get(), 0) != 154 &&
+         sqlite3_column_int(user_version.get(), 0) != 155 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3102,6 +3133,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=155)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 155 for explicit passage framing and atomic overhead conversion history");
         if (required_format>=154)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 154 for overhead tilt-up door operation and retained pose history");
         if (required_format>=153)

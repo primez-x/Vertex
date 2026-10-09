@@ -1807,7 +1807,13 @@ void bound_wall_deletion_join_inference(const Entities& source,const std::vector
         if (roots.contains(host)) {
             ++removed_openings[host];
             if (entity.type=="opening") removed_semantic_openings.insert(owner);
-            if (entity.properties.contains("opening_kind")) {
+            if (entity.properties.contains("opening_assembly")) {
+                // Explicit passage frames have the same "opening" classification
+                // as bare cuts. Count their real factory work independently of
+                // the legacy implicit door/window kind parser.
+                (void)parse_opening_assembly(entity.properties.at("opening_assembly"));
+                ++manufactured_openings[host];
+            } else if (entity.properties.contains("opening_kind")) {
                 const auto& kind=entity.properties.at("opening_kind");
                 if (!kind.is_string()) invalid("malformed join inference opening kind");
                 if (parse_opening_assembly_kind(kind.get<std::string>())) ++manufactured_openings[host];

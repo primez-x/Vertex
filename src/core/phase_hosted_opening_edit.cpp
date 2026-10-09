@@ -177,7 +177,7 @@ Profile profile(const Entity& entity) {
     if (entity.properties.contains("opening_assembly")) {
         result.assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
         if (kind != entity.properties.end() &&
-            (!family || *family != result.assembly->kind))
+            kind->get_ref<const std::string&>() != opening_assembly_kind_name(result.assembly->kind))
             invalid("Hosted opening profile kind and assembly disagree");
     } else if (family) result.assembly = default_opening_assembly(*family);
     if (entity.properties.contains("door_operation")) {
@@ -214,10 +214,16 @@ nlohmann::json encode_hosted_opening_profile_edit_intent(const HostedOpeningProf
     (void)identity(intent.wall_id);
     if (intent.clear_door_operation && intent.door_operation)
         invalid("Hosted opening profile cannot set and clear the same door operation");
+    if (intent.materialize_default_door_assembly &&
+        (intent.offset || intent.width || intent.sill || intent.height || intent.clear_door_operation ||
+         !intent.assembly || *intent.assembly != default_opening_assembly(OpeningAssemblyKind::door) ||
+         !intent.door_operation || intent.door_operation->kind != DoorOperationKind::overhead_tilt_up))
+        invalid("Hosted opening profile materialization requires only a default door assembly and overhead operation");
     if (!intent.offset && !intent.width && !intent.sill && !intent.height &&
         !intent.assembly && !intent.door_operation && !intent.clear_door_operation)
         invalid("Hosted opening profile edit requires an authored field");
-    Json result{{"version", 1}, {"opening_id", intent.opening_id}, {"wall_id", intent.wall_id},
+    Json result{{"version", intent.materialize_default_door_assembly ? 2 : 1},
+        {"opening_id", intent.opening_id}, {"wall_id", intent.wall_id},
         {"offset", intent.offset ? quantity(*intent.offset, true) : Json(nullptr)},
         {"width", intent.width ? quantity(*intent.width, false) : Json(nullptr)},
         {"sill", intent.sill ? quantity(*intent.sill, true) : Json(nullptr)},
@@ -225,14 +231,21 @@ nlohmann::json encode_hosted_opening_profile_edit_intent(const HostedOpeningProf
         {"assembly", intent.assembly ? opening_assembly_json(*intent.assembly) : Json(nullptr)},
         {"door_operation", intent.door_operation ? encode_door_operation(*intent.door_operation) : Json(nullptr)},
         {"clear_door_operation", intent.clear_door_operation}};
+    if (intent.materialize_default_door_assembly)
+        result["materialize_default_door_assembly"] = true;
     if (result.dump().size() > proof_limit) invalid("Hosted opening profile proof byte budget exceeded");
     return result;
 }
 
 HostedOpeningProfileEditIntent decode_hosted_opening_profile_edit_intent(const nlohmann::json& value) {
-    keys(value, {"version", "opening_id", "wall_id", "offset", "width", "sill", "height", "assembly", "door_operation", "clear_door_operation"});
-    if (!value.at("version").is_number_integer() || value.at("version") != 1)
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version") != 1 && value.at("version") != 2))
         invalid("Hosted opening profile edit version is unsupported");
+    const bool materialization = value.at("version") == 2;
+    if (materialization)
+        keys(value, {"version", "opening_id", "wall_id", "offset", "width", "sill", "height", "assembly", "door_operation", "clear_door_operation", "materialize_default_door_assembly"});
+    else
+        keys(value, {"version", "opening_id", "wall_id", "offset", "width", "sill", "height", "assembly", "door_operation", "clear_door_operation"});
     if (value.dump().size() > proof_limit) invalid("Hosted opening profile proof byte budget exceeded");
     HostedOpeningProfileEditIntent result;
     result.opening_id = identity(value.at("opening_id"));
@@ -246,6 +259,12 @@ HostedOpeningProfileEditIntent decode_hosted_opening_profile_edit_intent(const n
     if (!value.at("clear_door_operation").is_boolean())
         invalid("Hosted opening profile clear operation flag must be a boolean");
     result.clear_door_operation = value.at("clear_door_operation").get<bool>();
+    if (materialization) {
+        if (!value.at("materialize_default_door_assembly").is_boolean() ||
+            !value.at("materialize_default_door_assembly").get<bool>())
+            invalid("Hosted opening profile version two requires explicit default door materialization");
+        result.materialize_default_door_assembly = true;
+    }
     (void)encode_hosted_opening_profile_edit_intent(result);
     return result;
 }
@@ -258,6 +277,11 @@ Entity replay_hosted_opening_profile_entity(const Entity& source, const HostedOp
     if (!read_document_wall_id(source, host, error) || host != intent.wall_id)
         invalid("Hosted opening profile edit must retain its actual host");
     const auto original = profile(source);
+    if (intent.materialize_default_door_assembly &&
+        (source.properties.contains("opening_assembly") || !original.assembly ||
+         *original.assembly != default_opening_assembly(OpeningAssemblyKind::door) ||
+         (original.operation && original.operation->kind == DoorOperationKind::overhead_tilt_up)))
+        invalid("Hosted opening profile materialization requires an actual retained implicit door");
     auto result = source;
     if (intent.offset) scalar(result, "offset_m", "offset", *intent.offset, original.cut.offset, true);
     if (intent.width) scalar(result, "width_m", "width", *intent.width, original.cut.width, false);
@@ -266,7 +290,7 @@ Entity replay_hosted_opening_profile_entity(const Entity& source, const HostedOp
     if (intent.assembly) {
         if (!original.assembly || intent.assembly->kind != original.assembly->kind)
             invalid("Hosted opening profile edit must retain its existing assembly family");
-        if (*intent.assembly != *original.assembly)
+        if (intent.materialize_default_door_assembly || *intent.assembly != *original.assembly)
             result.properties["opening_assembly"] = opening_assembly_json(*intent.assembly);
     }
     if (intent.door_operation) {
@@ -291,6 +315,13 @@ std::map<std::string, Entity, std::less<>> replay_hosted_opening_profile_entitie
     if (intents.empty()) return source;
     const auto scope = constraint_phase_scope(source);
     std::set<std::string, std::less<>> targets, hosts;
+    std::set<std::string, std::less<>> materialization_hosts;
+    for (const auto& intent : intents)
+        if (intent.materialize_default_door_assembly) materialization_hosts.insert(intent.wall_id);
+    // A new representation cannot silently repair an invalid retained profile
+    // or host. Batch complete source admission only for the new closed dialect;
+    // recorded version-one edits keep their established admission.
+    validate_active_wall_physical_dependencies(source, materialization_hosts, true);
     auto result = source;
     std::size_t proof_bytes = 0;
     for (const auto& intent : intents) {
@@ -305,6 +336,14 @@ std::map<std::string, Entity, std::less<>> replay_hosted_opening_profile_entitie
         if (target == source.end() || target->second.id != target->first ||
             host == source.end() || host->second.id != host->first || host->second.type != "wall")
             invalid("Hosted opening profile target or host is missing or inconsistent");
+        if (intent.materialize_default_door_assembly) {
+            // Admit the actual retained cut and resolved host before changing
+            // representation; final full-host physical admission remains below.
+            validate_hosted_opening_profile_entity(target->second);
+            const auto retained_host = host_wall(source, host->second, {&target->second});
+            if (retained_host.baseline.sweep_radians != 0)
+                invalid("Hosted opening profile overhead conversion requires a straight actual wall");
+        }
         result.at(intent.opening_id) = replay_hosted_opening_profile_entity(target->second, intent);
         hosts.insert(intent.wall_id);
     }

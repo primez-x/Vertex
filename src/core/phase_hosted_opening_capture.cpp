@@ -315,12 +315,16 @@ std::optional<HostedOpeningProfileEditIntent> capture_hosted_opening_profile_edi
         invalid("Opening capture original host is missing or invalid");
     const auto pointers = changed_pointers(original, candidate);
     if (authored) {
-        if (authored->opening_id != original.id || authored->wall_id != host || authored_fields(*authored) != 1)
-            invalid("Opening capture authored hint must bind this original and one field");
+        if (authored->opening_id != original.id || authored->wall_id != host ||
+            authored_fields(*authored) != (authored->materialize_default_door_assembly ? 2u : 1u))
+            invalid("Opening capture authored hint must bind this original and one field or explicit atomic conversion");
         // Admit the exact entered quantity before any numeric fallback. Replay
         // independently checks source receipts, same family and retained host.
         const auto expected = replay_hosted_opening_profile_entity(original, *authored);
-        const auto normalized = normalize_equivalent_source_profile(original, candidate, expected);
+        if (authored->materialize_default_door_assembly && !exact(candidate, expected))
+            invalid("Opening capture atomic conversion must preserve all other source fields exactly");
+        const auto normalized = authored->materialize_default_door_assembly ? candidate :
+            normalize_equivalent_source_profile(original, candidate, expected);
         compare_candidate(original, normalized, expected, pointers);
         if (exact(normalized, original) && exact(expected, original)) return std::nullopt;
         return authored;
@@ -350,9 +354,20 @@ std::optional<HostedOpeningProfileEditIntent> capture_hosted_opening_profile_edi
             intent.clear_door_operation = true;
         }
     }
+    if (!original_assembly && intent.assembly &&
+        *intent.assembly == default_opening_assembly(OpeningAssemblyKind::door) &&
+        intent.door_operation && intent.door_operation->kind == DoorOperationKind::overhead_tilt_up) {
+        // Infer only the explicit representation required by this actual
+        // conversion. Typed replay admits the retained family/source; its
+        // closed flag grammar rejects simultaneous dimensions or other edits.
+        intent.materialize_default_door_assembly = true;
+    }
     if (authored_fields(intent) == 0) seed_source_admission(original, intent);
     const auto expected = replay_hosted_opening_profile_entity(original, intent);
-    const auto normalized = normalize_equivalent_source_profile(original, candidate, expected);
+    if (intent.materialize_default_door_assembly && !exact(candidate, expected))
+        invalid("Opening capture atomic conversion must preserve all other source fields exactly");
+    const auto normalized = intent.materialize_default_door_assembly ? candidate :
+        normalize_equivalent_source_profile(original, candidate, expected);
     compare_candidate(original, normalized, expected, pointers);
     if (exact(normalized, original) && exact(expected, original)) return std::nullopt;
     return intent;

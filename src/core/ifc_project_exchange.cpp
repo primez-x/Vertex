@@ -38,6 +38,9 @@ namespace {
 
 using Json = nlohmann::json;
 constexpr double kTolerance = 1e-7;
+constexpr std::string_view kPassageDescription =
+    "Vertex framed passage (jambs and head; no leaf or glazing)";
+constexpr std::string_view kPassageObjectType = "VertexFramedPassage";
 
 [[noreturn]] void invalid() { throw std::invalid_argument("invalid_or_excessive_ifc"); }
 
@@ -225,6 +228,14 @@ std::string step_string(std::string_view value, const IfcExchangeLimits& limits)
     }
     result.push_back('\'');
     return result;
+}
+
+bool passage_product(std::string_view type, const std::vector<std::string>& fields,
+                     const IfcExchangeLimits& limits) {
+    return type == "IFCBUILDINGELEMENTPROXY" && fields.size() == 9 &&
+        fields[7] == "$" && fields[8] == ".NOTDEFINED." &&
+        decode_string(fields[3], limits) == kPassageDescription &&
+        decode_string(fields[4], limits) == kPassageObjectType;
 }
 
 std::string real_text(double value) {
@@ -627,9 +638,9 @@ struct ExportContext {
         return builder.add("IFCLOCALPLACEMENT",(parent ? ref(parent) : "$")+","+ref(axis));
     }
 
-    std::string root(std::string_view id, std::string_view name) {
+    std::string root(std::string_view id, std::string_view name, std::string_view description = {}) {
         return step_string(guid_for(id, ++ordinal), limits) + "," + ref(owner_history) +
-            "," + step_string(name, limits) + ",$";
+            "," + step_string(name, limits) + "," + (description.empty() ? "$" : step_string(description, limits));
     }
 
     void aggregate(int parent, int child, std::string_view id) {
@@ -1459,11 +1470,20 @@ void export_fill(const DocumentSnapshot& document, const Entity& entity, int voi
     const auto shape = mesh_shape(meshes, context);
     const auto placement = fill_placement(frame, context);
     const bool door = profile.kind == OpeningAssemblyKind::door;
-    const auto fill = context.builder.add(door ? "IFCDOOR" : "IFCWINDOW",
-        context.root("fill:" + entity.id, entity.id + " fill") + ",$," + ref(placement) +
-        "," + ref(shape) + ",$," + real_text(opening.height) + "," + real_text(fill_overall_width(wall, opening, frame)) +
-        (door ? ",.DOOR.," + door_operation_enum(operation) + "," + door_operation_label(operation, context.limits)
-              : ",.WINDOW.," + window_partition_enum(profile) + "," + window_partition_label(profile, context.limits)));
+    const bool passage = profile.kind == OpeningAssemblyKind::passage;
+    int fill = 0;
+    if (passage) {
+        fill = context.builder.add("IFCBUILDINGELEMENTPROXY",
+            context.root("fill:" + entity.id, entity.id + " frame", kPassageDescription) + "," +
+            step_string(kPassageObjectType, context.limits) + "," + ref(placement) + "," + ref(shape) +
+            ",$,.NOTDEFINED.");
+    } else {
+        fill = context.builder.add(door ? "IFCDOOR" : "IFCWINDOW",
+            context.root("fill:" + entity.id, entity.id + " fill") + ",$," + ref(placement) +
+            "," + ref(shape) + ",$," + real_text(opening.height) + "," + real_text(fill_overall_width(wall, opening, frame)) +
+            (door ? ",.DOOR.," + door_operation_enum(operation) + "," + door_operation_label(operation, context.limits)
+                  : ",.WINDOW.," + window_partition_enum(profile) + "," + window_partition_label(profile, context.limits)));
+    }
     context.builder.add("IFCRELFILLSELEMENT", context.root("fills:" + entity.id, "") +
         "," + ref(void_id) + "," + ref(fill));
     context.contain(fill);
@@ -2519,7 +2539,8 @@ std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parse
         result.push_back(std::move(mesh));
     }
     if (result.empty()) return std::nullopt;
-    if (product.type == "IFCDOOR" || product.type == "IFCWINDOW" ||
+    const bool passage = passage_product(product.type, fields, limits);
+    if (product.type == "IFCDOOR" || product.type == "IFCWINDOW" || passage ||
         product.type == "IFCROOF" || product.type == "IFCSPACE" || product.type == "IFCSTAIR" ||
         product.type == "IFCRAILING") {
         const auto frame = product_frame(parsed, fields, count, limits);
@@ -3488,7 +3509,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         const auto void_id = reference(fields[4]), fill_id = reference(fields[5]);
         require(void_id && fill_id && find_record(parsed, *void_id) && find_record(parsed, *fill_id));
         require(find_record(parsed, *void_id)->type == "IFCOPENINGELEMENT" &&
-            (find_record(parsed, *fill_id)->type == "IFCDOOR" || find_record(parsed, *fill_id)->type == "IFCWINDOW"));
+            (find_record(parsed, *fill_id)->type == "IFCDOOR" || find_record(parsed, *fill_id)->type == "IFCWINDOW" ||
+             find_record(parsed, *fill_id)->type == "IFCBUILDINGELEMENTPROXY"));
         fills[*void_id].push_back({*fill_id, record.id});
         ++fill_use[*fill_id];
     }
@@ -3528,21 +3550,31 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             // even sub-ULP changes can alter native triangulation ordering.
             const auto checked_opening = native_opening(candidate);
             const bool door = profile.kind == OpeningAssemblyKind::door;
+            const bool passage = profile.kind == OpeningAssemblyKind::passage;
             const auto* fill_record = find_record(parsed, fill_id);
             const auto fields = split_top_level(fill_record->args, argument_count, limits);
             const auto frame = product_frame(parsed, fields, argument_count, limits);
-            const bool legacy_fixed_window = !door && profile.window_layout == WindowLayoutKind::fixed &&
+            const bool legacy_fixed_window = profile.kind == OpeningAssemblyKind::window &&
+                profile.window_layout == WindowLayoutKind::fixed &&
                 metadata.at("opening_assembly").value("version", 0) == 1;
-            if (fields.size() != 13 || (door ? fill_record->type != "IFCDOOR" : fill_record->type != "IFCWINDOW") ||
+            bool product_matches = false;
+            if (passage) {
+                product_matches = passage_product(fill_record->type, fields, limits);
+            } else if (fields.size() == 13) {
+                product_matches = (door ? fill_record->type == "IFCDOOR" : fill_record->type == "IFCWINDOW") &&
+                    fields[10] == (door ? ".DOOR." : ".WINDOW.") &&
+                    (fields[11] == (door ? door_operation_enum(operation) : window_partition_enum(profile)) ||
+                     (legacy_fixed_window && fields[11] == ".NOTDEFINED.")) &&
+                    fields[12] == (door ? door_operation_label(operation, limits) : window_partition_label(profile, limits)) &&
+                    std::abs(number<double>(fields[8]) - opening.properties.at("height_m").get<double>()) <= kTolerance &&
+                    frame && std::abs(number<double>(fields[9]) -
+                        fill_overall_width(native_wall(*host), checked_opening, *frame)) <= kTolerance;
+            }
+            if (!product_matches ||
                 metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
                 void_metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
-                (!door && operation) || fields[10] != (door ? ".DOOR." : ".WINDOW.") ||
-                (fields[11] != (door ? door_operation_enum(operation) : window_partition_enum(profile)) &&
-                 !(legacy_fixed_window && fields[11] == ".NOTDEFINED.")) ||
-                fields[12] != (door ? door_operation_label(operation, limits) : window_partition_label(profile, limits)) ||
-                std::abs(number<double>(fields[8]) - opening.properties.at("height_m").get<double>()) > kTolerance ||
+                (!door && operation) ||
                 !frame || !same_frame(*frame, fill_frame(native_wall(*host), checked_opening, operation)) ||
-                std::abs(number<double>(fields[9]) - fill_overall_width(native_wall(*host), checked_opening, *frame)) > kTolerance ||
                 !matching_meshes(meshes_by_id.at(fill_id), ifc_native_fill_mesh(native_wall(*host),
                     checked_opening, profile, operation, limits.max_mesh_vertices, limits.max_mesh_triangles)))
                 continue;

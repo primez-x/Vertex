@@ -100,10 +100,12 @@ void add_surface_kind(const Entity& entity, ScheduleRecord& record) {
 void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                  std::vector<std::string>& diagnostics) {
     const auto opening_kind = text_field(entity, "opening_kind");
-    // Bare wall voids have no door or window assembly to schedule.
-    if (opening_kind == std::optional<std::string>{"opening"}) return;
-    if (!opening_kind || (*opening_kind != "door" && *opening_kind != "window")) {
-        diagnostic(diagnostics, entity, "opening_kind must be door or window");
+    const bool passage = opening_kind == std::optional<std::string>{"opening"};
+    // A bare wall void has no assembly. An explicit passage profile schedules
+    // the physical frame without inventing a door leaf or a window sash.
+    if (passage && !entity.properties.contains("opening_assembly")) return;
+    if (!opening_kind || (*opening_kind != "door" && *opening_kind != "window" && !passage)) {
+        diagnostic(diagnostics, entity, "opening_kind must be door, window or opening");
         return;
     }
     const auto width = finite_field(entity, "width_m");
@@ -114,9 +116,14 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
     }
     ScheduleRecord record;
     record.object_id = entity.id;
-    record.kind = *opening_kind == "door" ? ScheduleRowKind::door : ScheduleRowKind::window;
-    record.mark = mark_for(entity, record.kind == ScheduleRowKind::door ? "D-" : "W-",
+    record.kind = passage ? ScheduleRowKind::assembly :
+        *opening_kind == "door" ? ScheduleRowKind::door : ScheduleRowKind::window;
+    record.mark = mark_for(entity, passage ? "P-" : record.kind == ScheduleRowKind::door ? "D-" : "W-",
                            diagnostics);
+    if (passage) {
+        record.properties.emplace("name", std::string{"Framed passage"});
+        record.properties.emplace("count", std::int64_t{1});
+    }
     record.properties.emplace("width", ScheduleQuantity{*width, ScheduleUnit::metre});
     record.properties.emplace("height", ScheduleQuantity{*height, ScheduleUnit::metre});
     if(*opening_kind == "door" && entity.properties.contains("door_operation")) {
@@ -152,16 +159,23 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
         try {
             const auto assembly = parse_opening_assembly(
                 entity.properties.at("opening_assembly"));
+            if (opening_assembly_kind_name(assembly.kind) != *opening_kind ||
+                (passage && entity.properties.contains("door_operation"))) {
+                diagnostic(diagnostics, entity, "opening_assembly must match the opening kind and passage frames have no door operation");
+                return;
+            }
             record.properties.emplace("assembly_kind",
                                       std::string(opening_assembly_kind_name(assembly.kind)));
             record.properties.emplace("frame_width",
                                       ScheduleQuantity{assembly.frame_width_m, ScheduleUnit::metre});
             record.properties.emplace("frame_depth",
                                       ScheduleQuantity{assembly.frame_depth_m, ScheduleUnit::metre});
-            record.properties.emplace("panel_thickness",
-                                      ScheduleQuantity{assembly.panel_thickness_m, ScheduleUnit::metre});
-            record.properties.emplace("glazing_thickness",
-                                      ScheduleQuantity{assembly.glazing_thickness_m, ScheduleUnit::metre});
+            if (!passage) {
+                record.properties.emplace("panel_thickness",
+                                          ScheduleQuantity{assembly.panel_thickness_m, ScheduleUnit::metre});
+                record.properties.emplace("glazing_thickness",
+                                          ScheduleQuantity{assembly.glazing_thickness_m, ScheduleUnit::metre});
+            }
             record.properties.emplace("inset",
                                       ScheduleQuantity{assembly.inset_m, ScheduleUnit::metre});
             if (assembly.kind == OpeningAssemblyKind::window) {
@@ -425,14 +439,24 @@ DocumentScheduleProjection project_schedules(
         // Stored room measurements are primitive provenance for gross_area,
         // but the schedule editor only authorizes room names and marks.
         for (auto& row : result.snapshot.rows) {
-            if (row.kind == ScheduleRowKind::door || row.kind == ScheduleRowKind::window) {
+            const bool passage = row.kind == ScheduleRowKind::assembly && row.cells.contains("assembly_kind") &&
+                row.cells.at("assembly_kind").value == ScheduleValue{std::string{"opening"}};
+            if (row.kind == ScheduleRowKind::door || row.kind == ScheduleRowKind::window || passage) {
                 for (const auto* key : {"assembly_kind", "frame_width", "frame_depth", "panel_thickness", "glazing_thickness", "inset",
                                        "window_layout", "panel_count", "bay_projection", "bay_front_fraction", "projection_side"}) {
                     const auto cell = row.cells.find(key);
                     if (cell == row.cells.end()) continue;
                     cell->second.editable = false;
                     cell->second.sources = {{row.object_id, "opening_assembly"}};
-                    cell->second.explanation = "Manufactured opening assembly profile";
+                    cell->second.explanation = passage ? "Framed passage assembly profile" : "Manufactured opening assembly profile";
+                }
+            }
+            if (passage) {
+                for (const auto* key : {"name", "count"}) {
+                    auto& cell = row.cells.at(key);
+                    cell.editable = false;
+                    cell.sources = {{row.object_id, "opening_assembly"}};
+                    cell.explanation = "Physical framed passage assembly";
                 }
             }
             if (row.kind == ScheduleRowKind::window) {
