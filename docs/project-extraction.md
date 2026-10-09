@@ -1,5 +1,18 @@
 # Portable project extraction
 
+Exchange version 144 requires native reader 146 for independent drawing
+removal around direct active-design authoring. Closed outer forty-two encloses
+exactly one canonical authoring thirty-four with identical revision/message and
+the existing closed drawing-selection intent. Original source/history/save
+bindings, complete phase replay, active-policy checks and final drawing replay
+remain required throughout retained and undone history.
+
+Exchange version 143 requires native reader 145 for independent drawing
+removal around complete wall/room review under closed outer forty-one. Its
+historical grammar stays distinct from direct active-design authoring above.
+Extraction derives these floors from the complete retained native history;
+an undone operation cannot lower its reader requirement.
+
 Exchange version 132 requires native reader 134 for mixed architectural
 demolition. Full historical children bind one actual source and saved design
 under exclusive authoring fifteen. Typed family replay and known-row

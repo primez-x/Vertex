@@ -133,17 +133,10 @@ void append_missing(Json& rows, const Ids& additions) {
     for (const auto& row : rows) retained.insert(row.get<std::string>());
     for (const auto& id : additions) if (retained.insert(id).second) rows.push_back(id);
 }
-} // namespace
-
-std::optional<ApplyEntityChanges> prepare_phase_wall_demolition(
-    const DocumentSnapshot& source, const std::vector<std::string>& selected_wall_ids,
-    const std::string& message) {
-    if (!source.is_editable())
-        throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
+std::optional<Entity> prepare_registry(const Entities& entities,const std::vector<std::string>& selected_wall_ids) {
     if (selected_wall_ids.size() > root_limit) reject("selected wall count exceeds 128");
     if (selected_wall_ids.empty()) return std::nullopt;
     try {
-        const auto& entities = source.entities();
         bounds(entities);
         const auto scope = constraint_phase_scope(entities);
         std::map<std::string, const PhysicalWallPhaseState*, std::less<>> owners;
@@ -271,15 +264,68 @@ std::optional<ApplyEntityChanges> prepare_phase_wall_demolition(
                 owners.contains(id) || after.inactive_owner_ids.contains(id) || stage.at(id) != entities.at(id))
                 reject("unregistered opening lacks exact inherited host inactivity: " + id);
         }
-        if (message.size() > 65536) reject("command message exceeds budget");
-        ApplyEntityChanges result;
-        result.expected_revision = source.revision();
-        result.message = message;
-        result.entity_changes.push_back(EntityChange::upsert(std::move(replacement)));
-        return result;
+        return replacement;
     } catch (const Json::exception& error) {
         reject(std::string("malformed source: ") + error.what());
     }
+}
+} // namespace
+
+nlohmann::json encode_phase_wall_demolition_intent(const PhaseWallDemolitionIntent& intent) {
+    identity(intent.registry_id);identity(intent.alternative_id);
+    if (intent.wall_ids.empty() || intent.wall_ids.size()>root_limit)
+        reject("semantic wall selection requires one to 128 actual roots");
+    for (std::size_t index=0;index<intent.wall_ids.size();++index) {
+        identity(intent.wall_ids[index]);
+        if (index && intent.wall_ids[index-1]>=intent.wall_ids[index])
+            reject("semantic wall roots must be ascending and unique");
+    }
+    return {{"version",1},{"registry_id",intent.registry_id},{"alternative_id",intent.alternative_id},{"wall_ids",intent.wall_ids}};
+}
+
+PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const Json& value) {
+    try {
+        if (!value.is_object() || value.size()!=4 || !value.contains("version") ||
+            !value.at("version").is_number_integer() || value.at("version")!=1 ||
+            !value.contains("registry_id") || !value.at("registry_id").is_string() ||
+            !value.contains("alternative_id") || !value.at("alternative_id").is_string() ||
+            !value.contains("wall_ids") || !value.at("wall_ids").is_array() || value.at("wall_ids").size()>root_limit)
+            reject("semantic wall intent requires exact version-one fields");
+        const auto& registry_id=value.at("registry_id").get_ref<const std::string&>();
+        const auto& alternative_id=value.at("alternative_id").get_ref<const std::string&>();
+        identity(registry_id);identity(alternative_id);
+        PhaseWallDemolitionIntent result{registry_id,alternative_id,{}};
+        for (const auto& id:value.at("wall_ids")) {
+            if (!id.is_string()) reject("semantic wall root must be an actual identity");
+            if (id.get_ref<const std::string&>().size()>128) reject("semantic wall root identity exceeds budget");
+            result.wall_ids.push_back(id.get<std::string>());
+        }
+        (void)encode_phase_wall_demolition_intent(result);
+        return result;
+    } catch (const Json::exception& error) { reject(std::string("malformed semantic wall intent: ")+error.what()); }
+}
+
+Entities replay_phase_wall_demolition_entities(const Entities& actual,const PhaseWallDemolitionIntent& intent) {
+    (void)encode_phase_wall_demolition_intent(intent);
+    const auto registry=prepare_registry(actual,intent.wall_ids);
+    if (!registry || registry->id!=intent.registry_id)
+        reject("semantic wall selection differs from its actual saved registry");
+    const auto phases=ModelPhases::from_json(registry->properties.at("model"));
+    if (phases.active_alternative()!=std::optional<std::string>{intent.alternative_id})
+        reject("semantic wall selection differs from its actual saved alternative");
+    auto result=actual;result.at(registry->id)=*registry;
+    return result;
+}
+
+std::optional<ApplyEntityChanges> prepare_phase_wall_demolition(
+    const DocumentSnapshot& source,const std::vector<std::string>& selected_wall_ids,const std::string& message) {
+    if (!source.is_editable()) throw DocumentError(DocumentErrorCode::read_only,source.read_only_reason());
+    auto registry=prepare_registry(source.entities(),selected_wall_ids);
+    if (!registry) return std::nullopt;
+    if (message.size()>65536) reject("command message exceeds budget");
+    ApplyEntityChanges result{source.revision(),{}, {},message};
+    result.entity_changes.push_back(EntityChange::upsert(std::move(*registry)));
+    return result;
 }
 
 } // namespace sketch

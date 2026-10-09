@@ -45,6 +45,7 @@
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_wall_demolition.hpp"
+#include "sketch/mixed_phase_wall_demolition.hpp"
 #include "sketch/hosted_opening_removal.hpp"
 #include "sketch/opening_host_geometry.hpp"
 #include "sketch/wall_join_removal.hpp"
@@ -15537,11 +15538,13 @@ public:
 
     std::optional<Command> reviewRemodelingRoomChanges(const DocumentSnapshot& source,
         const ApplyEntityChanges& registry_command,const PhysicalWallPhaseSelection& destination,
-        const SourceEditAuthority& authority,QWidget* parent) {
+        const SourceEditAuthority& authority,QWidget* parent,const std::function<void()>& additional_fence={}) {
+        if (additional_fence) additional_fence();
         if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
         if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
             throw std::invalid_argument("Finish or cancel the current drawing or placement before reviewing rooms.");
         const auto inventory=inspect_physical_wall_phase_room_review(source,registry_command,destination);
+        if (additional_fence) additional_fence();
         if (inventory.intent.planes.empty()) return Command{registry_command};
         // Returning to the baseline retrieves the original records. Existing
         // stale measurements remain withheld by the ordinary room resolver.
@@ -15582,14 +15585,17 @@ public:
             }
         }
         PhysicalWallPhaseRoomReviewDialog dialog(source,registry_command,destination,m_metric_units,
-            [this,authority] {
+            [this,authority,additional_fence] {
+                if (additional_fence) additional_fence();
                 if (!sourceEditAuthorityCurrent(authority) || hasPendingPlacementEdit() ||
                     m_text_placement_context || m_plan_label_context || m_armed_area_class)
                     throw std::invalid_argument("The project or drawing changed. Reopen the room review.");
                 return authoringSnapshot();
             },parent);
         styleDialog(dialog);
-        if (dialog.exec()!=QDialog::Accepted || !dialog.acceptedCommand()) return std::nullopt;
+        const auto accepted=dialog.exec()==QDialog::Accepted;
+        if (additional_fence) additional_fence();
+        if (!accepted || !dialog.acceptedCommand()) return std::nullopt;
         if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
         return Command{*dialog.acceptedCommand()};
     }
@@ -31606,7 +31612,6 @@ public:
             canonicalIndependentDrawingRemoval(drawing_intent);
             (void)replay_drawing_selection_removal(source.entities(),drawing_intent,source.uses_active_phase_constraints());
         }
-        validate_mixed_wall_removal_source_admission(source.entities(),true);
         QStringList opening_selection;
         for (const auto& id:intent.opening_ids) opening_selection.push_back(QString::fromStdString(id));
         const auto graph=clipboardSelectionGraph(source,true,&opening_selection);
@@ -31614,6 +31619,40 @@ public:
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity) {
                 return entity.id==id && entity.type=="opening";
             })) throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
+        const std::string message=cut ? "Cut selected openings and objects" : "Delete selected openings and objects";
+        if (hasIndependentDrawingRemoval(drawing_intent) && other_ids.empty() && components.empty()) {
+            std::optional<PhysicalWallPhaseSelection> destination;
+            const auto scope=constraint_phase_scope(source.entities());
+            for (const auto& registry:scope.registries) if (registry.alternative_id) {
+                const auto phases=ModelPhases::from_json(source.entities().at(registry.registry_id).properties.at("model"));
+                for (const auto& id:intent.opening_ids)
+                    if (std::binary_search(phases.baseline_ids().begin(),phases.baseline_ids().end(),id)) {
+                        if (destination && (destination->registry_id!=registry.registry_id ||
+                            destination->alternative_id!=registry.alternative_id))
+                            throw std::invalid_argument("The selected openings belong to different active designs.");
+                        destination=PhysicalWallPhaseSelection{registry.registry_id,registry.alternative_id};
+                    }
+            }
+            if (destination) {
+                const auto phase=baselineArchitecturalDemolitionCommand(source,intent.opening_ids,message,*destination);
+                if (!phase) throw std::invalid_argument("The selected openings no longer have a baseline demolition source.");
+                QString clipboard_text;
+                QClipboard* clipboard=nullptr;
+                if (cut) {
+                    const auto encoded=clipboardSelectionPayload(source);
+                    clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
+                    clipboard=QGuiApplication::clipboard();
+                    if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+                }
+                require_current();
+                const auto command=complete_drawing_removal_command(source,Command{*phase},drawing_intent);
+                require_current();
+                if (!applyAuthoredCommand(command)) return false;
+                if (cut) clipboard->setText(clipboard_text,QClipboard::Clipboard);
+                m_selected_id.clear();m_selected_ids.clear();clearError();refresh();return true;
+            }
+        }
+        validate_mixed_wall_removal_source_admission(source.entities(),true);
         intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components));
         validate_physical_wall_join_removal_identity_lifetime(source,intent.other.roof_additional_identities);
         QString clipboard_text;
@@ -31625,7 +31664,6 @@ public:
             if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
         }
         require_current();
-        const std::string message=cut ? "Cut selected openings and objects" : "Delete selected openings and objects";
         Command command;
         if (!intent.other.object_ids.empty() || !intent.other.components.empty())
             command=prepare_opening_architectural_removal(source,intent,message);
@@ -31640,6 +31678,75 @@ public:
         if (!applyAuthoredCommand(command)) return false;
         if (cut) clipboard->setText(clipboard_text,QClipboard::Clipboard);
         m_selected_id.clear();m_selected_ids.clear();clearError();refresh();return true;
+    }
+
+    std::optional<ApplyBoundaryConstraintChanges> baselineArchitecturalDemolitionCommand(
+        const DocumentSnapshot& source,const std::vector<std::string>& roots,const std::string& message,
+        const PhysicalWallPhaseSelection& destination) {
+        if (roots.empty()) return std::nullopt;
+        if (!destination.alternative_id)
+            throw std::invalid_argument("The selected walls no longer have an active design.");
+        std::map<std::string,std::vector<std::string>,std::less<>> families;
+        for (const auto& id:roots) {
+            const auto& object=source.entities().at(id);
+            const char* slot=object.type=="opening" ? "opening_authoring" : object.type=="roof" ? "roof_authoring" :
+                object.type=="slab" ? "slab_authoring" : structuralObject(object) ? "structural_authoring" :
+                object.type=="stair" || object.type=="railing" ? "stair_authoring" : nullptr;
+            if (!slot) throw std::invalid_argument("The selected object has no baseline demolition workflow: "+id);
+            families[slot].push_back(id);
+        }
+        ConstraintAuthoringIntent semantic;semantic.message=message;
+        auto combined=make_phase_constraint_authoring_intent(source,semantic);
+        auto children=json{{"version",1},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
+            {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr}};
+        std::optional<PhaseConstraintAuthoringIntent> only;
+        for (auto& [family,ids]:families) {
+            std::sort(ids.begin(),ids.end());
+            auto leaf=combined;
+            if (family=="opening_authoring") {
+                const PhaseOpeningDemolitionIntent request{destination.registry_id,*destination.alternative_id,ids};
+                leaf.opening_demolition=encode_phase_opening_demolition_intent(request);
+            } else if (family=="slab_authoring") {
+                const auto request=phase_slab_demolition_request(source.entities(),ids);
+                if (!request) throw std::invalid_argument("The selected slabs are not active baseline owners.");
+                leaf.slab_demolition=encode_slab_demolition_intent(*request);
+            } else if (family=="stair_authoring") {
+                const auto request=phase_stair_demolition_request(source.entities(),ids);
+                if (!request) throw std::invalid_argument("The selected stairs or railings are not active baseline owners.");
+                leaf.stair_demolition=encode_stair_demolition_intent(*request);
+            } else if (family=="structural_authoring") {
+                const auto request=phase_structural_demolition_request(source.entities(),ids);
+                if (!request) throw std::invalid_argument("The selected structural objects are not active baseline owners.");
+                PhaseStructuralReplacementAuthoring replacement;
+                replacement.registry_id=request->registry_id;replacement.alternative_id=request->alternative_id;
+                replacement.seed_object_ids=request->seed_object_ids;replacement.demolition=true;
+                leaf.structural_replacement=encode_phase_structural_replacement_authoring(replacement);
+            } else {
+                const auto request=roof_demolition_request(source.entities(),ids,true,true);
+                if (!request) throw std::invalid_argument("The selected roofs are not active baseline owners.");
+                const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
+                    request->registry_id,request->alternative_id,true);
+                if (!plan.ready() || !plan.required_entity_ids.empty() || !plan.required_child_ids.empty() ||
+                    !roof_demolition_additional_identity_counts(source.entities(),*request).empty())
+                    throw std::invalid_argument("The selected roofs need a complete joined-roof demolition review.");
+                PhaseRoofReplacementAuthoring replacement;
+                replacement.registry_id=request->registry_id;replacement.alternative_id=request->alternative_id;
+                replacement.seed_roof_ids=request->seed_roof_ids;replacement.demolition=true;
+                replacement.phase_qualified_joins=true;replacement.preserve_singleton_material=true;
+                leaf.roof_replacement=encode_phase_roof_replacement_authoring(replacement);
+            }
+            children[family]=encode_phase_constraint_authoring_intent(leaf);
+            only=std::move(leaf);
+        }
+        if (families.size()==1) combined=std::move(*only);
+        else combined.coordinated_demolition=std::move(children);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();command.message=message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(combined);
+        // These closed leaves are independently replayed by the core composer.
+        // No family Document preview occurs before complete wall/room decisions.
+        return command;
     }
 
     bool removeSelectedMixedPhysicalWalls(const DocumentSnapshot& source,bool cut) {
@@ -31690,7 +31797,6 @@ public:
             canonicalIndependentDrawingRemoval(drawing_intent);
             (void)replay_drawing_selection_removal(source.entities(),drawing_intent,source.uses_active_phase_constraints());
         }
-        validate_mixed_wall_removal_source_admission(source.entities(),true);
         QStringList wall_selection;
         for (const auto& id:intent.wall_ids) wall_selection.push_back(QString::fromStdString(id));
         for (const auto& id:opening_ids) wall_selection.push_back(QString::fromStdString(id));
@@ -31698,6 +31804,67 @@ public:
         for (const auto& id:intent.wall_ids)
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="wall";}))
                 throw std::invalid_argument("The mixed selection no longer contains its actual physical wall roots.");
+        for (const auto& id:opening_ids)
+            if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="opening";}))
+                throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
+        const std::string message=cut ? "Cut selected walls and objects" : "Delete selected walls and objects";
+        if (const auto walls_demolition=prepare_phase_wall_demolition(source,intent.wall_ids,message)) {
+            // Baseline walls stay in the original plan. Hosted openings already
+            // follow their selected wall; independently selected baseline owners
+            // contribute their own source-bound demolition to the same registry.
+            const std::set<std::string,std::less<>> walls(intent.wall_ids.begin(),intent.wall_ids.end());
+            for (const auto& id:opening_ids) {
+                const auto host=read_string(source.entities().at(id).properties,"wall_id");
+                if (!host || !walls.contains(*host)) other_ids.push_back(id);
+            }
+            std::sort(other_ids.begin(),other_ids.end());
+            const auto& walls_registry=walls_demolition->entity_changes.front().entity;
+            const auto walls_phases=ModelPhases::from_json(walls_registry.properties.at("model"));
+            const PhysicalWallPhaseSelection destination{walls_registry.id,walls_phases.active_alternative()};
+            const auto other=baselineArchitecturalDemolitionCommand(source,other_ids,message,destination);
+            const auto demolition=prepare_mixed_phase_wall_demolition(source,intent.wall_ids,other,message);
+            if (!demolition) throw std::invalid_argument("The selected baseline walls changed. Select the objects again.");
+            const auto& registry=demolition->entity_changes.front().entity;
+            const auto phases=ModelPhases::from_json(registry.properties.at("model"));
+            if (!phases.active_alternative())
+                throw std::invalid_argument("The active wall demolition design changed. Select the objects again.");
+            // The producer preserves all physical bodies and catalog rows.
+            // A selected hosted component is covered only by newly inactive
+            // source hosting; an unrelated component is never silently ignored.
+            auto stage=source.entities();stage.at(registry.id)=registry;
+            const auto before_scope=constraint_phase_scope(source.entities());
+            const auto after_scope=constraint_phase_scope(stage);
+            for (const auto& [catalog_id,instance_id]:components) {
+                const auto catalog=AssemblyModel::from_json(source.entities().at(catalog_id).properties.at("model"));
+                const auto row=std::find_if(catalog.instances().begin(),catalog.instances().end(),[&](const auto& item) {
+                    return item.id==instance_id;
+                });
+                if (row==catalog.instances().end() || !row->placement ||
+                    saved_design_reference_inactive(source,before_scope,row->placement->host_entity_id) ||
+                    !saved_design_reference_inactive(source,after_scope,row->placement->host_entity_id))
+                    throw std::invalid_argument("The selected component needs its own active-design removal review.");
+            }
+            QString clipboard_text;
+            QClipboard* clipboard=nullptr;
+            if (cut) {
+                const auto encoded=clipboardSelectionPayload(source);
+                clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
+                clipboard=QGuiApplication::clipboard();
+                if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+            }
+            require_current();
+            auto final=reviewRemodelingRoomChanges(source,*demolition,
+                PhysicalWallPhaseSelection{registry.id,phases.active_alternative()},authority,owner,require_current);
+            if (!final) { clearError();refreshInspector();return false; }
+            require_current();
+            if (hasIndependentDrawingRemoval(drawing_intent))
+                final=complete_drawing_removal_command(source,*final,drawing_intent);
+            require_current();
+            if (!applyAuthoredCommand(*final)) return false;
+            if (cut) clipboard->setText(clipboard_text,QClipboard::Clipboard);
+            m_selected_id.clear();m_selected_ids.clear();clearError();refresh();return true;
+        }
+        validate_mixed_wall_removal_source_admission(source.entities(),true);
         intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components));
         const auto joins=inspect_physical_wall_join_removal(source.entities(),intent.wall_ids);
         if (!joins.ready()) {
@@ -31729,7 +31896,6 @@ public:
         require_current();
         const MixedWallOpeningRemovalIntent opening_intent{
             intent.wall_ids,opening_ids,intent.wall_additional_identities,intent.other};
-        const std::string message=cut ? "Cut selected walls and objects" : "Delete selected walls and objects";
         Command command;
         json proof=nullptr;
         if (!opening_ids.empty()) {

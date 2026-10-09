@@ -434,27 +434,31 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             required = std::max(required, 8U);
             const auto& command = *revision.boundary_constraint_changes;
             if (command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null())
-                required=std::max(required,145U);
-            const auto active_constraint_proof=[](const nlohmann::json& proof) {
+                required=std::max(required,
+                    command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null() ? 146U : 145U);
+            const auto active_constraint_proof=[](const auto& self,const nlohmann::json& proof,unsigned depth)->bool {
+                if (depth>3) return false;
                 if (!proof.is_object() || !proof.contains("kind") || proof.at("kind")!="apply_boundary_constraint_changes" ||
                     !proof.contains("version")) return false;
                 if (proof.at("version")==34) return true;
-                if (proof.at("version")!=19 || !proof.contains("proof")) return false;
-                const auto& child=proof.at("proof");
-                return child.is_object() && child.contains("kind") && child.at("kind")=="apply_boundary_constraint_changes" &&
-                    child.contains("version") && child.at("version")==34;
+                if ((proof.at("version")==42 || proof.at("version")==41 ||
+                     proof.at("version")==22 || proof.at("version")==19) && proof.contains("proof"))
+                    return self(self,proof.at("proof"),depth+1);
+                return proof.contains("room_review_geometry_proof") &&
+                    self(self,proof.at("room_review_geometry_proof"),depth+1);
             };
             if (command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null() ||
-                active_constraint_proof(command.room_review_geometry_proof))
+                active_constraint_proof(active_constraint_proof,command.room_review_geometry_proof,0))
                 required=std::max(required,86U);
             const auto replacement_proof=[](const auto& self,const nlohmann::json& proof,unsigned depth)->bool {
-                if (depth>2 || !proof.is_object() || !proof.contains("kind") ||
+                if (depth>3 || !proof.is_object() || !proof.contains("kind") ||
                     proof.at("kind")!="apply_boundary_constraint_changes" || !proof.contains("version")) return false;
                 if (proof.at("version")==34) {
                     const auto found=proof.find("phase_constraint_authoring_intent");
                     return found!=proof.end() && found->is_object() && found->contains("version") && found->at("version")==2;
                 }
-                if ((proof.at("version")==22 || proof.at("version")==19) && proof.contains("proof"))
+                if ((proof.at("version")==42 || proof.at("version")==41 ||
+                     proof.at("version")==22 || proof.at("version")==19) && proof.contains("proof"))
                     return self(self,proof.at("proof"),depth+1);
                 return proof.contains("room_review_geometry_proof") && self(self,proof.at("room_review_geometry_proof"),depth+1);
             };
@@ -629,7 +633,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return version==5 ? 92U : version==4 ? 91U : version==3 ? 89U : version==2 ? 88U : 0U;
             };
             const auto profile_proof=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->std::uint32_t {
-                if (depth>2 || !proof.is_object()) return 0;
+                if (depth>3 || !proof.is_object()) return 0;
+                if (proof.value("kind",std::string{})=="apply_boundary_constraint_changes" &&
+                    (proof.value("version",0)==42 || proof.value("version",0)==41) && proof.contains("proof"))
+                    return std::max(proof.value("version",0)==42 ? 146U : 145U,
+                        self(self,proof.at("proof"),depth+1));
                 if (proof.value("kind",std::string{})=="mixed_wall_opening_deletion" && proof.value("version",0)==40)
                     return 144U;
                 if (proof.value("kind",std::string{})=="mixed_wall_deletion" && proof.value("version",0)==39)
@@ -2461,6 +2469,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 45 &&
          sqlite3_column_int(user_version.get(), 0) != 144 &&
          sqlite3_column_int(user_version.get(), 0) != 145 &&
+         sqlite3_column_int(user_version.get(), 0) != 146 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3059,6 +3068,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=146)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 146 for independent drawing removal with direct phase authoring");
         if (required_format>=145)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 145 for independent drawing removal with wall and room review");
         if (required_format>=144)

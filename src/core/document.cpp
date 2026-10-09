@@ -1867,9 +1867,12 @@ static ApplyBoundaryConstraintChanges without_independent_drawing_removal(ApplyB
 }
 
 static void validate_independent_drawing_removal_mode(const ApplyBoundaryConstraintChanges& command) {
+    const bool phase_authoring=command.phase_constraint_authoring_completion &&
+        !command.phase_constraint_authoring_intent.is_null();
     if (!command.independent_drawing_removal_completion || command.independent_drawing_removal_intent.is_null() ||
-        (!(command.room_review_completion && command.room_review_geometry_completion) && !command.phase_room_review_completion))
-        throw std::invalid_argument("Independent drawing removal requires a complete wall/room review and its semantic intent");
+        (!(command.room_review_completion && command.room_review_geometry_completion) &&
+            !command.phase_room_review_completion && !phase_authoring))
+        throw std::invalid_argument("Independent drawing removal requires a complete wall/room review or active design operation and its semantic intent");
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
     const auto intent=decode_drawing_selection_removal_intent(command.independent_drawing_removal_intent);
     if (encode_drawing_selection_removal_intent(intent).dump()!=command.independent_drawing_removal_intent.dump())
@@ -2590,7 +2593,7 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
         // The new independent removal is one validated outer enclosure;
         // preserve the historical child walk's existing depth allowance.
-        else if (version==41) self(self,proof.at("proof"),depth);
+        else if (version==41 || version==42) self(self,proof.at("proof"),depth);
         else if (version==22 || version==19) self(self,proof.at("proof"),depth+1);
         else if (proof.contains("room_review_geometry_proof"))
             self(self,proof.at("room_review_geometry_proof"),depth+1);
@@ -2893,13 +2896,14 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const ApplyBoundaryConstraintChanges& command) {
     std::set<std::string,std::less<>> fresh;
     std::set<std::string,std::less<>> nested_fresh;
-    bool complete_envelope_reservation=false;
+    const bool phase_drawing_enclosure=has_independent_drawing_removal(command) && has_phase_constraint_authoring(command);
+    bool complete_envelope_reservation=phase_drawing_enclosure;
     bool wall_stack_asset_reservation=false;
     bool hosted_slab_asset_reservation=false;
     bool roof_mixed_asset_reservation=false;
     bool wall_presentation_asset_reservation=false;
-    bool structural_asset_reservation=false;
-    bool structural_hosted_alias_reservation=false;
+    bool structural_asset_reservation=phase_drawing_enclosure;
+    bool structural_hosted_alias_reservation=phase_drawing_enclosure;
     const bool wall_join_asset_reservation=has_complete_wall_join_deletion_proof(command);
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
@@ -3104,6 +3108,16 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("A proposed component presentation overlaps another fresh identity: "+alias);
             nested_fresh.insert(alias);
         }
+    }
+    if (phase_drawing_enclosure) {
+        // The complete new enclosure reserves every resulting or declared
+        // destination against both stage vocabularies, even for older phase
+        // children whose original dialect required less envelope reservation.
+        nested_fresh.insert(fresh.begin(),fresh.end());
+        for (const auto* token:{"independent_drawing_removal_completion","independent_drawing_removal_intent",
+            "owner_ids","annotations","owner_id","child_id","proof"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A fresh phase destination borrows an independent drawing proof token: "+std::string(token));
     }
     if (fresh.empty()) return;
     if (fresh.size()>4096) throw std::invalid_argument("Active design fresh identity budget exceeded");
@@ -5048,6 +5062,14 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 original,retained_replay,active_policy);
             validate_completed_constraint_change(source,stage,original,retained_replay);
             auto result=replay_drawing_selection_removal_after_review(source,stage,intent,active_policy);
+            if (has_phase_constraint_authoring(original)) {
+                // Explicit drawing retirement may remove active annotation
+                // rows, but cannot alter suspended constraints, inactive bodies
+                // or the retained order/values of inactive annotation rows.
+                validate_active_design_preserved_dependents(source,result,
+                    false,true);
+                validate_active_design_preserved_dependents(stage,result,false,true);
+            }
             validate_boundary_identity_transition(history,source,result);
             (void)validate_state(result,source_assets,active_policy);
             return result;
@@ -6747,10 +6769,12 @@ nlohmann::json command_to_json(const Command& command) {
                 try {
                     validate_independent_drawing_removal_mode(typed);
                     const auto proof=command_to_json(Command{without_independent_drawing_removal(typed)});
+                    const bool phase_authoring=has_phase_constraint_authoring(typed);
                     if (proof.at("kind")!="apply_boundary_constraint_changes" || !proof.at("version").is_number_integer() ||
-                        proof.at("version").get<int>()<1 || proof.at("version").get<int>()>40)
-                        throw std::invalid_argument("Independent drawing removal requires one preceding unnested wall/room proof");
-                    auto encoded=nlohmann::json{{"version",41},{"kind","apply_boundary_constraint_changes"},
+                        proof.at("version").get<int>()<1 || proof.at("version").get<int>()>40 ||
+                        (phase_authoring && proof.at("version")!=34))
+                        throw std::invalid_argument("Independent drawing removal requires one preceding unnested complete proof");
+                    auto encoded=nlohmann::json{{"version",phase_authoring ? 42 : 41},{"kind","apply_boundary_constraint_changes"},
                         {"expected_revision",typed.expected_revision},{"message",typed.message},
                         {"independent_drawing_removal_completion",true},
                         {"independent_drawing_removal_intent",typed.independent_drawing_removal_intent},{"proof",proof}};
@@ -7194,7 +7218,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>41) ||
+            (value.at("version")<1 || value.at("version")>42) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -7297,7 +7321,8 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
-            if (value.at("version")==41) {
+            if (value.at("version")==41 || value.at("version")==42) {
+                const bool phase_enclosure=value.at("version")==42;
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "independent_drawing_removal_completion","independent_drawing_removal_intent","proof"},
                     DocumentErrorCode::invalid_entity,"serialized independent drawing removal");
@@ -7307,11 +7332,13 @@ Command command_from_json(const nlohmann::json& value,
                 const auto& proof=value.at("proof");
                 if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
                     proof.at("version").get<std::int64_t>()<1 || proof.at("version").get<std::int64_t>()>40 ||
-                    !proof.contains("kind") || proof.at("kind")!=kind)
+                    !proof.contains("kind") || proof.at("kind")!=kind ||
+                    (phase_enclosure && proof.at("version")!=34))
                     throw std::invalid_argument("Independent drawing removal requires one preceding unnested proof");
                 const auto decoded=command_from_json(proof,asset_resolver);
                 const auto* original=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
                 if (!original || has_independent_drawing_removal(*original) ||
+                    (phase_enclosure ? !has_phase_constraint_authoring(*original) : has_phase_constraint_authoring(*original)) ||
                     original->expected_revision!=command_revision(value.at("expected_revision"),"Independent drawing removal revision") ||
                     !value.at("message").is_string() || value.at("message")!=proof.at("message"))
                     throw std::invalid_argument("Independent drawing removal must retain its original command identity");

@@ -14,6 +14,54 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 direct active-design and drawing source implementation
+
+Delete/Cut can now combine baseline hosted opening demolition with independently
+selected drawing owners, labels and symbols. A separate closed outer-forty-two
+command retains the exact original phase-authoring proof and reconstructs the
+complete phase stage before drawing removal. Existing outer-forty-one wall/room
+commands keep their historical meaning. Source/history/save bindings, active
+ownership, assets, metadata, selection and Site publication fences remain in
+the operation; Cut publishes its captured clipboard only after application.
+
+Native reader 146 and extraction 144 retain the new meaning in current,
+historical and undone operations. Fresh phase destinations additionally reserve
+the combined drawing proof vocabulary, retained assets and component aliases.
+Independent source review approved after protecting suspended constraints and
+inactive dependents through the final drawing stage. Root integrated source
+review is complete. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran; compilation and runtime
+remain unverified. The installed candidate is unchanged.
+
+### October 9 mixed baseline-wall and legacy drawing-view source implementation
+
+Mixed Delete/Cut now routes shared baseline walls and independently selected
+baseline architectural owners through one captured active-design demolition.
+Each family derives its candidate from the complete original source; composition
+retains physical bodies, hosted catalog rows, saved metadata, membership order
+and other alternatives. Hosted opening selections collapse into their selected
+wall consequence. Selected components require a newly inactive actual host.
+Room decisions retain the full original selection and Site source fence;
+independent drawing removal completes afterward in the same applied command.
+
+Supported legacy sheet/view models whose last explicit source is removed are
+promoted to the existing version-six representation before pruning. The helper
+copies raw entities and collections, adds existing reader defaults, verifies
+unchanged interpreted meaning, and retains an empty restricted view. Conflicting
+pre-v4 raw sheet order and unsupported schemas refuse rather than broaden views.
+
+Both slices passed independent source review. Mixed-family demolition preserves
+the original raw demolition prefix even when a historical opening leaf sorts
+its semantic set; coordinated families each replay the actual source before
+that narrowly validated order adapter and composition. Root integrated source
+review is complete. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations ran; compilation and runtime remain
+unverified. The installed candidate is unchanged. Mixed baseline/ordinary wall
+cohorts, independent component retirement, all roof demolition cohorts,
+demolition with other fresh
+destinations, broader phase-authoring/drawing combinations and production
+qualification remain unfinished.
+
 ### October 9 joint baseline stair attachment source implementation
 
 Baseline stair replacement now makes the matching conditional group-retirement

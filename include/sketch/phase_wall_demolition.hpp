@@ -4,6 +4,25 @@
 
 namespace sketch {
 
+struct PhaseWallDemolitionIntent {
+    std::string registry_id;
+    std::string alternative_id;
+    std::vector<std::string> wall_ids;
+    bool operator==(const PhaseWallDemolitionIntent&) const = default;
+};
+
+// Closed semantic selection: the actual saved registry/alternative and an
+// ascending unique inventory of retained baseline walls. No entity payloads
+// or unrelated membership changes can borrow this authority.
+[[nodiscard]] nlohmann::json encode_phase_wall_demolition_intent(const PhaseWallDemolitionIntent& intent);
+[[nodiscard]] PhaseWallDemolitionIntent decode_phase_wall_demolition_intent(const nlohmann::json& value);
+// Analytical complete actual-source replay. Only the admitted active registry
+// changes; baseline bodies, cuts, hosted rows, metadata and aliases remain exact.
+// The enclosing producer still owns source/history/constraint admission and
+// explicit physical-room disposition review before publication.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_wall_demolition_entities(
+    const std::map<std::string,Entity,std::less<>>& actual,const PhaseWallDemolitionIntent& intent);
+
 // Prepare one raw, asset-free registry upsert for the existing phase-room
 // review. No shared-baseline selection returns nullopt. Once any selected wall
 // qualifies, every selected root must be an actual, nonrequired, active baseline

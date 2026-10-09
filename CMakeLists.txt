@@ -831,6 +831,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_hosted_opening_edit.cpp src/core/phase_hosted_opening_capture.cpp
     src/core/phase_hosted_opening_rehost.cpp src/core/phase_hosted_opening_family_edit.cpp
     src/core/phase_opening_demolition.cpp src/core/phase_wall_demolition.cpp
+    src/core/mixed_phase_wall_demolition.cpp
     src/core/phase_roof_profile_edit.cpp src/core/phase_roof_opening_edit.cpp
     src/core/phase_roof_pose_edit.cpp src/core/phase_roof_form_edit.cpp src/core/phase_roof_transform.cpp
     src/core/phase_roof_uniform_transform.cpp
@@ -856,6 +857,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_stair_replacement.cpp
     src/core/stair_edit_dependencies.cpp
     src/core/drawing_selection_removal.cpp src/core/drawing_removal_command.cpp
+    src/core/sheet_view_restriction_migration.cpp
     src/core/stair_clone.cpp
     src/core/slab_layer_stack_edit.cpp src/core/slab_geometry_edit.cpp src/core/slab_clone.cpp
     src/core/slab_hosted_geometry_edit.cpp

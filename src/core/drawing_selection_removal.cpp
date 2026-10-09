@@ -5,10 +5,12 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/sheet_view_restriction_migration.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -453,6 +455,7 @@ Authority authority(const Entities& actual, const DrawingSelectionRemovalIntent&
         for (const auto& relation : model.relations()) if ((result.roots.contains(relation.source_id) || result.roots.contains(relation.target_id)) &&
             relation.kind != RoomRelationKind::independent) reject("dependent room relationship requires explicit review: " + id);
     }
+    const auto constraint_scope=constraint_phase_scope(actual);
     for (const auto& [id, entity] : actual) {
         if (result.retired.contains(id)) continue;
         if (can_recognize_boundary_dimension_entity_type(entity.type) && touches(entity, result.roots, budget)) {
@@ -468,6 +471,8 @@ Authority authority(const Entities& actual, const DrawingSelectionRemovalIntent&
             if (std::any_of(decoded.constraint->bindings.begin(), decoded.constraint->bindings.end(),
                 [&](const auto& binding) { return result.roots.contains(binding.owner_id); })) {
                 if (entity.required) reject("dependent constraint is required: " + id);
+                if (!constraint_participates(*decoded.constraint,constraint_scope))
+                    reject("dependent constraint belongs to an inactive design and needs explicit relationship review: " + id);
                 result.retired.insert(id);
             }
         }
@@ -637,13 +642,22 @@ void cleanup(Entity& entity, const Authority& selected) {
         validate_annotation_entity(entity);
     } else if (entity.type == kSheetViewEntityType) {
         validate_sheet_view_entity(entity);
+        // An older source list becomes unrestricted when its final ID is
+        // removed. Promote only that previously refused case, preserving every
+        // surviving raw collection and the existing reader's legacy meaning.
+        const auto& model = p.at("model");
+        if (model.at("version").get<unsigned>() < 6 &&
+            std::any_of(model.at("views").begin(), model.at("views").end(), [&](const Json& view) {
+                const auto ids = field(view, "object_ids");
+                return ids && !ids->empty() && std::all_of(ids->begin(), ids->end(), [&](const Json& id) {
+                    return selected.retired.contains(id.get<std::string>());
+                });
+            })) entity = upgrade_sheet_view_entity_for_empty_restriction(entity);
         for (auto& view : p.at("model").at("views")) {
             if (view.contains("object_ids")) {
                 auto& ids = view.at("object_ids"); const bool restricted = !ids.empty() || view.value("restrict_to_objects", false);
                 const auto size = ids.size(); remove_ids(ids, selected.retired);
                 if (size != ids.size() && restricted && ids.empty()) {
-                    if (p.at("model").at("version").get<std::uint64_t>() < 6)
-                        reject("empty restricted view requires an explicit sheet/view v6 upgrade: " + entity.id);
                     view["restrict_to_objects"] = true;
                 }
             }

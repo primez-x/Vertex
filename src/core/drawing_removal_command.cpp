@@ -39,10 +39,18 @@ Command complete_drawing_removal_command(const DocumentSnapshot& source,const Co
     if (const auto* raw=std::get_if<ApplyEntityChanges>(&original)) {
         if (!raw->asset_changes.empty()) throw std::invalid_argument("Drawing removal cannot change assets.");
     } else if (const auto* reviewed=std::get_if<ApplyBoundaryConstraintChanges>(&original)) {
+        const bool phase_authoring=reviewed->phase_constraint_authoring_completion &&
+            !reviewed->phase_constraint_authoring_intent.is_null();
         if (reviewed->independent_drawing_removal_completion || !reviewed->independent_drawing_removal_intent.is_null() ||
             (!(reviewed->room_review_completion && reviewed->room_review_geometry_completion) &&
-                !reviewed->phase_room_review_completion))
-            throw std::invalid_argument("Drawing removal requires one complete unnested wall/room review.");
+                !reviewed->phase_room_review_completion && !phase_authoring))
+            throw std::invalid_argument("Drawing removal requires one complete unnested wall/room review or active design authoring.");
+        // Let the strict command mode reject competing authorities before geometry replay.
+        const auto proof=command_to_json(original);
+        if (proof.dump().size()>1024*1024 || command_to_json(command_from_json(proof)).dump()!=proof.dump() ||
+            ((reviewed->phase_constraint_authoring_completion || !reviewed->phase_constraint_authoring_intent.is_null()) &&
+                (!phase_authoring || proof.at("version")!=34)))
+            throw std::invalid_argument("Drawing removal requires an exactly retained unnested preceding operation.");
     } else throw std::invalid_argument("The selected drawing removal has no supported complete operation.");
     const auto stage=Document::preview_command(source,original);
     metadata(source,stage);

@@ -1,4 +1,28 @@
-# Vertex project formats v1 through v145
+# Vertex project formats v1 through v146
+
+## Independent drawing removal around active-design authoring (v146)
+
+Native reader 146 and JSON/assets extraction 144 retain separate additive
+command envelope forty-two, including retained and undone history. Its exact
+seven fields match forty-one, but `proof` must be one canonical, unnested
+active-design command thirty-four with the same revision and message.
+Forty-one retains its complete wall/room meaning and cannot enclose direct
+active-design authoring.
+
+The Document authenticates the original phase source/history/save bindings,
+reconstructs that complete stage, and then replays the closed independent
+drawing selection against the actual source and admitted stage. Active-design
+policy, inactive ownership, original assets, metadata and history reservations
+remain enforced. Every resulting or declared phase destination is reserved
+against retained assets, component aliases, entity envelopes and the combined
+proof vocabulary. No raw payload gains phase geometry authority.
+
+The desktop uses this completion when baseline doors/windows and independent
+drawing items are deleted or cut together. One command retains the original
+opening bodies in the baseline and removes them from the active design, while
+removing only the explicitly selected drawing items. Publication retains the
+full captured selection and Site fence; Cut updates the clipboard afterward.
+Compilation and runtime remain unverified under the source-only instruction.
 
 ## Independent drawing removal around wall/room review (v145)
 
@@ -32,8 +56,25 @@ retains the complete original selection and Site source fence across room
 dialogs. The command decoder ceiling now includes existing children thirty-five
 through forty as well as the new outer envelope. Compilation, runtime and
 save/reopen remain unverified under the source-only instruction. Affected opaque
-references, protected owners and empty legacy restricted views still require
-additional authoring support rather than inferred changes.
+references and protected owners still require additional authoring support
+rather than inferred changes.
+
+When deleting the last explicit source from a supported sheet/view model
+version one through five, cleanup copies the complete raw entity and promotes
+its model to the existing version-six reader representation before pruning.
+Only missing defaults already defined by that reader are added; all interpreted
+view, overlay, sheet, schedule and order semantics must remain equal. The emptied
+view retains `restrict_to_objects: true`. A pre-v4 raw `sheet_order` conflicting
+with its legacy interpreted order refuses. Unsupported schemas cannot use this
+migration. This adds no new model dialect or reader floor.
+
+Mixed shared-baseline wall and architectural demolition composes independently
+source-bound, retained-body candidates into one raw active-registry update.
+Physical bodies, catalog rows, other alternatives and saved metadata remain
+exact. Existing explicit phase-room review completes the registry stage before
+publication; independent drawing removal uses the existing completion above.
+Ordinary/proposed erasure, roof cohorts and fresh destination cohorts require their own
+complete authoring lane and cannot borrow this registry-only authority.
 
 ## Ordinary stair attachment edits in existing raw commands
 
