@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 ordinary stair attachment source implementation
+
+The stair editor now offers explicit attachment choices for ordinary stairs as
+well as baseline replacements. Analytical inspection derives the affected
+actual railings and valid resulting flights or landings. Named targets retain
+their names; unnamed targets use readable flight/landing numbers. The dialog
+requires one choice for each affected railing and retains the complete source
+fence through application.
+
+The ordinary producer reserves actual retained child history before geometry
+work, uses the complete original-source rail/component retirement closure, and
+captures and replays the existing compound profile/placement edit. Surviving
+aliases, room/boundary lineage, assets, metadata and real Document preview are
+checked. Protected design ownership remains refused. This uses existing raw
+version-one commands and supported state; no new format dialect is introduced.
+
+Independent source review approved; root integrated source review is complete.
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged. Jointly valid mutually referring retirements,
+conservative capacity limits, mixed drawing/annotation and shared-baseline wall
+cohorts, and production qualification remain unfinished. The next source batch
+adds independent drawing and annotation removal around retained wall review.
+
 ### October 9 mixed wall and semantic opening source implementation
 
 Mixed wall, door/window/doorway and optional architectural/component Delete/Cut

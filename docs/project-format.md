@@ -1,5 +1,20 @@
 # Vertex project formats v1 through v144
 
+## Ordinary stair attachment edits in existing raw commands
+
+Ordinary stair edits with explicit railing rehost/removal decisions use the
+existing asset-free raw version-one command. All retained entities use their
+existing supported stair, railing, catalog and presentation dialects; this
+producer introduces no additional reader floor. The source-derived compound
+profile/placement replay and complete rail retirement run before the single
+command is created. The actual snapshot supplies retained child lifetime,
+constraint policy, assets and source authority. Protected phase owners remain
+under their existing authoring paths.
+
+The complete command and candidate pass exact real Document preview before
+publication; Undo retains the whole edit. Compilation, runtime and save/reopen
+remain unverified under the source-only instruction.
+
 ## Mixed wall and semantic opening removal with room review (v144)
 
 Native reader 144 and JSON/assets extraction 142 retain child forty under a

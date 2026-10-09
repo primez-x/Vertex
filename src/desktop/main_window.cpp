@@ -50,6 +50,7 @@
 #include "sketch/wall_join_removal.hpp"
 #include "sketch/mixed_wall_removal.hpp"
 #include "sketch/mixed_wall_opening_removal.hpp"
+#include "sketch/stair_edit_dependencies.hpp"
 #include "sketch/opening_architectural_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
@@ -23572,19 +23573,26 @@ public:
                 edited.reserve(changes.size()+1);
                 for (const auto& change:changes) edited.push_back(change.entity);
                 edited.push_back(candidate);
-                const auto dispositions=reviewStairDependencyDispositions(snapshot,edited);
+                bool ordinary_dependencies=false;
+                const auto dispositions=reviewStairDependencyDispositions(snapshot,edited,&ordinary_dependencies);
                 if (!dispositions) return {};
-                const auto compound=dispositions->empty() ?
-                    capture_phase_stair_replacement_compound_edits(snapshot.entities(), edited) :
-                    capture_phase_stair_replacement_compound_edits(snapshot.entities(), edited,*dispositions);
-                if (compound.empty()) {
-                    clearError();
-                    refresh();
-                    return id_from(candidate.id);
-                }
                 if (!related_context_completions.empty())
                     throw std::invalid_argument("An existing object edit cannot borrow a new hosted object's hierarchy completion.");
-                const auto command=sourceDerivedStairCompoundEditCommand(snapshot, compound, "Edit stair or railing",*dispositions);
+                Command command;
+                if (ordinary_dependencies)
+                    command=prepare_ordinary_stair_dependency_edit(
+                        snapshot,edited,*dispositions,"Edit stair or railing");
+                else {
+                    const auto compound=dispositions->empty() ?
+                        capture_phase_stair_replacement_compound_edits(snapshot.entities(), edited) :
+                        capture_phase_stair_replacement_compound_edits(snapshot.entities(), edited,*dispositions);
+                    if (compound.empty()) {
+                        clearError();
+                        refresh();
+                        return id_from(candidate.id);
+                    }
+                    command=sourceDerivedStairCompoundEditCommand(snapshot,compound,"Edit stair or railing",*dispositions);
+                }
                 const auto proposed_id=alternativeReplacementTargetID(command, candidate.id);
                 if (!sourceEditAuthorityUnchanged(source_authority) || !applyAuthoredCommand(command)) return {};
                 m_selected_id=id_from(proposed_id);
@@ -44871,7 +44879,8 @@ private:
     }
 
     std::optional<std::vector<PhaseStairReplacementDependencyDisposition>> reviewStairDependencyDispositions(
-        const DocumentSnapshot& source,const std::vector<Entity>& edited) {
+        const DocumentSnapshot& source,const std::vector<Entity>& edited,bool* ordinary_dependencies=nullptr) {
+        if (ordinary_dependencies) *ordinary_dependencies=false;
         bool shared=false;
         for (const auto& [id,registry]:source.entities()) {
             (void)id;
@@ -44887,8 +44896,8 @@ private:
                     std::binary_search(model.baseline_ids().begin(),model.baseline_ids().end(),entity.id)) shared=true;
             }
         }
-        if (!shared) return std::vector<PhaseStairReplacementDependencyDisposition>{};
-        const auto plan=inspect_phase_stair_replacement_dependencies(source.entities(),edited);
+        const auto plan=shared ? inspect_phase_stair_replacement_dependencies(source.entities(),edited) :
+            inspect_ordinary_stair_edit_dependencies(source.entities(),edited);
         if (!plan.ready()) {
             std::string reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
@@ -44898,6 +44907,7 @@ private:
             throw std::invalid_argument(reasons.empty() ? "The stair attachments could not be reviewed." : reasons);
         }
         if (plan.dependencies.empty()) return std::vector<PhaseStairReplacementDependencyDisposition>{};
+        if (ordinary_dependencies) *ordinary_dependencies=!shared;
         const auto authority=captureSourceEditAuthority(source);
         StairDependencyReviewDialog dialog(source,plan,[this,authority] {
             if (!sourceEditAuthorityCurrent(authority))

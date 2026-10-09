@@ -854,6 +854,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_stair_demolition.cpp
     src/core/phase_stair_demolition_retirement.cpp
     src/core/phase_stair_replacement.cpp
+    src/core/stair_edit_dependencies.cpp
     src/core/stair_clone.cpp
     src/core/slab_layer_stack_edit.cpp src/core/slab_geometry_edit.cpp src/core/slab_clone.cpp
     src/core/slab_hosted_geometry_edit.cpp
