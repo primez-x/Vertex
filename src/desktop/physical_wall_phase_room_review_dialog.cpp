@@ -6,6 +6,7 @@
 #include "sketch/physical_wall_phase_review.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
+#include "sketch/phase_wall_demolition_authoring.hpp"
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/document_wall_plan.hpp"
@@ -149,8 +150,9 @@ public:
     PhysicalWallPhaseRoomReviewDialog* dialog;
     DocumentSnapshot source;
     ApplyEntityChanges registry_command;
-    std::optional<PhaseConstraintAuthoringIntent> replacement_intent;
+    std::optional<PhaseConstraintAuthoringIntent> wall_authoring_intent;
     std::optional<PhaseWallReplacementAuthoringPreview> replacement_preview;
+    std::optional<PhaseWallDemolitionAuthoringPreview> demolition_preview;
     std::set<std::string,std::less<>> deferred_constraint_ids;
     std::vector<RoomConstraintRow> room_constraints;
     PhysicalWallPhaseSelection destination;
@@ -181,8 +183,8 @@ public:
 
     Impl(PhysicalWallPhaseRoomReviewDialog* owner,DocumentSnapshot captured,ApplyEntityChanges command,
         PhysicalWallPhaseSelection target,bool metric_units,std::function<DocumentSnapshot()> current,
-        std::optional<PhaseConstraintAuthoringIntent> replacement=std::nullopt):
-        dialog(owner),source(std::move(captured)),registry_command(std::move(command)),replacement_intent(std::move(replacement)),
+        std::optional<PhaseConstraintAuthoringIntent> wall_authoring=std::nullopt):
+        dialog(owner),source(std::move(captured)),registry_command(std::move(command)),wall_authoring_intent(std::move(wall_authoring)),
         destination(std::move(target)),
         current_source(std::move(current)),source_digest(document_snapshot_digest(source)),metric(metric_units) {
         dialog->setObjectName(QStringLiteral("physicalPhaseRoomReviewDialog"));
@@ -236,8 +238,9 @@ public:
         presentation_table=table(presentation_page,QStringLiteral("physicalPhaseRoomReviewPresentationRemovals"),
             {QStringLiteral("Saved presentation / annotation record"),QStringLiteral("Affected items"),QStringLiteral("Change acknowledgement")});
         presentation_layout->addWidget(presentation_table);tabs->addTab(presentation_page,QStringLiteral("Presentation changes"));layout->addWidget(tabs,2);
-        if (replacement_intent) {
-            dialog->setWindowTitle(QStringLiteral("Review rooms for the proposed wall edit"));
+        if (wall_authoring_intent) dialog->setWindowTitle(wall_authoring_intent->wall_demolition.is_null()?
+            QStringLiteral("Review rooms for the proposed wall edit"):QStringLiteral("Review rooms for wall demolition"));
+        if (wall_authoring_intent && !wall_authoring_intent->wall_replacement.is_null()) {
             limitation->setText(QStringLiteral("Review copied room constraints individually. Keep requires unchanged active original rooms. "
                 "Remap every room endpoint to a reviewed active room edge and corner, or explicitly omit the new copy. "
                 "The original baseline constraint remains preserved."));
@@ -253,7 +256,8 @@ public:
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
         apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalPhaseRoomReviewApply"));
         apply->setText(destination.alternative_id?QStringLiteral("Apply alternative and reviewed rooms"):QStringLiteral("Apply baseline selection"));
-        if (replacement_intent) apply->setText(QStringLiteral("Apply wall edit and reviewed rooms"));
+        if (wall_authoring_intent) apply->setText(wall_authoring_intent->wall_demolition.is_null()?
+            QStringLiteral("Apply wall edit and reviewed rooms"):QStringLiteral("Apply wall demolition and reviewed rooms"));
         apply->setEnabled(false);layout->addWidget(buttons);
         QObject::connect(apply,&QPushButton::clicked,dialog,[this]{dialog->accept();});
         QObject::connect(buttons,&QDialogButtonBox::rejected,dialog,[this]{dialog->reject();});
@@ -297,7 +301,8 @@ public:
         return name.isEmpty()?text(id):name;
     }
     const PhaseWallReplacementEntities& analytical_entities() const {
-        return replacement_preview?replacement_preview->edited_entities:source.entities();
+        if (replacement_preview) return replacement_preview->edited_entities;
+        return demolition_preview?demolition_preview->edited_entities:source.entities();
     }
     QString endpoint_label(const WallEndpointBinding& binding,const PhaseWallReplacementEntities& entities) const {
         const auto& room=entities.at(binding.owner_id);const auto boundary=decode_identified_boundary_entity(room);
@@ -321,8 +326,8 @@ public:
         if (!replacement_preview || !room_constraint_table) return;
         for (const auto& id:replacement_preview->replacement.room_constraint_ids_requiring_review) {
             RoomConstraintRow row;row.original_id=id;row.fresh_id=replacement_preview->replacement.original_to_proposed.at(id);
-            row.removal_requested=std::any_of(replacement_intent->intent.relation_mutations.begin(),
-                replacement_intent->intent.relation_mutations.end(),[&](const auto& mutation) {
+            row.removal_requested=std::any_of(wall_authoring_intent->intent.relation_mutations.begin(),
+                wall_authoring_intent->intent.relation_mutations.end(),[&](const auto& mutation) {
                     return mutation.kind==ConstraintRelationMutationKind::remove && mutation.constraint_id==id;
                 });
             const auto decoded=decode_constraint_entity(analytical_entities().at(row.fresh_id));
@@ -441,16 +446,29 @@ public:
         rebuilding=true;
         try {
             require_current();
-            if (replacement_intent) {
-                replacement_preview=inspect_phase_wall_replacement_authoring(source,*replacement_intent);
-                const auto record=decode_phase_wall_replacement_authoring(replacement_intent->wall_replacement);
-                destination={record.registry_id,record.alternative_id};
+            if (wall_authoring_intent) {
+                const bool replacement=!wall_authoring_intent->wall_replacement.is_null();
+                const bool demolition=!wall_authoring_intent->wall_demolition.is_null();
+                if (replacement==demolition)
+                    throw std::invalid_argument("Room review requires exactly one typed wall replacement or demolition stage.");
+                if (replacement) {
+                    replacement_preview=inspect_phase_wall_replacement_authoring(source,*wall_authoring_intent);
+                    const auto record=decode_phase_wall_replacement_authoring(wall_authoring_intent->wall_replacement);
+                    destination={record.registry_id,record.alternative_id};
+                    inventory=replacement_preview->room_inventory;
+                    for (const auto& [id,entity]:replacement_preview->replacement.deferred_room_constraints) deferred_constraint_ids.insert(id);
+                } else {
+                    demolition_preview=inspect_phase_wall_demolition_authoring(source,*wall_authoring_intent);
+                    const auto record=decode_phase_wall_demolition_authoring(wall_authoring_intent->wall_demolition);
+                    destination={record.wall_demolition.registry_id,record.wall_demolition.alternative_id};
+                    inventory=demolition_preview->room_inventory;
+                }
+                require_current();
                 registry_command.expected_revision=source.revision();registry_command.message="Review proposed rooms";
                 registry_command.entity_changes={EntityChange::upsert(analytical_entities().at(destination.registry_id))};
-                inventory=replacement_preview->room_inventory;
-                for (const auto& [id,entity]:replacement_preview->replacement.deferred_room_constraints) deferred_constraint_ids.insert(id);
                 initialize_room_constraints();
             } else inventory=inspect_physical_wall_phase_room_review(source,registry_command,destination);
+            require_current();
             if (inventory->reports.size()!=inventory->intent.planes.size()) throw std::invalid_argument("The room review is incomplete. Cancel and start again.");
             auto target_entities=analytical_entities();
             for (const auto& change:registry_command.entity_changes) if (change.kind==EntityChangeKind::upsert)
@@ -570,9 +588,10 @@ public:
         std::sort(result.begin(),result.end());return result;
     }
     void rebuild_references() {
+        require_current();
         const auto selected=superseded();if (selected==reference_superseded) return;
         std::vector<PhysicalWallRoomPhaseBaselineAcknowledgement> evidence;
-        try {evidence=replacement_intent?physical_wall_phase_room_baseline_dependents(source,analytical_entities(),destination.registry_id,selected):
+        try {evidence=wall_authoring_intent?physical_wall_phase_room_baseline_dependents(source,analytical_entities(),destination.registry_id,selected):
             physical_wall_phase_room_baseline_dependents(source,destination.registry_id,selected);}
         catch (const std::exception&) {throw std::invalid_argument("The baseline reference list is unavailable. Cancel and review the original rooms.");}
         std::map<std::string,PhysicalWallRoomPhaseBaselineAcknowledgement,std::less<>> confirmed;
@@ -633,9 +652,10 @@ public:
         if (action=="create" && f.allocated_room_id.empty()) f.allocated_room_id="physical-room-"+make_stable_id();
     }
     void rebuild_proposed_references() {
+        require_current();
         const auto changed_ids=changed_proposals();
         if (changed_ids!=reference_changed) {
-            const auto evidence=replacement_intent?physical_wall_phase_room_proposed_dependents(source,analytical_entities(),destination,changed_ids):
+            const auto evidence=wall_authoring_intent?physical_wall_phase_room_proposed_dependents(source,analytical_entities(),destination,changed_ids):
                 physical_wall_phase_room_proposed_dependents(source,destination,changed_ids);
             const std::set<std::string> owners(changed_ids.begin(),changed_ids.end());
             std::vector<ProposedReferenceRow> rows;std::vector<QString> labels;
@@ -693,7 +713,7 @@ public:
         if (retiring==graph_retiring) return;
         // Request only retiring owners. The helper's rows are evidence, and
         // each new retirement set requires fresh individual acknowledgement.
-        const auto evidence=replacement_intent?physical_wall_phase_room_proposed_dependents(source,analytical_entities(),destination,retiring):
+        const auto evidence=wall_authoring_intent?physical_wall_phase_room_proposed_dependents(source,analytical_entities(),destination,retiring):
             physical_wall_phase_room_proposed_dependents(source,destination,retiring);
         rebuilding=true;graphs.clear();graph_table->setRowCount(0);
         const auto add_row=[this](const QString& label,const QString& name) {
@@ -719,6 +739,7 @@ public:
         tabs->setTabText(3,QStringLiteral("Proposed relationships (%1)").arg(graph_table->rowCount()));
     }
     void rebuild_mappings() {
+        require_current();
         std::map<Child,QString> previous;for (const auto& [child,combo]:mappings) previous.emplace(child,combo->currentData().toString());
         rebuilding=true;mapping_table->setRowCount(0);mappings.clear();
         try {
@@ -756,7 +777,7 @@ public:
                 std::any_of(reference.owners.begin(),reference.owners.end(),[&](const auto& id){return redefined.contains(id);})))
                 removed.insert(reference.id);
         }
-        if (replacement_intent) {
+        if (replacement_preview) {
             const auto affected=physical_wall_phase_room_proposed_dependents(source,analytical_entities(),destination,changed_proposals());
             const std::set<std::string> affected_ids(affected.reference_ids.begin(),affected.reference_ids.end());
             for (const auto& row:room_constraints) if (affected_ids.contains(row.fresh_id) &&
@@ -765,10 +786,11 @@ public:
         return {removed.begin(),removed.end()};
     }
     void rebuild_presentation_removals() {
+        require_current();
         const auto removed=removed_presentation_items();if (removed==presentation_removed) return;
         // Evidence is rederived from the original captured source, including
         // its exact before/after records; no prepared snapshot becomes authority.
-        const auto evidence=replacement_intent?physical_wall_phase_room_presentation_removals(source,analytical_entities(),removed):
+        const auto evidence=wall_authoring_intent?physical_wall_phase_room_presentation_removals(source,analytical_entities(),removed):
             physical_wall_phase_room_presentation_removals(source,removed);
         std::map<std::string,PhysicalWallRoomPhasePresentationRemoval,std::less<>> confirmed;
         for (const auto& row:presentation_rows) if (row.acknowledge->isChecked()) confirmed.emplace(row.evidence.entity_id,row.evidence);
@@ -897,7 +919,7 @@ public:
                 decision.child_mapping[vertex?"vertices":"segments"][old_id]=value(mapping->second);
             }
         }
-        if (replacement_intent) {
+        if (replacement_preview) {
             const auto affected=physical_wall_phase_room_proposed_dependents(source,analytical_entities(),destination,changed_proposals());
             const std::set<std::string> affected_ids(affected.reference_ids.begin(),affected.reference_ids.end());
             for (const auto& row:room_constraints) if (affected_ids.contains(row.fresh_id)) {
@@ -1013,20 +1035,29 @@ public:
         try {require_current();rebuild_references();rebuild_proposed_references();rebuild_presentation_removals();if (topology) rebuild_mappings();update_replacement_identities();const auto decisions=intent();
             try {
                 ApplyBoundaryConstraintChanges command;std::optional<PreparedPhysicalWallPhaseRoomReview> prepared;
-                if (replacement_intent) {
+                if (wall_authoring_intent) {
                     const auto encoded=encode_physical_wall_phase_room_review_intent(decisions);
-                    const auto reviewed=replay_physical_wall_phase_room_review_with_deferred_constraints(analytical_entities(),encoded,deferred_constraint_ids);
-                    update_room_constraint_targets(reviewed.entities);
-                    auto replacement=*replacement_intent;
-                    auto record=decode_phase_wall_replacement_authoring(replacement.wall_replacement);
-                    record.room_review_intent=encoded;record.room_constraint_decisions=room_constraint_decisions();
-                    replacement.wall_replacement=encode_phase_wall_replacement_authoring(record);
-                    command=phase_wall_replacement_authoring_command(replacement);
+                    require_current();
+                    auto authoring=*wall_authoring_intent;
+                    if (replacement_preview) {
+                        const auto reviewed=replay_physical_wall_phase_room_review_with_deferred_constraints(analytical_entities(),encoded,deferred_constraint_ids);
+                        update_room_constraint_targets(reviewed.entities);
+                        auto record=decode_phase_wall_replacement_authoring(authoring.wall_replacement);
+                        record.room_review_intent=encoded;record.room_constraint_decisions=room_constraint_decisions();
+                        authoring.wall_replacement=encode_phase_wall_replacement_authoring(record);
+                        command=phase_wall_replacement_authoring_command(authoring);
+                    } else {
+                        auto record=decode_phase_wall_demolition_authoring(authoring.wall_demolition);
+                        record.room_review_intent=encoded;
+                        authoring.wall_demolition=encode_phase_wall_demolition_authoring(record);
+                        command=phase_wall_demolition_authoring_command(authoring);
+                    }
                 } else {
                     prepared=prepare_physical_wall_phase_room_review(source,decisions);
                     command.expected_revision=source.revision();command.message="Review alternative rooms";
                     command.phase_room_review_completion=true;command.phase_room_review_intent=prepared->intent;
                 }
+                require_current();
                 auto exact=Document::preview_command(source,command);
                 if (prepared && !exact_entities(exact.entities(),prepared->entities))
                     throw std::invalid_argument("Prepared room decisions differ from the complete command.");
@@ -1069,7 +1100,7 @@ public:
             const auto& report=inventory->reports.at(static_cast<std::size_t>(p)).correspondence;
             plane_status->setText(report.fresh.empty()?QStringLiteral("No current clear spaces on this plane. Every previous room still needs a decision."):
                 QStringLiteral("Review %1 previous rooms and %2 current clear spaces on this plane.").arg(report.retained.size()).arg(report.fresh.size()));
-            if (replacement_intent) {
+            if (wall_authoring_intent) {
                 try {
                     const auto& displayed=candidate_snapshot?candidate_snapshot->entities():analytical_entities();
                     const auto scope=constraint_phase_scope(displayed);const auto organization=organize_project(displayed);
@@ -1108,7 +1139,7 @@ public:
                 e.fill_color=QColor(36,107,206,35);entities.push_back(std::move(e));
                 if (!current.boundary.empty()) labels.push_back({{},current.boundary.front().start,QStringLiteral("C%1").arg(i+1)});
                 const auto& f=planes.at(static_cast<std::size_t>(p)).fresh.at(i);
-                if (value(f.assignment).starts_with("redefine:") || (replacement_intent && value(f.assignment)!="unclassified"))
+                if (value(f.assignment).starts_with("redefine:") || (wall_authoring_intent && value(f.assignment)!="unclassified"))
                     for (std::size_t edge=0;edge<current.boundary.size();++edge) {
                     const auto& segment=current.boundary[edge];
                     labels.push_back({{},segment.start,QStringLiteral("C%1 V%2").arg(i+1).arg(edge+1)});
@@ -1137,7 +1168,7 @@ public:
                         preview_entities.push_back(std::move(e));
                         if (!boundary.empty()) preview_labels.push_back({{},boundary.front().start,
                             QStringLiteral("Preview: ")+text(property_text(room,"name"))});
-                        if (replacement_intent) for (std::size_t edge=0;edge<boundary.size();++edge) {
+                        if (wall_authoring_intent) for (std::size_t edge=0;edge<boundary.size();++edge) {
                             const auto& segment=boundary[edge];const auto name=text(property_text(room,"name"));
                             preview_labels.push_back({{},segment.start,QStringLiteral("%1 V%2").arg(name).arg(edge+1)});
                             preview_labels.push_back({{},{(segment.start.x+segment.end.x)/2,(segment.start.y+segment.end.y)/2},
@@ -1156,7 +1187,7 @@ public:
                     entities.insert(entities.end(),preview_entities.begin(),preview_entities.end());
                     labels.insert(labels.end(),preview_labels.begin(),preview_labels.end());
                     plane_status->setText(plane_status->text()+QStringLiteral(" Prepared preview: %1 assigned rooms.").arg(preview_rooms.size()));
-                    if (replacement_intent) {
+                    if (replacement_preview) {
                         std::size_t retained_copies=0;
                         for (const auto& row:room_constraints) if (candidate_snapshot->entities().contains(row.fresh_id)) ++retained_copies;
                         plane_status->setText(plane_status->text()+QStringLiteral(" %1 copied room constraints retained; %2 omitted.")
@@ -1182,10 +1213,10 @@ public:
 PhysicalWallPhaseRoomReviewDialog::PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,ApplyEntityChanges registry_command,
     PhysicalWallPhaseSelection destination,bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent):
     QDialog(parent),m_impl(std::make_unique<Impl>(this,std::move(source),std::move(registry_command),std::move(destination),metric_units,std::move(current_source))) {}
-PhysicalWallPhaseRoomReviewDialog::PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,PhaseConstraintAuthoringIntent replacement_intent,
+PhysicalWallPhaseRoomReviewDialog::PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,PhaseConstraintAuthoringIntent wall_authoring_intent,
     bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent):
     QDialog(parent),m_impl(std::make_unique<Impl>(this,std::move(source),ApplyEntityChanges{},PhysicalWallPhaseSelection{},
-        metric_units,std::move(current_source),std::move(replacement_intent))) {}
+        metric_units,std::move(current_source),std::move(wall_authoring_intent))) {}
 PhysicalWallPhaseRoomReviewDialog::~PhysicalWallPhaseRoomReviewDialog()=default;
 const std::optional<ApplyBoundaryConstraintChanges>& PhysicalWallPhaseRoomReviewDialog::acceptedCommand() const {return m_impl->accepted;}
 QString PhysicalWallPhaseRoomReviewDialog::lastError() const {return m_impl->error;}

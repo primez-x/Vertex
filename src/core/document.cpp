@@ -62,6 +62,7 @@
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
+#include "sketch/phase_wall_demolition_authoring.hpp"
 #include "sketch/wall_join_removal.hpp"
 #endif
 
@@ -2627,12 +2628,17 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
             (intent.contains("stair_demolition") && !intent.at("stair_demolition").is_null()) ||
             (intent.contains("stair_replacement") && !intent.at("stair_replacement").is_null()) ||
             (intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null()) ||
-            (intent.contains("coordinated_demolition") && !intent.at("coordinated_demolition").is_null());
+            (intent.contains("coordinated_demolition") && !intent.at("coordinated_demolition").is_null()) ||
+            (intent.contains("wall_demolition") && !intent.at("wall_demolition").is_null());
     });
 }
 static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryConstraintChanges& command) {
     const auto proofs=phase_constraint_authoring_proofs(command);
     return std::any_of(proofs.begin(), proofs.end(), [](const auto& intent) {
+        // The closed complete wall-removal replay admits active reference
+        // retirement, including reviewed room consequences. Inactive rows
+        // remain protected by their exact raw subsequence below.
+        if (intent.contains("wall_demolition") && !intent.at("wall_demolition").is_null()) return true;
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
         const auto replacement_retires=[](const nlohmann::json& value) {
             if (!value.is_object() || value.value("version",0)!=5) return false;
@@ -2665,7 +2671,8 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
-        if (!intent.coordinated_replacements.is_null() || !intent.coordinated_demolition.is_null()) {
+        if (!intent.coordinated_replacements.is_null() || !intent.coordinated_demolition.is_null() ||
+            !intent.wall_demolition.is_null()) {
             const auto replay = replay_phase_constraint_authoring(source, encoded);
             if (entity_map_digest(replay) != entity_map_digest(candidate))
                 throw std::invalid_argument("Coordinated architectural authoring differs from its actual source replay");
@@ -2890,6 +2897,30 @@ static PhysicalWallJoinRemovalAdditionalIdentities complete_wall_join_deletion_d
 #endif
     return command.room_review_geometry_proof.at("additional_join_identities").get<PhysicalWallJoinRemovalAdditionalIdentities>();
 }
+static std::set<std::string,std::less<>> phase_demolition_ordinary_roof_destinations(
+    const PhaseConstraintAuthoringIntent& intent) {
+    std::set<std::string,std::less<>> result;
+    const auto reserve=[&](const auto& mappings) {
+        for (const auto& [original,ids]:mappings) {
+            (void)original;
+            for (const auto& id:ids)
+                if (!result.insert(id).second)
+                    throw std::invalid_argument("Architectural removal repeats a declared roof destination: "+id);
+        }
+    };
+    auto historical=intent;
+    if (!intent.wall_demolition.is_null()) {
+        const auto complete=decode_phase_wall_demolition_authoring(intent.wall_demolition);
+        reserve(complete.ordinary.roof_additional_identities);
+        if (complete.other_authoring.is_null()) return result;
+        historical=decode_phase_constraint_authoring_intent(complete.other_authoring);
+    }
+    if (!historical.coordinated_demolition.is_null())
+        if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(historical.coordinated_demolition,historical);
+            ordinary && ordinary->version==2) reserve(ordinary->roof_additional_identities);
+    return result;
+}
+
 static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records,
@@ -2907,6 +2938,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const bool wall_join_asset_reservation=has_complete_wall_join_deletion_proof(command);
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
+    std::set<std::string,std::less<>> wall_demolition_room_destinations;
+    bool complete_wall_demolition=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -2927,20 +2960,45 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto root_intent=decode_phase_constraint_authoring_intent(encoded);
+        for (const auto& id:phase_demolition_ordinary_roof_destinations(root_intent))
+            if (!ordinary_roof_destinations.insert(id).second)
+                throw std::invalid_argument("A complete removal repeats a declared roof destination: "+id);
+        if (!root_intent.wall_demolition.is_null()) {
+            complete_wall_demolition=true;
+            complete_envelope_reservation=true;
+            roof_mixed_asset_reservation=true;
+            structural_asset_reservation=true;
+            structural_hosted_alias_reservation=true;
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            const auto demolition=decode_phase_wall_demolition_authoring(root_intent.wall_demolition);
+            if (!demolition.room_review_intent.is_null()) {
+                validate_phase_room_review_lifetime(demolition.room_review_intent,history,preceding_records);
+                const auto rooms=decode_physical_wall_phase_room_review_intent(demolition.room_review_intent);
+                const auto reserve_room=[&](const std::string& id) {
+                    if (!wall_demolition_room_destinations.insert(id).second)
+                        throw std::invalid_argument("Wall demolition room destinations overlap: "+id);
+                    fresh.insert(id);
+                };
+                for (const auto& plane:rooms.planes) {
+                    for (const auto& decision:plane.fresh) {
+                        if (decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::create_proposed &&
+                            decision.disposition!=PhysicalWallRoomPhaseFreshDisposition::redefine_proposed) continue;
+                        if (decision.disposition==PhysicalWallRoomPhaseFreshDisposition::create_proposed) reserve_room(decision.room_id);
+                        for (const auto& id:decision.fresh_ids.segment_ids) reserve_room(id);
+                        for (const auto& id:decision.fresh_ids.vertex_ids) reserve_room(id);
+                    }
+                    for (const auto& decision:plane.source_rooms)
+                        for (const auto& id:decision.replacement_dimension_ids) reserve_room(id);
+                }
+            }
+#endif
+        }
         if (!root_intent.coordinated_demolition.is_null()) {
             complete_envelope_reservation=true;
             // Historical roof demolition children can omit phase-qualified
             // joins. The new enclosure always reserves every destination
             // against retained assets, independently of the child's dialect.
             roof_mixed_asset_reservation=true;
-            if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(root_intent.coordinated_demolition,root_intent);
-                ordinary && ordinary->version==2)
-                for (const auto& [original,ids]:ordinary->roof_additional_identities) {
-                    (void)original;
-                    for (const auto& id:ids)
-                        if (!ordinary_roof_destinations.insert(id).second)
-                            throw std::invalid_argument("A coordinated roof split repeats a declared destination: "+id);
-                }
         }
         if (!root_intent.coordinated_replacements.is_null()) {
             complete_envelope_reservation=true;
@@ -3095,6 +3153,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
 #endif
     }
+    for (const auto& id:wall_demolition_room_destinations)
+        if (!nested_fresh.insert(id).second)
+            throw std::invalid_argument("A wall demolition room destination overlaps another declared identity: "+id);
     for (const auto& id:ordinary_roof_destinations) {
         if (!nested_fresh.insert(id).second)
             throw std::invalid_argument("A coordinated ordinary roof split overlaps another fresh identity: "+id);
@@ -3109,6 +3170,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             nested_fresh.insert(alias);
         }
     }
+    if (complete_wall_demolition) nested_fresh.insert(fresh.begin(),fresh.end());
     if (phase_drawing_enclosure) {
         // The complete new enclosure reserves every resulting or declared
         // destination against both stage vocabularies, even for older phase
@@ -3147,14 +3209,9 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 }
             for (const auto& encoded:phase_constraint_authoring_proofs(*record.boundary_constraint_changes)) {
                 const auto root=decode_phase_constraint_authoring_intent(encoded);
-                if (root.coordinated_demolition.is_null()) continue;
-                if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(root.coordinated_demolition,root);
-                    ordinary && ordinary->version==2)
-                    for (const auto& [original,ids]:ordinary->roof_additional_identities) {
-                        (void)original;
-                        for (const auto& id:ids) if (fresh.contains(id))
-                            throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);
-                    }
+                for (const auto& id:phase_demolition_ordinary_roof_destinations(root))
+                    if (fresh.contains(id))
+                        throw std::invalid_argument("Proposed identity was already reserved by retained ordinary roof split intent: "+id);
             }
         }
         if (record.boundary_constraint_changes)

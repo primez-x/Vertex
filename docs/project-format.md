@@ -1,4 +1,48 @@
-# Vertex project formats v1 through v146
+# Vertex project formats v1 through v147
+
+## Complete baseline wall demolition authoring (v147)
+
+Native reader 147 and JSON/assets extraction 145 retain phase-authoring dialect
+sixteen under the existing command envelope thirty-four, including retained and
+undone history and independent drawing completion forty-two. Its exact nine
+fields are the eight common phase-authoring fields plus `wall_demolition`.
+Other phase-authoring operation fields and geometry/relationship authority are
+excluded. Historical dialects retain their meanings and reader floors.
+
+The closed inner-one record has exactly `version`, `wall_demolition`,
+`other_authoring`, `ordinary`, `opening_ids` and `room_review_intent`. Its wall
+leaf names actual baseline walls, their registry and the actual saved
+alternative. `other_authoring` is null or one same-source canonical historical
+demolition envelope for openings, roofs, slabs, structural objects or stairs,
+including coordinated demolition. It cannot recursively enclose dialect
+sixteen or supply a transform/replacement unrelated to demolition. `ordinary`
+contains exactly `object_ids`, qualified `components` and explicit
+`roof_additional_identities`. Independent ordinary openings use `opening_ids`.
+Ordinary wall removal requires its separate wall-authoring path.
+
+Every lane independently replays the complete actual source before composition.
+Only known source-row removals, declared fresh destinations and exact hosted
+instance suffixes compose. Restoring the source instance inventory must recover
+the original catalog envelope, definitions, materials and opaque fields.
+Physical owners, shared baselines, other saved alternatives, inactive evidence
+and surviving component aliases remain protected. An explicit selection already
+covered by an authenticated host or historical retirement consequence collapses
+only after its actual source ownership has been admitted.
+
+Room inspection uses the complete analytical stage while keeping the original
+Snapshot, history, save state and saved-choice bindings. The stage registry's
+identity upsert binds room geometry and membership without fabricating a
+Snapshot. Every required retained/fresh room and dependent reference decision
+remains explicit; incomplete room decisions cannot publish. Document admission
+reserves declared and resulting destinations against retained history, assets,
+component aliases, nested identities and entity envelope names, including
+omitted historical roof-copy slots.
+
+Delete/Cut retain the captured full selection and Site publication fence through
+room review and application. Independent drawing selection may complete the
+same command afterward; Cut publishes its captured clipboard only after the
+complete operation applies. Compilation and runtime remain unverified under
+the source-only instruction.
 
 ## Independent drawing removal around active-design authoring (v146)
 

@@ -197,7 +197,9 @@ public:
     // including wrapped, retained and undone command history.
     // Direct phase authoring enclosed by independent drawing removal requires
     // v146 throughout retained and undone history (outer command version 42).
-    static constexpr std::uint32_t format_version = 146;
+    // Full baseline wall demolition authoring requires v147, including wrapped,
+    // retained and undone command history (phase authoring version 16).
+    static constexpr std::uint32_t format_version = 147;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

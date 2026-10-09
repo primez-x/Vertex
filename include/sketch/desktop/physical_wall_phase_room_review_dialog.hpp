@@ -20,9 +20,9 @@ public:
     PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,ApplyEntityChanges registry_command,
         PhysicalWallPhaseSelection destination,bool metric_units,
         std::function<DocumentSnapshot()> current_source,QWidget* parent=nullptr);
-    // The wall replacement's full analytical stage supplies room evidence;
+    // The wall replacement or demolition's full analytical stage supplies room evidence;
     // the final command and source fence still name this actual capture.
-    PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,PhaseConstraintAuthoringIntent replacement_intent,
+    PhysicalWallPhaseRoomReviewDialog(DocumentSnapshot source,PhaseConstraintAuthoringIntent wall_authoring_intent,
         bool metric_units,std::function<DocumentSnapshot()> current_source,QWidget* parent=nullptr);
     ~PhysicalWallPhaseRoomReviewDialog() override;
     [[nodiscard]] const std::optional<ApplyBoundaryConstraintChanges>& acceptedCommand() const;

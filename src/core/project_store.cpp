@@ -496,6 +496,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && (intent.value("version",0)==16 ||
+                    (intent.contains("wall_demolition") && !intent.at("wall_demolition").is_null())))
+                    return 147U;
                 if (intent.is_object() && intent.value("version",0)==15) {
                     const auto coordinated=intent.find("coordinated_demolition");
                     if (coordinated!=intent.end() && coordinated->is_object() && coordinated->value("version",0)==3)
@@ -2470,6 +2473,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 144 &&
          sqlite3_column_int(user_version.get(), 0) != 145 &&
          sqlite3_column_int(user_version.get(), 0) != 146 &&
+         sqlite3_column_int(user_version.get(), 0) != 147 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3068,6 +3072,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=147)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 147 for source-bound full baseline wall demolition with phase room review");
         if (required_format>=146)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 146 for independent drawing removal with direct phase authoring");
         if (required_format>=145)

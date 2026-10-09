@@ -45,7 +45,7 @@
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_wall_demolition.hpp"
-#include "sketch/mixed_phase_wall_demolition.hpp"
+#include "sketch/phase_wall_demolition_authoring.hpp"
 #include "sketch/hosted_opening_removal.hpp"
 #include "sketch/opening_host_geometry.hpp"
 #include "sketch/wall_join_removal.hpp"
@@ -31711,9 +31711,13 @@ public:
                 if (!request) throw std::invalid_argument("The selected slabs are not active baseline owners.");
                 leaf.slab_demolition=encode_slab_demolition_intent(*request);
             } else if (family=="stair_authoring") {
-                const auto request=phase_stair_demolition_request(source.entities(),ids);
-                if (!request) throw std::invalid_argument("The selected stairs or railings are not active baseline owners.");
-                leaf.stair_demolition=encode_stair_demolition_intent(*request);
+                const auto retirement=phase_stair_demolition_retirement_request(source.entities(),ids);
+                const auto request=retirement ? std::optional<StairDemolitionIntent>{} :
+                    phase_stair_demolition_request(source.entities(),ids);
+                if (!retirement && !request)
+                    throw std::invalid_argument("The selected stairs or railings are not active baseline owners.");
+                if (retirement) leaf.stair_demolition_retirement=encode_stair_demolition_retirement_intent(*retirement);
+                else leaf.stair_demolition=encode_stair_demolition_intent(*request);
             } else if (family=="structural_authoring") {
                 const auto request=phase_structural_demolition_request(source.entities(),ids);
                 if (!request) throw std::invalid_argument("The selected structural objects are not active baseline owners.");
@@ -31726,13 +31730,32 @@ public:
                 if (!request) throw std::invalid_argument("The selected roofs are not active baseline owners.");
                 const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
                     request->registry_id,request->alternative_id,true);
-                if (!plan.ready() || !plan.required_entity_ids.empty() || !plan.required_child_ids.empty() ||
-                    !roof_demolition_additional_identity_counts(source.entities(),*request).empty())
-                    throw std::invalid_argument("The selected roofs need a complete joined-roof demolition review.");
+                if (!plan.ready()) {
+                    std::string reasons;
+                    for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                        if (!reasons.empty()) reasons+='\n';
+                        reasons+=diagnostic.entity_id+": "+diagnostic.reason;
+                    }
+                    throw std::invalid_argument(reasons.empty() ? "The selected roofs have an unresolved demolition dependency." : reasons);
+                }
                 PhaseRoofReplacementAuthoring replacement;
                 replacement.registry_id=request->registry_id;replacement.alternative_id=request->alternative_id;
                 replacement.seed_roof_ids=request->seed_roof_ids;replacement.demolition=true;
                 replacement.phase_qualified_joins=true;replacement.preserve_singleton_material=true;
+                auto occupied=retainedSlabIdentityNames(source,true);
+                for (const auto* token:{"wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+                    "independent_drawing_removal_completion","independent_drawing_removal_intent","owner_ids",
+                    "annotations","owner_id","child_id","proof"}) occupied.insert(token);
+                const auto allocate=[&] {
+                    auto id=new_id("proposed");
+                    while (!occupied.insert(id).second) id=new_id("proposed");
+                    return id;
+                };
+                for (const auto* required:{&plan.required_entity_ids,&plan.required_child_ids})
+                    for (const auto& id:*required) replacement.identities.emplace(id,allocate());
+                for (const auto& [original,count]:roof_demolition_additional_identity_counts(source.entities(),*request))
+                    for (std::size_t index=0;index<count;++index)
+                        replacement.demolition_additional_identities[original].push_back(allocate());
                 leaf.roof_replacement=encode_phase_roof_replacement_authoring(replacement);
             }
             children[family]=encode_phase_constraint_authoring_intent(leaf);
@@ -31809,41 +31832,60 @@ public:
                 throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
         const std::string message=cut ? "Cut selected walls and objects" : "Delete selected walls and objects";
         if (const auto walls_demolition=prepare_phase_wall_demolition(source,intent.wall_ids,message)) {
-            // Baseline walls stay in the original plan. Hosted openings already
-            // follow their selected wall; independently selected baseline owners
-            // contribute their own source-bound demolition to the same registry.
-            const std::set<std::string,std::less<>> walls(intent.wall_ids.begin(),intent.wall_ids.end());
-            for (const auto& id:opening_ids) {
-                const auto host=read_string(source.entities().at(id).properties,"wall_id");
-                if (!host || !walls.contains(*host)) other_ids.push_back(id);
-            }
-            std::sort(other_ids.begin(),other_ids.end());
             const auto& walls_registry=walls_demolition->entity_changes.front().entity;
             const auto walls_phases=ModelPhases::from_json(walls_registry.properties.at("model"));
             const PhysicalWallPhaseSelection destination{walls_registry.id,walls_phases.active_alternative()};
-            const auto other=baselineArchitecturalDemolitionCommand(source,other_ids,message,destination);
-            const auto demolition=prepare_mixed_phase_wall_demolition(source,intent.wall_ids,other,message);
-            if (!demolition) throw std::invalid_argument("The selected baseline walls changed. Select the objects again.");
-            const auto& registry=demolition->entity_changes.front().entity;
-            const auto phases=ModelPhases::from_json(registry.properties.at("model"));
-            if (!phases.active_alternative())
+            if (!destination.alternative_id)
                 throw std::invalid_argument("The active wall demolition design changed. Select the objects again.");
-            // The producer preserves all physical bodies and catalog rows.
-            // A selected hosted component is covered only by newly inactive
-            // source hosting; an unrelated component is never silently ignored.
-            auto stage=source.entities();stage.at(registry.id)=registry;
-            const auto before_scope=constraint_phase_scope(source.entities());
-            const auto after_scope=constraint_phase_scope(stage);
-            for (const auto& [catalog_id,instance_id]:components) {
-                const auto catalog=AssemblyModel::from_json(source.entities().at(catalog_id).properties.at("model"));
-                const auto row=std::find_if(catalog.instances().begin(),catalog.instances().end(),[&](const auto& item) {
-                    return item.id==instance_id;
-                });
-                if (row==catalog.instances().end() || !row->placement ||
-                    saved_design_reference_inactive(source,before_scope,row->placement->host_entity_id) ||
-                    !saved_design_reference_inactive(source,after_scope,row->placement->host_entity_id))
-                    throw std::invalid_argument("The selected component needs its own active-design removal review.");
+            const auto scope=constraint_phase_scope(source.entities());
+            const auto baseline=[&](const std::string& id) {
+                if (saved_design_reference_inactive(source,scope,id))
+                    throw std::invalid_argument("The selected object is inactive in the saved design: "+id);
+                for (const auto& registry:scope.registries) {
+                    const auto found=registry.states.find(id);
+                    if (found==registry.states.end() || found->second!=ModelPhase::existing || !registry.alternative_id) continue;
+                    if (registry.registry_id!=destination.registry_id || registry.alternative_id!=destination.alternative_id)
+                        throw std::invalid_argument("The selected baseline objects belong to different saved designs.");
+                    return true;
+                }
+                return false;
+            };
+            PhaseWallDemolitionAuthoring demolition;
+            demolition.wall_demolition={destination.registry_id,*destination.alternative_id,intent.wall_ids};
+            std::vector<std::string> baseline_ids,ordinary_ids;
+            for (const auto& id:other_ids) (baseline(id) ? baseline_ids : ordinary_ids).push_back(id);
+            const std::set<std::string,std::less<>> selected_walls(intent.wall_ids.begin(),intent.wall_ids.end());
+            for (const auto& id:opening_ids) {
+                const auto host=read_string(source.entities().at(id).properties,"wall_id");
+                if (host && selected_walls.contains(*host)) demolition.opening_ids.push_back(id);
+                else if (baseline(id)) baseline_ids.push_back(id);
+                else demolition.opening_ids.push_back(id);
             }
+            std::sort(baseline_ids.begin(),baseline_ids.end());
+            if (const auto other=baselineArchitecturalDemolitionCommand(source,baseline_ids,message,destination))
+                demolition.other_authoring=other->phase_constraint_authoring_intent;
+            demolition.ordinary=captureArchitecturalSelectionRemoval(source,std::move(ordinary_ids),std::move(components));
+            // All declared slots, including omitted historical copies, reserve
+            // their names before independently allocated ordinary roof splits.
+            auto occupied=retainedSlabIdentityNames(source,true);
+            for (const auto* token:{"wall_demolition","other_authoring","ordinary","opening_ids","room_review_intent",
+                "independent_drawing_removal_completion","independent_drawing_removal_intent","owner_ids",
+                "annotations","owner_id","child_id","proof"}) occupied.insert(token);
+            std::vector<const json*> pending{&demolition.other_authoring};
+            while (!pending.empty()) {
+                const auto& value=*pending.back();pending.pop_back();
+                if (value.is_string()) occupied.insert(value.get_ref<const std::string&>());
+                else if (value.is_object()) for (const auto& [key,child]:value.items()) {
+                    occupied.insert(key);pending.push_back(&child);
+                } else if (value.is_array()) for (const auto& child:value) pending.push_back(&child);
+            }
+            for (auto& [original,ids]:demolition.ordinary.roof_additional_identities) {
+                (void)original;
+                for (auto& id:ids) while (!occupied.insert(id).second) id=new_id("roof");
+            }
+            ConstraintAuthoringIntent semantic;semantic.message=message;
+            auto phase=make_phase_constraint_authoring_intent(source,semantic);
+            phase.wall_demolition=encode_phase_wall_demolition_authoring(demolition);
             QString clipboard_text;
             QClipboard* clipboard=nullptr;
             if (cut) {
@@ -31853,9 +31895,19 @@ public:
                 if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
             }
             require_current();
-            auto final=reviewRemodelingRoomChanges(source,*demolition,
-                PhysicalWallPhaseSelection{registry.id,phases.active_alternative()},authority,owner,require_current);
-            if (!final) { clearError();refreshInspector();return false; }
+            const auto preview=inspect_phase_wall_demolition_authoring(source,phase);
+            require_current();
+            std::optional<Command> final;
+            if (preview.needs_room_review) {
+                PhysicalWallPhaseRoomReviewDialog dialog(source,phase,m_metric_units,[this,&require_current] {
+                    require_current();return authoringSnapshot();
+                },owner);
+                styleDialog(dialog);
+                const auto accepted=dialog.exec()==QDialog::Accepted;
+                require_current();
+                if (!accepted || !dialog.acceptedCommand()) { clearError();refreshInspector();return false; }
+                final=Command{*dialog.acceptedCommand()};
+            } else final=Command{phase_wall_demolition_authoring_command(phase)};
             require_current();
             if (hasIndependentDrawingRemoval(drawing_intent))
                 final=complete_drawing_removal_command(source,*final,drawing_intent);
@@ -52401,6 +52453,25 @@ private:
                     (void)command_to_json(Command{direct});
                     const auto after=replay_phase_constraint_authoring(source.entities(),direct.phase_constraint_authoring_intent);
                     const auto intent=decode_phase_constraint_authoring_intent(direct.phase_constraint_authoring_intent);
+                    auto historical_demolition=intent;
+                    if (!intent.wall_demolition.is_null()) {
+                        const auto demolition=decode_phase_wall_demolition_authoring(intent.wall_demolition);
+                        targets.insert(demolition.wall_demolition.wall_ids.begin(),demolition.wall_demolition.wall_ids.end());
+                        targets.insert(demolition.opening_ids.begin(),demolition.opening_ids.end());
+                        targets.insert(demolition.ordinary.object_ids.begin(),demolition.ordinary.object_ids.end());
+                        const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                        for (const auto& key:demolition.ordinary.components) {
+                            targets.insert(key.first);targets.insert(aliases.at(key));
+                            const auto catalog=AssemblyModel::from_json(source.entities().at(key.first).properties.at("model"));
+                            const auto row=std::find_if(catalog.instances().begin(),catalog.instances().end(),
+                                [&](const auto& instance) { return instance.id==key.second; });
+                            if (row==catalog.instances().end())
+                                throw std::invalid_argument("The selected component is absent from its captured catalog.");
+                            if (row->placement) targets.insert(row->placement->host_entity_id);
+                        }
+                        if (!demolition.other_authoring.is_null())
+                            historical_demolition=decode_phase_constraint_authoring_intent(demolition.other_authoring);
+                    }
                     // Demolition leaves retain baseline bytes, so their roots
                     // must enter Site/selection authority independently of a
                     // physical payload diff or a registry-only consequence.
@@ -52431,8 +52502,9 @@ private:
                             targets.insert(leaf.retired_proposed_rail_ids.begin(),leaf.retired_proposed_rail_ids.end());
                         }
                     }
-                    if (!intent.coordinated_demolition.is_null())
-                        if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(intent.coordinated_demolition,intent)) {
+                    if (!historical_demolition.coordinated_demolition.is_null())
+                        if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(
+                            historical_demolition.coordinated_demolition,historical_demolition)) {
                             targets.insert(ordinary->object_ids.begin(),ordinary->object_ids.end());
                             const auto aliases=embedded_assembly_presentation_ids(source.entities());
                             if (ordinary->version==2) {
@@ -52498,6 +52570,16 @@ private:
                         (void)entity;
                         if (!source.entities().contains(id)) targets.insert(id);
                     }
+                    const auto original_aliases=embedded_assembly_presentation_ids(source.entities());
+                    const auto remaining_aliases=embedded_assembly_presentation_ids(after);
+                    for (const auto& [key,alias]:original_aliases) {
+                        const auto remaining=remaining_aliases.find(key);
+                        if (remaining==remaining_aliases.end() || remaining->second!=alias) {
+                            targets.insert(key.first);targets.insert(alias);
+                        }
+                    }
+                    for (const auto& [key,alias]:remaining_aliases)
+                        if (!original_aliases.contains(key)) { targets.insert(key.first);targets.insert(alias); }
                 };
                 phase_constraint_targets(value);
                 if (!value.room_review_geometry_proof.is_null()) {

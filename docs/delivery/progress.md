@@ -14,6 +14,35 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete mixed wall demolition source implementation
+
+The complete active-design wall-removal path now carries independently replayed
+baseline architectural demolition, ordinary/proposed architectural selection,
+qualified components, independent openings and explicit room decisions in one
+typed operation. Roof leaves carry their actual required and split destinations;
+stair leaves retain their authenticated proposed-railing retirement. The room
+dialog inspects the full analytical stage against the original capture rather
+than a partial family preview or fabricated Snapshot. Delete/Cut keep the full
+selection, pending-placement and Site publication fences through application.
+
+Catalog consequence composition has an explicit dialect-sixteen-only opt-in
+for raw fresh hosted suffixes with exact retained source rows and envelopes.
+Historical commands keep retirement-only composition. Document source replay,
+inactive dependent protection, identity lifetime and native/extraction reader
+floors are integrated. Native 147 / extraction 145 preserve the new meaning
+through retained and undone history. Independent drawing completion can enclose
+this same operation. Independent source review found a valid hosted selection
+refusal; component collapse now follows newly inactive hosts from every admitted
+demolition family, including inherited semantic opening hosts. Original qualified
+source admission remains required before collapse. Root integrated source review
+is complete after resolving that finding.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged. Mixed baseline/ordinary wall roots and production
+qualification remain unfinished. Continue source implementation without a goal
+loop or per-turn build/package cadence.
+
 ### October 9 direct active-design and drawing source implementation
 
 Delete/Cut can now combine baseline hosted opening demolition with independently

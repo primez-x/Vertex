@@ -75,6 +75,10 @@ struct PhaseConstraintAuthoringIntent {
     // historical families with actual ordinary/proposed removal. Each child
     // binds the same source; baselines and other alternatives stay protected.
     nlohmann::json coordinated_demolition=nullptr;
+    // Dialect sixteen: complete baseline wall demolition with independently
+    // replayed architectural removal and explicit phase-room decisions.
+    // The analytical stage retains the actual captured source as authority.
+    nlohmann::json wall_demolition=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
@@ -119,10 +123,16 @@ struct PhaseConstraintAuthoringIntent {
 // Explicit shared-reference completion treats identical codec-known reference
 // erasures and source-row omissions as one consequence. Physical owner overlap
 // and conflicting edits still refuse; the default retains historical rules.
+// Dialect sixteen alone opts into complete hosted catalog consequences: exact
+// retained source rows/removals plus disjoint raw fresh-instance suffixes, with
+// the entire source catalog envelope preserved. Every input must already be a
+// complete independently admitted typed primitive replay of this same source;
+// this composer grants neither fresh-row nor physical removal admission.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_ordinary_architectural_removal_candidates(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::vector<std::map<std::string,Entity,std::less<>>>& candidates,
-    bool allow_shared_reference_retirement=false);
+    bool allow_shared_reference_retirement=false,
+    bool complete_hosted_catalog_consequences=false);
 
 // Independently evaluated saved selections, including the empty-registry case.
 [[nodiscard]] nlohmann::json phase_constraint_authoring_selections(
