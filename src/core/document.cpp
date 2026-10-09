@@ -2583,13 +2583,20 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
             (intent.contains("structural_replacement") && !intent.at("structural_replacement").is_null()) ||
             (intent.contains("stair_demolition") && !intent.at("stair_demolition").is_null()) ||
             (intent.contains("stair_replacement") && !intent.at("stair_replacement").is_null()) ||
-            (intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null());
+            (intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null()) ||
+            (intent.contains("coordinated_demolition") && !intent.at("coordinated_demolition").is_null());
     });
 }
 static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryConstraintChanges& command) {
     const auto proofs=phase_constraint_authoring_proofs(command);
     return std::any_of(proofs.begin(), proofs.end(), [](const auto& intent) {
-        return intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null();
+        if (intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null())
+            return true;
+        const auto coordinated=intent.find("coordinated_demolition");
+        if (coordinated==intent.end() || !coordinated->is_object()) return false;
+        const auto stair=coordinated->find("stair_authoring");
+        return stair!=coordinated->end() && stair->is_object() &&
+            stair->contains("stair_demolition_retirement") && !stair->at("stair_demolition_retirement").is_null();
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2597,10 +2604,10 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
-        if (!intent.coordinated_replacements.is_null()) {
+        if (!intent.coordinated_replacements.is_null() || !intent.coordinated_demolition.is_null()) {
             const auto replay = replay_phase_constraint_authoring(source, encoded);
             if (entity_map_digest(replay) != entity_map_digest(candidate))
-                throw std::invalid_argument("Coordinated architectural replacements differ from their actual source replay");
+                throw std::invalid_argument("Coordinated architectural authoring differs from its actual source replay");
             continue;
         }
         if (!intent.wall_replacement.is_null()) validate_phase_wall_replacement_originals(source,candidate,intent);
@@ -2808,6 +2815,13 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     }
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto root_intent=decode_phase_constraint_authoring_intent(encoded);
+        if (!root_intent.coordinated_demolition.is_null()) {
+            complete_envelope_reservation=true;
+            // Historical roof demolition children can omit phase-qualified
+            // joins. The new enclosure always reserves every destination
+            // against retained assets, independently of the child's dialect.
+            roof_mixed_asset_reservation=true;
+        }
         if (!root_intent.coordinated_replacements.is_null()) {
             complete_envelope_reservation=true;
             roof_mixed_asset_reservation=true;

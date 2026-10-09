@@ -70,6 +70,10 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect thirteen: retire actual active proposed rail dependents before
     // demolishing their retained baseline stair. No arbitrary erase authority.
     nlohmann::json stair_demolition_retirement=nullptr;
+    // Dialect fifteen: independently replayed demolition children for at least
+    // two architectural families. Each historical child binds the same actual
+    // source; retained baselines and other alternatives remain protected.
+    nlohmann::json coordinated_demolition=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
@@ -96,6 +100,13 @@ struct PhaseConstraintAuthoringIntent {
 // rows and distinct hosted instance placements have composition authority.
 // Callers still own complete geometry, phase-scope and command admission.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_architectural_family_candidates(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::vector<std::map<std::string,Entity,std::less<>>>& candidates);
+
+// Internal composition of independently admitted demolition leaves. Complete
+// typed leaf replay owns removals and fresh destinations; overlapping changes
+// compose only through codec-known phase/presentation rows and catalog removals.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> compose_phase_demolition_candidates(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::vector<std::map<std::string,Entity,std::less<>>>& candidates);
 

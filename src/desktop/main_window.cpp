@@ -31407,7 +31407,8 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            auto demolition = structuralDemolitionCommand(source, selected_ids, "Cut selected structural objects");
+            auto demolition = coordinatedDemolitionCommand(source, selected_ids, "Cut selected architectural objects");
+            if (!demolition) demolition = structuralDemolitionCommand(source, selected_ids, "Cut selected structural objects");
             if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Cut selected stairs and railings");
             if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Cut selected horizontal assemblies");
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Cut selected roofs");
@@ -31928,7 +31929,8 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            auto demolition=structuralDemolitionCommand(source,selected_ids,"Demolish selected structural objects");
+            auto demolition=coordinatedDemolitionCommand(source,selected_ids,"Demolish selected architectural objects");
+            if (!demolition) demolition=structuralDemolitionCommand(source,selected_ids,"Demolish selected structural objects");
             if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Demolish selected stairs and railings");
             if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Delete selected horizontal assemblies");
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs");
@@ -42911,6 +42913,60 @@ private:
             std::vector<StructuralObjectEditIntent>{},message);
     }
 
+    std::optional<Command> coordinatedDemolitionCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& ids,const std::string& message) {
+        if (ids.empty()) return std::nullopt;
+        if (ids.size()>maximum_architectural_group_targets)
+            throw std::invalid_argument("The architectural demolition selection is too large.");
+        std::map<std::string,std::vector<std::string>,std::less<>> families;
+        std::set<std::string,std::less<>> unique;
+        for (const auto& id:ids) {
+            if (!unique.insert(id).second)
+                throw std::invalid_argument("The architectural demolition selection contains duplicate objects.");
+            const auto found=source.entities().find(id);
+            if (found==source.entities().end()) return std::nullopt;
+            const auto& object=found->second;
+            const char* slot=object.type=="opening" ? "opening_authoring" : object.type=="roof" ? "roof_authoring" :
+                object.type=="slab" ? "slab_authoring" : structuralObject(object) ? "structural_authoring" :
+                object.type=="stair" || object.type=="railing" ? "stair_authoring" : nullptr;
+            if (!slot) return std::nullopt;
+            families[slot].push_back(id);
+        }
+        if (families.size()<2) return std::nullopt;
+        ConstraintAuthoringIntent semantic;
+        semantic.message=message;
+        auto intent=make_phase_constraint_authoring_intent(source,semantic);
+        auto children=nlohmann::json{{"version",1},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
+            {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr}};
+        for (auto& [family,roots]:families) {
+            std::sort(roots.begin(),roots.end());
+            std::optional<Command> child;
+            if (family=="opening_authoring") {
+                if (const auto opening=phase_opening_demolition_command(source,roots)) child=Command{*opening};
+            } else if (family=="roof_authoring") child=alternativeRoofDemolitionCommand(source,roots,message);
+            else if (family=="slab_authoring") child=slabRemovalCommand(source,roots,message);
+            else if (family=="structural_authoring") child=structuralDemolitionCommand(source,roots,message);
+            else child=stairDemolitionCommand(source,roots,message);
+            // Ordinary selections retain the existing complete removal path.
+            // Never publish only the subset which happened to be baseline.
+            if (!child) return std::nullopt;
+            const auto* captured=std::get_if<ApplyBoundaryConstraintChanges>(&*child);
+            if (!captured || !captured->phase_constraint_authoring_completion ||
+                captured->phase_constraint_authoring_intent.is_null())
+                throw std::invalid_argument("The architectural demolition child has no captured source authority.");
+            children[family]=captured->phase_constraint_authoring_intent;
+        }
+        intent.coordinated_demolition=std::move(children);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();
+        command.message=message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        const auto candidate=Document::preview_command(source,Command{command});
+        (void)admitArchitecturalGroupCandidate(candidate.entities());
+        return Command{std::move(command)};
+    }
+
     static std::optional<Command> structuralDemolitionCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& ids,const std::string& message) {
         if (ids.empty() || !std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
@@ -44506,6 +44562,7 @@ private:
         if (!constrained || !constrained->phase_constraint_authoring_completion ||
             constrained->phase_constraint_authoring_intent.is_null()) return command;
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
+        if (!intent.coordinated_demolition.is_null()) return command;
         if (!intent.coordinated_replacements.is_null()) {
             const auto wall = intent.coordinated_replacements.find("wall_authoring");
             if (wall != intent.coordinated_replacements.end() && !wall->is_null() &&
@@ -51478,6 +51535,36 @@ private:
                     (void)command_to_json(Command{direct});
                     const auto after=replay_phase_constraint_authoring(source.entities(),direct.phase_constraint_authoring_intent);
                     const auto intent=decode_phase_constraint_authoring_intent(direct.phase_constraint_authoring_intent);
+                    // Demolition leaves retain baseline bytes, so their roots
+                    // must enter Site/selection authority independently of a
+                    // physical payload diff or a registry-only consequence.
+                    for (const auto& component:phase_constraint_replacement_components(intent)) {
+                        if (!component.opening_demolition.is_null()) {
+                            const auto leaf=decode_phase_opening_demolition_intent(component.opening_demolition);
+                            targets.insert(leaf.opening_ids.begin(),leaf.opening_ids.end());
+                        }
+                        if (!component.roof_replacement.is_null()) {
+                            const auto leaf=decode_phase_roof_replacement_authoring(component.roof_replacement);
+                            if (leaf.demolition) targets.insert(leaf.seed_roof_ids.begin(),leaf.seed_roof_ids.end());
+                        }
+                        if (!component.slab_demolition.is_null()) {
+                            const auto leaf=decode_slab_demolition_intent(component.slab_demolition);
+                            targets.insert(leaf.slab_ids.begin(),leaf.slab_ids.end());
+                        }
+                        if (!component.structural_replacement.is_null()) {
+                            const auto leaf=decode_phase_structural_replacement_authoring(component.structural_replacement);
+                            if (leaf.demolition) targets.insert(leaf.seed_object_ids.begin(),leaf.seed_object_ids.end());
+                        }
+                        if (!component.stair_demolition.is_null()) {
+                            const auto leaf=decode_stair_demolition_intent(component.stair_demolition);
+                            targets.insert(leaf.selected_object_ids.begin(),leaf.selected_object_ids.end());
+                        }
+                        if (!component.stair_demolition_retirement.is_null()) {
+                            const auto leaf=decode_stair_demolition_retirement_intent(component.stair_demolition_retirement);
+                            targets.insert(leaf.selected_object_ids.begin(),leaf.selected_object_ids.end());
+                            targets.insert(leaf.retired_proposed_rail_ids.begin(),leaf.retired_proposed_rail_ids.end());
+                        }
+                    }
                     if (!intent.coordinated_replacements.is_null())
                         for (const auto& [original, fresh] : alternativePhysicalReplacementIdentities(intent)) {
                             (void)fresh; targets.insert(original);

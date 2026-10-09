@@ -824,6 +824,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   # connected solve. Keep it in the authoritative library without a cyclic
   # document/authoring dependency; the public authoring target remains stable.
   target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp src/core/phase_constraint_authoring.cpp
+    src/core/phase_coordinated_demolition.cpp
     src/core/phase_wall_replacement.cpp src/core/phase_wall_replacement_authoring.cpp
     src/core/phase_wall_replacement_command.cpp src/core/phase_wall_replacement_request.cpp
     src/core/phase_wall_profile_edit.cpp src/core/phase_wall_profile_capture.cpp src/core/phase_wall_canvas_proposal.cpp

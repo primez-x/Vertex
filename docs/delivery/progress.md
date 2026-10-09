@@ -14,6 +14,24 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed architectural demolition source integration
+
+Delete and Cut now capture demolition for multiple architectural families in
+one command: openings, roofs, horizontal assemblies, columns/beams and
+stairs/railings. Every participating baseline family uses its existing typed
+producer against the same source and saved alternative. Baseline owners remain
+retained; actual proposed railing retirement, qualified hosted rows and saved
+presentation consequences compose atomically. Site/selection authority includes
+retained demolition roots even when their physical records do not change.
+Native 134/extraction 132 retains current/history/wrapped proof meaning.
+
+Independent source review approved after closing retained-asset reservation
+for historical roof demolition children. Root integrated source review is
+complete. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation and
+runtime remain unverified; the installed candidate is unchanged. Mixed
+baseline/ordinary removal and topology retirement remain additional scope.
+
 ### October 8 combined stair edits and mixed transforms source integration
 
 The existing object editor now captures a complete related stair/railing cohort,

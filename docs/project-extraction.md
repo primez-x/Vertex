@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 132 requires native reader 134 for mixed architectural
+demolition. Full historical children bind one actual source and saved design
+under exclusive authoring fifteen. Typed family replay and known-row
+composition preserve baseline owners and qualified proposal retirement.
+Current, retained and wrapped proofs retain the floor.
+
 Exchange version 131 requires native reader 133 for combined stair profile and
 placement edits. Stair replacement child three retains closed compound intents
 under direct authoring twelve or coordinated authoring fourteen. Neutral typed

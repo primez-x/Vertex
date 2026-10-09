@@ -1,4 +1,25 @@
-# Vertex project formats v1 through v133
+# Vertex project formats v1 through v134
+
+## Mixed architectural demolition (v134)
+
+Native reader 134 and JSON/assets extraction 132 retain active-design authoring
+fifteen with closed coordinated demolition inner one. Its exact keys are
+`version`, `opening_authoring`, `roof_authoring`, `slab_authoring`,
+`structural_authoring` and `stair_authoring`. Absent children are null; at least
+two families are present. Each child is its full historical source-bound
+demolition envelope and names the same saved registry and alternative. No
+geometry, relationship, replacement-body or nested coordination authority may
+accompany a demolition child.
+
+Each family independently replays the complete actual source. Composition
+retains baseline physical owners, merges disjoint codec-known registry and
+presentation rows, retires only actual proposed dependents, and preserves
+surviving hosted row bytes and render aliases. An emptied restricted view stays
+restricted. Fresh roof/join destinations remain subject to Document lifetime
+reservation. Delete and Cut publish one complete undoable command; Cut prepares
+the clipboard before publication. Current, retained and wrapped proofs retain
+the format floor. Independent and integrated source review approved;
+compilation and runtime remain unverified.
 
 ## Combined stair profile and placement edits (v133)
 

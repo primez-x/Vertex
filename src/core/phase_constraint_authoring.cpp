@@ -9,6 +9,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/joint_translation_replay.hpp"
 #include "sketch/phase_opening_demolition.hpp"
+#include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
@@ -22,6 +23,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/slab_hosted_geometry_edit.hpp"
 #include "sketch/structural_hosted_components.hpp"
+#include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -709,6 +711,83 @@ Entity compose_source_container(const Entity& source,const std::vector<const Ent
         merge_source_row_container(source,candidates);
 }
 
+// Retirement can remove disjoint hosted rows from a shared catalog. It cannot
+// change retained definitions, material assignments, row bytes or order.
+Entity merge_demolition_catalog(const Entity& source,const std::vector<const Entity*>& candidates) {
+    const auto& retained=source.properties.at("model").at("instances");
+    std::map<std::string,std::size_t,std::less<>> positions;
+    for (std::size_t i=0;i<retained.size();++i)
+        if (!positions.emplace(retained.at(i).at("id").get<std::string>(),i).second)
+            invalid("Coordinated demolition has ambiguous actual hosted rows");
+    std::set<std::string,std::less<>> removed;
+    for (const auto* candidate:candidates) {
+        (void)AssemblyModel::from_json(candidate->properties.at("model"));
+        auto envelope=*candidate;
+        const auto& rows=envelope.properties.at("model").at("instances");
+        std::set<std::string,std::less<>> surviving;
+        std::optional<std::size_t> previous;
+        for (const auto& row:rows) {
+            const auto name=row.at("id").get<std::string>();
+            const auto actual=positions.find(name);
+            if (actual==positions.end() || !surviving.insert(name).second ||
+                (previous && actual->second<=*previous) || !exact_json(row,retained.at(actual->second)))
+                invalid("Coordinated demolition catalog authority is limited to actual row removal");
+            previous=actual->second;
+        }
+        for (const auto& [name,index]:positions) {
+            (void)index;
+            if (!surviving.contains(name) && !removed.insert(name).second)
+                invalid("Coordinated demolition repeats the same hosted row retirement");
+        }
+        envelope.properties.at("model").at("instances")=retained;
+        if (!exact(source,envelope)) invalid("Coordinated demolition changed a retained catalog envelope");
+    }
+    auto result=source;
+    auto rows=Json::array();
+    for (const auto& row:retained)
+        if (!removed.contains(row.at("id").get<std::string>())) rows.push_back(row);
+    result.properties.at("model").at("instances")=std::move(rows);
+    (void)AssemblyModel::from_json(result.properties.at("model"));
+    return result;
+}
+
+Entity merge_demolition_row_container(const Entity& source,const std::vector<const Entity*>& candidates) {
+    if (source.type!=kSheetViewEntityType) return merge_source_row_container(source,candidates);
+    std::vector<Entity> normalized;
+    normalized.reserve(candidates.size());
+    const auto& source_views=source.properties.at("model").at("views");
+    for (const auto* candidate:candidates) {
+        normalized.push_back(*candidate);
+        auto& views=normalized.back().properties.at("model").at("views");
+        if (views.size()!=source_views.size()) invalid("Coordinated demolition cannot change the saved view inventory");
+        for (std::size_t i=0;i<views.size();++i) {
+            auto& view=views.at(i);
+            const auto& actual=source_views.at(i);
+            const bool same_presence=view.contains("restrict_to_objects")==actual.contains("restrict_to_objects");
+            if (same_presence && (!view.contains("restrict_to_objects") ||
+                exact_json(view.at("restrict_to_objects"),actual.at("restrict_to_objects")))) continue;
+            // Preserve an emptied restricted view as restricted; an empty list
+            // must never broaden a view to every surviving building object.
+            if (actual.at("object_ids").empty() || !view.at("object_ids").empty() ||
+                !view.contains("restrict_to_objects") || view.at("restrict_to_objects")!=true ||
+                actual.value("restrict_to_objects",false))
+                invalid("Coordinated demolition changed saved view restriction authority");
+            if (actual.contains("restrict_to_objects")) view["restrict_to_objects"]=actual.at("restrict_to_objects");
+            else view.erase("restrict_to_objects");
+        }
+    }
+    std::vector<const Entity*> rows;
+    for (const auto& candidate:normalized) rows.push_back(&candidate);
+    auto result=merge_source_row_container(source,rows);
+    auto& views=result.properties.at("model").at("views");
+    for (std::size_t i=0;i<views.size();++i)
+        if (source_views.at(i).contains("object_ids") && views.at(i).contains("object_ids") &&
+            (!source_views.at(i).at("object_ids").empty() || source_views.at(i).value("restrict_to_objects",false)) &&
+            views.at(i).at("object_ids").empty()) views.at(i)["restrict_to_objects"]=true;
+    validate_sheet_view_entity(result);
+    return result;
+}
+
 std::vector<std::string> coordinated_wall_fresh(const PhaseConstraintAuthoringIntent& child) {
     std::vector<std::string> result;
     if (child.wall_replacement.is_null()) return result;
@@ -1016,11 +1095,12 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         static_cast<int>(!value.structural_replacement.is_null()) +
         static_cast<int>(!value.stair_demolition.is_null()) +
         static_cast<int>(!value.stair_replacement.is_null()) +
-        static_cast<int>(!value.stair_demolition_retirement.is_null());
+        static_cast<int>(!value.stair_demolition_retirement.is_null()) +
+        static_cast<int>(!value.coordinated_demolition.is_null());
     if (exclusive_operations > 1)
         invalid("Active design operations cannot borrow another replacement or demolition authority");
     const auto coordinated_version=value.coordinated_replacements.is_null()?0:coordinated(value.coordinated_replacements,value).version;
-    Json result={{"version",!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    Json result={{"version",!value.coordinated_demolition.is_null()?15:!value.stair_demolition_retirement.is_null()?13:!value.stair_replacement.is_null()?12:!value.stair_demolition.is_null()?11:!value.structural_replacement.is_null()?9:coordinated_version==4?14:coordinated_version==3?10:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
@@ -1118,6 +1198,13 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Stair dependent retirement cannot borrow geometry or relationship authority");
         result["stair_demolition_retirement"]=value.stair_demolition_retirement;
     }
+    if (!value.coordinated_demolition.is_null()) {
+        ConstraintAuthoringIntent empty;
+        empty.message=value.intent.message;
+        if (encode_intent(value.intent)!=encode_intent(empty))
+            invalid("Coordinated demolition cannot borrow geometry or relationship authority");
+        result["coordinated_demolition"]=encode_phase_coordinated_demolition(value.coordinated_demolition,value);
+    }
     // dump validates UTF-8 as well as the complete byte resource bound.
     resource_shape(result);
     if (result.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
@@ -1138,6 +1225,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool stair_demolition=value.is_object() && value.contains("version") && value.at("version")==11;
     const bool stair_replacement=value.is_object() && value.contains("version") && value.at("version")==12;
     const bool stair_retirement=value.is_object() && value.contains("version") && value.at("version")==13;
+    const bool coordinated_demolition=value.is_object() && value.contains("version") && value.at("version")==15;
     if (replacement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
     else if (demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
@@ -1158,9 +1246,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","stair_replacement"});
     else if (stair_retirement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","stair_demolition_retirement"});
+    else if (coordinated_demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","coordinated_demolition"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9 && value.at("version")!=10 && value.at("version")!=11 && value.at("version")!=12 && value.at("version")!=13 && value.at("version")!=14 && value.at("version")!=15) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -1222,6 +1312,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         if (result.stair_demolition_retirement.is_null()) invalid("Version thirteen requires stair dependent retirement decisions");
         (void)decode_stair_demolition_retirement_intent(result.stair_demolition_retirement);
     }
+    if (coordinated_demolition) {
+        result.coordinated_demolition=value.at("coordinated_demolition");
+        if (result.coordinated_demolition.is_null()) invalid("Version fifteen requires coordinated demolition decisions");
+        (void)encode_phase_coordinated_demolition(result.coordinated_demolition,result);
+    }
     if (encode_phase_constraint_authoring_intent(result)!=value) invalid("Phase constraint proof is not canonical");
     return result;
 }
@@ -1229,6 +1324,8 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
 std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_components(
     const PhaseConstraintAuthoringIntent& intent) {
     (void)encode_phase_constraint_authoring_intent(intent);
+    if (!intent.coordinated_demolition.is_null())
+        return phase_coordinated_demolition_components(intent.coordinated_demolition,intent);
     if (intent.coordinated_replacements.is_null()) return {intent};
     std::vector<PhaseConstraintAuthoringIntent> result;
     const auto lanes=coordinated(intent.coordinated_replacements,intent);
@@ -1264,6 +1361,8 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
         invalid("Phase constraint proof does not describe the actual source entities and saved choices");
     if (!decoded.coordinated_replacements.is_null())
         return replay_coordinated(source,decoded);
+    if (!decoded.coordinated_demolition.is_null())
+        return replay_phase_coordinated_demolition(source,decoded);
     if (!decoded.opening_demolition.is_null())
         return replay_phase_opening_demolition_entities(source,
             decode_phase_opening_demolition_intent(decoded.opening_demolition));
@@ -1339,6 +1438,56 @@ Entities compose_architectural_family_candidates(const Entities& source,const st
     for (const auto& candidate:candidates) for (const auto& [key,alias]:embedded_assembly_presentation_ids(candidate))
         if (final_aliases.at(key)!=alias) invalid("Ordinary family composition changed a candidate render alias");
     validate_document_assembly_instances(result);
+    return result;
+}
+
+Entities compose_phase_demolition_candidates(const Entities& source,const std::vector<Entities>& candidates) {
+    coordinated_map_budget(source);
+    if (candidates.size()<2 || candidates.size()>5)
+        invalid("Coordinated demolition requires two to five complete family candidates");
+    for (const auto& candidate:candidates) coordinated_map_budget(candidate);
+    std::set<std::string,std::less<>> baseline;
+    for (const auto& [key,entity]:source) if (entity.type=="model_phases") {
+        (void)key;
+        const auto model=ModelPhases::from_json(entity.properties.at("model"));
+        baseline.insert(model.baseline_ids().begin(),model.baseline_ids().end());
+    }
+    auto result=source;
+    for (const auto& [key,entity]:source) {
+        std::vector<const Entity*> changed;
+        std::size_t erased{};
+        for (const auto& candidate:candidates) {
+            const auto found=candidate.find(key);
+            if (found==candidate.end()) ++erased;
+            else if (!exact(entity,found->second)) changed.push_back(&found->second);
+        }
+        if (baseline.contains(key) && (erased || !changed.empty()))
+            invalid("Coordinated demolition cannot change retained baseline physical owners");
+        if (erased) {
+            if (erased!=1 || !changed.empty())
+                invalid("Coordinated demolition has overlapping retirement consequences");
+            result.erase(key);
+        } else if (changed.size()==1) result.at(key)=*changed.front();
+        else if (changed.size()>1) result.at(key)=entity.type=="assembly_model"
+            ? merge_demolition_catalog(entity,changed) : merge_demolition_row_container(entity,changed);
+    }
+    for (const auto& candidate:candidates) for (const auto& [key,entity]:candidate) {
+        if (source.contains(key)) continue;
+        if (!result.emplace(key,entity).second)
+            invalid("Coordinated demolition family destinations overlap");
+    }
+    coordinated_map_budget(result);
+    const auto final_aliases=embedded_assembly_presentation_ids(result);
+    const auto preserve_surviving_aliases=[&](const Entities& original) {
+        for (const auto& [key,alias]:embedded_assembly_presentation_ids(original))
+            if (const auto final=final_aliases.find(key);final!=final_aliases.end() && final->second!=alias)
+                invalid("Coordinated demolition changed a surviving component's render alias");
+    };
+    preserve_surviving_aliases(source);
+    for (const auto& candidate:candidates) preserve_surviving_aliases(candidate);
+    (void)constraint_phase_scope(result);
+    validate_document_assembly_instances(result);
+    validate_stair_attachment_state(result);
     return result;
 }
 } // namespace sketch
