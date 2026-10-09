@@ -201,7 +201,9 @@ public:
     // retained and undone command history (phase authoring version 16).
     // Ordinary wall removal alongside baseline wall demolition requires v148,
     // including wrapped, retained and undone history (wall demolition version 2).
-    static constexpr std::uint32_t format_version = 148;
+    // Complete coordinated hosted-catalog consequences require v149 throughout
+    // retained and undone history (phase authoring v15, coordinated demolition v4).
+    static constexpr std::uint32_t format_version = 149;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

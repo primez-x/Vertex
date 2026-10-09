@@ -2658,7 +2658,8 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
             return true;
         const auto coordinated=intent.find("coordinated_demolition");
         if (coordinated==intent.end() || !coordinated->is_object()) return false;
-        if ((coordinated->value("version",0)==2 || coordinated->value("version",0)==3) &&
+        if ((coordinated->value("version",0)==2 || coordinated->value("version",0)==3 ||
+             coordinated->value("version",0)==4) &&
             coordinated->contains("ordinary_removal") &&
             coordinated->at("ordinary_removal").is_object()) return true;
         const auto stair=coordinated->find("stair_authoring");
@@ -2950,6 +2951,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     std::set<std::string,std::less<>> wall_demolition_room_destinations;
     std::set<std::string,std::less<>> wall_demolition_join_destinations;
     bool complete_wall_demolition=false;
+    bool complete_ordinary_wall_demolition=false;
+    bool complete_hosted_demolition=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -2981,6 +2984,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             structural_hosted_alias_reservation=true;
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
             const auto demolition=decode_phase_wall_demolition_authoring(root_intent.wall_demolition);
+            complete_ordinary_wall_demolition=complete_ordinary_wall_demolition || !demolition.ordinary_wall_ids.empty();
             for (const auto& [original,ids]:demolition.wall_additional_identities) {
                 (void)original;
                 for (const auto& id:ids) {
@@ -3013,6 +3017,12 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
         if (!root_intent.coordinated_demolition.is_null()) {
             complete_envelope_reservation=true;
+            if (phase_coordinated_demolition_complete_hosted_catalog_consequences(
+                    root_intent.coordinated_demolition,root_intent)) {
+                complete_hosted_demolition=true;
+                structural_asset_reservation=true;
+                structural_hosted_alias_reservation=true;
+            }
             // Historical roof demolition children can omit phase-qualified
             // joins. The new enclosure always reserves every destination
             // against retained assets, independently of the child's dialect.
@@ -3191,8 +3201,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             nested_fresh.insert(alias);
         }
     }
-    if (complete_wall_demolition) {
-        nested_fresh.insert(fresh.begin(),fresh.end());
+    if (complete_wall_demolition) nested_fresh.insert(fresh.begin(),fresh.end());
+    // Inner one predates this vocabulary. Its retained identities keep their
+    // historical meaning; only inner two introduces these reserved fields.
+    if (complete_ordinary_wall_demolition) {
         for (const auto* token:{"version","wall_demolition","other_authoring","ordinary","opening_ids",
             "room_review_intent","registry_id","alternative_id","wall_ids","ordinary_wall_ids",
             "wall_additional_identities","object_ids","components","catalog_id","instance_id",
@@ -3200,6 +3212,17 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             "source_entities_digest","source_saved_revision","phase_selections","intent"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A fresh wall demolition destination borrows a semantic proof field: "+std::string(token));
+    }
+    if (complete_hosted_demolition) {
+        nested_fresh.insert(fresh.begin(),fresh.end());
+        for (const auto* token:{"version","coordinated_demolition","opening_authoring","roof_authoring",
+            "slab_authoring","structural_authoring","stair_authoring","ordinary_removal",
+            "complete_hosted_catalog_consequences","object_ids","components","catalog_id","instance_id",
+            "roof_additional_identities","registry_id","alternative_id","expected_revision",
+            "source_snapshot_digest","source_authoring_digest","source_entities_digest",
+            "source_saved_revision","phase_selections","intent"})
+            if (fresh.contains(token))
+                throw std::invalid_argument("A fresh architectural demolition destination borrows a semantic proof field: "+std::string(token));
     }
     if (phase_drawing_enclosure) {
         // The complete new enclosure reserves every resulting or declared

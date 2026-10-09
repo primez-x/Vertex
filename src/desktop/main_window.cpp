@@ -31685,7 +31685,7 @@ public:
         const PhysicalWallPhaseSelection& destination) {
         if (roots.empty()) return std::nullopt;
         if (!destination.alternative_id)
-            throw std::invalid_argument("The selected walls no longer have an active design.");
+            throw std::invalid_argument("The selected objects no longer have an active design.");
         std::map<std::string,std::vector<std::string>,std::less<>> families;
         for (const auto& id:roots) {
             const auto& object=source.entities().at(id);
@@ -32161,12 +32161,64 @@ public:
         return true;
     }
 
+    std::optional<bool> removeSelectedArchitecturalDrawing(const DocumentSnapshot& source,bool cut) {
+        const auto authority=captureSourceEditAuthority(source);
+        DrawingSelectionRemovalIntent drawing;
+        std::vector<std::string> architectural_ids;
+        for (const auto& selected:authority.selection) {
+            if (captureIndependentDrawingRemoval(source,selected,drawing)) continue;
+            const auto id=selected.toStdString();
+            const auto actual=source.entities().find(id);
+            // Physical walls use their complete room-review workflow.
+            if (actual!=source.entities().end() && actual->second.type=="wall") return std::nullopt;
+            architectural_ids.push_back(id);
+        }
+        if (!hasIndependentDrawingRemoval(drawing) || architectural_ids.empty()) return std::nullopt;
+        if (authority.selection.size()>1000 || !authority.selection.contains(authority.context.selected_id))
+            throw std::invalid_argument("The mixed selection changed. Select the objects again.");
+        const bool site=siteCanvas(m_architecturalCanvas);
+        const auto site_generation=m_site_publication_generation;
+        const auto require_current=[&] {
+            if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
+                m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The mixed removal, project, selection or workspace changed. Select the objects again.");
+            if (site) {
+                requireSitePublicationCurrent();
+                if (site_generation!=m_site_publication_generation || !m_site_publication_source ||
+                    fullSnapshotDigest(*m_site_publication_source)!=authority.source_digest)
+                    throw std::invalid_argument("The displayed Site Plan changed during mixed removal. Select the objects again.");
+            }
+        };
+        require_current();
+        canonicalIndependentDrawingRemoval(drawing);
+        (void)replay_drawing_selection_removal(source.entities(),drawing,source.uses_active_phase_constraints());
+        const std::string message=cut ? "Cut selected architectural objects and drawings" :
+            "Delete selected architectural objects and drawings";
+        auto command=coordinatedDemolitionCommand(source,architectural_ids,message,true);
+        if (!command) return std::nullopt;
+        require_current();
+        QString clipboard_text;
+        QClipboard* clipboard=nullptr;
+        if (cut) {
+            const auto encoded=clipboardSelectionPayload(source);
+            clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
+            clipboard=QGuiApplication::clipboard();
+            if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+        }
+        command=complete_drawing_removal_command(source,*command,drawing);
+        require_current();
+        if (!applyAuthoredCommand(*command)) return false;
+        if (cut) clipboard->setText(clipboard_text,QClipboard::Clipboard);
+        m_selected_id.clear();m_selected_ids.clear();clearError();refresh();return true;
+    }
+
     bool cutSelection() {
         try {
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,true);
             if (hasMixedPhysicalWallSelection(source)) return removeSelectedMixedPhysicalWalls(source,true);
+            if (const auto removed=removeSelectedArchitecturalDrawing(source,true)) return *removed;
             const auto authority = captureSourceEditAuthority(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
@@ -32702,6 +32754,7 @@ public:
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,false);
             if (hasMixedPhysicalWallSelection(source)) return removeSelectedMixedPhysicalWalls(source,false);
+            if (const auto removed=removeSelectedArchitecturalDrawing(source,false)) return *removed;
             const auto authority = captureSourceEditAuthority(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
@@ -43715,14 +43768,15 @@ private:
     }
 
     std::optional<Command> coordinatedDemolitionCommand(const DocumentSnapshot& source,
-        const std::vector<std::string>& ids,const std::string& message) {
+        const std::vector<std::string>& ids,const std::string& message,bool include_single_family=false) {
         if (ids.empty()) return std::nullopt;
         if (ids.size()>maximum_architectural_group_targets)
             throw std::invalid_argument("The architectural demolition selection is too large.");
         std::map<std::string,std::vector<std::string>,std::less<>> families;
+        std::vector<std::string> baseline_roots;
         std::vector<std::string> ordinary_roots;
         std::vector<std::pair<std::string,std::string>> ordinary_components;
-        std::map<std::pair<std::string,std::string>,std::string> component_hosts;
+        std::optional<PhysicalWallPhaseSelection> destination;
         const auto scope=constraint_phase_scope(source.entities());
         std::map<std::string,const PhysicalWallPhaseState*,std::less<>> owners;
         for (const auto& registry:scope.registries) for (const auto& id:registry.registered_entity_ids)
@@ -43737,13 +43791,12 @@ private:
                 const auto component=geometric_assembly_for_child(source,id);
                 if (!component) return std::nullopt;
                 const auto key=std::pair{component->assembly_catalog_id,component->instance.id};
-                if (scope.inactive_owner_ids.contains(key.first))
+                if (saved_design_reference_inactive(source,scope,key.first))
                     throw std::invalid_argument("The selected component catalog is inactive in the saved design.");
                 if (component->instance.placement) {
                     const auto& host=component->instance.placement->host_entity_id;
-                    if (scope.inactive_owner_ids.contains(host))
+                    if (saved_design_reference_inactive(source,scope,host))
                         throw std::invalid_argument("The selected component's host is inactive in the saved design.");
-                    component_hosts.emplace(key,host);
                 }
                 ordinary_components.push_back(key);
                 continue;
@@ -43753,78 +43806,78 @@ private:
                 object.type=="slab" ? "slab_authoring" : structuralObject(object) ? "structural_authoring" :
                 object.type=="stair" || object.type=="railing" ? "stair_authoring" : nullptr;
             if (!slot) return std::nullopt;
-            if (scope.inactive_owner_ids.contains(id))
+            if (saved_design_reference_inactive(source,scope,id))
                 throw std::invalid_argument("The selected object is inactive in the saved design: "+id);
             const auto owner=owners.find(id);
             const bool baseline=owner!=owners.end() && owner->second->alternative_id &&
                 owner->second->states.at(id)==ModelPhase::existing;
-            if (baseline) families[slot].push_back(id);
+            if (baseline) {
+                const PhysicalWallPhaseSelection choice{owner->second->registry_id,owner->second->alternative_id};
+                if (destination && (destination->registry_id!=choice.registry_id ||
+                        destination->alternative_id!=choice.alternative_id))
+                    throw std::invalid_argument("The selected baseline objects belong to different saved designs.");
+                destination=choice;
+                families[slot].push_back(id);
+                baseline_roots.push_back(id);
+            }
             else if (object.type=="stair" || object.type=="railing" || object.type=="slab" ||
                 object.type=="roof" || structuralObject(object))
                 ordinary_roots.push_back(id);
             else return std::nullopt;
         }
-        if (families.empty() || (families.size()<2 && ordinary_roots.empty() && ordinary_components.empty()))
+        if (families.empty() || (!include_single_family && families.size()<2 &&
+                ordinary_roots.empty() && ordinary_components.empty()))
             return std::nullopt;
-        ConstraintAuthoringIntent semantic;
-        semantic.message=message;
-        auto intent=make_phase_constraint_authoring_intent(source,semantic);
-        auto children=nlohmann::json{{"version",1},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
-            {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr}};
-        std::optional<Command> only_child;
-        std::set<std::string,std::less<>> covered_roots;
-        std::set<std::pair<std::string,std::string>> covered_components;
-        for (auto& [family,roots]:families) {
-            std::sort(roots.begin(),roots.end());
-            std::optional<Command> child;
-            if (family=="opening_authoring") {
-                if (const auto opening=phase_opening_demolition_command(source,roots)) child=Command{*opening};
-            } else if (family=="roof_authoring") child=alternativeRoofDemolitionCommand(source,roots,message);
-            else if (family=="slab_authoring") child=slabRemovalCommand(source,roots,message);
-            else if (family=="structural_authoring") child=structuralDemolitionCommand(source,roots,message);
-            else child=stairDemolitionCommand(source,roots,message);
-            if (!child)
-                throw std::invalid_argument("The selected baseline family has no complete demolition command.");
-            const auto* captured=std::get_if<ApplyBoundaryConstraintChanges>(&*child);
-            if (!captured || !captured->phase_constraint_authoring_completion ||
-                captured->phase_constraint_authoring_intent.is_null())
-                throw std::invalid_argument("The architectural demolition child has no captured source authority.");
-            children[family]=captured->phase_constraint_authoring_intent;
-            // A baseline stair leaf may already retire its actual proposed
-            // rails/components. Cover those explicit selections once rather
-            // than granting a second ordinary lane overlapping erase authority.
-            const auto leaf_candidate=Document::preview_command(source,*child);
-            for (const auto& id:ordinary_roots)
-                if (!leaf_candidate.entities().contains(id)) covered_roots.insert(id);
-            const auto aliases=embedded_assembly_presentation_ids(leaf_candidate.entities());
-            const auto leaf_scope=constraint_phase_scope(leaf_candidate.entities());
-            for (const auto& key:ordinary_components) {
-                const auto host=component_hosts.find(key);
-                if (!aliases.contains(key) || (host!=component_hosts.end() &&
-                    (!leaf_candidate.entities().contains(host->second) || leaf_scope.inactive_owner_ids.contains(host->second))))
-                    covered_components.insert(key);
-            }
-            only_child=std::move(child);
+        std::sort(baseline_roots.begin(),baseline_roots.end());
+        auto captured=baselineArchitecturalDemolitionCommand(source,baseline_roots,message,*destination);
+        if (!captured) throw std::invalid_argument("The selected baseline objects have no complete demolition command.");
+        auto intent=decode_phase_constraint_authoring_intent(captured->phase_constraint_authoring_intent);
+        if (families.size()==1 && ordinary_roots.empty() && ordinary_components.empty()) {
+            (void)Document::preview_command(source,Command{*captured});
+            return Command{std::move(*captured)};
         }
-        std::erase_if(ordinary_roots,[&](const auto& id) { return covered_roots.contains(id); });
-        std::erase_if(ordinary_components,[&](const auto& key) { return covered_components.contains(key); });
+        auto children=json{{"version",4},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
+            {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr},
+            {"ordinary_removal",nullptr},{"complete_hosted_catalog_consequences",true}};
+        if (families.size()>1) {
+            for (const auto* family:{"opening_authoring","roof_authoring","slab_authoring","structural_authoring","stair_authoring"})
+                children[family]=intent.coordinated_demolition.at(family);
+        } else children[families.begin()->first]=captured->phase_constraint_authoring_intent;
+        // Keep every explicit ordinary selection in the semantic proof. The
+        // source core admits it before collapsing closure covered by a leaf.
         if (!ordinary_roots.empty() || !ordinary_components.empty()) {
             std::sort(ordinary_roots.begin(),ordinary_roots.end());
             std::sort(ordinary_components.begin(),ordinary_components.end());
-            auto rows=nlohmann::json::array();
+            auto rows=json::array();
             for (const auto& [catalog,instance]:ordinary_components)
                 rows.push_back({{"catalog_id",catalog},{"instance_id",instance}});
-            children["version"]=2;
             children["ordinary_removal"]={{"version",1},{"object_ids",ordinary_roots},{"components",std::move(rows)}};
             if (std::any_of(ordinary_roots.begin(),ordinary_roots.end(),[&](const auto& id) {
                     return source.entities().at(id).type=="roof";
                 })) {
-                const auto ordinary=captureArchitecturalSelectionRemoval(source,ordinary_roots,ordinary_components);
-                children["version"]=3;
+                auto ordinary=captureArchitecturalSelectionRemoval(source,ordinary_roots,ordinary_components);
+                auto occupied=retainedSlabIdentityNames(source,true);
+                std::vector<const json*> pending{&children};
+                while (!pending.empty()) {
+                    const auto& value=*pending.back();pending.pop_back();
+                    if (value.is_string()) occupied.insert(value.get_ref<const std::string&>());
+                    else if (value.is_object()) for (const auto& [key,child]:value.items()) {
+                        occupied.insert(key);pending.push_back(&child);
+                    } else if (value.is_array()) for (const auto& child:value) pending.push_back(&child);
+                }
+                for (const auto* token:{"roof_additional_identities","independent_drawing_removal_completion",
+                    "independent_drawing_removal_intent","owner_ids","annotations","owner_id","child_id","proof"})
+                    occupied.insert(token);
+                for (auto& [original,destinations]:ordinary.roof_additional_identities) {
+                    (void)original;
+                    for (auto& id:destinations) while (!occupied.insert(id).second) id=new_id("roof");
+                }
                 children["ordinary_removal"]["version"]=2;
                 children["ordinary_removal"]["roof_additional_identities"]=ordinary.roof_additional_identities;
             }
-        } else if (families.size()==1) return only_child;
+        }
+        ConstraintAuthoringIntent semantic;semantic.message=message;
+        intent=make_phase_constraint_authoring_intent(source,semantic);
         intent.coordinated_demolition=std::move(children);
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision();

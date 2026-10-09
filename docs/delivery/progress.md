@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete non-wall architectural/drawing removal source implementation
+
+Delete/Cut now build complete mixed architectural demolition from one actual
+capture, with closed inner-four catalog consequences. Original roofs, slabs,
+structural objects, stairs/railings and hosted openings may combine with actual
+ordinary/proposed architectural roots and qualified components. The source core
+authenticates every explicit selection before collapsing historical closure;
+the controller no longer previews individual families or silently removes
+covered selections from its proof. Independently selected drawing owners,
+labels and symbols complete the same applied operation. Source/selection,
+pending-placement and Site fences remain through application and Cut publication.
+
+Native 149 / extraction 147 preserve the additive meaning in direct, wrapped,
+retained and undone operations. Document admission reserves complete destinations
+and active reference retirement without weakening earlier dialects. Root
+integrated source review is complete; independent review of this new composition
+is pending. The previous inner-two review found one history compatibility issue:
+its new vocabulary refusal now applies only to inner two, preserving inner-one
+identities. No further actionable findings were reported in that targeted review.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation and runtime remain unverified; the installed candidate is
+unchanged. Mixed independent ordinary openings with historical non-wall families,
+remaining authoring relationships and production qualification remain unfinished.
+
 ### October 9 mixed original and ordinary/proposed wall source implementation
 
 Delete/Cut now classifies selected walls from their actual saved membership,
@@ -29,7 +54,9 @@ inspection and current/retained Document source admission check join lifetime
 before native inference, including assets, retained/undone proofs and aliases.
 Retained admission receives an explicit preceding record index. Native 148 /
 extraction 146 preserve inner two; inner one retains 147 / 145. Root integrated
-source review is complete; targeted independent source review remains pending.
+source review is complete. Targeted independent source review found one history
+compatibility issue in the new vocabulary refusal; the following source batch
+gates that refusal on inner two and preserves inner-one identity semantics.
 No runtime acceptance is claimed.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or

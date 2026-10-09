@@ -18,6 +18,11 @@ namespace sketch {
 // Closed inner v3 has the same seven fields as v2 and requires ordinary child
 // v2: exactly version, object_ids, components and roof_additional_identities.
 // Its source-derived roof lane cannot be borrowed by any historical dialect.
+// Closed inner v4 adds complete_hosted_catalog_consequences:true to the seven
+// v2/v3 fields. Ordinary removal is nullable; when present its exact child v1
+// or v2 codec remains closed. At least two historical families are required
+// without ordinary removal, otherwise one. Only v4 admits complete independently
+// replayed hosted catalog consequences and proven historical selection closure.
 [[nodiscard]] nlohmann::json encode_phase_coordinated_demolition(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
@@ -36,11 +41,15 @@ struct PhaseCoordinatedOrdinaryRemoval {
 };
 
 // Validates the complete enclosure, including historical children and source
-// bindings. V1 has no ordinary selection and returns nullopt. V2 selections
+// bindings. V1 and v4 with null ordinary_removal return nullopt. V2 selections
 // are canonical ascending unique ASCII identities with aggregate size <=1000.
-// Inner v3/child v2 destinations are bounded nonempty arrays of fresh IDs; slot
+// Inner v3/v4 child v2 destinations are bounded nonempty arrays of fresh IDs; slot
 // order is authored join/overlay order rather than lexical identity order.
 [[nodiscard]] std::optional<PhaseCoordinatedOrdinaryRemoval> phase_coordinated_demolition_ordinary_removal(
+    const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
+
+// Validates the entire enclosure; true exclusively for closed inner v4.
+[[nodiscard]] bool phase_coordinated_demolition_complete_hosted_catalog_consequences(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
 // Every leaf independently replays the SAME actual source. Only the exported
@@ -49,6 +58,8 @@ struct PhaseCoordinatedOrdinaryRemoval {
 // owner/catalog/host phase authority must match the historical saved choice.
 // V3 additionally binds affected actual roofs/joins and retained roof registry
 // transitions to that same actual registry/alternative.
+// V4 retains actual registry ID order and all baseline physical envelopes,
+// protects foreign/inactive hosts, and composes only complete typed consequences.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_phase_coordinated_demolition(
     const std::map<std::string, Entity, std::less<>>& source,
     const PhaseConstraintAuthoringIntent& enclosing);

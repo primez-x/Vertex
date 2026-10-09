@@ -1,4 +1,41 @@
-# Vertex project formats v1 through v148
+# Vertex project formats v1 through v149
+
+## Complete coordinated architectural demolition (v149)
+
+Native reader 149 and JSON/assets extraction 147 retain coordinated demolition
+inner four under phase-authoring dialect fifteen, including direct commands,
+independent drawing completion forty-two, retained and undone history. Earlier
+inner versions retain their exact meanings and reader floors.
+
+The closed inner-four record has exactly `version`, `opening_authoring`,
+`roof_authoring`, `slab_authoring`, `structural_authoring`, `stair_authoring`,
+`ordinary_removal` and `complete_hosted_catalog_consequences:true`. Historical
+family slots contain complete canonical demolition envelopes bound to the same
+actual Snapshot and saved choice. At least two families are required when
+ordinary removal is null; otherwise at least one. The ordinary child retains
+its closed version-one or version-two grammar, including explicit roof split
+destinations for version two.
+
+Each family independently replays the original entity map. Explicit ordinary
+roots and qualified component rows must pass actual source ownership checks
+before consequences covered by a historical leaf can collapse. Composition
+admits exact retained catalog rows and authenticated fresh suffixes while
+preserving catalog envelopes, definitions, materials and opaque fields.
+Baseline physical owners, required/foreign/inactive evidence, other alternatives,
+surviving aliases and raw registry metadata remain protected. The registry
+adapter changes only known ID lists, preserves their retained raw order, and
+checks unchanged typed meaning. Known identical reference retirement composes
+once; conflicting physical or join consequences refuse.
+
+Document admission reserves resulting and declared destinations against the
+complete source and retained history, assets, component aliases and this new
+proof vocabulary. Delete/Cut assemble one complete command without partial
+family Document previews or UI-only consequence pruning. Mixed selections may
+include independently selected drawing owners, labels and symbols. Selection,
+pending-placement and Site publication fences stay attached to that full
+operation; Cut updates its clipboard only after application. Physical walls and
+independent ordinary openings retain their dedicated completion workflows.
+Compilation and runtime remain unverified under the source-only instruction.
 
 ## Mixed original and ordinary/proposed wall removal (v148)
 
@@ -22,8 +59,9 @@ Snapshot inspection and current/retained Document source admission reserve
 ordinary split identities before native inference. Retained replay uses its
 explicit preceding history prefix; current preparation also reserves retained
 undone records, assets, metadata and component aliases. Final complete admission
-checks the combined wall, roof and room destinations and reserves the new proof
-vocabulary. The complete stage supplies the existing explicit phase-room review;
+checks the combined wall, roof and room destinations. Only inner two reserves
+the newly introduced semantic proof vocabulary; inner-one retained identities
+keep their historical meaning. The complete stage supplies the existing explicit phase-room review;
 no intermediate Snapshot or family preview becomes authority.
 
 Wall-only and broader Delete/Cut selections use this path when originals and
