@@ -6,8 +6,11 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_roof_replacement.hpp"
+#include "sketch/phase_roof_resize.hpp"
+#include "sketch/phase_roof_transform.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
@@ -74,13 +77,21 @@ std::string overlay_owner(const Json& overlay) {
     return {};
 }
 
+void admit_material_assignment(const RoofDemolitionEntities& source, const Json& assignment);
+
 void admit_roofs_and_joins(const RoofDemolitionEntities& source, const Ids& roofs, const Ids& joins) {
     std::map<std::string, TopoDS_Shape, std::less<>> shapes;
     const auto shape = [&](const std::string& id) -> const TopoDS_Shape& {
         if (!shapes.contains(id)) {
             const auto found = source.find(id);
             if (found == source.end() || found->second.type != "roof") reject("join member is not an actual roof: " + id);
+            // Known quantity, opening and historical transform/resize receipts
+            // bind the actual raw owner before context-derived native geometry.
             validate_roof_profile_source_entity(found->second);
+            validate_roof_rigid_transform_derivations(found->second);
+            validate_roof_plan_resize_derivations(found->second);
+            if (found->second.properties.contains("material_assignment"))
+                admit_material_assignment(source, found->second.properties.at("material_assignment"));
             shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second))));
         }
         return shapes.at(id);
@@ -88,6 +99,8 @@ void admit_roofs_and_joins(const RoofDemolitionEntities& source, const Ids& roof
     for (const auto& id : roofs) (void)shape(id);
     for (const auto& id : joins) {
         const auto join = parse_roof_join(source.at(id).properties, id);
+        if (join.material_assignment)
+            admit_material_assignment(source, source.at(id).properties.at("material_assignment"));
         std::vector<TopoDS_Shape> members;
         for (const auto& roof : join.roof_ids) members.push_back(shape(roof));
         (void)make_roof_join(join, members);
@@ -104,6 +117,7 @@ void admit_material_assignment(const RoofDemolitionEntities& source, const Json&
         reject("singleton source material assignment is unsupported");
     const auto catalog_id = assignment.at("catalog_id").get<std::string>();
     const auto material_id = assignment.at("material_id").get<std::string>();
+    identity(catalog_id);
     const auto catalog = source.find(catalog_id);
     if (catalog == source.end() || catalog->second.type != "assembly_model")
         reject("singleton material assignment requires an actual source assembly catalog");
@@ -126,12 +140,20 @@ DemolitionDerivation derive_demolition(const RoofDemolitionEntities& source,
     const RoofDemolitionRequest& request) {
     DemolitionDerivation result;
     result.plan = inspect_phase_roof_replacement_plan(source, request.seed_roof_ids,
-        request.registry_id, request.alternative_id);
+        request.registry_id, request.alternative_id, request.phase_qualified_joins);
     if (!result.plan.ready()) {
         for (const auto& diagnostic : result.plan.diagnostics) if (diagnostic.blocking)
             reject("unresolved affected dependency " + diagnostic.entity_id + ": " + diagnostic.reason);
     }
     const Ids seeds(request.seed_roof_ids.begin(), request.seed_roof_ids.end());
+    const Ids retained(result.plan.retained_join_roof_ids.begin(), result.plan.retained_join_roof_ids.end());
+    Ids admitted_roofs = retained, admitted_joins;
+    for (const auto& id : result.plan.required_entity_ids) {
+        if (source.at(id).type == "roof") admitted_roofs.insert(id);
+        else if (source.at(id).type == "roof_join") admitted_joins.insert(id);
+    }
+    if (request.phase_qualified_joins) validate_roof_join_ownership(source);
+    admit_roofs_and_joins(source, admitted_roofs, admitted_joins);
     std::map<std::string, TopoDS_Shape, std::less<>> shapes;
     for (const auto& id : result.plan.required_entity_ids) {
         const auto& entity = source.at(id);
@@ -166,6 +188,16 @@ DemolitionDerivation derive_demolition(const RoofDemolitionEntities& source,
                 // resolve a catalog/material, retaining compatible roof extras.
                 for (const auto& [key, value] : effective.items()) assignment[key] = value;
                 admit_material_assignment(source, assignment);
+                if (retained.contains(component.front())) {
+                    // This survivor belongs to its actual source role and is
+                    // preserved byte-for-byte. A different effective material
+                    // needs a richer representation than this typed family.
+                    if (!roof.properties.contains("material_assignment") ||
+                        roof.properties.at("material_assignment") != assignment ||
+                        roof.properties.at("material_assignment").dump() != assignment.dump())
+                        reject("retained singleton source join material has a representation conflict: " + component.front());
+                    continue;
+                }
                 if (!result.singleton_material_assignments.emplace(component.front(), std::move(assignment)).second)
                     reject("singleton has more than one source join material override");
             }
@@ -264,7 +296,8 @@ void complete_presentation(RoofDemolitionEntities& candidate,
 } // namespace
 
 std::optional<RoofDemolitionRequest> roof_demolition_request(
-    const RoofDemolitionEntities& source, const std::vector<std::string>& selected_roof_ids) {
+    const RoofDemolitionEntities& source, const std::vector<std::string>& selected_roof_ids,
+    bool phase_qualified_joins) {
     try {
         if (selected_roof_ids.empty() || selected_roof_ids.size() > maximum_identities)
             reject("requires bounded nonempty explicit roof selection");
@@ -288,7 +321,7 @@ std::optional<RoofDemolitionRequest> roof_demolition_request(
             const bool baseline = std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end();
             if (!baseline || !model.active_alternative()) { ++ordinary; continue; }
             if (request && request->registry_id != membership->second) reject("selection spans shared-baseline registries");
-            if (!request) request = RoofDemolitionRequest{membership->second, *model.active_alternative(), {}};
+            if (!request) request = RoofDemolitionRequest{membership->second, *model.active_alternative(), {}, phase_qualified_joins};
             request->seed_roof_ids.push_back(id);
         }
         if (request && ordinary) reject("selection mixes shared-baseline and ordinary/proposed roof owners");
@@ -322,26 +355,32 @@ Json encode_roof_demolition_intent(const RoofDemolitionIntent& intent) {
         }
     }
     for (const auto& id : seeds) if (!intent.identities.contains(id)) reject("seed has no declared destination identity");
-    Json result{{"version", 1}, {"registry_id", intent.registry_id}, {"alternative_id", intent.alternative_id},
+    Json result{{"version", intent.phase_qualified_joins ? 2 : 1}, {"registry_id", intent.registry_id}, {"alternative_id", intent.alternative_id},
         {"seed_roof_ids", intent.seed_roof_ids}, {"identities", intent.identities},
         {"additional_identities", intent.additional_identities}};
+    if (intent.phase_qualified_joins) result["phase_qualified_joins"] = true;
     if (result.dump().size() > maximum_intent_bytes) reject("intent byte budget exceeded");
     return result;
 }
 
 RoofDemolitionIntent decode_roof_demolition_intent(const Json& value) {
     try {
-        if (!value.is_object() || value.size() != 6 || !value.contains("version") ||
-            !value.at("version").is_number_integer() || value.at("version") != 1 ||
+        const bool qualified = value.is_object() && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version") == 2;
+        if (!value.is_object() || value.size() != (qualified ? 7 : 6) || !value.contains("version") ||
+            !value.at("version").is_number_integer() || (!qualified && value.at("version") != 1) ||
+            (qualified && (!value.contains("phase_qualified_joins") || !value.at("phase_qualified_joins").is_boolean() ||
+                !value.at("phase_qualified_joins").get<bool>())) ||
             !value.contains("registry_id") || !value.contains("alternative_id") ||
             !value.contains("seed_roof_ids") || !value.at("seed_roof_ids").is_array() ||
             !value.contains("identities") || !value.at("identities").is_object() ||
             !value.contains("additional_identities") || !value.at("additional_identities").is_object())
-            reject("intent must contain exactly the six version-one fields");
+            reject("intent must contain its exact version-one/two fields");
         if (value.at("seed_roof_ids").size() > maximum_identities ||
             value.at("identities").size() > maximum_identities || value.dump().size() > maximum_intent_bytes)
             reject("intent budget exceeded");
         RoofDemolitionIntent result;
+        result.phase_qualified_joins = qualified;
         result.registry_id = value.at("registry_id").get<std::string>();
         result.alternative_id = value.at("alternative_id").get<std::string>();
         result.seed_roof_ids = value.at("seed_roof_ids").get<std::vector<std::string>>();
@@ -362,7 +401,8 @@ std::map<std::string, std::size_t, std::less<>> roof_demolition_additional_ident
 RoofDemolitionResult replay_roof_demolition(const RoofDemolitionEntities& source, const RoofDemolitionIntent& intent) {
     try {
         (void)encode_roof_demolition_intent(intent);
-        const auto derived = derive_demolition(source, {intent.registry_id, intent.alternative_id, intent.seed_roof_ids});
+        const auto derived = derive_demolition(source, {intent.registry_id, intent.alternative_id,
+            intent.seed_roof_ids, intent.phase_qualified_joins});
         const auto& plan = derived.plan;
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
@@ -384,6 +424,7 @@ RoofDemolitionResult replay_roof_demolition(const RoofDemolitionEntities& source
                     reject("additional fresh identity collision: " + new_id);
         }
         const Ids seeds(intent.seed_roof_ids.begin(), intent.seed_roof_ids.end());
+        const Ids retained(plan.retained_join_roof_ids.begin(), plan.retained_join_roof_ids.end());
         // Inspection already admitted the complete actual resolved source cohort.
         // Recheck owner kinds here; final resolved copies are admitted below.
         Ids copied_roofs, copied_joins;
@@ -410,8 +451,15 @@ RoofDemolitionResult replay_roof_demolition(const RoofDemolitionEntities& source
                 for (const auto& component : derived.components.at(id)) if (component.size() >= 2) {
                     auto join_copy = copy;
                     auto members = Json::array();
-                    for (const auto& roof : component) members.push_back(intent.identities.at(roof));
+                    for (const auto& roof : component) {
+                        if (intent.identities.contains(roof)) members.push_back(intent.identities.at(roof));
+                        else if (intent.phase_qualified_joins && retained.contains(roof)) members.push_back(roof);
+                        else reject("survivor is neither a mapped baseline nor an actual retained roof: " + roof);
+                    }
                     join_copy.properties.at("roof_ids") = std::move(members);
+                    if (intent.phase_qualified_joins)
+                        join_copy.extensions[std::string(roof_join_phase_ownership_extension_key)] =
+                            Json{{"version", 1}, {"registry_id", plan.registry_id}};
                     join_copy.id = index == 0 ? intent.identities.at(id) : intent.additional_identities.at(id).at(index - 1);
                     const auto copy_id = join_copy.id;
                     if (!result.entities.emplace(copy_id, std::move(join_copy)).second) reject("join copy insertion collides");
@@ -444,6 +492,10 @@ RoofDemolitionResult replay_roof_demolition(const RoofDemolitionEntities& source
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json()) reject("retained registry reconstruction differs from typed update");
         result.entities.at(plan.registry_id).properties.at("model") = std::move(raw);
         complete_presentation(result.entities, source, copies, intent);
+        // The complete candidate registry proves exclusion for shared retained
+        // members. Native/context/material admission uses this same owner map.
+        if (intent.phase_qualified_joins) validate_roof_join_ownership(result.entities);
+        copied_roofs.insert(retained.begin(), retained.end());
         admit_roofs_and_joins(result.entities, copied_roofs, copied_joins);
         (void)constraint_phase_scope(result.entities);
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());

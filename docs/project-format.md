@@ -1,4 +1,26 @@
-# Vertex project formats v1 through v115
+# Vertex project formats v1 through v116
+
+## Phase-qualified roof demolition (v116)
+
+Native format 116 and JSON/assets extraction version 114 retain roof replacement
+authoring version seven through direct, wrapped and historical commands.
+Its eight exact fields are the seven version-four demolition fields plus
+`phase_qualified_joins: true`. Standalone roof demolition intent version two
+similarly adds that discriminator to version one's six fields. Older dialects
+retain their closed fields and original interpretation.
+
+Replay derives the active join cohort and each member's actual saved role.
+Original baseline roofs and joins remain exact and become demolished only in
+the saved active alternative. Baseline survivors get independent proposed
+copies; ordinary/proposed survivors keep their source IDs, bodies, openings
+and roles. New survivor joins alone receive actual phase ownership metadata.
+Mapped identities for omitted seed copies stay reserved across Undo. Qualified
+presentation extends only actual new owners and overlays, while complete
+source/candidate ownership and native admission use the same retained map.
+
+A retained singleton cannot inherit a different join material by mutating its
+preserved owner; that case requires a separate phase-specific representation.
+Source implementation remains uncompiled and runtime/storage unverified.
 
 ## Independently scaled assembly heights (v115)
 

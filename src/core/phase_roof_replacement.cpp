@@ -704,13 +704,13 @@ nlohmann::json encode_phase_roof_replacement_authoring(const PhaseRoofReplacemen
     identity(authoring.registry_id); identity(authoring.alternative_id);
     if (authoring.demolition) {
         if (!authoring.roof_profiles.empty() || !authoring.roof_opening_edits.empty() || !authoring.roof_edits.empty() ||
-            !authoring.ordinary_roof_edits.empty() || authoring.phase_qualified_joins)
+            !authoring.ordinary_roof_edits.empty())
             reject("roof demolition cannot borrow body edit authority");
         auto result=encode_roof_demolition_intent({authoring.registry_id,authoring.alternative_id,
-            authoring.seed_roof_ids,authoring.identities,authoring.demolition_additional_identities});
+            authoring.seed_roof_ids,authoring.identities,authoring.demolition_additional_identities,authoring.phase_qualified_joins});
         result["demolition_additional_identities"] = std::move(result.at("additional_identities"));
         result.erase("additional_identities");
-        result["version"]=4;
+        result["version"]=authoring.phase_qualified_joins ? 7 : 4;
         result["demolition"]=true;
         if (result.dump().size()>maximum_authoring_bytes) reject("roof demolition authoring byte budget exceeded");
         return result;
@@ -859,13 +859,15 @@ PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nloh
             if (canonical != value || canonical.dump() != value.dump()) reject("mixed authoring differs from its canonical typed encoding");
             return result;
         }
-        if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() && value.at("version")==4) {
-            if (value.size()!=7 || !value.contains("demolition") || !value.at("demolition").is_boolean() ||
+        if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+            (value.at("version")==4 || value.at("version")==7)) {
+            const bool qualified = value.at("version")==7;
+            if (value.size()!=(qualified ? 8 : 7) || !value.contains("demolition") || !value.at("demolition").is_boolean() ||
                 !value.contains("demolition_additional_identities") || !value.at("demolition_additional_identities").is_object() ||
                 !value.at("demolition").get<bool>() || value.dump().size()>maximum_authoring_bytes)
-                reject("roof demolition must contain exactly its seven version-four fields");
+                reject("roof demolition must contain its exact version-four/seven fields");
             auto wire=value;
-            wire.erase("demolition");wire["version"]=1;
+            wire.erase("demolition");wire["version"]=qualified ? 2 : 1;
             wire["additional_identities"] = std::move(wire.at("demolition_additional_identities"));
             wire.erase("demolition_additional_identities");
             const auto demolition=decode_roof_demolition_intent(wire);
@@ -873,6 +875,7 @@ PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(const nloh
             result.registry_id=demolition.registry_id;result.alternative_id=demolition.alternative_id;
             result.seed_roof_ids=demolition.seed_roof_ids;result.identities=demolition.identities;result.demolition=true;
             result.demolition_additional_identities=demolition.additional_identities;
+            result.phase_qualified_joins=demolition.phase_qualified_joins;
             (void)encode_phase_roof_replacement_authoring(result);
             return result;
         }
@@ -940,7 +943,7 @@ PhaseRoofReplacementEntities replay_phase_roof_replacement_authoring(
     (void)encode_phase_roof_replacement_authoring(authoring);
     if (authoring.demolition)
         return replay_roof_demolition(source,{authoring.registry_id,authoring.alternative_id,
-            authoring.seed_roof_ids,authoring.identities,authoring.demolition_additional_identities}).entities;
+            authoring.seed_roof_ids,authoring.identities,authoring.demolition_additional_identities,authoring.phase_qualified_joins}).entities;
     const auto plan = inspect_phase_roof_replacement_plan(source, authoring.seed_roof_ids, authoring.registry_id,
         authoring.alternative_id, authoring.phase_qualified_joins);
     return replay_phase_roof_replacement(source, plan, authoring.identities, authoring.roof_profiles,

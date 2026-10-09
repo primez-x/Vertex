@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 qualified baseline roof demolition source integration
+
+Baseline Cut/Delete now derives active joined roof roles before allocating
+proposed identities. Original baseline roofs and joins remain exact; surviving
+baseline members get independent proposed copies, while ordinary/proposed
+neighbors keep their actual source IDs and roles. Actual connected survivor
+components produce only needed new joins and presentation copies. New joins
+alone carry the actual registry's phase ownership, and source/candidate native,
+receipt, material and ownership admission uses the same complete map.
+
+Standalone demolition two/replacement authoring seven/native 116/extraction 114
+retain the opt-in meaning through saved history. Older demolition dialects keep
+their original semantics. A retained singleton with a different effective join
+material still requires a phase-specific material representation. Independent
+source review approved after retaining catalog material identifier semantics and
+checking known receipt namespaces without narrowing opaque source metadata.
+Builds, tests, probes, scripts, native jobs, launches,
+packages and installations remain disabled. Compilation, interaction and storage
+round trips are unverified, and the installed candidate remains unchanged.
+
 ### October 8 phase-preserving shared roof removal source integration
 
 Cut and Delete now derive phase retention before the older baseline demolition

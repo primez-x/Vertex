@@ -83,8 +83,9 @@ struct PhaseRoofReplacementAuthoring {
     // Version five independently classifies both combined edit lists from the
     // actual saved source. Ordinary owners retain their identities in place.
     std::vector<RoofEditIntent> ordinary_roof_edits{};
-    // Version six qualifies joins from actual registry activity. It also admits
-    // pure baseline combined edits with an empty ordinary edit list.
+    // Version six qualifies combined joins from actual registry activity. It
+    // also admits pure baseline combined edits with an empty ordinary edit list.
+    // Version seven uses this opt-in for demolition without body edit authority.
     bool phase_qualified_joins{};
 };
 
@@ -98,6 +99,7 @@ struct PhaseRoofReplacementAuthoring {
 // combined lists must be nonempty, historical arrays empty, and targets disjoint.
 // Version 6 has the nine version-five fields plus phase_qualified_joins:true.
 // Its ordinary list may be empty; its baseline combined list remains nonempty.
+// Version 7 has version four's seven fields plus phase_qualified_joins:true.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(

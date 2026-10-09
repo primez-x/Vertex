@@ -41830,12 +41830,12 @@ private:
             if (found != source.entities().end() && found->second.type == "roof") roof_ids.push_back(id);
         }
         if (roof_ids.empty()) return std::nullopt;
-        const auto request = roof_demolition_request(source.entities(), roof_ids);
+        const auto request = roof_demolition_request(source.entities(), roof_ids, true);
         if (!request) return std::nullopt;
         if (roof_ids.size() != selected_ids.size())
             throw std::invalid_argument("Delete shared baseline roofs separately from other selected objects.");
         const auto plan = inspect_phase_roof_replacement_plan(source.entities(), request->seed_roof_ids,
-            request->registry_id, request->alternative_id);
+            request->registry_id, request->alternative_id, true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
@@ -41847,10 +41847,8 @@ private:
         replacement.alternative_id = request->alternative_id;
         replacement.seed_roof_ids = request->seed_roof_ids;
         replacement.demolition = true;
-        std::set<std::string, std::less<>> occupied;
-        for (const auto& record : source.history())
-            for (const auto& [id, entity] : record.entities) { (void)entity; occupied.insert(id); }
-        for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+        replacement.phase_qualified_joins = true;
+        auto occupied = retainedSlabIdentityNames(source);
         const auto allocate = [&] {
             auto proposed = new_id("proposed");
             while (!occupied.insert(proposed).second) proposed = new_id("proposed");
