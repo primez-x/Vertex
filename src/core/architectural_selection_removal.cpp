@@ -126,7 +126,8 @@ EmbeddedAssemblyPresentationIds expected_aliases(const Entities& source, const s
 } // namespace
 
 Entities replay_architectural_selection_removal(const Entities& actual,
-    const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts) {
+    const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts,
+    bool complete_roof_hosted_catalog_consequences) {
     try {
         bounds(actual);
         if (intent.object_ids.size() > selection_limit ||
@@ -163,14 +164,16 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         }
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
-            const auto plan = inspect_roof_removal_plan(actual, roofs, true, true, true);
+            const auto plan = inspect_roof_removal_plan(actual, roofs, true, true, true,
+                complete_roof_hosted_catalog_consequences);
             if (!plan.ready()) {
                 for (const auto& row : plan.diagnostics) if (row.blocking)
                     reject(row.entity_id + ": " + row.reason);
                 reject("actual roof removal plan is not ready");
             }
             for (const auto& key : plan.retired_hosted_component_keys) selected_components.erase(key);
-            auto roof = replay_roof_removal(actual, roofs, intent.roof_additional_identities, true, true, true);
+            auto roof = replay_roof_removal(actual, roofs, intent.roof_additional_identities, true, true, true,
+                complete_roof_hosted_catalog_consequences);
             bounds(roof.entities);
             candidates.push_back(std::move(roof.entities));
         }
@@ -195,7 +198,8 @@ Entities replay_architectural_selection_removal(const Entities& actual,
             expected_inactive.insert(scope.inactive_owner_ids.begin(), scope.inactive_owner_ids.end());
         }
         auto result = candidates.size() == 1 ? std::move(candidates.front()) :
-            compose_ordinary_architectural_removal_candidates(actual, candidates);
+            compose_ordinary_architectural_removal_candidates(actual, candidates,
+                complete_roof_hosted_catalog_consequences, complete_roof_hosted_catalog_consequences);
         bounds(result);
         validate_document_assembly_instances(result);
         if (embedded_assembly_presentation_ids(result) != aliases)

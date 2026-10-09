@@ -325,9 +325,42 @@ struct Derivation {
     std::map<std::string, std::string, std::less<>> memberships;
     std::map<std::string, Json, std::less<>> singleton_assignments;
     std::optional<RoofRemovalEntities> hosted_candidate;
+    Ids retained_baseline_catalogs;
 };
+// The retained carrier is still the actual source envelope. Raw filtering is
+// proved against qualified source-derived keys, never accepted from a caller.
+void validate_retained_catalog_rows(const RoofRemovalEntities& source,
+    const RoofRemovalEntities& candidate, const Derivation& derived) {
+    std::map<std::string, Ids, std::less<>> retired;
+    for (const auto& [catalog, local] : derived.plan.retired_hosted_component_keys)
+        if (derived.retained_baseline_catalogs.contains(catalog)) retired[catalog].insert(local);
+    for (const auto& id : derived.retained_baseline_catalogs) {
+        const auto found = candidate.find(id);
+        if (found == candidate.end()) reject("complete roof consequence erased its retained catalog: " + id);
+        auto expected = source.at(id);
+        auto rows = Json::array();
+        for (const auto& row : expected.properties.at("model").at("instances"))
+            if (!retired.at(id).contains(row.at("id").get<std::string>())) rows.push_back(row);
+        expected.properties.at("model").at("instances") = std::move(rows);
+        if (found->second != expected)
+            reject("complete roof consequence changed its raw retained catalog beyond admitted rows: " + id);
+        const auto& registry = derived.memberships.at(id);
+        const auto before = ModelPhases::from_json(source.at(registry).properties.at("model"));
+        const auto after = ModelPhases::from_json(candidate.at(registry).properties.at("model"));
+        if (after.active_alternative() != before.active_alternative() ||
+            std::find(after.entity_ids().begin(), after.entity_ids().end(), id) == after.entity_ids().end() ||
+            std::find(after.baseline_ids().begin(), after.baseline_ids().end(), id) == after.baseline_ids().end() ||
+            after.active_state().at(id) != ModelPhase::existing)
+            reject("complete roof consequence changed its retained catalog membership: " + id);
+        for (const auto& alternative : after.alternatives())
+            if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), id) != alternative.proposed_ids.end() ||
+                std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id) != alternative.demolished_ids.end())
+                reject("complete roof consequence changed protected catalog membership: " + id);
+    }
+}
 Derivation derive(const RoofRemovalEntities& source, const std::vector<std::string>& selected,
-    bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components) {
+    bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
+    bool complete_hosted_catalog_consequences) {
     Derivation result;
     auto& plan = result.plan;
     plan.selected_roof_ids = selected;
@@ -362,6 +395,34 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
             const auto model = ModelPhases::from_json(source.at(registry).properties.at("model"));
             if (model.active_alternative() && std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end())
                 reject("affected shared-baseline roof owner requires typed replacement: " + id);
+        };
+        const auto retained_baseline_catalog_row = [&](const Entity& catalog, const std::string& roof) {
+            if (!complete_hosted_catalog_consequences) return false;
+            const auto registry = membership(catalog.id);
+            if (registry.empty()) return false;
+            const auto model = ModelPhases::from_json(source.at(registry).properties.at("model"));
+            if (!model.active_alternative() ||
+                std::find(model.baseline_ids().begin(), model.baseline_ids().end(), catalog.id) == model.baseline_ids().end())
+                return false;
+            if (catalog.required || scope.inactive_owner_ids.contains(catalog.id) ||
+                !supported_catalog(catalog.properties.at("model")))
+                reject("complete roof consequence requires an active nonrequired supported catalog: " + catalog.id);
+            const auto& host = source.at(roof);
+            if (host.type != "roof" || host.required || scope.inactive_owner_ids.contains(roof) ||
+                membership(roof) != registry)
+                reject("complete roof/catalog consequence has protected or foreign actual roof ownership: " + catalog.id + "/" + roof);
+            const auto state = model.active_state();
+            if (std::find(model.baseline_ids().begin(), model.baseline_ids().end(), roof) != model.baseline_ids().end() ||
+                !state.contains(roof) || state.at(roof) != ModelPhase::proposed)
+                reject("complete roof/catalog consequence requires actual proposed roof ownership: " + roof);
+            for (const auto& alternative : model.alternatives()) {
+                if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), catalog.id) != alternative.demolished_ids.end() ||
+                    (alternative.id != *model.active_alternative() &&
+                        (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), roof) != alternative.proposed_ids.end() ||
+                            std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), roof) != alternative.demolished_ids.end())))
+                    reject("complete roof/catalog consequence touches a protected carrier or roof: " + catalog.id + "/" + roof);
+            }
+            return true;
         };
         for (const auto& id : seeds) {
             identity(id);
@@ -454,7 +515,9 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                 const auto model = AssemblyModel::from_json(entity.properties.at("model"));
                 bool carrier_admitted = false;
                 for (const auto& row : model.instances()) if (row.placement && removed.contains(row.placement->host_entity_id)) {
-                    if (!carrier_admitted) {
+                    const bool retained_carrier = retained_baseline_catalog_row(entity, row.placement->host_entity_id);
+                    if (retained_carrier) result.retained_baseline_catalogs.insert(id);
+                    else if (!carrier_admitted) {
                         mutable_owner(id);
                         if (!membership(id).empty()) {
                             const auto phases = ModelPhases::from_json(source.at(membership(id)).properties.at("model"));
@@ -494,6 +557,7 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
                 // This producer receives the complete actual source and no physical
                 // selection. It cannot acquire roof or join deletion authority.
                 result.hosted_candidate = replay_architectural_object_removal(source, {}, plan.retired_hosted_component_keys);
+                validate_retained_catalog_rows(source, *result.hosted_candidate, result);
             }
         }
         const auto& reference_source = result.hosted_candidate ? *result.hosted_candidate : source;
@@ -829,15 +893,18 @@ bool RoofRemovalPlan::ready() const noexcept {
 
 RoofRemovalPlan inspect_roof_removal_plan(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references, bool preserve_singleton_material,
-    bool retire_hosted_components) {
-    return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material, retire_hosted_components).plan;
+    bool retire_hosted_components, bool complete_hosted_catalog_consequences) {
+    return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
+        retire_hosted_components, complete_hosted_catalog_consequences).plan;
 }
 
 RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, const RoofRemovalAdditionalIdentities& additional_identities,
-    bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components) {
+    bool preserve_phase_references, bool preserve_singleton_material, bool retire_hosted_components,
+    bool complete_hosted_catalog_consequences) {
     try {
-        const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material, retire_hosted_components);
+        const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material,
+            retire_hosted_components, complete_hosted_catalog_consequences);
         if (!derived.plan.ready()) {
             for (const auto& item : derived.plan.diagnostics) if (item.blocking) reject(item.entity_id + ": " + item.reason);
         }
@@ -891,6 +958,7 @@ RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
         if (result.entities.size() > maximum_entities) reject("final entity budget exceeded");
         (void)occupied_strings(result.entities);
         if (retire_hosted_components) {
+            validate_retained_catalog_rows(source, result.entities, derived);
             validate_document_assembly_instances(result.entities);
             for (const auto& [id, entity] : result.entities) if (entity.type == "assembly_model") {
                 const auto model = AssemblyModel::from_json(entity.properties.at("model"));

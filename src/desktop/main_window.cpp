@@ -30116,7 +30116,8 @@ public:
 
     static ArchitecturalSelectionRemovalIntent captureArchitecturalSelectionRemoval(
         const DocumentSnapshot& source, std::vector<std::string> object_ids,
-        std::vector<std::pair<std::string,std::string>> components={}) {
+        std::vector<std::pair<std::string,std::string>> components={},
+        bool complete_roof_hosted_catalog_consequences=false) {
         std::sort(object_ids.begin(),object_ids.end());
         std::sort(components.begin(),components.end());
         ArchitecturalSelectionRemovalIntent intent{std::move(object_ids),std::move(components),{}};
@@ -30124,7 +30125,8 @@ public:
         for (const auto& id:intent.object_ids)
             if (source.entities().at(id).type=="roof") roofs.push_back(id);
         if (!roofs.empty()) intent.roof_additional_identities=captureRoofRemovalIdentities(source,
-            inspect_roof_removal_plan(source.entities(),roofs,true,true,true));
+            inspect_roof_removal_plan(source.entities(),roofs,true,true,true,
+                complete_roof_hosted_catalog_consequences));
         return intent;
     }
 
@@ -43843,7 +43845,10 @@ private:
                 ordinary_roots.push_back(id);
             else return std::nullopt;
         }
-        if ((families.empty() && ordinary_openings.empty()) || (!include_single_family && families.size()<2 &&
+        const bool ordinary_roofs=std::any_of(ordinary_roots.begin(),ordinary_roots.end(),[&](const auto& id) {
+            return source.entities().at(id).type=="roof";
+        });
+        if ((families.empty() && ordinary_openings.empty() && !ordinary_roofs) || (!include_single_family && families.size()<2 &&
                 ordinary_roots.empty() && ordinary_components.empty() && ordinary_openings.empty()))
             return std::nullopt;
         ConstraintAuthoringIntent semantic;semantic.message=message;
@@ -43855,26 +43860,29 @@ private:
             if (!captured) throw std::invalid_argument("The selected baseline objects have no complete demolition command.");
             intent=decode_phase_constraint_authoring_intent(captured->phase_constraint_authoring_intent);
         } else {
-            // A proposed opening can own the complete typed operation without
-            // manufacturing a historical demolition leaf. Entirely ordinary
+            // A proposed opening or roof can own the complete typed operation
+            // without manufacturing a historical demolition leaf. Ordinary
             // projects keep the existing non-phase producer.
-            std::optional<PhysicalWallPhaseSelection> opening_choice;
-            bool legacy_owned_opening=false;
-            for (const auto& id:ordinary_openings) {
+            std::optional<PhysicalWallPhaseSelection> removal_choice;
+            bool legacy_owned=false;
+            auto choice_ids=ordinary_openings;
+            for (const auto& id:ordinary_roots)
+                if (source.entities().at(id).type=="roof") choice_ids.push_back(id);
+            for (const auto& id:choice_ids) {
                 auto owner=owners.find(id);
-                if (owner==owners.end())
+                if (owner==owners.end() && source.entities().at(id).type=="opening")
                     owner=owners.find(source.entities().at(id).properties.at("wall_id").get<std::string>());
                 if (owner==owners.end()) continue;
-                if (!owner->second->alternative_id) { legacy_owned_opening=true;continue; }
+                if (!owner->second->alternative_id) { legacy_owned=true;continue; }
                 const PhysicalWallPhaseSelection choice{owner->second->registry_id,owner->second->alternative_id};
-                if (opening_choice && (opening_choice->registry_id!=choice.registry_id ||
-                        opening_choice->alternative_id!=choice.alternative_id))
-                    throw std::invalid_argument("The selected openings belong to different actual saved designs.");
-                opening_choice=choice;
+                if (removal_choice && (removal_choice->registry_id!=choice.registry_id ||
+                        removal_choice->alternative_id!=choice.alternative_id))
+                    throw std::invalid_argument("The selected objects belong to different actual saved designs.");
+                removal_choice=choice;
             }
-            if (!opening_choice) return std::nullopt;
-            if (legacy_owned_opening)
-                throw std::invalid_argument("The selected openings do not share one actual saved design.");
+            if (!removal_choice) return std::nullopt;
+            if (legacy_owned)
+                throw std::invalid_argument("The selected objects do not share one actual saved design.");
         }
         if (families.size()==1 && ordinary_roots.empty() && ordinary_components.empty() && ordinary_openings.empty()) {
             (void)Document::preview_command(source,Command{*captured});
@@ -43883,9 +43891,9 @@ private:
         auto children=json{{"version",4},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
             {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr},
             {"ordinary_removal",nullptr},{"complete_hosted_catalog_consequences",true}};
-        if (!ordinary_openings.empty()) {
+        if (!ordinary_openings.empty() || ordinary_roofs) {
             std::sort(ordinary_openings.begin(),ordinary_openings.end());
-            children["version"]=5;
+            children["version"]=ordinary_roofs ? 6 : 5;
             children["ordinary_opening_ids"]=ordinary_openings;
         }
         if (families.size()>1) {
@@ -43901,10 +43909,8 @@ private:
             for (const auto& [catalog,instance]:ordinary_components)
                 rows.push_back({{"catalog_id",catalog},{"instance_id",instance}});
             children["ordinary_removal"]={{"version",1},{"object_ids",ordinary_roots},{"components",std::move(rows)}};
-            if (std::any_of(ordinary_roots.begin(),ordinary_roots.end(),[&](const auto& id) {
-                    return source.entities().at(id).type=="roof";
-                })) {
-                auto ordinary=captureArchitecturalSelectionRemoval(source,ordinary_roots,ordinary_components);
+            if (ordinary_roofs) {
+                auto ordinary=captureArchitecturalSelectionRemoval(source,ordinary_roots,ordinary_components,true);
                 auto occupied=retainedSlabIdentityNames(source,true);
                 std::vector<const json*> pending{&children};
                 while (!pending.empty()) {
@@ -52647,7 +52653,9 @@ private:
                                 std::vector<std::string> roofs;
                                 for (const auto& id:ordinary->object_ids)
                                     if (source.entities().at(id).type=="roof") roofs.push_back(id);
-                                const auto removal=inspect_roof_removal_plan(source.entities(),roofs,true,true,true);
+                                const auto removal=inspect_roof_removal_plan(source.entities(),roofs,true,true,true,
+                                    phase_coordinated_demolition_complete_roof_hosted_catalog_consequences(
+                                        historical_demolition.coordinated_demolition,historical_demolition));
                                 if (!removal.ready())
                                     throw std::invalid_argument("The coordinated roof removal no longer has complete source authority.");
                                 targets.insert(removal.removed_entity_ids.begin(),removal.removed_entity_ids.end());

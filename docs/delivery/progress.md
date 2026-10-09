@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete proposed-roof catalog source implementation
+
+Closed coordinated demolition inner six now removes an active proposed roof
+and its placed components even when their shared catalog is an original
+baseline member. It derives the real saved choice from actual roof/opening
+membership, without inventing a historical leaf. The catalog remains intact
+with only the admitted roof-hosted rows removed; its definitions, materials,
+raw survivor order and saved membership remain preserved. Baseline roofs and
+required, inactive, foreign or protected owners retain their safeguards.
+
+Controller Delete/Cut capture the same actual source, roof join destinations,
+selection and pending-placement fences. Site admission follows complete roof,
+join and component consequences. Mixed roof/primitive/component candidates can
+compose their distinct catalog retirements. Native 151 / extraction 149 preserve
+the new operation throughout direct, wrapped, retained and undone history;
+historical and default façades retain their previous semantics. Root integrated
+source review is complete; independent review of inner six is pending.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation and runtime remain unverified. The installed candidate remains
+unchanged; source implementation continues without a goal loop.
+
 ### October 9 complete mixed original/proposed opening source implementation
 
 Closed coordinated demolition inner five now adds an actual-source ordinary
@@ -37,8 +59,9 @@ pending drawing, text, plan-label and area placement plus full selection and Sit
 authority before preparation and application in pure Cut/Delete paths. Captured
 Cut content publishes only after successful application. The new opening proof
 token is reserved exclusively by inner five; inner-four identities remain valid.
-Root integrated source review is complete; this new opening lane's independent
-source review is pending.
+Root integrated source review is complete. Independent review approved the
+integrated inner-five source at ecb28c1 with no actionable findings; this is
+source review only and does not establish compilation or runtime acceptance.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or installations
 ran. Compilation and runtime remain unverified; the installed candidate is

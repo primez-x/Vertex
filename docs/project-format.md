@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v150
+# Vertex project formats v1 through v151
+
+## Complete proposed-roof catalog consequences (v151)
+
+Native reader 151 and JSON/assets extraction 149 retain coordinated demolition
+inner six in direct, drawing-wrapped, retained and undone history. The exclusive
+phase-authoring enclosure remains fifteen. Inner six has exactly inner five's
+nine fields, permits an empty `ordinary_opening_ids` array, and requires a closed
+ordinary-removal child two with an actual selected roof and actual join slots.
+Historical families remain optional; without them, the actual saved registry
+and alternative are derived from actual opening/host and roof membership.
+Existing aggregate, identity, source-binding and destination budgets remain.
+
+Only inner six opts into complete proposed-roof catalog consequences. The roof
+must be exclusively proposed in the catalog's actual active saved registry;
+the baseline carrier stays present with its original membership. Retirement
+filters only admitted qualified roof-hosted rows from the original raw carrier,
+preserving its envelope, definitions, materials, unrelated rows and survivor
+order. Baseline roofs, required/inactive/foreign carriers and protected owners
+remain refused. Compound roof/primitive/component removal composes complete
+actual-source consequences rather than dropping either catalog edit.
+
+Delete/Cut capture the complete source and selected roof slots, route through
+this typed operation, and retain existing pending-placement and Site fences.
+Site admission includes affected roof joins and qualified component aliases.
+Document replay preserves source/history authority and reserves every fresh
+destination across retained and undone operations. Older coordinated dialects,
+historical wall children and default roof façades keep their original semantics
+and reader floors. No build or runtime acceptance is claimed.
 
 ## Independent ordinary openings in coordinated demolition (v150)
 

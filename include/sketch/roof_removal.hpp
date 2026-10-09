@@ -65,10 +65,13 @@ struct RoofRemovalResult {
 // version-three relationship instead of transferring its binding onto a roof.
 // Hosted retirement is a separate opt-in; historical replay retains its original
 // refusal semantics. Only actual hosted rows of physically removed roofs retire.
+// Complete catalog consequences may retain an active baseline catalog in the
+// same saved registry as an exclusively active proposed roof, filtering only
+// the admitted hosted rows and preserving the raw carrier and its membership.
 [[nodiscard]] RoofRemovalPlan inspect_roof_removal_plan(
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
     bool preserve_phase_references = false, bool preserve_singleton_material = false,
-    bool retire_hosted_components = false);
+    bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false);
 
 // Rederives the entire operation from source and explicit selection. Supplied
 // identities must exactly fill actual additional join/overlay slots and must
@@ -77,6 +80,6 @@ struct RoofRemovalResult {
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
     const RoofRemovalAdditionalIdentities& additional_identities,
     bool preserve_phase_references = false, bool preserve_singleton_material = false,
-    bool retire_hosted_components = false);
+    bool retire_hosted_components = false, bool complete_hosted_catalog_consequences = false);
 
 } // namespace sketch

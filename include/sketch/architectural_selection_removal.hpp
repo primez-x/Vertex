@@ -17,8 +17,10 @@ struct ArchitecturalSelectionRemovalIntent {
 // their dedicated authoring path. Inputs are never modified.
 // Opening-hosted component admission is explicit; historical/default callers
 // retain their existing body and replay authority.
+// Complete roof-hosted catalog consequences are a separate explicit opt-in.
 [[nodiscard]] RoofRemovalEntities replay_architectural_selection_removal(
     const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent,
-    bool allow_manufactured_opening_hosts = false);
+    bool allow_manufactured_opening_hosts = false,
+    bool complete_roof_hosted_catalog_consequences = false);
 
 } // namespace sketch
