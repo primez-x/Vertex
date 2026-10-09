@@ -105,7 +105,8 @@ bool has_architectural_appraisal_v57_semantics(const Entity& entity) {
         const auto model = entity.properties.find("model");
         if (model != entity.properties.end() && model->is_object() &&
             (model->value("schema", nlohmann::json()) == "sketch.assemblies.v4" ||
-             model->value("schema", nlohmann::json()) == "sketch.assemblies.v5")) return true;
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v5" ||
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v6")) return true;
     }
     if (entity.type == "roof_join" &&
         (entity.properties.value("version", nlohmann::json()) == 2 ||
@@ -592,8 +593,17 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if (entity.type == "assembly_model" && entity.properties.is_object()) {
                 const auto model = entity.properties.find("model");
                 if (model != entity.properties.end() && model->is_object() &&
+                    model->value("schema", nlohmann::json()) == "sketch.assemblies.v6")
+                    required = std::max(required, 115U);
+                if (model != entity.properties.end() && model->is_object() &&
                     model->value("schema", nlohmann::json()) == "sketch.assemblies.v5")
                     required = std::max(required, 110U);
+            }
+            if (entity.type == "assembly_instance" && entity.properties.is_object()) {
+                const auto instance = entity.properties.find("instance");
+                if (instance != entity.properties.end() && instance->is_object() &&
+                    instance->value("schema", nlohmann::json()) == "sketch.assembly-instance.v2")
+                    required = std::max(required, 115U);
             }
             if (required<101 && (scientific_receipt(entity.properties) || scientific_receipt(entity.extensions))) required=101;
             if (entity.type == "slab" && entity.extensions.contains("slab_layer_stack_retirement"))
@@ -2250,6 +2260,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 115 &&
          sqlite3_column_int(user_version.get(), 0) != 114 &&
          sqlite3_column_int(user_version.get(), 0) != 113 &&
          sqlite3_column_int(user_version.get(), 0) != 112 &&
@@ -2819,6 +2830,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=115)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 115 for independently scaled assembly heights");
         if (required_format>=114)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 114 for phase-qualified roof joins");
         if (required_format>=113)

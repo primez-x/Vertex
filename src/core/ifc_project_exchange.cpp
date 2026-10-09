@@ -1568,9 +1568,10 @@ void export_independent_assembly(const DocumentSnapshot& document, const Entity&
                 return result;
             };
             Json holes=Json::array(); for (const auto& hole:profile.holes) holes.push_back(boundary_json(boundary(hole)));
+            const auto height_scale=transform.scale*transform.vertical_scale;
             Entity room{"ifc-assembly-profile","room",{{"boundary",boundary_json(boundary(profile.outer))},
-                {"holes",holes},{"height_m",profile.height_m*transform.scale},
-                {"elevation_m",profile.elevation_m*transform.scale+transform.translation_m.z}}};
+                {"holes",holes},{"height_m",profile.height_m*height_scale},
+                {"elevation_m",profile.elevation_m*height_scale+transform.translation_m.z}}};
             auto meshes=ifc_native_room_mesh(room,context.limits.max_mesh_vertices-vertices,
                 context.limits.max_mesh_triangles-triangles);
             for (const auto& mesh:meshes) {

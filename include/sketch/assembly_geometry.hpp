@@ -23,4 +23,8 @@ struct AssemblyGeometry {
 // Derived OCCT cache only. Volumes are measured from each transformed solid.
 [[nodiscard]] AssemblyGeometry make_assembly_geometry(const AssemblyExpansion& expansion);
 
+// Reusable derived-body transform; validates the actual resulting native shape.
+[[nodiscard]] TopoDS_Shape transform_assembly_shape(const TopoDS_Shape& source,
+    const AssemblyTransform& transform);
+
 } // namespace sketch

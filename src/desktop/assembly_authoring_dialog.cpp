@@ -111,24 +111,34 @@ double read_number(QLineEdit* input, bool metric, bool length=false, bool angle=
     return scalar(input->text());
 }
 struct TransformFields {
-    std::array<QLineEdit*,5> fields{};
+    std::array<QLineEdit*,6> fields{};
     bool mirrored_y{false};
+    AssemblyTransform initial_transform;
     static TransformFields form(QWidget* parent, QFormLayout* layout, const QString& prefix, const AssemblyTransform& transform) {
-        TransformFields result; result.mirrored_y=transform.mirrored_y;
-        const std::array<double,5> values{transform.translation_m.x,transform.translation_m.y,transform.translation_m.z,transform.rotation_radians,transform.scale};
-        const std::array<QString,5> suffixes{"X","Y","Z","Yaw","Scale"};
-        const std::array<QString,5> labels{"X","Y","Base Z","Yaw (degrees)","Uniform scale"};
-        for (int i=0;i<5;++i) { result.fields[i]=number(parent,prefix+suffixes[i],values[i],i<3,i==3); layout->addRow(labels[i],result.fields[i]); }
+        TransformFields result; result.mirrored_y=transform.mirrored_y; result.initial_transform=transform;
+        const std::array<double,6> values{transform.translation_m.x,transform.translation_m.y,transform.translation_m.z,transform.rotation_radians,transform.scale,transform.scale*transform.vertical_scale};
+        const std::array<QString,6> suffixes{"X","Y","Z","Yaw","Scale","HeightScale"};
+        const std::array<QString,6> labels{"X","Y","Base Z","Yaw (degrees)","Width/depth scale","Height scale"};
+        for (int i=0;i<6;++i) { result.fields[i]=number(parent,prefix+suffixes[i],values[i],i<3,i==3); layout->addRow(labels[i],result.fields[i]); }
         return result;
     }
     AssemblyTransform read(bool metric) const {
+        const auto scale=read_number(fields[4],metric);
+        const auto height_scale=read_number(fields[5],metric);
+        require(std::isfinite(scale) && scale>0 && std::isfinite(height_scale) && height_scale>0,"Width/depth and height scales must be positive and finite");
+        const auto unchanged=[](QLineEdit* input){return input->text().trimmed()==input->property("initialText").toString().trimmed();};
+        // Retain the authored factor exactly when neither scale was edited.
+        // The height control shows physical Z scale, independent of plan scale.
+        const auto vertical_scale=unchanged(fields[4]) && unchanged(fields[5]) ? initial_transform.vertical_scale : height_scale/scale;
+        require(std::isfinite(vertical_scale) && vertical_scale>0 && std::isfinite(scale*vertical_scale) && scale*vertical_scale>0,"Resulting height scale must be positive and finite");
         return {{read_number(fields[0],metric,true),read_number(fields[1],metric,true),read_number(fields[2],metric,true)},
-                read_number(fields[3],metric,false,true),read_number(fields[4],metric),mirrored_y};
+                read_number(fields[3],metric,false,true),scale,mirrored_y,vertical_scale};
     }
     void set(const AssemblyTransform& value) {
         mirrored_y=value.mirrored_y;
-        const std::array<double,5> values{value.translation_m.x,value.translation_m.y,value.translation_m.z,value.rotation_radians,value.scale};
-        for (int i=0;i<5;++i) {
+        initial_transform=value;
+        const std::array<double,6> values{value.translation_m.x,value.translation_m.y,value.translation_m.z,value.rotation_radians,value.scale,value.scale*value.vertical_scale};
+        for (int i=0;i<6;++i) {
             const auto text=exact(i==3 ? values[i]*180/std::numbers::pi : values[i])+(i<3 ? " m" : "");
             fields[i]->setText(text); fields[i]->setProperty("initialText",text); fields[i]->setProperty("initialValue",values[i]);
         }
@@ -396,7 +406,7 @@ public:
         tabs->addTab(profile_page,"Solid profiles");
         for(const auto& p:original.profiles)add_profile(p);
         auto* parts_page=new QWidget(tabs); auto* parts_layout=new QVBoxLayout(parts_page);
-        parts=table(parts_page,"assemblyParts",{"Child type","X","Y","Z","Yaw (degrees)","Scale"}); parts_layout->addWidget(parts);
+        parts=table(parts_page,"assemblyParts",{"Child type","X","Y","Z","Yaw (degrees)","Width/depth scale","Height scale"}); parts_layout->addWidget(parts);
         row_controls(parts_page,parts_layout,parts,"assemblyPart",[this]{guard([&]{add_part(std::nullopt);});},true);
         parts_page->findChild<QPushButton*>("assemblyPartAdd")->setObjectName("assemblyAddPart"); tabs->addTab(parts_page,"Nested parts");
         auto* part_action=new QPushButton("Part overrides…",parts_page);part_action->setObjectName("assemblyPartOverrides");parts_layout->addWidget(part_action);
@@ -439,8 +449,8 @@ public:
         if(value)choice->setCurrentIndex(choice->findData(q(part.type_id))); choice->setProperty("stableId",q(part.id));
         if(!value)part.type_id=choice->currentData().toString().toStdString();part_drafts.emplace(part.id,part);
         parts->setCellWidget(row,0,choice);
-        const std::array<double,5> values{part.transform.translation_m.x,part.transform.translation_m.y,part.transform.translation_m.z,part.transform.rotation_radians,part.transform.scale};
-        for(int i=0;i<5;++i)parts->setCellWidget(row,i+1,number(parts,{},values[i],i<3,i==3));
+        const std::array<double,6> values{part.transform.translation_m.x,part.transform.translation_m.y,part.transform.translation_m.z,part.transform.rotation_radians,part.transform.scale,part.transform.scale*part.transform.vertical_scale};
+        for(int i=0;i<6;++i)parts->setCellWidget(row,i+1,number(parts,{},values[i],i<3,i==3));
     }
     void import_profile(QComboBox* choice) {
         require(choice && choice->currentIndex()>=0,"Select a captured boundary to import");
@@ -515,7 +525,7 @@ public:
             const auto row=parts->verticalHeader()->logicalIndex(visual); auto* choice=qobject_cast<QComboBox*>(parts->cellWidget(row,0));
             require(choice && choice->currentIndex()>=0,"Choose an available child type"); auto id=choice->property("stableId").toString().toStdString();
             auto part=part_drafts.at(id);part.id=id;part.type_id=choice->currentData().toString().toStdString();
-            TransformFields transform; transform.mirrored_y=part.transform.mirrored_y; for(int i=0;i<5;++i)transform.fields[i]=qobject_cast<QLineEdit*>(parts->cellWidget(row,i+1)); part.transform=transform.read(metric); result.parts.push_back(std::move(part));
+            TransformFields transform; transform.mirrored_y=part.transform.mirrored_y; transform.initial_transform=part.transform; for(int i=0;i<6;++i)transform.fields[i]=qobject_cast<QLineEdit*>(parts->cellWidget(row,i+1)); part.transform=transform.read(metric); result.parts.push_back(std::move(part));
         }
         require(!result.profiles.empty() || !result.parts.empty(),"Add a solid profile or a nested part"); return result;
     }

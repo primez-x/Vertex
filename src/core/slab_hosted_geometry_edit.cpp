@@ -11,15 +11,7 @@
 #include <set>
 #include <stdexcept>
 
-#include <BRepBuilderAPI_Transform.hxx>
-#include <BRepCheck_Analyzer.hxx>
 #include <Standard_Failure.hxx>
-#include <gp_Ax1.hxx>
-#include <gp_Ax2.hxx>
-#include <gp_Dir.hxx>
-#include <gp_Pnt.hxx>
-#include <gp_Trsf.hxx>
-#include <gp_Vec.hxx>
 
 namespace sketch {
 namespace {
@@ -65,7 +57,7 @@ bool affected_catalog(const Json& model, const Ids& owners) {
     const bool supported = schema && schema->is_string() &&
         (*schema == "sketch.assemblies.v1" || *schema == "sketch.assemblies.v2" ||
          *schema == "sketch.assemblies.v3" || *schema == "sketch.assemblies.v4" ||
-         *schema == "sketch.assemblies.v5");
+         *schema == "sketch.assemblies.v5" || *schema == "sketch.assemblies.v6");
     // Unknown dialects may rename or relocate binding slots, including keyed
     // inventories. Opaque actual-owner references cannot acquire motion rules.
     if (!supported && contains_owner(model,owners)) return true;
@@ -108,13 +100,14 @@ void catalog_bounds(const Json& model, std::size_t& inventory, const std::string
 }
 AssemblyTransform world_transform(const SlabGeometryEditIntent& intent) {
     AssemblyPoint3 pivot, offset;
-    double theta = 0, scale = 1;
+    double theta = 0, scale = 1, vertical_scale = 1;
     bool flip_x = false, flip_y = false;
     if (intent.kind == SlabGeometryEditKind::transform_plan) {
-        if (intent.uniform_scale != 1)
-            reject("hosted plan-only scale cannot scale the physical assembly profile; use a model transform");
         const auto& t = *intent.transform;
         pivot = {t.pivot.x, t.pivot.y, 0}; offset = {t.offset.x, t.offset.y, 0};
+        // The actual slab plan producer changes XY only. Hosted profiles must
+        // follow that same map while retaining their physical Z dimensions.
+        scale = intent.uniform_scale; vertical_scale = 1 / scale;
         theta = t.rotation_radians; flip_x = t.flip_horizontal; flip_y = t.flip_vertical;
     } else if (intent.kind == SlabGeometryEditKind::transform_model) {
         const auto& t = *intent.model_transform;
@@ -127,7 +120,7 @@ AssemblyTransform world_transform(const SlabGeometryEditIntent& intent) {
     // reflect local Y then rotate. D_world*R(theta) = R(yaw)*D_y^odd.
     const bool odd = flip_x != flip_y;
     AssemblyTransform result{{}, std::remainder((odd ? -theta : theta) +
-        (flip_x ? std::numbers::pi : 0), 2 * std::numbers::pi), scale, odd};
+        (flip_x ? std::numbers::pi : 0), 2 * std::numbers::pi), scale, odd, vertical_scale};
     if (result.rotation_radians == 0 && !odd && scale == 1) result.translation_m = offset;
     else {
         const auto moved_pivot = transform_assembly_point(pivot, result);
@@ -156,28 +149,9 @@ void admit_instance(const AssemblyModel& model, const AssemblyInstance& instance
     Slab slab; std::string error;
     if (!read_document_slab(resolve_vertical_placement(entities, host->second), slab, error))
         reject("cannot admit actual hosted slab " + host->first + ": " + error);
-    auto shape = make_slab(slab);
-    const auto apply = [&](const gp_Trsf& transform) {
-        BRepBuilderAPI_Transform changed(shape, transform, true);
-        if (!changed.IsDone() || changed.Shape().IsNull())
-            reject("native placement failed for affected instance: " + instance.id);
-        shape = changed.Shape();
-    };
-    if (placement.mirrored_y) {
-        gp_Trsf mirror;
-        mirror.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)));
-        apply(mirror);
-    }
-    gp_Trsf scale; scale.SetScale(gp_Pnt(0, 0, 0), placement.scale); apply(scale);
-    gp_Trsf rotate;
-    rotate.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), placement.rotation_radians);
-    apply(rotate);
-    gp_Trsf translate;
-    translate.SetTranslation(gp_Vec(placement.translation_m.x, placement.translation_m.y, placement.translation_z_m));
-    apply(translate);
-    const auto volume = solid_volume(shape);
-    if (!BRepCheck_Analyzer(shape).IsValid() || !std::isfinite(volume) || volume <= 0)
-        reject("affected instance produces an invalid native solid: " + instance.id);
+    (void)transform_assembly_shape(make_slab(slab),
+        {{placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
+            placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
 } catch (const Standard_Failure& error) {
     reject(std::string("affected hosted native admission failed: ") + error.what());
 }

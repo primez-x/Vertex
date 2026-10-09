@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 independent component height and hosted plan scaling source integration
+
+Assembly placements and nested transforms now represent width/depth independently
+from height. Actual point/solid composition, source-derived hosted movement and
+native admission preserve physical Z during nonunit horizontal plan scaling;
+spatial model scaling keeps its uniform XYZ meaning. Source and proposed catalogs
+retain baseline rows and unrelated definitions, materials, overrides and entered
+quantities. Catalog six/independent instance two/native 115/extraction 113 retain
+the new scale in saved history, while older schema fields stay closed.
+
+Native preview and controller legacy-host copies use one actual affine shape
+producer. Properties expose width/depth and height scales; source XYZ and saved
+scale envelopes survive edits. Schedules and IFC extrusion heights consume the
+same effective Z scale. Independent source review approved this slice after
+closing height-factor loss in root/part/override forms, retaining saved catalog
+dialects across type editing and clipboard closure, and matching IFC arithmetic
+to the effective Z scale used by point and native geometry producers.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. The installed candidate remains unchanged. Compilation,
+interaction, export and storage round trips remain unverified. No production
+acceptance, completion percentage or ETA is claimed.
+
 ### October 8 phase-qualified roof join source integration
 
 The roof model now has explicit phase-qualified join ownership. A proposed join

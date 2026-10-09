@@ -20,15 +20,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include <BRepBuilderAPI_Transform.hxx>
-#include <BRepCheck_Analyzer.hxx>
 #include <Standard_Failure.hxx>
-#include <gp_Ax1.hxx>
-#include <gp_Ax2.hxx>
-#include <gp_Dir.hxx>
-#include <gp_Pnt.hxx>
-#include <gp_Trsf.hxx>
-#include <gp_Vec.hxx>
 
 namespace sketch {
 namespace {
@@ -279,26 +271,9 @@ void admit_hosted_instance(const AssemblyModel& model, const AssemblyInstance& i
         (void)make_assembly_geometry(expansion);
         return;
     }
-    auto shape = make_slab(actual_slab(resolve_vertical_placement(source, host->second)));
-    const auto apply = [&](const gp_Trsf& transform) {
-        BRepBuilderAPI_Transform changed(shape, transform, true);
-        if (!changed.IsDone() || changed.Shape().IsNull()) reject("hosted assembly native placement failed");
-        shape = changed.Shape();
-    };
-    if (placement.mirrored_y) {
-        gp_Trsf mirror;
-        mirror.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0)));
-        apply(mirror);
-    }
-    gp_Trsf scale; scale.SetScale(gp_Pnt(0.0, 0.0, 0.0), placement.scale); apply(scale);
-    gp_Trsf rotate;
-    rotate.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), placement.rotation_radians);
-    apply(rotate);
-    gp_Trsf translate;
-    translate.SetTranslation(gp_Vec(placement.translation_m.x, placement.translation_m.y, placement.translation_z_m)); apply(translate);
-    const auto volume = solid_volume(shape);
-    if (!BRepCheck_Analyzer(shape).IsValid() || !std::isfinite(volume) || volume <= 0.0)
-        reject("hosted assembly placement produces an invalid native solid");
+    (void)transform_assembly_shape(make_slab(actual_slab(resolve_vertical_placement(source, host->second))),
+        {{placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
+            placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
 } catch (const Standard_Failure& error) {
     reject(std::string("hosted assembly native admission failed: ") + error.what());
 }

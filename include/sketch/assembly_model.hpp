@@ -29,13 +29,15 @@ struct AssemblyPoint3 {
     double x{}, y{}, z{};
     bool operator==(const AssemblyPoint3&) const = default;
 };
-// Optional local Y reflection, positive uniform scale, yaw about local Z,
-// then translation in parent metres: t + s R(yaw) D_y^mirrored_y p.
+// Optional local Y reflection, positive XY scale, yaw about local Z,
+// then translation in parent metres. Z scale is scale * vertical_scale.
 struct AssemblyTransform {
     AssemblyPoint3 translation_m{};
     double rotation_radians{};
     double scale{1.0};
     bool mirrored_y{false};
+    // Appended for aggregate compatibility; 1 retains uniform scaling.
+    double vertical_scale{1.0};
     bool operator==(const AssemblyTransform&) const = default;
 };
 [[nodiscard]] AssemblyPoint3 transform_assembly_point(AssemblyPoint3 point, const AssemblyTransform& transform);
@@ -90,13 +92,16 @@ struct AssemblyPlacement {
     bool mirrored_y{false};
     // Appended for existing aggregate callers; legacy placements default to Z=0.
     double translation_z_m{};
+    // Positive multiplier relative to scale, independent of XY yaw/reflection.
+    double vertical_scale{1.0};
     bool operator==(const AssemblyPlacement& other) const noexcept {
         return host_entity_id == other.host_entity_id &&
                translation_m.x == other.translation_m.x &&
                translation_m.y == other.translation_m.y &&
                rotation_radians == other.rotation_radians &&
                scale == other.scale && mirrored_y == other.mirrored_y &&
-               translation_z_m == other.translation_z_m;
+               translation_z_m == other.translation_z_m &&
+               vertical_scale == other.vertical_scale;
     }
 };
 // Retains the source host identity. If its geometry also follows G, conjugate
@@ -107,6 +112,10 @@ struct AssemblyPlacement {
 // overrides or unchanged numeric representations. Unknown/unhosted IDs fail.
 [[nodiscard]] nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_model,
     const std::map<std::string, AssemblyTransform, std::less<>>& instance_transforms);
+// Retain an existing XYZ/vertical placement dialect after canonical edits or
+// catalog closure, supplying only its required envelope fields.
+[[nodiscard]] nlohmann::json retain_assembly_catalog_dialect(
+    const nlohmann::json& actual_model, nlohmann::json generated_model);
 struct AssemblyInstance {
     std::string id;
     std::string type_id;
@@ -119,8 +128,8 @@ struct AssemblyInstance {
     std::vector<AssemblyPathOverride> nested_overrides;
     bool operator==(const AssemblyInstance&) const = default;
 };
-// Strict independent-instance codec (sketch.assembly-instance.v1). Legacy
-// embedded catalog instances use the separate V1-V5 catalog representation.
+// Strict independent-instance codec (v1 uniform, v2 vertical scaling). Legacy
+// embedded catalog instances use the separate V1-V6 catalog representation.
 [[nodiscard]] nlohmann::json encode_assembly_instance(const AssemblyInstance& instance);
 [[nodiscard]] AssemblyInstance decode_assembly_instance(const nlohmann::json& value);
 [[nodiscard]] nlohmann::json encode_assembly_transform(const AssemblyTransform& transform);

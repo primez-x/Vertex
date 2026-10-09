@@ -1046,7 +1046,8 @@ AssemblyTransform embedded_assembly_transform(const AssemblyInstance& instance) 
     if (instance.root_transform) return *instance.root_transform;
     if (instance.placement) {
         const auto& p = *instance.placement;
-        return {{p.translation_m.x, p.translation_m.y, 0}, p.rotation_radians, p.scale, p.mirrored_y};
+        return {{p.translation_m.x, p.translation_m.y, p.translation_z_m},
+            p.rotation_radians, p.scale, p.mirrored_y, p.vertical_scale};
     }
     return {};
 }
@@ -12105,8 +12106,9 @@ public:
         auto* y = field("embeddedAssemblyY", "Y", placement.translation_m.y, true);
         auto* z = field("embeddedAssemblyZ", "Z", placement.translation_m.z, true);
         auto* yaw = field("embeddedAssemblyYaw", "Yaw (degrees)", placement.rotation_radians*180/std::numbers::pi, false);
-        auto* scale = field("embeddedAssemblyScale", "Uniform scale", placement.scale, false);
-        const std::array<QString,5> initial{x->text(), y->text(), z->text(), yaw->text(), scale->text()};
+        auto* scale = field("embeddedAssemblyScale", "Width / depth scale", placement.scale, false);
+        auto* height_scale = field("embeddedAssemblyHeightScale", "Height scale", placement.scale*placement.vertical_scale, false);
+        const std::array<QString,6> initial{x->text(), y->text(), z->text(), yaw->text(), scale->text(), height_scale->text()};
         layout->addLayout(form);
         auto* properties = new QTableWidget(static_cast<int>(resolved.properties.size()), 2, &dialog);
         properties->setObjectName(QStringLiteral("embeddedAssemblyProperties")); properties->setHorizontalHeaderLabels({"Property", "Value"});
@@ -12127,7 +12129,8 @@ public:
                     document_snapshot_digest(authoringSnapshot()) != digest)
                     throw std::invalid_argument("The embedded assembly source changed. Reopen properties.");
                 auto instance = binding->instance;
-                if (x->text()!=initial[0] || y->text()!=initial[1] || z->text()!=initial[2] || yaw->text()!=initial[3] || scale->text()!=initial[4]) {
+                if (x->text()!=initial[0] || y->text()!=initial[1] || z->text()!=initial[2] || yaw->text()!=initial[3] ||
+                    scale->text()!=initial[4] || height_scale->text()!=initial[5]) {
                     const auto entered = parseArchitecturalTransform(yaw->text(), x->text(), y->text(), z->text(), scale->text());
                     auto updated = placement;
                     if (x->text()!=initial[0]) updated.translation_m.x=entered.x;
@@ -12135,6 +12138,16 @@ public:
                     if (z->text()!=initial[2]) updated.translation_m.z=entered.z;
                     if (yaw->text()!=initial[3]) updated.rotation_radians=entered.rotation_z_radians;
                     if (scale->text()!=initial[4]) updated.scale=entered.scale;
+                    if (scale->text()!=initial[4] || height_scale->text()!=initial[5]) {
+                        auto height = placement.scale*placement.vertical_scale;
+                        if (height_scale->text()!=initial[5]) {
+                            bool ok = false;
+                            height = height_scale->text().trimmed().toDouble(&ok);
+                            if (!ok || !std::isfinite(height) || height<=0)
+                                throw std::invalid_argument("Enter a positive height scale.");
+                        }
+                        updated.vertical_scale=height/updated.scale;
+                    }
                     instance.placement.reset(); instance.root_transform = updated;
                 }
                 for (int r = 0; r < properties->rowCount(); ++r) {
@@ -12142,7 +12155,9 @@ public:
                     if (value != resolved.properties.at(key)) instance.property_overrides[key] = value;
                 }
                 if (instance != binding->instance) {
-                    auto catalog = original; catalog.properties["model"] = model.with_instance(std::move(instance)).to_json();
+                    auto catalog = original;
+                    catalog.properties["model"] = retain_assembly_catalog_dialect(original.properties.at("model"),
+                        model.with_instance(std::move(instance)).to_json());
                     auto candidate = source.entities(); candidate.insert_or_assign(catalog.id, catalog); validate_document_assembly_instances(candidate);
                     const Command command = ApplyEntityChanges{source.revision(), {EntityChange::upsert(std::move(catalog))}, {}, "Edit embedded assembly"};
                     (void)Document::preview_command(source, command); applyAuthoredCommand(command); refresh();
@@ -16320,23 +16335,8 @@ public:
                 : found->second;
             if (entity.type != "assembly_model") throw std::invalid_argument("The assembly catalog is unavailable.");
             auto updated_model = model.to_json();
-            if (entity.properties.contains("model") && entity.properties.at("model").is_object() &&
-                entity.properties.at("model").value("schema", json{}) == "sketch.assemblies.v5" &&
-                updated_model.at("schema") != "sketch.assemblies.v5") {
-                // Clearing the last nonzero Z does not discard the saved XYZ
-                // dialect or its nested envelope during an ordinary edit.
-                updated_model.at("schema") = "sketch.assemblies.v5";
-                for (auto& type : updated_model.at("types")) {
-                    if (!type.contains("profiles")) type["profiles"] = json::array();
-                    if (!type.contains("parts")) type["parts"] = json::array();
-                }
-                for (auto& instance : updated_model.at("instances")) {
-                    if (!instance.contains("root_transform")) instance["root_transform"] = nullptr;
-                    if (!instance.contains("nested_overrides")) instance["nested_overrides"] = json::array();
-                    if (instance.contains("placement")) instance.at("placement").at("translation_m").push_back(0.0);
-                }
-                (void)AssemblyModel::from_json(updated_model);
-            }
+            if (entity.properties.contains("model") && entity.properties.at("model").is_object())
+                updated_model = retain_assembly_catalog_dialect(entity.properties.at("model"), std::move(updated_model));
             entity.properties["model"] = std::move(updated_model);
             if (found != source.entities().end() && entity == found->second) { clearError(); return true; }
             const ApplyEntityChanges command{
@@ -17216,7 +17216,8 @@ public:
             } else {
                 auto types = model.types(); types.push_back(draft->replacement);
                 auto catalog = catalog_source;
-                catalog.properties["model"] = AssemblyModel::create(model.materials(), std::move(types), model.instances()).to_json();
+                catalog.properties["model"] = retain_assembly_catalog_dialect(catalog_source.properties.at("model"),
+                    AssemblyModel::create(model.materials(), std::move(types), model.instances()).to_json());
                 command = {source.revision(), {EntityChange::upsert(std::move(catalog))}, {}, "Create reusable assembly type"};
             }
             (void)Document::preview_command(source, command);
@@ -18295,7 +18296,7 @@ public:
                     const auto scale = read_finite(placement_scale, "scale", previous.scale);
                     if (!(scale > 0.0)) throw std::invalid_argument("Placement scale must be positive.");
                     const auto mirrored_y = replacement.placement && replacement.placement->mirrored_y;
-                    replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale, mirrored_y, z};
+                    replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale, mirrored_y, z, previous.vertical_scale};
                     const auto updated = current->model.with_instance(std::move(replacement));
                     if (apply_model(updated, QStringLiteral("Save assembly placement"))) {
                         populate();
@@ -24440,35 +24441,9 @@ public:
 
     static TopoDS_Shape transformAssemblyHostShape(const TopoDS_Shape& source,
         const AssemblyPlacement& placement) {
-        if (source.IsNull()) throw std::invalid_argument("assembly host solid is empty");
-        if (!std::isfinite(placement.scale) || placement.scale<=0.0 ||
-            !std::isfinite(placement.rotation_radians) || !std::isfinite(placement.translation_m.x) ||
-            !std::isfinite(placement.translation_m.y) || !std::isfinite(placement.translation_z_m))
-            throw std::invalid_argument("assembly placement transform is invalid");
-        // This is the catalog's existing legacy copy transform. Physical
-        // owner gestures remain rigid and never resize the owner's height.
-        auto placed_source = source;
-        if (placement.mirrored_y) {
-            gp_Trsf mirror;
-            mirror.SetMirror(gp_Ax2(gp_Pnt(0.0,0.0,0.0),gp_Dir(0.0,1.0,0.0)));
-            BRepBuilderAPI_Transform mirrored(placed_source,mirror,true);
-            if (!mirrored.IsDone() || mirrored.Shape().IsNull())
-                throw std::invalid_argument("assembly mirror transform failed");
-            placed_source = mirrored.Shape();
-        }
-        gp_Trsf scale;
-        scale.SetScale(gp_Pnt(0.0,0.0,0.0),placement.scale);
-        BRepBuilderAPI_Transform scaled(placed_source,scale,true);
-        if (!scaled.IsDone() || scaled.Shape().IsNull()) throw std::invalid_argument("assembly scale transform failed");
-        gp_Trsf rotate;
-        rotate.SetRotation(gp_Ax1(gp_Pnt(0.0,0.0,0.0),gp_Dir(0.0,0.0,1.0)),placement.rotation_radians);
-        BRepBuilderAPI_Transform rotated(scaled.Shape(),rotate,true);
-        if (!rotated.IsDone() || rotated.Shape().IsNull()) throw std::invalid_argument("assembly rotation transform failed");
-        gp_Trsf translate;
-        translate.SetTranslation(gp_Vec(placement.translation_m.x,placement.translation_m.y,placement.translation_z_m));
-        BRepBuilderAPI_Transform translated(rotated.Shape(),translate,true);
-        if (!translated.IsDone() || translated.Shape().IsNull()) throw std::invalid_argument("assembly translation transform failed");
-        return translated.Shape();
+        return transform_assembly_shape(source,
+            {{placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
+                placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
     }
 
     static Boundary assemblyHostPlan(const DocumentSnapshot& snapshot,const std::string& host_id,
@@ -24930,7 +24905,8 @@ public:
                         }
                         const auto& host=candidate.at(placement.host_entity_id);
                         proposed.thickness_metres=(host.type=="wall" || host.type=="slab" || host.type=="room" ||
-                            is_closed_boundary_entity(host.type) ? read_number(host.properties,"thickness_m",0.08) : 0.0)*placement.scale;
+                            is_closed_boundary_entity(host.type) ? read_number(host.properties,"thickness_m",0.08) : 0.0)*placement.scale*
+                            (host.type=="slab" ? placement.vertical_scale : 1.0);
                         if (captured_presentations.contains(presentation_identity(item)) || !proposed.segments.empty())
                             result.entities.push_back(std::move(proposed));
                         continue;

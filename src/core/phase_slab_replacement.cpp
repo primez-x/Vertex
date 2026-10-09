@@ -162,7 +162,7 @@ bool has_hosted_instances(const PhaseSlabReplacementEntities& source, const Ids&
 
 AssemblyTransform hosted_world_transform(const SlabGeometryEditIntent& intent) {
     AssemblyPoint3 pivot, offset;
-    double angle{}, scale{1};
+    double angle{}, scale{1}, vertical_scale{1};
     bool horizontal{}, vertical{};
     if (intent.kind == SlabGeometryEditKind::transform_model) {
         const auto& t = *intent.model_transform;
@@ -171,16 +171,15 @@ AssemblyTransform hosted_world_transform(const SlabGeometryEditIntent& intent) {
         angle = t.rotation_radians; scale = t.uniform_scale;
         horizontal = t.flip_horizontal; vertical = t.flip_vertical;
     } else {
-        if (intent.uniform_scale != 1)
-            reject("hosted plan scaling requires a physical XY-only placement codec; 3D similarity would change profile Z");
         const auto& t = *intent.transform;
         pivot = {t.pivot.x, t.pivot.y, 0}; offset = {t.offset.x, t.offset.y, 0};
+        scale = intent.uniform_scale; vertical_scale = 1 / scale;
         angle = t.rotation_radians; horizontal = t.flip_horizontal; vertical = t.flip_vertical;
     }
     // Slab operations reflect after yaw. Assembly transforms reflect local Y
     // before yaw, so convert parity/order before evaluating the pivot shift.
     AssemblyTransform result{{}, std::remainder((horizontal ? std::numbers::pi : 0) +
-        (horizontal != vertical ? -angle : angle), 2 * std::numbers::pi), scale, horizontal != vertical};
+        (horizontal != vertical ? -angle : angle), 2 * std::numbers::pi), scale, horizontal != vertical, vertical_scale};
     const auto mapped_pivot = transform_assembly_point(pivot, result);
     result.translation_m = {(pivot.x - mapped_pivot.x) + offset.x,
         (pivot.y - mapped_pivot.y) + offset.y, (pivot.z - mapped_pivot.z) + offset.z};
@@ -587,9 +586,9 @@ PhaseSlabReplacementResult replay_phase_slab_replacement(
                 if (!transforms.empty()) {
                     const auto transformed = transform_hosted_assembly_model(source.at(id).properties.at("model"), transforms);
                     auto& copied_model = copy.properties.at("model");
-                    // A needed XYZ schema upgrade also supplies its required
-                    // empty legacy nesting fields. Keep that admitted envelope
-                    // while retaining only the exact qualified selected rows.
+                    // Keep the source envelope, including v6 vertical factors,
+                    // or its admitted placement upgrade and required legacy
+                    // nesting fields. Retain only qualified selected rows.
                     copied_model = transformed;
                     copied_model.at("instances") = Json::array();
                     for (const auto& row : transformed.at("instances")) {

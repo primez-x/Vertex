@@ -879,52 +879,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
     };
     const auto transform_assembly_shape = [](const TopoDS_Shape& source,
                                              const AssemblyPlacement& placement) {
-        if (source.IsNull()) throw std::invalid_argument("assembly host solid is empty");
-        if (!std::isfinite(placement.scale) || placement.scale <= 0.0 ||
-            !std::isfinite(placement.rotation_radians) ||
-            !std::isfinite(placement.translation_m.x) ||
-            !std::isfinite(placement.translation_m.y) ||
-            !std::isfinite(placement.translation_z_m)) {
-            throw std::invalid_argument("assembly placement transform is invalid");
-        }
-        auto local = source;
-        if (placement.mirrored_y) {
-            gp_Trsf mirror;
-            mirror.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0)));
-            BRepBuilderAPI_Transform mirrored(source, mirror, true);
-            if (!mirrored.IsDone() || mirrored.Shape().IsNull()) {
-                throw std::invalid_argument("assembly mirror transform failed");
-            }
-            local = mirrored.Shape();
-        }
-        gp_Trsf scale;
-        scale.SetScale(gp_Pnt(0.0, 0.0, 0.0), placement.scale);
-        BRepBuilderAPI_Transform scaled(local, scale, true);
-        if (!scaled.IsDone() || scaled.Shape().IsNull()) {
-            throw std::invalid_argument("assembly scale transform failed");
-        }
-        gp_Trsf rotate;
-        rotate.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)),
-                           placement.rotation_radians);
-        BRepBuilderAPI_Transform rotated(scaled.Shape(), rotate, true);
-        if (!rotated.IsDone() || rotated.Shape().IsNull()) {
-            throw std::invalid_argument("assembly rotation transform failed");
-        }
-        gp_Trsf translate;
-        translate.SetTranslation(gp_Vec(placement.translation_m.x,
-                                         placement.translation_m.y, placement.translation_z_m));
-        BRepBuilderAPI_Transform translated(rotated.Shape(), translate, true);
-        if (!translated.IsDone() || translated.Shape().IsNull()) {
-            throw std::invalid_argument("assembly translation transform failed");
-        }
-        if (!BRepCheck_Analyzer(translated.Shape()).IsValid()) {
-            throw std::invalid_argument("assembly host transform produced an invalid solid");
-        }
-        const auto volume = solid_volume(translated.Shape());
-        if (!std::isfinite(volume) || volume <= 0.0) {
-            throw std::invalid_argument("assembly host solid volume must be finite and positive");
-        }
-        return translated.Shape();
+        return sketch::transform_assembly_shape(source,
+            {{placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
+                placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
     };
 
     AssemblyExpansionBudget embedded_materialization_budget;
@@ -968,6 +925,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 if (placement.translation_z_m != 0)
                     placement_content.at("translation").push_back(placement.translation_z_m);
                 if (placement.mirrored_y) placement_content["mirrored_y"] = true;
+                if (placement.vertical_scale != 1) placement_content["vertical_scale"] = placement.vertical_scale;
                 content.append(placement_content.dump());
                 content.push_back('\0');
                 append_entity_content(content, geometry_entity);

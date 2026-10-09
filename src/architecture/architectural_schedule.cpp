@@ -590,6 +590,8 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 data("host_entity_id",placement.host_entity_id);
                 data("rotation_radians",placement.rotation_radians);
                 data("scale",placement.scale);
+                data("vertical_scale",placement.vertical_scale);
+                data("height_scale",placement.scale*placement.vertical_scale);
                 data("translation_x_m",ScheduleQuantity{placement.translation_m.x,ScheduleUnit::metre});
                 data("translation_y_m",ScheduleQuantity{placement.translation_m.y,ScheduleUnit::metre});
                 data("translation_z_m",ScheduleQuantity{placement.translation_z_m,ScheduleUnit::metre});
@@ -597,6 +599,8 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 const auto& transform = *instance.root_transform;
                 data("rotation_radians",transform.rotation_radians);
                 data("scale",transform.scale);
+                data("vertical_scale",transform.vertical_scale);
+                data("height_scale",transform.scale*transform.vertical_scale);
                 data("translation_x_m",ScheduleQuantity{transform.translation_m.x,ScheduleUnit::metre});
                 data("translation_y_m",ScheduleQuantity{transform.translation_m.y,ScheduleUnit::metre});
                 data("translation_z_m",ScheduleQuantity{transform.translation_m.z,ScheduleUnit::metre});

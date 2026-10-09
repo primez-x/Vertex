@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v114
+# Vertex project formats v1 through v115
+
+## Independently scaled assembly heights (v115)
+
+Native format 115 and JSON/assets extraction version 113 retain assembly catalog
+schema `sketch.assemblies.v6` and independent instance schema
+`sketch.assembly-instance.v2`, including when present only in retained history.
+Catalog six keeps the XYZ placement and nested envelope from catalog five;
+every hosted placement additionally carries a positive finite `vertical_scale`.
+Version-six transforms may carry this factor on roots, parts and nested overrides.
+Independent instance two allows the same optional transform factor. Earlier
+enclosing schemas keep their closed fields and reject the new field, even one.
+
+The existing `scale` applies to XY. Actual Z scale is `scale * vertical_scale`;
+an absent factor in earlier schemas is one. Y reflection precedes yaw, then
+translation. Composition multiplies corresponding scales; hosted legacy-solid
+placements use actual `G*A*G^-1`, while type-owned profile instances use `G*A`.
+Actual native geometry and calculated volume use the same affine transform.
+Entered quantities remain authored quantities and are not rescaled.
+
+Horizontal plan scaling uses XY scale `s` and factor `1/s`, retaining physical
+Z and thickness. Spatial model scaling retains uniform XYZ semantics. Ordinary
+and proposed hosted producers patch actual placements; original baseline rows,
+definitions, materials, overrides and unchanged raw numeric values remain exact.
+Needed upgrades add only required codec envelope fields. Existing catalog six
+and independent instance two remain in that dialect when factors return to one.
+Native previews, plan projections, schedules, IFC extrusion heights and component
+properties consume the same scale. These source changes have not been compiled
+or qualified through interaction, export or storage round trips.
 
 ## Phase-qualified roof joins (v114)
 

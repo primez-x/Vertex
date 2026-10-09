@@ -228,6 +228,9 @@ Entity encode_document_assembly_instance(const Entity& source, const AssemblyDoc
     result.properties["form"] = "independent_assembly_instance";
     result.properties["assembly_catalog_id"] = value.assembly_catalog_id;
     result.properties["instance"] = encode_assembly_instance(value.instance);
+    if (source.properties.contains("instance") && source.properties.at("instance").is_object() &&
+        source.properties.at("instance").value("schema", nlohmann::json{}) == "sketch.assembly-instance.v2")
+        result.properties.at("instance")["schema"] = "sketch.assembly-instance.v2";
     (void)decode_document_assembly_instance(result);
     return result;
 }
@@ -314,7 +317,8 @@ AssemblyDocumentEntities assembly_clipboard_dependencies(const DocumentSnapshot&
         for (const auto& material : model.materials())
             if (material_ids.contains(material.id)) retained_materials.push_back(material);
         Entity entity = source_entity;
-        entity.properties["model"] = AssemblyModel::create(std::move(retained_materials), std::move(types), {}).to_json();
+        entity.properties["model"] = retain_assembly_catalog_dialect(source_entity.properties.at("model"),
+            AssemblyModel::create(std::move(retained_materials), std::move(types), {}).to_json());
         result.emplace(catalog_id, entity);
         closure.emplace(catalog_id, std::move(entity));
     }
@@ -343,7 +347,8 @@ std::vector<AssemblyDocumentTypeUpdateImpact> preview_document_assembly_type_upd
     require(found!=entities.end(),"assembly catalog update target is missing");
     const auto type_id=replacement.id;
     auto candidate=entities;
-    candidate.at(catalog_id).properties["model"]=catalog(found->second).with_type(std::move(replacement)).to_json();
+    candidate.at(catalog_id).properties["model"]=retain_assembly_catalog_dialect(found->second.properties.at("model"),
+        catalog(found->second).with_type(std::move(replacement)).to_json());
     AssemblyExpansionBudget before_budget,after_budget;
     const auto before=expand_document_assembly_instances(entities,before_budget);
     const auto after=expand_document_assembly_instances(candidate,after_budget);
@@ -387,7 +392,8 @@ ApplyEntityChanges independent_assembly_type_update_command(const DocumentSnapsh
     const auto found = source.entities().find(catalog_id);
     require(found != source.entities().end(), "assembly catalog update target is missing");
     Entity entity = found->second;
-    entity.properties["model"] = catalog(entity).with_type(std::move(replacement)).to_json();
+    entity.properties["model"] = retain_assembly_catalog_dialect(found->second.properties.at("model"),
+        catalog(entity).with_type(std::move(replacement)).to_json());
     return upsert(source, std::move(entity), expected_revision, "Update assembly type");
 }
 ApplyEntityChanges independent_assembly_type_remove_command(const DocumentSnapshot& source,
@@ -396,7 +402,8 @@ ApplyEntityChanges independent_assembly_type_remove_command(const DocumentSnapsh
     const auto found=source.entities().find(catalog_id);
     require(found!=source.entities().end(),"assembly catalog removal target is missing");
     Entity entity=found->second;
-    entity.properties["model"]=catalog(entity).without_type(type_id).to_json();
+    entity.properties["model"]=retain_assembly_catalog_dialect(found->second.properties.at("model"),
+        catalog(entity).without_type(type_id).to_json());
     return upsert(source,std::move(entity),expected_revision,"Remove assembly type");
 }
 ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnapshot& source,
@@ -524,6 +531,8 @@ ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnaps
             encoded["rotation_radians"] = pose.rotation_radians;
             encoded["scale"] = pose.scale;
             if (pose.mirrored_y || encoded.contains("mirrored_y")) encoded["mirrored_y"] = pose.mirrored_y;
+            if (pose.vertical_scale != 1 || encoded.contains("vertical_scale"))
+                encoded["vertical_scale"] = pose.vertical_scale;
         }
         if (target.copy_instance_id) instances.push_back(std::move(raw));
         else instances.at(roots[i].raw_index) = std::move(raw);
@@ -597,7 +606,8 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
             [&](const auto& value) { return value.at("id") == target.instance_id; });
         require(row != rows.end(), "embedded assembly copy lost its raw source record");
         auto raw = *row;
-        raw["schema"] = "sketch.assembly-instance.v1";
+        raw["schema"] = proposed.properties.at("model").value("schema", nlohmann::json{}) == "sketch.assemblies.v6"
+            ? "sketch.assembly-instance.v2" : "sketch.assembly-instance.v1";
         raw["id"] = *target.copy_instance_id;
         if (raw.contains("placement") || !raw.at("root_transform").is_object())
             raw["root_transform"] = encode_assembly_transform(expansion.nodes.front().transform);
