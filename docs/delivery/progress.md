@@ -14,6 +14,27 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 canvas navigation source corrections
+
+Canvas input now uses the painted rotated selection frame for move/pan,
+context targeting and pointer feedback. Its axis-aligned cache remains an
+early rejection, followed by inverse local-frame containment. Empty corners
+outside the visible rotated frame therefore remain navigation space. Selected
+painted hits and existing handle priority remain intact.
+
+Stationary Ctrl-click retains the press target instead of picking again at
+release; sub-threshold motion cannot toggle another object. Existing drag
+thresholds, generated-label handling and additive marquees remain unchanged.
+Wheel zoom now accepts an explicit top-left `(0,0)` anchor. Separate one-argument
+center-zoom and two-argument anchored-zoom overloads replace the null-point
+sentinel; explicit invalid anchors refuse navigation. Root read the affected
+input paths, painted frame geometry and existing call sites.
+
+Root integrated source review and whitespace inspection are complete. No
+builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation and observed pointer behavior remain unverified; the installed
+candidate is unchanged.
+
 ### October 9 mixed-room-callout move source implementation
 
 The mixed Site path now captures current room callouts in a typed joint lane,

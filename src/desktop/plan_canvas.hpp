@@ -483,7 +483,8 @@ public:
         std::optional<CanvasEntity> preview);
     void clearPreview();
     void fitView();
-    void zoomBy(double factor, QPointF anchor = {});
+    void zoomBy(double factor);
+    void zoomBy(double factor, QPointF anchor);
     // Synchronize read-only drawing views in model coordinates. Invalid
     // transforms are ignored; valid scales use the interactive zoom limits.
     void setViewTransform(Vec2 center, double scale);
@@ -802,6 +803,7 @@ private:
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds(bool include_drafts = false) const;
     [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> selectionFrame(const QRectF& viewport) const;
+    [[nodiscard]] bool selectionFrameContains(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> computeSelectionBounds(const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> computeSelectionFrame(const QRectF& viewport) const;
     [[nodiscard]] QByteArray retainedSelectionKey(const QRectF& viewport, bool model_axes = false) const;

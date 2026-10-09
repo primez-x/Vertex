@@ -1353,16 +1353,18 @@ void PlanCanvas::fitView() {
     update();
 }
 
+void PlanCanvas::zoomBy(double factor) {
+    zoomBy(factor, QRectF(rect()).center());
+}
+
 void PlanCanvas::zoomBy(double factor, QPointF anchor) {
-    if (!(factor > 0.0) || !std::isfinite(factor)) {
+    if (!(factor > 0.0) || !std::isfinite(factor) ||
+        !std::isfinite(anchor.x()) || !std::isfinite(anchor.y())) {
         return;
     }
     beginPerformanceMeasurement(PerformanceMetric::navigation);
     const auto previous_center = m_view_center;
     const auto previous_scale = m_scale;
-    if (anchor.isNull()) {
-        anchor = rect().center();
-    }
     const auto before = toModel(anchor, rect());
     m_scale = std::clamp(m_scale * factor, minimum_scale, maximum_scale);
     const auto after = toModel(anchor, rect());
@@ -3243,6 +3245,9 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         if (label && generated_area_callout(*label)) m_pressed_generated_label = identity;
     }
     if (control) {
+        // A stationary Ctrl click retains the same press target as a plain
+        // click; sub-threshold motion across another hit cannot retarget it.
+        m_pressed_entity = hitTest(position);
         m_left_gesture = LeftGesture::marquee;
         m_selection_start = position;
         m_selection_end = position;
@@ -3412,14 +3417,14 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     m_pressed_entity = hitTest(position);
     m_pressed_occupied = !m_pressed_entity.isEmpty() || !hitTest(position, false).isEmpty();
     const auto retained_selection = selectedIds();
-    const auto frame = selectionFrame(QRectF(rect()));
+    const bool inside_frame = selectionFrameContains(position, QRectF(rect()));
     // A selected annotation can paint away from its same-ID guide geometry.
     // Its painted hit still owns movement of the retained selection.
     const bool selected_hit = !m_pressed_entity.isEmpty() && retained_selection.contains(m_pressed_entity);
     m_clear_selection_on_click = !m_selected_generated_labels.empty() && !selected_hit &&
-        (retained_selection.isEmpty() || !frame || !frame->contains(position));
+        (retained_selection.isEmpty() || !inside_frame);
     if (selectionInteractionEnabled() && !retained_selection.isEmpty() &&
-        (selected_hit || (frame && frame->contains(position)))) {
+        (selected_hit || inside_frame)) {
         m_left_gesture = LeftGesture::object_move;
         m_move_ids = retained_selection;
         captureOpeningMove(position);
@@ -3857,7 +3862,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                 if (generated_label_click_current && m_generated_label_selection_clicked)
                     m_generated_label_selection_clicked(*pressed_generated_label, true);
             } else if (m_entity_selection_clicked) {
-                m_entity_selection_clicked(hitTest(position), true);
+                m_entity_selection_clicked(pressed_entity, true);
             }
         } else if (gesture == LeftGesture::canvas_pan && !dragging) {
             if (overlap_selection && m_overlap_selection_requested) {
@@ -4266,6 +4271,16 @@ std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
         m_selection_frame_cache.key = key;
     }
     return m_selection_frame_cache.bounds;
+}
+
+bool PlanCanvas::selectionFrameContains(QPointF point, const QRectF& viewport) const {
+    const auto bounds = selectionFrame(viewport);
+    if (!bounds || !bounds->contains(point)) return false;
+    // The cached bounds enclose a rotated frame, so their empty corner areas
+    // are navigation space. Use the same local rectangle/transform as painting.
+    bool invertible = false;
+    const auto inverse = selectionControlTransform(viewport).inverted(&invertible);
+    return invertible && selectionControlRect(viewport).contains(inverse.map(point));
 }
 
 std::optional<QRectF> PlanCanvas::computeSelectionFrame(const QRectF& viewport) const {
@@ -7823,8 +7838,7 @@ QString PlanCanvas::contextTarget(QPointF point) const {
                 m_selected_generated_labels.end()) return identity->id;
         }
         const auto ids = selectedIds();
-        const auto frame = selectionFrame(QRectF(rect()));
-        if (!ids.isEmpty() && frame && frame->contains(point) && matchesSelectionFilter(ids.back()))
+        if (!ids.isEmpty() && selectionFrameContains(point, QRectF(rect())) && matchesSelectionFilter(ids.back()))
             return ids.back();
     }
     return hitTest(point);
@@ -7878,8 +7892,7 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
                         ? Qt::SizeHorCursor : Qt::SizeVerCursor);
             return;
         }
-        const auto frame = selectionFrame(QRectF(rect()));
-        if (frame && frame->contains(point)) {
+        if (selectionFrameContains(point, QRectF(rect()))) {
             setCursor(Qt::SizeAllCursor);
             return;
         }
