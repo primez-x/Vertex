@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v116
+# Vertex project formats v1 through v117
+
+## Coordinated roof and horizontal design replacement (v117)
+
+Native format 117 and JSON/assets extraction version 115 retain outer phase
+constraint authoring version seven in direct, wrapped and historical commands.
+The outer source-bound envelope contains only `coordinated_replacements` in
+addition to its eight shared fields. Its ordinary semantic intent carries only
+the message. The inner version-one object has exactly `version`,
+`roof_replacement`, `slab_replacement`, `ordinary_roof_edits` and
+`ordinary_slab_geometry`.
+
+Each family has exactly one lane: a canonical non-demolition replacement leaf,
+or a nonempty canonical ordinary typed edit list. At least one family requires
+replacement, and two replacement leaves must name the same actual registry and
+saved alternative. Historical leaves keep their original codecs and meanings.
+Both complete family candidates derive from the unchanged actual source.
+
+Physical consequences must be disjoint. Shared registry and presentation
+containers merge only through admitted append paths: actual active registry
+rosters, annotation overrides, and per-view object, appearance and overlay rows.
+All source array prefixes, raw order and remaining envelope values stay exact.
+Conflicting physical or catalog consequences and overlapping fresh identities
+refuse. Whole-map ownership, baseline preservation, identity lifetime and native
+admission precede one undoable publication. Canvas dragging, transform actions
+and Site movement use the same producer; previews and selection redirection
+include both families. Other shared-baseline family coordination remains separate.
+These changes have not been compiled or qualified through runtime or storage.
 
 ## Phase-qualified roof demolition (v116)
 

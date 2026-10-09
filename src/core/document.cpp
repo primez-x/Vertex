@@ -2547,6 +2547,18 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
     return result;
 }
 
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+static std::vector<PhaseConstraintAuthoringIntent> phase_constraint_authoring_components(
+    const ApplyBoundaryConstraintChanges& command) {
+    std::vector<PhaseConstraintAuthoringIntent> result;
+    for (const auto& encoded : phase_constraint_authoring_proofs(command)) {
+        auto components = phase_constraint_replacement_components(decode_phase_constraint_authoring_intent(encoded));
+        for (auto& component : components) result.push_back(std::move(component));
+    }
+    return result;
+}
+#endif
+
 static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryConstraintChanges& command) {
     const auto proofs=phase_constraint_authoring_proofs(command);
     return std::none_of(proofs.begin(),proofs.end(),[](const auto& intent) {
@@ -2554,7 +2566,8 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
             (intent.contains("opening_demolition") && !intent.at("opening_demolition").is_null()) ||
             (intent.contains("roof_replacement") && !intent.at("roof_replacement").is_null()) ||
             (intent.contains("slab_replacement") && !intent.at("slab_replacement").is_null()) ||
-            (intent.contains("slab_demolition") && !intent.at("slab_demolition").is_null());
+            (intent.contains("slab_demolition") && !intent.at("slab_demolition").is_null()) ||
+            (intent.contains("coordinated_replacements") && !intent.at("coordinated_replacements").is_null());
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2562,6 +2575,12 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        if (!intent.coordinated_replacements.is_null()) {
+            const auto replay = replay_phase_constraint_authoring(source, encoded);
+            if (entity_map_digest(replay) != entity_map_digest(candidate))
+                throw std::invalid_argument("Coordinated roof and horizontal replacements differ from their actual source replay");
+            continue;
+        }
         if (!intent.wall_replacement.is_null()) validate_phase_wall_replacement_originals(source,candidate,intent);
         if (!intent.opening_demolition.is_null()) {
             const auto replay = replay_phase_opening_demolition_entities(source,
@@ -2720,7 +2739,21 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         if (!source.contains(id)) fresh.insert(id);
     }
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
-        const auto intent=decode_phase_constraint_authoring_intent(encoded);
+        const auto root_intent=decode_phase_constraint_authoring_intent(encoded);
+        if (!root_intent.coordinated_replacements.is_null()) {
+            complete_envelope_reservation=true;
+            roof_mixed_asset_reservation=true;
+            std::vector<RoofEditIntent> ordinary_roof_edits;
+            for (const auto& row : root_intent.coordinated_replacements.at("ordinary_roof_edits"))
+                ordinary_roof_edits.push_back(decode_roof_edit_intent(row));
+            for (const auto& id : new_roof_opening_identity_ids(source, roof_edit_opening_intents(ordinary_roof_edits))) {
+                if (!fresh.insert(id).second)
+                    throw std::invalid_argument("A coordinated roof opening overlaps another fresh identity: "+id);
+                nested_fresh.insert(id);
+            }
+        }
+    }
+    for (const auto& intent : phase_constraint_authoring_components(command)) {
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
             roof_mixed_asset_reservation=roof_mixed_asset_reservation ||
@@ -2844,8 +2877,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         // A deliberately omitted fresh relationship copy is still a declared
         // identity in the recorded semantic operation. Undo cannot release it.
         if (record.boundary_constraint_changes)
-            for (const auto& encoded:phase_constraint_authoring_proofs(*record.boundary_constraint_changes)) {
-                const auto intent=decode_phase_constraint_authoring_intent(encoded);
+            for (const auto& intent : phase_constraint_authoring_components(*record.boundary_constraint_changes)) {
                 const auto require_unused=[&](const auto& identities) {
                     for (const auto& [original,id]:identities) {
                         (void)original;

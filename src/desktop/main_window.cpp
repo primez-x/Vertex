@@ -8702,6 +8702,16 @@ public:
                 roofs.push_back({id.toStdString(), {{}, {offset.x, offset.y, 0.0}, 0.0, 1.0, false, false}});
             return sourceDerivedRoofTransformCommand(source, roofs, "Move roofs");
         }
+        if (changes.empty() && annotation_moves.empty() && reference_moves.empty() &&
+            !model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
+                const auto found = source.entities().find(id.toStdString());
+                return found != source.entities().end() && (found->second.type == "roof" || found->second.type == "slab");
+            })) {
+            std::vector<ArchitecturalGroupTransformTarget> targets;
+            for (const auto& id : model_ids)
+                targets.push_back({id.toStdString(), {{}, {offset.x, offset.y, 0.0}, 0.0, 1.0, false, false}});
+            return sourceDerivedRoofSlabTransformCommand(source, targets, "Move roofs and horizontal assemblies");
+        }
         if (!model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
                 const auto found = source.entities().find(id.toStdString());
                 return found != source.entities().end() && found->second.type == "wall";
@@ -13157,6 +13167,14 @@ public:
                             return {sourceDerivedRoofTransformCommand(source, roofs, "Transform roofs"),
                                 primary_render_id.toStdString()};
                         }
+                        if (geometry_selection.isEmpty() && selected_presentations && selected_presentations->entity_changes.empty() &&
+                            embedded_targets.empty() && !physical_targets.empty() &&
+                            std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
+                                const auto& type = source.entities().at(target.entity_id).type;
+                                return type == "roof" || type == "slab";
+                            }))
+                            return {sourceDerivedRoofSlabTransformCommand(source, physical_targets,
+                                "Transform roofs and horizontal assemblies"), primary_render_id.toStdString()};
                         auto architectural=physical_targets.empty() ?
                             ApplyEntityChanges{source.revision(),{}, {},"Transform architectural selection"} :
                             architectural_group_transform_command(source,physical_targets,
@@ -25664,14 +25682,8 @@ public:
         if (!phase || !phase->phase_constraint_authoring_completion ||
             phase->phase_constraint_authoring_intent.is_null()) return std::nullopt;
         const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
-        PhaseSlabReplacementIdentityMap identities;
-        if (!intent.slab_replacement.is_null())
-            identities = decode_phase_slab_replacement_authoring(intent.slab_replacement).identities;
-        else if (!intent.roof_replacement.is_null()) {
-            const auto replacement = decode_phase_roof_replacement_authoring(intent.roof_replacement);
-            if (replacement.demolition) return std::nullopt;
-            identities = replacement.identities;
-        } else return std::nullopt;
+        const auto identities = alternativePhysicalReplacementIdentities(intent);
+        if (identities.empty()) return std::nullopt;
         std::map<QString, QString> aliases;
         for (const auto& [old_id, new_id] : identities) {
             const auto original = source.entities().find(old_id);
@@ -42117,20 +42129,34 @@ private:
             anchor, frame_rotation_radians), source);
     }
 
+    static PhaseWallReplacementIdentityMap alternativePhysicalReplacementIdentities(
+        const PhaseConstraintAuthoringIntent& intent) {
+        PhaseWallReplacementIdentityMap result;
+        for (const auto& component : phase_constraint_replacement_components(intent)) {
+            PhaseWallReplacementIdentityMap identities;
+            if (!component.slab_replacement.is_null())
+                identities = decode_phase_slab_replacement_authoring(component.slab_replacement).identities;
+            else if (!component.roof_replacement.is_null()) {
+                const auto replacement = decode_phase_roof_replacement_authoring(component.roof_replacement);
+                if (!replacement.demolition) identities = replacement.identities;
+            }
+            for (const auto& [old_id, new_id] : identities) {
+                const auto [found, inserted] = result.emplace(old_id, new_id);
+                if (!inserted && found->second != new_id)
+                    throw std::invalid_argument("The coordinated edit has conflicting proposed identity mappings.");
+            }
+        }
+        return result;
+    }
+
     static std::string alternativeReplacementTargetID(const Command& command, const std::string& original) {
         const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
         if (!phase || !phase->phase_constraint_authoring_completion ||
             phase->phase_constraint_authoring_intent.is_null()) return original;
         const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
-        if (!intent.slab_replacement.is_null()) {
-            const auto replacement = decode_phase_slab_replacement_authoring(intent.slab_replacement);
-            const auto found = replacement.identities.find(original);
-            return found != replacement.identities.end() ? found->second : original;
-        }
-        if (intent.roof_replacement.is_null()) return original;
-        const auto replacement = decode_phase_roof_replacement_authoring(intent.roof_replacement);
-        const auto found = replacement.identities.find(original);
-        return !replacement.demolition && found != replacement.identities.end() ? found->second : original;
+        const auto identities = alternativePhysicalReplacementIdentities(intent);
+        const auto found = identities.find(original);
+        return found != identities.end() ? found->second : original;
     }
 
     static PhaseWallReplacementIdentityMap admittedAlternativeSelectionRedirect(
@@ -42140,14 +42166,7 @@ private:
         if (!phase || !phase->phase_constraint_authoring_completion ||
             phase->phase_constraint_authoring_intent.is_null()) return result;
         const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
-        PhaseWallReplacementIdentityMap identities;
-        if (!intent.roof_replacement.is_null()) {
-            const auto replacement = decode_phase_roof_replacement_authoring(intent.roof_replacement);
-            if (replacement.demolition) return result;
-            identities = replacement.identities;
-        } else if (!intent.slab_replacement.is_null()) {
-            identities = decode_phase_slab_replacement_authoring(intent.slab_replacement).identities;
-        } else return result;
+        const auto identities = alternativePhysicalReplacementIdentities(intent);
         for (const auto& [original_id, proposed_id] : identities) {
             const auto original = source.entities().find(original_id);
             if (original == source.entities().end() ||
@@ -42451,6 +42470,105 @@ private:
         return sourceDerivedSlabEditCommand(source, {}, {}, geometry, message);
     }
 
+    static Command sourceDerivedRoofSlabTransformCommand(const DocumentSnapshot& source,
+        std::span<const ArchitecturalGroupTransformTarget> targets, const std::string& message) {
+        if (targets.empty() || targets.size() > maximum_architectural_group_targets)
+            throw std::invalid_argument("Select a bounded group of actual roofs and horizontal assemblies.");
+        std::set<std::string, std::less<>> owners;
+        std::vector<RoofRigidTransformIntent> roofs;
+        std::vector<SlabGeometryEditIntent> slabs;
+        for (const auto& target : targets) {
+            const auto found = source.entities().find(target.entity_id);
+            if (found == source.entities().end() || !owners.insert(target.entity_id).second)
+                throw std::invalid_argument("The architectural group contains a missing or repeated source owner.");
+            if (found->second.type == "roof") roofs.push_back({target.entity_id, target.transform});
+            else if (found->second.type == "slab")
+                slabs.push_back(slabTransformGeometryIntent(target.entity_id, target.transform));
+            else throw std::invalid_argument("This coordinated group requires actual roofs and horizontal assemblies.");
+        }
+        const auto roof_physical = roofs.empty() ? source.entities() :
+            replay_roof_rigid_transform_entities(source.entities(), roofs);
+        std::vector<RoofEditIntent> roof_edits;
+        for (const auto& operation : roofs)
+            if (const auto captured = capture_roof_rigid_transform(source.entities().at(operation.roof_id),
+                    roof_physical.at(operation.roof_id), operation.transform)) {
+                RoofEditIntent edit;
+                edit.roof_id = operation.roof_id;
+                edit.transform = *captured;
+                roof_edits.push_back(std::move(edit));
+            }
+        if (!slabs.empty()) {
+            const auto slab_physical = replay_slab_geometry_entities(source.entities(), slabs);
+            std::erase_if(slabs, [&](const auto& edit) {
+                const auto& original = source.entities().at(edit.slab_id);
+                const auto& changed = slab_physical.at(edit.slab_id);
+                return original == changed && original.properties.dump() == changed.properties.dump() &&
+                    original.extensions.dump() == changed.extensions.dump();
+            });
+        }
+        if (roof_edits.empty())
+            return slabs.empty() ? Command{ApplyEntityChanges{source.revision(), {}, {}, message}} :
+                sourceDerivedSlabGeometryEditCommand(source, slabs, message);
+        if (slabs.empty()) return sourceDerivedRoofMathEditCommand(source, roof_physical, std::move(roof_edits), message);
+
+        const auto roof_command = sourceDerivedRoofMathEditCommand(source, roof_physical, roof_edits, message);
+        const auto slab_command = sourceDerivedSlabGeometryEditCommand(source, slabs, message);
+        const auto* ordinary_roofs = std::get_if<ApplyEntityChanges>(&roof_command);
+        const auto* ordinary_slabs = std::get_if<ApplyEntityChanges>(&slab_command);
+        if (ordinary_roofs && ordinary_slabs) {
+            ApplyEntityChanges command{source.revision(), {}, {}, message};
+            std::map<std::string, Entity, std::less<>> changes;
+            for (const auto* family : {ordinary_roofs, ordinary_slabs}) {
+                if (!family->asset_changes.empty() || family->expected_revision != source.revision())
+                    throw std::invalid_argument("A coordinated transform must retain the source revision and shared assets.");
+                for (const auto& change : family->entity_changes) {
+                    if (change.kind != EntityChangeKind::upsert)
+                        throw std::invalid_argument("A coordinated transform cannot remove source owners.");
+                    const auto [found, inserted] = changes.emplace(change.entity.id, change.entity);
+                    if (!inserted && (found->second != change.entity ||
+                        found->second.properties.dump() != change.entity.properties.dump() ||
+                        found->second.extensions.dump() != change.entity.extensions.dump()))
+                        throw std::invalid_argument("The selected families require conflicting changes to one source owner.");
+                }
+            }
+            for (auto& [id, entity] : changes) { (void)id; command.entity_changes.push_back(EntityChange::upsert(std::move(entity))); }
+            const auto candidate = Document::preview_command(source, Command{command});
+            validate_architectural_geometry_changes(source, candidate);
+            return command;
+        }
+        ConstraintAuthoringIntent semantic;
+        semantic.message = message;
+        auto intent = make_phase_constraint_authoring_intent(source, semantic);
+        json coordinated{{"version", 1}, {"roof_replacement", nullptr}, {"slab_replacement", nullptr},
+            {"ordinary_roof_edits", json::array()}, {"ordinary_slab_geometry", json::array()}};
+        const auto replacement = [&](const Command& family, const char* key) {
+            const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&family);
+            if (!phase || !phase->phase_constraint_authoring_completion || phase->phase_constraint_authoring_intent.is_null())
+                throw std::invalid_argument("A proposed family transform lost its actual source authority.");
+            const auto leaf = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
+            if (leaf.expected_revision != intent.expected_revision || leaf.source_snapshot_digest != intent.source_snapshot_digest ||
+                leaf.source_entities_digest != intent.source_entities_digest || leaf.source_authoring_digest != intent.source_authoring_digest ||
+                leaf.source_saved_revision != intent.source_saved_revision || leaf.phase_selections != intent.phase_selections)
+                throw std::invalid_argument("The coordinated families were prepared from different source snapshots.");
+            return std::string_view(key) == "roof_replacement" ? leaf.roof_replacement : leaf.slab_replacement;
+        };
+        if (ordinary_roofs)
+            for (const auto& edit : roof_edits) coordinated.at("ordinary_roof_edits").push_back(encode_roof_edit_intent(edit));
+        else coordinated.at("roof_replacement") = replacement(roof_command, "roof_replacement");
+        if (ordinary_slabs)
+            for (const auto& edit : slabs) coordinated.at("ordinary_slab_geometry").push_back(encode_slab_geometry_edit_intent(edit));
+        else coordinated.at("slab_replacement") = replacement(slab_command, "slab_replacement");
+        intent.coordinated_replacements = std::move(coordinated);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision = source.revision();
+        command.message = message;
+        command.phase_constraint_authoring_completion = true;
+        command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
+        const auto candidate = Document::preview_command(source, Command{command});
+        validate_architectural_geometry_changes(source, candidate);
+        return command;
+    }
+
     std::optional<Command> reviewAlternativeSlabEdit(const Command& requested) {
         const auto* raw = std::get_if<ApplyEntityChanges>(&requested);
         if (!raw) return requested;
@@ -42626,6 +42744,10 @@ private:
         if (!constrained || !constrained->phase_constraint_authoring_completion ||
             constrained->phase_constraint_authoring_intent.is_null()) return command;
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
+        if (!intent.coordinated_replacements.is_null()) {
+            proposed_ids = alternativePhysicalReplacementIdentities(intent);
+            return command;
+        }
         if (!intent.slab_demolition.is_null()) return command;
         if (!intent.slab_replacement.is_null()) {
             proposed_ids = decode_phase_slab_replacement_authoring(intent.slab_replacement).identities;
@@ -49504,6 +49626,10 @@ private:
                     (void)command_to_json(Command{direct});
                     const auto after=replay_phase_constraint_authoring(source.entities(),direct.phase_constraint_authoring_intent);
                     const auto intent=decode_phase_constraint_authoring_intent(direct.phase_constraint_authoring_intent);
+                    if (!intent.coordinated_replacements.is_null())
+                        for (const auto& [original, fresh] : alternativePhysicalReplacementIdentities(intent)) {
+                            (void)fresh; targets.insert(original);
+                        }
                     if (!intent.wall_replacement.is_null()) {
                         const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
                         // Shared originals remain byte-identical, but replacing
@@ -49886,6 +50012,13 @@ private:
             for (const auto& target : physical_targets) roofs.push_back({target.entity_id, target.transform});
             return sourceDerivedRoofTransformCommand(source, roofs, "Move roofs on Site");
         }
+        if (geometry_ids.isEmpty() && dimension_ids.isEmpty() && annotation_targets.empty() &&
+            reference_targets.empty() && embedded_targets.empty() && !physical_targets.empty() &&
+            std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
+                const auto& type = source.entities().at(target.entity_id).type;
+                return type == "roof" || type == "slab";
+            }))
+            return sourceDerivedRoofSlabTransformCommand(source, physical_targets, "Move roofs and horizontal assemblies on Site");
         const auto geometry_operation=geometry_ids.isEmpty() ? PlanarTransform{} : selected_operation(geometry_ids.front());
         bool per_owner_geometry=!geometry_ids.isEmpty() && std::any_of(geometry_ids.begin(),geometry_ids.end(),[&](const auto& id) {
             return !equivalentPlanOperators(geometry_operation,selected_operation(id));

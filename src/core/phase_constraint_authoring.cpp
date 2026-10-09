@@ -1,6 +1,7 @@
 #include "sketch/phase_constraint_authoring.hpp"
 
 #include "sketch/boundary_transform.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_digest.hpp"
@@ -10,6 +11,10 @@
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
+#include "sketch/model_phases.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/slab_hosted_geometry_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -17,6 +22,7 @@
 #include <initializer_list>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 
 namespace sketch {
 namespace {
@@ -27,8 +33,9 @@ constexpr std::size_t proof_budget = 1024 * 1024;
 [[noreturn]] void invalid(const char* reason) { throw std::invalid_argument(reason); }
 void resource_shape(const Json& root) {
     std::set<std::string,std::less<>> owners;
+    std::size_t nodes=0;
     const auto walk=[&](const auto& self,const Json& value,std::size_t depth) -> void {
-        if (depth>64) invalid("Phase constraint proof nesting budget exceeded");
+        if (depth>64 || ++nodes>4*1024*1024) invalid("Phase constraint proof node/nesting budget exceeded");
         if (value.is_array()) {
             if (value.size()>4096) invalid("Phase constraint proof collection budget exceeded");
             for (const auto& row : value) self(self,row,depth+1);
@@ -277,6 +284,251 @@ void selections(const Json& value) {
         if (!row.at("alternative_id").is_null()) (void)id(row.at("alternative_id"));
     }
 }
+
+struct CoordinatedReplacements {
+    std::optional<PhaseRoofReplacementAuthoring> roof;
+    std::optional<PhaseSlabReplacementAuthoring> slab;
+    std::vector<RoofEditIntent> ordinary_roofs;
+    std::vector<SlabGeometryEditIntent> ordinary_slabs;
+};
+CoordinatedReplacements coordinated(const Json& value) {
+    resource_shape(value);
+    if (value.dump().size()>proof_budget) invalid("Coordinated replacement proof byte budget exceeded");
+    keys(value,{"version","roof_replacement","slab_replacement","ordinary_roof_edits","ordinary_slab_geometry"});
+    if (!value.at("version").is_number_integer() || value.at("version")!=1)
+        invalid("Coordinated replacements require version one");
+    bounded_array(value.at("ordinary_roof_edits"));
+    bounded_array(value.at("ordinary_slab_geometry"));
+    CoordinatedReplacements result;
+    if (!value.at("roof_replacement").is_null()) {
+        const auto& leaf=value.at("roof_replacement");
+        result.roof=decode_phase_roof_replacement_authoring(leaf);
+        if (result.roof->demolition || encode_phase_roof_replacement_authoring(*result.roof).dump()!=leaf.dump())
+            invalid("Coordinated roof replacement requires canonical replacement authority without demolition");
+    }
+    if (!value.at("slab_replacement").is_null()) {
+        const auto& leaf=value.at("slab_replacement");
+        result.slab=decode_phase_slab_replacement_authoring(leaf);
+        if (result.slab->slab_geometry.empty() || !result.slab->slab_profiles.empty() || !result.slab->slab_stacks.empty() ||
+            encode_phase_slab_replacement_authoring(*result.slab).dump()!=leaf.dump())
+            invalid("Coordinated horizontal replacement requires canonical geometry authority");
+    }
+    std::set<std::string,std::less<>> roof_targets, slab_targets;
+    for (const auto& row:value.at("ordinary_roof_edits")) {
+        auto edit=decode_roof_edit_intent(row);
+        if (encode_roof_edit_intent(edit).dump()!=row.dump() || !roof_targets.insert(edit.roof_id).second)
+            invalid("Coordinated ordinary roofs require unique canonical typed edits");
+        result.ordinary_roofs.push_back(std::move(edit));
+    }
+    for (const auto& row:value.at("ordinary_slab_geometry")) {
+        auto edit=decode_slab_geometry_edit_intent(row);
+        if (encode_slab_geometry_edit_intent(edit).dump()!=row.dump() || !slab_targets.insert(edit.slab_id).second)
+            invalid("Coordinated ordinary slabs require unique canonical typed geometry");
+        result.ordinary_slabs.push_back(std::move(edit));
+    }
+    if (static_cast<int>(result.roof.has_value())+static_cast<int>(!result.ordinary_roofs.empty())!=1 ||
+        static_cast<int>(result.slab.has_value())+static_cast<int>(!result.ordinary_slabs.empty())!=1 ||
+        (!result.roof && !result.slab))
+        invalid("Coordinated replacements require exactly one lane per family and at least one replacement");
+    if (result.roof && result.slab && (result.roof->registry_id!=result.slab->registry_id ||
+        result.roof->alternative_id!=result.slab->alternative_id))
+        invalid("Coordinated replacement leaves must name the same actual registry and alternative");
+    return result;
+}
+
+bool exact(const Entity& a,const Entity& b) {
+    return a==b && a.properties.dump()==b.properties.dump() && a.extensions.dump()==b.extensions.dump();
+}
+bool exact_json(const Json& a,const Json& b) { return a==b && a.dump()==b.dump(); }
+
+// Explicit paths only. Removing these arrays from each independently replayed
+// envelope must leave the exact source envelope. This is not JSON merge authority.
+struct AppendPath { Json::json_pointer path; const char* identity_key; };
+std::vector<AppendPath> append_paths(const Entity& source) {
+    std::vector<AppendPath> result;
+    if (source.type=="model_phases") {
+        const auto model=ModelPhases::from_json(source.properties.at("model"));
+        result.push_back({Json::json_pointer("/model/entity_ids"),nullptr});
+        if (!model.active_alternative()) invalid("Shared phase append requires an actual saved active alternative");
+        const auto& alternatives=source.properties.at("model").at("alternatives");
+        for (std::size_t i=0;i<alternatives.size();++i) if (alternatives[i].at("id")==*model.active_alternative()) {
+            const auto prefix="/model/alternatives/"+std::to_string(i);
+            result.push_back({Json::json_pointer(prefix+"/proposed_ids"),nullptr});
+            result.push_back({Json::json_pointer(prefix+"/demolished_ids"),nullptr});
+        }
+    } else if (source.type==kAnnotationEntityType) {
+        validate_annotation_entity(source);
+        result.push_back({Json::json_pointer("/state/overrides"),"target_id"});
+    } else if (source.type==kSheetViewEntityType) {
+        validate_sheet_view_entity(source);
+        const auto& views=source.properties.at("model").at("views");
+        for (std::size_t i=0;i<views.size();++i) {
+            const auto prefix="/model/views/"+std::to_string(i);
+            const auto& view=views[i];
+            if (view.contains("object_ids")) result.push_back({Json::json_pointer(prefix+"/object_ids"),nullptr});
+            const auto& presentation=view.at("presentation");
+            if (presentation.contains("appearance") && !presentation.at("appearance").is_null())
+                result.push_back({Json::json_pointer(prefix+"/presentation/appearance/objects"),"object_id"});
+            if (view.contains("overlays")) result.push_back({Json::json_pointer(prefix+"/overlays"),"id"});
+        }
+    } else if (source.type=="assembly_model")
+        invalid("Coordinated replacements have overlapping hosted catalog consequences; catalog rows cannot be merged");
+    else invalid("Coordinated replacements have conflicting physical changes to the same actual entity");
+    return result;
+}
+Entity merge_append_container(const Entity& source,const Entity& roof,const Entity& slab) {
+    const auto paths=append_paths(source);
+    auto roof_envelope=roof, slab_envelope=slab, merged=source;
+    for (const auto& allowed:paths) {
+        const auto& retained=source.properties.at(allowed.path);
+        const auto& roof_rows=roof.properties.at(allowed.path);
+        const auto& slab_rows=slab.properties.at(allowed.path);
+        if (!retained.is_array() || !roof_rows.is_array() || !slab_rows.is_array() ||
+            roof_rows.size()<retained.size() || slab_rows.size()<retained.size())
+            invalid("Coordinated shared container must retain source array types and prefixes");
+        for (std::size_t i=0;i<retained.size();++i)
+            if (!exact_json(retained[i],roof_rows[i]) || !exact_json(retained[i],slab_rows[i]))
+                invalid("Coordinated shared container changed a retained source row or its order");
+        auto& rows=merged.properties.at(allowed.path);
+        std::set<std::string,std::less<>> destinations;
+        const auto destination=[&](const Json& row) {
+            const auto& value=allowed.identity_key ? row.at(allowed.identity_key) : row;
+            // The admitted source codecs own these reference alphabets. View
+            // aliases and annotation targets need not use entity-ID spelling.
+            if (!value.is_string()) invalid("Coordinated append destination must be an admitted string reference");
+            return value.get<std::string>();
+        };
+        for (const auto& row:retained) destinations.insert(destination(row));
+        for (const auto* additions:{&roof_rows,&slab_rows})
+            for (std::size_t i=retained.size();i<additions->size();++i) {
+                const auto& row=(*additions)[i];
+                if (!destinations.insert(destination(row)).second)
+                    invalid("Coordinated shared container append destinations overlap");
+                rows.push_back(row);
+            }
+        roof_envelope.properties.at(allowed.path)=retained;
+        slab_envelope.properties.at(allowed.path)=retained;
+    }
+    if (!exact(source,roof_envelope) || !exact(source,slab_envelope))
+        invalid("Coordinated shared container changed fields outside its explicit append authority");
+    if (source.type=="model_phases") (void)ModelPhases::from_json(merged.properties.at("model"));
+    else if (source.type==kAnnotationEntityType) validate_annotation_entity(merged);
+    else validate_sheet_view_entity(merged);
+    return merged;
+}
+
+// Bound the whole composed map, including opaque keys/strings which reserve
+// identity destinations in the existing leaf admission policy.
+void coordinated_map_budget(const Entities& entities) {
+    if (entities.size()>250000) invalid("Coordinated replacement entity budget exceeded");
+    std::size_t nodes=0, bytes=0, serialized_bytes=0;
+    const auto add_bytes=[&](std::size_t count) {
+        if (count>64*1024*1024-bytes) invalid("Coordinated replacement JSON byte budget exceeded");
+        bytes+=count;
+    };
+    const auto walk=[&](const auto& self,const Json& value,std::size_t depth)->void {
+        if (depth>64 || ++nodes>4*1024*1024) invalid("Coordinated replacement JSON node/nesting budget exceeded");
+        if (value.is_string()) add_bytes(value.get_ref<const std::string&>().size());
+        else if (value.is_object()) for (const auto& [key,child]:value.items()) {
+            add_bytes(key.size()); self(self,child,depth+1);
+        } else if (value.is_array()) for (const auto& child:value) self(self,child,depth+1);
+        else if (value.is_number_float() && !std::isfinite(value.get<double>()))
+            invalid("Coordinated replacement source number must be finite");
+    };
+    for (const auto& [key,entity]:entities) {
+        if (key!=entity.id || !entity.properties.is_object() || !entity.extensions.is_object())
+            invalid("Coordinated replacement requires actual identified entity envelopes");
+        (void)id(key); add_bytes(key.size()); add_bytes(entity.type.size());
+        walk(walk,entity.properties,0); walk(walk,entity.extensions,0);
+        // Reserve the enclosing map key and complete entity envelope as well
+        // as its JSON payloads; opaque numeric arrays consume the same budget.
+        const auto envelope_bytes=2*key.size()+entity.type.size()+128;
+        if (envelope_bytes>64*1024*1024-serialized_bytes)
+            invalid("Coordinated replacement serialized map byte budget exceeded");
+        serialized_bytes+=envelope_bytes;
+        for (const auto* payload:{&entity.properties,&entity.extensions}) {
+            const auto count=payload->dump().size();
+            if (count>64*1024*1024-serialized_bytes)
+                invalid("Coordinated replacement serialized map byte budget exceeded");
+            serialized_bytes+=count;
+        }
+    }
+}
+
+Entities replay_coordinated(const Entities& source,const Json& value) {
+    const auto lanes=coordinated(value);
+    coordinated_map_budget(source);
+    auto roof_candidate=source, slab_candidate=source;
+    std::vector<std::string> roof_fresh, slab_fresh;
+    std::set<std::string,std::less<>> retained_baselines;
+    if (lanes.roof) {
+        const auto& leaf=*lanes.roof;
+        const auto plan=inspect_phase_roof_replacement_plan(source,leaf.seed_roof_ids,leaf.registry_id,
+            leaf.alternative_id,leaf.phase_qualified_joins);
+        auto replay=replay_phase_roof_replacement(source,plan,leaf.identities,leaf.roof_profiles,
+            leaf.roof_opening_edits,leaf.roof_edits,leaf.ordinary_roof_edits,leaf.phase_qualified_joins);
+        roof_candidate=std::move(replay.entities); roof_fresh=std::move(replay.fresh_identity_ids);
+        retained_baselines.insert(plan.required_entity_ids.begin(),plan.required_entity_ids.end());
+    } else {
+        const auto partition=partition_phase_roof_geometry_edits(source,lanes.ordinary_roofs);
+        if (partition.replacement || !partition.baseline_roof_edits.empty())
+            invalid("Coordinated ordinary roof lane requires actual ordinary/proposed membership");
+        roof_candidate=replay_roof_edit_entities(source,lanes.ordinary_roofs);
+        roof_fresh=new_roof_opening_identity_ids(source,roof_edit_opening_intents(lanes.ordinary_roofs));
+    }
+    if (lanes.slab) {
+        const auto& leaf=*lanes.slab;
+        const auto plan=inspect_phase_slab_replacement_plan(source,leaf.seed_slab_ids,leaf.registry_id,leaf.alternative_id);
+        auto replay=replay_phase_slab_replacement(source,plan,leaf.identities,leaf.slab_profiles,
+            leaf.slab_stacks,leaf.slab_geometry,leaf.ordinary_geometry,leaf.hosted_instance_identities,
+            leaf.coordinate_ordinary_hosted_geometry);
+        slab_candidate=std::move(replay.entities); slab_fresh=std::move(replay.fresh_identity_ids);
+        retained_baselines.insert(plan.seed_slab_ids.begin(),plan.seed_slab_ids.end());
+    } else {
+        const auto partition=partition_phase_slab_geometry_edits(source,lanes.ordinary_slabs);
+        if (partition.replacement || !partition.baseline_geometry.empty())
+            invalid("Coordinated ordinary slab lane requires actual ordinary/proposed membership");
+        slab_candidate=replay_slab_geometry_with_hosted_entities(source,lanes.ordinary_slabs);
+    }
+    std::set<std::string,std::less<>> fresh;
+    for (const auto* destinations:{&roof_fresh,&slab_fresh}) for (const auto& destination:*destinations) {
+        // Leaf admission owns entity/child syntax. Its derived presentation
+        // aliases may combine two valid IDs and exceed an entity ID's length.
+        if (destination.empty()) invalid("Coordinated replacement has an empty derived identity destination");
+        if (!fresh.insert(destination).second) invalid("Coordinated replacement fresh identity destinations overlap");
+        if (fresh.size()>4096) invalid("Coordinated replacement identity budget exceeded");
+    }
+    auto result=source;
+    for (const auto& [key,original]:source) {
+        if (!roof_candidate.contains(key) || !slab_candidate.contains(key))
+            invalid("Coordinated replacement cannot remove an actual source owner");
+        const auto& roof=roof_candidate.at(key); const auto& slab=slab_candidate.at(key);
+        const bool roof_changed=!exact(original,roof), slab_changed=!exact(original,slab);
+        if (roof_changed && slab_changed) result.at(key)=merge_append_container(original,roof,slab);
+        else if (roof_changed) result.at(key)=roof;
+        else if (slab_changed) result.at(key)=slab;
+    }
+    for (const auto* candidate:{&roof_candidate,&slab_candidate})
+        for (const auto& [key,entity]:*candidate) if (!source.contains(key)) {
+            if (!fresh.contains(key) || !result.emplace(key,entity).second)
+                invalid("Coordinated replacement new entity destination is unreserved or overlapping");
+        }
+    for (const auto& key:retained_baselines) if (!exact(source.at(key),result.at(key)))
+        invalid("Coordinated replacement changed a retained baseline envelope");
+    coordinated_map_budget(result);
+    std::set<std::string,std::less<>> members;
+    for (const auto& [key,entity]:result) if (entity.type=="model_phases") {
+        (void)key;
+        const auto model=ModelPhases::from_json(entity.properties.at("model"));
+        for (const auto& member:model.entity_ids()) {
+            if (!result.contains(member) || !is_model_phase_entity_type(result.at(member).type) || !members.insert(member).second)
+                invalid("Coordinated merged phase membership is missing, unsupported or overlapping");
+        }
+    }
+    (void)constraint_phase_scope(result);
+    validate_roof_join_ownership(result);
+    return result;
+}
 } // namespace
 
 nlohmann::json phase_constraint_authoring_selections(const Entities& source) {
@@ -297,10 +549,11 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     selections(value.phase_selections);
     const auto exclusive_operations = static_cast<int>(!value.wall_replacement.is_null()) +
         static_cast<int>(!value.opening_demolition.is_null()) + static_cast<int>(!value.roof_replacement.is_null()) +
-        static_cast<int>(!value.slab_replacement.is_null()) + static_cast<int>(!value.slab_demolition.is_null());
+        static_cast<int>(!value.slab_replacement.is_null()) + static_cast<int>(!value.slab_demolition.is_null()) +
+        static_cast<int>(!value.coordinated_replacements.is_null());
     if (exclusive_operations > 1)
         invalid("Active design operations cannot borrow another replacement or demolition authority");
-    Json result={{"version",!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    Json result={{"version",!value.coordinated_replacements.is_null()?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
@@ -351,6 +604,14 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Slab demolition cannot borrow geometry or relationship authority");
         result["slab_demolition"] = value.slab_demolition;
     }
+    if (!value.coordinated_replacements.is_null()) {
+        (void)coordinated(value.coordinated_replacements);
+        ConstraintAuthoringIntent empty;
+        empty.message=value.intent.message;
+        if (encode_intent(value.intent)!=encode_intent(empty))
+            invalid("Coordinated replacements cannot borrow other geometry or relationship authority");
+        result["coordinated_replacements"]=value.coordinated_replacements;
+    }
     // dump validates UTF-8 as well as the complete byte resource bound.
     resource_shape(result);
     if (result.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
@@ -365,6 +626,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool roof=value.is_object() && value.contains("version") && value.at("version")==4;
     const bool slab=value.is_object() && value.contains("version") && value.at("version")==5;
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
+    const bool coordinated_replacements=value.is_object() && value.contains("version") && value.at("version")==7;
     if (replacement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
     else if (demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
@@ -375,9 +637,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","slab_replacement"});
     else if (slab_demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","slab_demolition"});
+    else if (coordinated_replacements) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","coordinated_replacements"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -411,7 +675,30 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         if (result.slab_demolition.is_null()) invalid("Version six requires slab demolition decisions");
         (void)decode_slab_demolition_intent(result.slab_demolition);
     }
+    if (coordinated_replacements) {
+        result.coordinated_replacements=value.at("coordinated_replacements");
+        if (result.coordinated_replacements.is_null()) invalid("Version seven requires coordinated replacement decisions");
+        (void)coordinated(result.coordinated_replacements);
+    }
     if (encode_phase_constraint_authoring_intent(result)!=value) invalid("Phase constraint proof is not canonical");
+    return result;
+}
+
+std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_components(
+    const PhaseConstraintAuthoringIntent& intent) {
+    (void)encode_phase_constraint_authoring_intent(intent);
+    if (intent.coordinated_replacements.is_null()) return {intent};
+    std::vector<PhaseConstraintAuthoringIntent> result;
+    for (const auto* family:{"roof_replacement","slab_replacement"}) {
+        const auto& leaf=intent.coordinated_replacements.at(family);
+        if (leaf.is_null()) continue;
+        auto component=intent;
+        component.coordinated_replacements=nullptr;
+        if (std::string_view(family)=="roof_replacement") component.roof_replacement=leaf;
+        else component.slab_replacement=leaf;
+        (void)encode_phase_constraint_authoring_intent(component);
+        result.push_back(std::move(component));
+    }
     return result;
 }
 
@@ -428,6 +715,8 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
     if (decoded.source_entities_digest!=entity_map_digest(source) ||
         decoded.phase_selections!=phase_constraint_authoring_selections(source))
         invalid("Phase constraint proof does not describe the actual source entities and saved choices");
+    if (!decoded.coordinated_replacements.is_null())
+        return replay_coordinated(source,decoded.coordinated_replacements);
     if (!decoded.opening_demolition.is_null())
         return replay_phase_opening_demolition_entities(source,
             decode_phase_opening_demolition_intent(decoded.opening_demolition));

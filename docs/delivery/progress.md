@@ -14,6 +14,27 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 coordinated roof and floor group source integration
+
+Mixed roof and horizontal selections now derive each family's transform from
+the same actual source. Ordinary groups combine their admitted physical changes;
+groups needing design replacement carry both typed family lanes in one source
+proof. Registry and presentation consequences merge only along explicit append
+paths, retaining source rows, order and other values. Baseline owners remain
+exact, and conflicting catalog or physical consequences refuse.
+
+Canvas dragging, transform actions and Site movement enter the coordinated path.
+Preview aliases and selection redirection enumerate both actual replacement
+families. Document replay retains source fences, baseline guards and complete
+history/asset/child identity reservations, including ordinary roof openings.
+Outer authoring seven/native 117/extraction 115 retains the coordinated meaning
+through saved history. Other mixed baseline families remain separate.
+
+Independent source review approved the integrated codec, composition, controller,
+publication and historical format slice. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations ran. Compilation, interaction and
+storage round trips remain unverified; the installed candidate is unchanged.
+
 ### October 8 qualified baseline roof demolition source integration
 
 Baseline Cut/Delete now derives active joined roof roles before allocating

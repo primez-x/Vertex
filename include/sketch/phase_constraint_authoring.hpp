@@ -2,6 +2,8 @@
 
 #include "sketch/constraint_authoring.hpp"
 
+#include <vector>
+
 namespace sketch {
 
 // Versioned semantic authority. Geometry payloads are outputs of replay;
@@ -30,11 +32,21 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect six: registry-only demolition of actual shared baseline slabs.
     // No replacement identity or ordinary geometry authority accompanies it.
     nlohmann::json slab_demolition=nullptr;
+    // Dialect seven: one actual-source roof lane and one horizontal geometry
+    // lane. Each is either a replacement leaf or a nonempty ordinary typed
+    // list; at least one replacement is required. Historical leaves retain
+    // their own codecs and replay semantics.
+    nlohmann::json coordinated_replacements=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
     const nlohmann::json& value);
 [[nodiscard]] nlohmann::json encode_phase_constraint_authoring_intent(
+    const PhaseConstraintAuthoringIntent& intent);
+// Historical identity/model guards enumerate the actual replacement leaves.
+// Ordinary historical intents return themselves; coordinated ordinary lists
+// do not acquire replacement authority through this enumeration.
+[[nodiscard]] std::vector<PhaseConstraintAuthoringIntent> phase_constraint_replacement_components(
     const PhaseConstraintAuthoringIntent& intent);
 [[nodiscard]] PhaseConstraintAuthoringIntent make_phase_constraint_authoring_intent(
     const DocumentSnapshot& source, const ConstraintAuthoringIntent& intent);
