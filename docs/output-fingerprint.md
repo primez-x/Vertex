@@ -22,7 +22,8 @@ backup names and digests, including zero-byte originals and absent paths.
 Destinations must be distinct regular sibling files; symbolic links and changed
 destinations are refused. A late failure restores the committed prefix in
 reverse order and attempts every restoration. Failed restoration retains the
-complete recovery set and reports its location. Successful publication or
+complete recovery set and reports its location plus each failed destination,
+operation and filesystem error. Successful publication or
 complete rollback removes these temporary recovery files.
 
 This is checked sequential publication with recovery, not a filesystem

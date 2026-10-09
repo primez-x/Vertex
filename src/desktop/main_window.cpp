@@ -36241,35 +36241,64 @@ public:
         for (auto* file : files) {
             if (file->isOpen()) file->cancelWriting();
         }
-        bool restored = true;
+        QStringList restoration_errors;
         for (auto restored_index = committed; restored_index > 0;) {
             const auto& entry = previous[--restored_index];
+            const auto record_failure = [&](const QString& stage, const QString& error) {
+                restoration_errors.push_back(QStringLiteral("%1: %2 (%3)").arg(entry.path, stage, error));
+            };
             try {
                 if (!entry.existed) {
-                    restored = (!QFileInfo::exists(entry.path) || QFile::remove(entry.path)) && restored;
+                    QFile published(entry.path);
+                    const QFileInfo current(entry.path);
+                    if ((current.exists() || current.isSymLink()) && !published.remove())
+                        record_failure(QStringLiteral("remove new file"), published.errorString());
                     continue;
                 }
                 QFile backup(entry.backup);
+                if (!backup.open(QIODevice::ReadOnly)) {
+                    record_failure(QStringLiteral("open recovery copy"), backup.errorString());
+                    continue;
+                }
                 QSaveFile restore(entry.path);
                 restore.setDirectWriteFallback(false);
-                bool complete = backup.open(QIODevice::ReadOnly) && restore.open(QIODevice::WriteOnly);
+                if (!restore.open(QIODevice::WriteOnly)) {
+                    record_failure(QStringLiteral("open restoration destination"), restore.errorString());
+                    continue;
+                }
+                bool complete = true;
                 while (complete && !backup.atEnd()) {
                     const auto chunk = backup.read(1024 * 1024);
-                    complete = !chunk.isEmpty() && restore.write(chunk) == chunk.size();
+                    if (chunk.isEmpty()) {
+                        record_failure(QStringLiteral("read recovery copy"), backup.errorString());
+                        complete = false;
+                    } else if (restore.write(chunk) != chunk.size()) {
+                        record_failure(QStringLiteral("write restored file"), restore.errorString());
+                        complete = false;
+                    }
                 }
-                complete = complete && backup.error() == QFileDevice::NoError &&
-                    restore.flush() && restore.error() == QFileDevice::NoError && restore.commit();
-                restored = complete && restored;
+                if (!complete) continue;
+                if (backup.error() != QFileDevice::NoError) {
+                    record_failure(QStringLiteral("read recovery copy"), backup.errorString());
+                } else if (!restore.flush() || restore.error() != QFileDevice::NoError) {
+                    record_failure(QStringLiteral("flush restored file"), restore.errorString());
+                } else if (!restore.commit()) {
+                    record_failure(QStringLiteral("commit restored file"), restore.errorString());
+                }
+            } catch (const std::exception& error) {
+                record_failure(QStringLiteral("restore file"), QString::fromUtf8(error.what()));
             } catch (...) {
-                restored = false;
+                record_failure(QStringLiteral("restore file"), QStringLiteral("unexpected restoration failure"));
             }
         }
+        const bool restored = restoration_errors.isEmpty();
         recovery.setAutoRemove(restored);
         setError(restored
             ? QStringLiteral("%1 export could not publish %2: %3. Previous files are unchanged.")
                 .arg(output_kind, QFileInfo(previous[committed].path).fileName(), publication_error)
-            : QStringLiteral("%1 export could not publish %2: %3. Recovery is incomplete; previous files are retained in %4.")
-                .arg(output_kind, QFileInfo(previous[committed].path).fileName(), publication_error, recovery.path()));
+            : QStringLiteral("%1 export could not publish %2: %3. Recovery is incomplete; previous files are retained in %4.\n%5")
+                .arg(output_kind, QFileInfo(previous[committed].path).fileName(), publication_error,
+                     recovery.path(), restoration_errors.join(QLatin1Char('\n'))));
         return false;
     }
 

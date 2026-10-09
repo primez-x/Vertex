@@ -24,20 +24,38 @@ Prior files are streamed to a sibling recovery directory with explicit absence
 records and digests; changed, linked, nonregular or duplicate destinations
 refuse publication. Late failures restore the committed prefix in reverse
 order. Incomplete restoration retains the complete recovery set and reports its
-location. DXF/IFC reports now bind the actual staged output digest. This replaces
+location, each failed destination, operation and filesystem error. DXF/IFC
+reports now bind the actual staged output digest. This replaces
 the previous post-output metadata saves and memory-only drawing-set rollback.
 
 Independent read-only approach review identified durable recovery copies,
 exception-contained rollback, metadata-first ordering and explicit path/presence
 handling; these are implemented in source. Sequential recovery does not claim
 multi-file filesystem atomicity, concurrent-writer protection or power-loss
-durability. Integrated source review remains in progress.
+durability. Independent integrated source review at 4092244 found one P2:
+restoration errors discarded the failed file/operation details. The correction
+now retains those details while continuing all other restorations. It found no
+other actionable publication-integrity fault. The retained drawing-set failure
+injection currently fails before the first commit; it does not establish late
+rollback coverage. Compilation and actual failure paths remain unverified.
 
 Assistance label anchors, language commands and parsed label content now
 explicitly reject embedded NUL bytes. Their previous C-string search discarded
 NUL from the prohibited set. The assistance documentation and current registry
 notes now reflect the existing isolated offline OCR source and bundled English
 model while preserving historical snapshots and unresolved qualification.
+
+The current appraisal-source audit also found that a legacy decimal area factor
+could round to exact unity and qualify physical GLA even though its stored value
+was not one. The source now withholds that narrowly ambiguous legacy case and
+asks the user to edit the area factor, preserving its entered value. Actual
+unit factors, explicit rational factors and other legacy conversions retain
+their behavior. Existing invalid-input handling withholds the boundary trace
+and property totals until resolved. This changes no measurement-standard rule.
+Root integrated source review is complete. Independent source review approved
+the factor correction and per-file restoration diagnostics with no actionable
+findings. It confirmed that factor editing remains available while values are
+withheld and stores explicit rational authority. This is source reasoning only.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or installations
 ran. These source changes are uncompiled and runtime unverified; the installed

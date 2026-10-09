@@ -116,6 +116,11 @@ ExactRational factor(const Json& properties) {
         throw std::invalid_argument("factor is outside the supported range");
     constexpr std::int64_t scale = 1000000000;
     const auto numerator = static_cast<std::int64_t>(std::llround(value * scale));
+    // Legacy decimal conversion must not turn an entered adjustment into the
+    // exact unity factor required for physical appraisal qualification.
+    if (numerator == scale && value != 1.0)
+        throw std::invalid_argument("The stored area factor is not exactly 1. Edit the area factor "
+                                    "to preserve its entered value before qualifying physical area.");
     const auto divisor = std::gcd(numerator, scale);
     return {numerator / divisor, scale / divisor};
 }
