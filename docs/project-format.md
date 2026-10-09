@@ -1,4 +1,28 @@
-# Vertex project formats v1 through v121
+# Vertex project formats v1 through v122
+
+## Architectural imperial input spelling (v122)
+
+Native format 122 and JSON/assets extraction version 120 retain quantities
+entered with `foot`/`feet`, `inch`/`inches`, or one architectural hyphen between
+explicit feet and inches, such as `12'-6"` and `12'-0"`. The leading sign
+applies to the entire quantity; the inch component is unsigned. Existing unit
+suffixes, exact fractions, scientific decimals and default units retain their
+meanings. Missing inch units, repeated separators and signs within the inch
+component refuse rather than becoming subtraction or another quantity.
+
+Quantity and hosted-opening input receipts retain the exact original spelling
+and rational metres. Their existing shapes and versions are unchanged; the
+reader floor identifies the expanded accepted grammar. Receipt-shaped cores
+through retained history and historical entity data acquire the floor even if
+the edit is undone or abandoned. Typed survey reports and their original reports
+also fence distances, numeric curve inputs and closure tolerances whose units
+come from the report's input provenance. Unrelated labels, survey source text,
+angular curve inputs and arbitrary strings do not acquire a quantity grammar
+floor. Scientific receipt detection
+retains its existing version 101 requirement when the new spelling is absent.
+
+Source implementation is uncompiled. Manual input, save/reopen, extraction and
+recovery remain unverified; no build, test, package or installation was run.
 
 ## Source-derived uniform roof scaling (v121)
 

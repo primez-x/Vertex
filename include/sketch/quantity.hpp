@@ -31,8 +31,9 @@ struct Quantity {
 };
 
 // Parses exact decimal, scientific-decimal and fractional input. Supported suffixes are m, mm, cm,
-// ft, in, apostrophe, and quote. A missing suffix uses default_unit. A leading
-// sign applies to an entire feet-plus-inches expression.
+// ft, foot, feet, in, inch, inches, apostrophe, and quote. A missing suffix uses
+// default_unit. Feet plus explicit inches may use one architectural hyphen
+// before unsigned inches. A leading sign applies to the entire expression.
 [[nodiscard]] Quantity parse_quantity(
     std::string_view expression,
     Unit default_unit = default_input_unit);

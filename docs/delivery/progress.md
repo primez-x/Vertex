@@ -14,6 +14,26 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 shared architectural measurement input source integration
+
+The shared quantity parser now accepts explicit architectural feet/inches
+notation, including `12'-6"`, `12'-0"`, `12ft-6in` and spelled-out units.
+The leading sign applies to the whole expression; the inch component remains
+unsigned. Existing exact decimal/fraction/scientific arithmetic and default
+units remain in use. The exact original text stays in the quantity receipt.
+Manual wall and other measurement fields share this parser rather than each
+implementing a different notation.
+
+Native 122/extraction 120 fences the expanded grammar in current and retained
+historical quantity/opening receipts, as well as typed survey distances, numeric
+curve inputs and closure tolerances. Labels and unrelated source strings do
+not acquire a grammar floor. Independent integrated source review approved
+after correcting inherited-unit survey and historical wall/construction receipt
+coverage. Root source review and the scoped whitespace check passed. No builds,
+tests, probes, scripts, native jobs, launches, packages or installations ran;
+manual input and storage behavior remain unverified. The installed candidate
+is unchanged.
+
 ### October 8 architectural dimension recognition source integration
 
 Offline dimension extraction now keeps feet/inches labels such as `12'-6"`

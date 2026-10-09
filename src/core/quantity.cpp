@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -334,6 +335,47 @@ struct NumberAndUnit {
     Unit unit;
 };
 
+struct FeetMarker {
+    std::size_t position{std::string_view::npos};
+    std::size_t length{};
+};
+
+FeetMarker find_feet_marker(std::string_view lowered) {
+    FeetMarker result;
+    for (std::size_t index = 0; index < lowered.size(); ++index) {
+        std::size_t length = 0;
+        if (lowered[index] == '\'') {
+            length = 1;
+        } else {
+            for (const auto alias : {std::string_view{"feet"}, std::string_view{"foot"},
+                                     std::string_view{"ft"}}) {
+                if (lowered.substr(index).starts_with(alias) &&
+                    (index == 0 || std::isalpha(static_cast<unsigned char>(lowered[index - 1])) == 0) &&
+                    (index + alias.size() == lowered.size() ||
+                     std::isalpha(static_cast<unsigned char>(lowered[index + alias.size()])) == 0)) {
+                    length = alias.size();
+                    break;
+                }
+            }
+        }
+        if (length == 0) continue;
+        if (result.position != std::string_view::npos) {
+            throw std::invalid_argument("quantity contains multiple feet markers");
+        }
+        result = {index, length};
+        index += length - 1;
+    }
+    return result;
+}
+
+std::size_t inch_suffix_length(std::string_view lowered) {
+    for (const auto suffix : {std::string_view{"inches"}, std::string_view{"inch"},
+                              std::string_view{"in"}, std::string_view{"\""}}) {
+        if (lowered.ends_with(suffix)) return suffix.size();
+    }
+    return 0;
+}
+
 NumberAndUnit parse_simple(std::string_view body, Unit default_unit) {
     const auto lowered = lowercase(body);
     std::size_t suffix_length = 0;
@@ -344,11 +386,8 @@ NumberAndUnit parse_simple(std::string_view body, Unit default_unit) {
     } else if (lowered.ends_with("cm")) {
         suffix_length = 2;
         unit = Unit::centimetre;
-    } else if (lowered.ends_with("in")) {
-        suffix_length = 2;
-        unit = Unit::inch;
-    } else if (lowered.ends_with('"')) {
-        suffix_length = 1;
+    } else if (const auto inches = inch_suffix_length(lowered); inches != 0) {
+        suffix_length = inches;
         unit = Unit::inch;
     } else if (lowered.ends_with('m')) {
         suffix_length = 1;
@@ -384,34 +423,25 @@ Quantity parse_quantity(std::string_view expression, Unit default_unit) {
         }
 
         const auto lowered = lowercase(body);
-        const auto apostrophe = lowered.find('\'');
-        const auto feet_text = lowered.find("ft");
-        if (apostrophe != std::string::npos && feet_text != std::string::npos) {
-            throw std::invalid_argument("quantity contains multiple feet markers");
-        }
+        const auto feet_marker = find_feet_marker(lowered);
 
         ExactRational exact_metres;
         Unit entered_unit = default_unit;
-        const auto feet_marker = apostrophe != std::string::npos ? apostrophe : feet_text;
-        if (feet_marker != std::string::npos) {
-            const auto marker_length = apostrophe != std::string::npos ? std::size_t{1} : std::size_t{2};
-            if (lowered.find(apostrophe != std::string::npos ? "'" : "ft",
-                             feet_marker + marker_length) != std::string::npos) {
-                throw std::invalid_argument("quantity contains multiple feet markers");
-            }
-            const auto feet = parse_unsigned_number(body.substr(0, feet_marker));
-            auto remainder = trim(body.substr(feet_marker + marker_length));
+        if (feet_marker.position != std::string_view::npos) {
+            const auto feet = parse_unsigned_number(body.substr(0, feet_marker.position));
+            auto remainder = trim(body.substr(feet_marker.position + feet_marker.length));
             exact_metres = multiply(feet, unit_factor(Unit::foot));
             entered_unit = Unit::foot;
 
             if (!remainder.empty()) {
+                const auto architectural_separator = remainder.front() == '-';
+                if (architectural_separator) {
+                    remainder.remove_prefix(1);
+                    remainder = trim(remainder);
+                }
                 const auto lowered_remainder = lowercase(remainder);
-                std::size_t inch_marker_length = 0;
-                if (lowered_remainder.ends_with("in")) {
-                    inch_marker_length = 2;
-                } else if (lowered_remainder.ends_with('"')) {
-                    inch_marker_length = 1;
-                } else {
+                const auto inch_marker_length = inch_suffix_length(lowered_remainder);
+                if (inch_marker_length == 0) {
                     throw std::invalid_argument("feet plus inches requires an inch marker");
                 }
                 const auto inches = parse_unsigned_number(

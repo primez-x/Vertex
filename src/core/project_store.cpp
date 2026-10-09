@@ -260,7 +260,25 @@ bool has_architectural_reflection_v68_semantics(const Entity& entity) {
 std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                                                bool reading_legacy_lineage = false) {
     std::uint32_t required = 1;
-    const auto scientific_receipt=[](const nlohmann::json& root) {
+    const auto extended_imperial=[](std::string text) {
+        for (auto& character : text)
+            if (character >= 'A' && character <= 'Z') character = static_cast<char>(character - 'A' + 'a');
+        if (text.find("feet") != std::string::npos || text.find("foot") != std::string::npos ||
+            text.find("inch") != std::string::npos) return true;
+        for (const auto marker : {std::string_view{"ft"}, std::string_view{"'"}}) {
+            auto at = text.find(marker);
+            while (at != std::string::npos) {
+                auto next = at + marker.size();
+                while (next < text.size() && (text[next] == ' ' || text[next] == '\t' ||
+                       text[next] == '\r' || text[next] == '\n' || text[next] == '\f' || text[next] == '\v')) ++next;
+                if (next < text.size() && text[next] == '-') return true;
+                at = text.find(marker, at + marker.size());
+            }
+        }
+        return false;
+    };
+    const auto quantity_reader_floor=[&extended_imperial](const nlohmann::json& root) {
+        std::uint32_t floor{};
         std::uint64_t nodes{};
         std::vector<const nlohmann::json*> pending{&root};
         while (!pending.empty()) {
@@ -270,24 +288,76 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 storage_error(StorageErrorCode::resource_limit,"Quantity reader-floor scan exceeds its JSON budget");
             if (value.is_object()) {
                 const auto expression=value.find("original_expression");
-                if (value.value("version",nlohmann::json())==1 && expression!=value.end() && expression->is_string() &&
-                    value.contains("entered_unit") && value.at("entered_unit").is_string() &&
+                const bool quantity = value.value("version",nlohmann::json())==1 &&
+                    value.contains("entered_unit") && value.at("entered_unit").is_string();
+                // Construction and legacy wall length inputs are unversioned;
+                // physical curve length receipts have their own version two.
+                const bool imperial_quantity = (!value.contains("version") ||
+                    value.value("version",nlohmann::json())==1 || value.value("version",nlohmann::json())==2) &&
+                    value.contains("entered_unit") && value.at("entered_unit").is_string();
+                const bool opening_input = (!value.contains("version") || value.value("version",nlohmann::json())==1) &&
+                    value.contains("default_unit") && value.at("default_unit").is_string();
+                if ((imperial_quantity || opening_input) && expression!=value.end() && expression->is_string() &&
                     value.contains("exact_metres") && value.at("exact_metres").is_object() &&
                     value.at("exact_metres").contains("numerator") && value.at("exact_metres").contains("denominator")) {
                     const auto& text=expression->get_ref<const std::string&>();
-                    for (std::size_t index=1;index+1<text.size();++index) {
+                    // Only receipt-shaped cores acquire a syntax reader floor;
+                    // annotation/source text and arbitrary strings do not.
+                    if (extended_imperial(text)) return 122U;
+                    if (quantity) for (std::size_t index=1;index+1<text.size();++index) {
                         if (text[index]!='e' && text[index]!='E') continue;
                         if ((text[index-1]<'0' || text[index-1]>'9') && text[index-1]!='.') continue;
                         auto next=index+1;
                         if (text[next]=='+' || text[next]=='-') ++next;
-                        if (next<text.size() && text[next]>='0' && text[next]<='9') return true;
+                        if (next<text.size() && text[next]>='0' && text[next]<='9') floor = 101U;
                     }
                 }
             }
             if (value.is_array() || value.is_object())
                 for (const auto& child:value) pending.push_back(&child);
         }
-        return false;
+        return floor;
+    };
+    const auto survey_quantity_reader_floor=[&extended_imperial](const Entity& entity) {
+        if (entity.type!="measurement_boundary" || !entity.extensions.is_object()) return 0U;
+        const auto wrapper=entity.extensions.find("survey_source");
+        const auto known=[](const nlohmann::json& value) {
+            return value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+                (value.at("version")==1 || value.at("version")==2);
+        };
+        if (wrapper==entity.extensions.end() || !known(*wrapper)) return 0U;
+        const auto entered_quantity=[&extended_imperial](const nlohmann::json& receipt) {
+            if (!receipt.is_object() || !receipt.contains("original_expression") ||
+                !receipt.at("original_expression").is_string() || !receipt.contains("exact_metres")) return false;
+            const auto& exact=receipt.at("exact_metres");
+            return exact.is_object() && exact.contains("numerator") && exact.contains("denominator") &&
+                exact.at("numerator").is_number_integer() && exact.at("denominator").is_number_integer() &&
+                extended_imperial(receipt.at("original_expression").get<std::string>());
+        };
+        for (const auto* key:{"report","original_report"}) {
+            const auto report=wrapper->find(key);
+            if (report==wrapper->end() || !known(*report)) continue;
+            const auto input=report->find("input_provenance");
+            if (input==report->end() || !known(*input) || input->at("version")!=report->at("version") ||
+                !input->contains("default_unit") ||
+                (input->at("default_unit")!="m" && input->at("default_unit")!="ft")) continue;
+            // Survey quantities inherit this actual typed input's unit. Source
+            // text, calls and angular curve receipts are not quantity grammars.
+            const auto tolerance=input->find("closure_tolerance_expression");
+            if (tolerance!=input->end() && tolerance->is_string() &&
+                extended_imperial(tolerance->get<std::string>())) return 122U;
+            const auto distances=input->find("distances");
+            if (distances!=input->end() && distances->is_array())
+                for (const auto& receipt:*distances) if (entered_quantity(receipt)) return 122U;
+            const auto curves=input->find("curves");
+            if (curves!=input->end() && curves->is_array()) for (const auto& receipt:*curves) {
+                if (!receipt.is_object() || receipt.value("version",nlohmann::json())!=1 ||
+                    !receipt.contains("construction_kind")) continue;
+                if ((receipt.at("construction_kind")=="chord_height" ||
+                     receipt.at("construction_kind")=="chord_arc_length") && entered_quantity(receipt)) return 122U;
+            }
+        }
+        return 0U;
     };
     const auto typed_authoring=[](const nlohmann::json& value) {
         return value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
@@ -327,10 +397,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         return false;
     };
     for (const auto& revision : snapshot.history()) {
-        if (required<101 && revision.boundary_geometry_edit &&
-            scientific_receipt(encode_boundary_geometry_edit(*revision.boundary_geometry_edit))) required=101;
-        if (required<101 && revision.boundary_constraint_changes &&
-            scientific_receipt(command_to_json(Command{*revision.boundary_constraint_changes}))) required=101;
+        if (required<122 && revision.boundary_geometry_edit)
+            required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
+        if (required<122 && revision.boundary_constraint_changes)
+            required=std::max(required,quantity_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (revision.boundary_geometry_edit && typed_edit(*revision.boundary_geometry_edit)) required=std::max(required,31U);
         if (revision.boundary_geometry_edit && revision.boundary_geometry_edit->wall_source_translation)
             required = std::max(required, 53U);
@@ -647,7 +717,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                     instance->value("schema", nlohmann::json()) == "sketch.assembly-instance.v2")
                     required = std::max(required, 115U);
             }
-            if (required<101 && (scientific_receipt(entity.properties) || scientific_receipt(entity.extensions))) required=101;
+            if (required<122)
+                required=std::max({required,quantity_reader_floor(entity.properties),quantity_reader_floor(entity.extensions),
+                    survey_quantity_reader_floor(entity)});
             if (entity.type == "slab" && entity.extensions.contains("slab_layer_stack_retirement"))
                 required = std::max(required, 103U);
             if (entity.type == "slab" && entity.extensions.contains("slab_geometry_derivations")) {
@@ -2304,6 +2376,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 122 &&
          sqlite3_column_int(user_version.get(), 0) != 121 &&
          sqlite3_column_int(user_version.get(), 0) != 120 &&
          sqlite3_column_int(user_version.get(), 0) != 119 &&
@@ -2880,6 +2953,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=122)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 122 for architectural feet-and-inches input");
         if (required_format>=121)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 121 for source-derived uniform roof scaling");
         if (required_format>=120)
