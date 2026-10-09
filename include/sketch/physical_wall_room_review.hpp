@@ -142,7 +142,8 @@ void validate_physical_wall_room_profile_review_source(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,const Command& command);
 [[nodiscard]] DocumentSnapshot preview_physical_wall_room_review_geometry(
-    const DocumentSnapshot& source,const Command& geometry_command);
+    const DocumentSnapshot& source,const Command& geometry_command,
+    const nlohmann::json& retained_geometry_proof=nlohmann::json(nullptr));
 // The report and intent belong to the detached geometry snapshot above. The
 // returned single command is independently previewed against the original
 // source; neither preparation publishes the intermediate geometry state.
@@ -150,14 +151,16 @@ void validate_physical_wall_room_profile_review_source(
 // entity-map hash retains the derived geometry that was actually reviewed.
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_after_geometry(
     const DocumentSnapshot& source,const Command& geometry_command,
-    const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent);
+    const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent,
+    const nlohmann::json& retained_geometry_proof=nlohmann::json(nullptr));
 // Each plain envelope-eighteen/version-one or envelope-twenty-nine/version-two
 // command belongs to the preceding detached
 // snapshot, starting with the geometry preview. Two to thirty-two disjoint
 // context/plane reviews become one original-source-bound atomic command.
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_batch_after_geometry(
     const DocumentSnapshot& source,const Command& geometry_command,
-    const std::vector<ApplyBoundaryConstraintChanges>& staged_room_commands);
+    const std::vector<ApplyBoundaryConstraintChanges>& staged_room_commands,
+    const nlohmann::json& retained_geometry_proof=nlohmann::json(nullptr));
 // Narrow compatibility helpers retain the direct curve-construction contract.
 [[nodiscard]] DocumentSnapshot preview_physical_wall_room_review_curve(
     const DocumentSnapshot& source,const Command& curve_command);

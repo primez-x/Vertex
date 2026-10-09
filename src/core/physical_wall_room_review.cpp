@@ -1,4 +1,5 @@
 #include "sketch/physical_wall_room_review.hpp"
+#include "sketch/mixed_wall_removal.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/assembly_document_adapter.hpp"
@@ -1460,7 +1461,18 @@ bool exact_assets(const std::map<std::string,Asset,std::less<>>& left,
     }
     return true;
 }
-Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& geometry_command) {
+Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& geometry_command,
+    const Json& retained_geometry_proof=Json(nullptr)) {
+    if (!retained_geometry_proof.is_null()) {
+        const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
+        if (decoded.command.expected_revision!=source.revision() ||
+            command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
+            invalid("explicit mixed wall proof differs from the captured raw geometry command");
+        const auto admitted=encode_mixed_wall_deletion_review_proof(source,decoded.intent,geometry_command);
+        if (admitted.dump()!=retained_geometry_proof.dump())
+            invalid("explicit mixed wall proof differs from complete captured-source admission");
+        return retained_geometry_proof;
+    }
     if (is_physical_wall_room_deletion_review_command(geometry_command))
         return encode_physical_wall_deletion_review_proof(source,geometry_command);
     if (is_physical_wall_room_profile_review_command(geometry_command)) return command_to_json(geometry_command);
@@ -1869,6 +1881,10 @@ Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,c
 
 void validate_physical_wall_room_deletion_review_source(const Entities& source,const Entities& candidate,const Command& command,
     const Json& retained_proof) {
+    if (retained_proof.is_object() && retained_proof.value("kind",std::string{})=="mixed_wall_deletion") {
+        validate_mixed_wall_deletion_review_source(source,candidate,command,retained_proof);
+        return;
+    }
     if (!is_physical_wall_room_deletion_review_command(command)) invalid("unsupported direct wall deletion command");
     const auto& ordinary=std::get<ApplyEntityChanges>(command);
     std::vector<std::string> wall_ids;
@@ -2038,9 +2054,10 @@ void validate_physical_wall_room_profile_review_source(const Entities& source,co
     }
 }
 
-DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapshot& source,const Command& geometry_command) {
+DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapshot& source,const Command& geometry_command,
+    const Json& retained_geometry_proof) {
     if (!source.is_editable()) invalid("captured document is read-only");
-    const auto proof=room_review_geometry_proof(source,geometry_command);
+    const auto proof=room_review_geometry_proof(source,geometry_command,retained_geometry_proof);
     // The original child command owns all ordinary admission and consequences.
     auto derived=Document::preview_command(source,geometry_command);
     const bool deletion=is_physical_wall_room_deletion_review_command(geometry_command);
@@ -2062,8 +2079,9 @@ DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapsh
 }
 
 PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_after_geometry(const DocumentSnapshot& source,
-    const Command& geometry_command,const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent) {
-    const auto derived=preview_physical_wall_room_review_geometry(source,geometry_command);
+    const Command& geometry_command,const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent,
+    const Json& retained_geometry_proof) {
+    const auto derived=preview_physical_wall_room_review_geometry(source,geometry_command,retained_geometry_proof);
     const auto prepared=prepare_physical_wall_room_review(derived,report,intent);
     auto retained_intent=decode_physical_wall_room_review_intent(prepared.intent);
     // The report was reviewed against the detached wall geometry. The final
@@ -2078,7 +2096,7 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_af
     else command.message=std::get<ApplyBoundaryConstraintChanges>(geometry_command).message;
     command.room_review_completion=true;
     command.room_review_intent=encode_physical_wall_room_review_intent(retained_intent);
-    command.room_review_geometry_completion=true;command.room_review_geometry_proof=room_review_geometry_proof(source,geometry_command);
+    command.room_review_geometry_completion=true;command.room_review_geometry_proof=room_review_geometry_proof(source,geometry_command,retained_geometry_proof);
     auto exact=Document::preview_command(source,command);
     if (exact.entities()!=prepared.entities || exact.assets()!=derived.assets())
         invalid("complete wall geometry and room preview differs from the prepared decisions");
@@ -2086,9 +2104,11 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_af
 }
 
 PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_batch_after_geometry(const DocumentSnapshot& source,
-    const Command& geometry_command,const std::vector<ApplyBoundaryConstraintChanges>& staged_room_commands) {
-    require_room_review_batch_size(staged_room_commands.size());
-    auto stage=preview_physical_wall_room_review_geometry(source,geometry_command);
+    const Command& geometry_command,const std::vector<ApplyBoundaryConstraintChanges>& staged_room_commands,
+    const Json& retained_geometry_proof) {
+    if (staged_room_commands.size()!=1 || retained_geometry_proof.is_null())
+        require_room_review_batch_size(staged_room_commands.size());
+    auto stage=preview_physical_wall_room_review_geometry(source,geometry_command,retained_geometry_proof);
     RoomReviewBatchGuard guard(stage.entities());
     std::vector<Json> retained_intents;retained_intents.reserve(staged_room_commands.size());
     const auto original_snapshot_digest=document_snapshot_digest(source);
@@ -2114,9 +2134,9 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_ba
     command.room_review_completion=true;
     command.room_review_intent=std::move(retained_intents.front());
     command.room_review_additional_intents.assign(retained_intents.begin()+1,retained_intents.end());
-    command.room_review_batch_completion=true;
+    command.room_review_batch_completion=staged_room_commands.size()>1;
     command.room_review_geometry_completion=true;
-    command.room_review_geometry_proof=room_review_geometry_proof(source,geometry_command);
+    command.room_review_geometry_proof=room_review_geometry_proof(source,geometry_command,retained_geometry_proof);
     auto exact=Document::preview_command(source,Command{command});
     if (!exact_entities(exact.entities(),stage.entities()) || !exact_assets(exact.assets(),stage.assets()))
         invalid("atomic wall geometry and room batch differs from the cumulative reviewed decisions");

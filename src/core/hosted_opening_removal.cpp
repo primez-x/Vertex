@@ -564,15 +564,23 @@ void refuse_qualified_references(const Entity& entity, const Keys& instances, co
     }
 }
 
-std::optional<ApplyEntityChanges> derive(const DocumentSnapshot& source,
-    const std::vector<std::string>& selection, const std::string& message) {
-    const auto& actual = source.entities();
-    if (selection.empty() || std::none_of(selection.begin(), selection.end(), [&](const auto& id) {
+bool has_selected_opening(const Entities& actual, const std::vector<std::string>& selection) {
+    return !selection.empty() && std::any_of(selection.begin(), selection.end(), [&](const auto& id) {
             const auto found = actual.find(id); return found != actual.end() && found->second.type == "opening";
-        })) return std::nullopt;
+        });
+}
+struct OpeningRemoval {
+    Entities entities;
+    Ids hosts;
+};
+// Keep history-policy resolution at its original source/candidate admission
+// points. Actual-map callers supply a fixed captured mode; the snapshot path
+// reads the real history only after the preceding source preflight succeeds.
+template<class ConstraintPolicy>
+std::optional<OpeningRemoval> derive(const Entities& actual,
+    const std::vector<std::string>& selection, ConstraintPolicy active_phase_constraints) {
+    if (!has_selected_opening(actual, selection)) return std::nullopt;
     if (selection.size() > selection_limit) reject("opening selection budget exceeded");
-    if (!source.is_editable()) throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
-    if (message.size() > 4096) reject("command message budget exceeded");
     bounds(actual);
     const auto source_output_views = output_view_ids(actual);
     const auto phase = phases(actual); const auto organization = organize_project(actual);
@@ -606,8 +614,8 @@ std::optional<ApplyEntityChanges> derive(const DocumentSnapshot& source,
     NativeBudget native_budget;
     const auto source_wall_work = charge_wall_dependencies(actual, hosts, phase.scope, 1, native_budget);
     // Admit source constraints before dependent deletion could hide malformed
-    // bindings. The snapshot's actual validation policy remains authoritative.
-    const auto unsupported = source.uses_active_phase_constraints()
+    // bindings. The caller's captured validation policy remains authoritative.
+    const auto unsupported = active_phase_constraints()
         ? validate_active_phase_constraint_integrity(actual) : validate_constraint_integrity(actual);
     if (unsupported) reject(*unsupported);
 
@@ -761,13 +769,10 @@ std::optional<ApplyEntityChanges> derive(const DocumentSnapshot& source,
     }
     if (phases(candidate).scope.inactive_owner_ids != phase.scope.inactive_owner_ids)
         reject("removal changes retained inactive ownership");
-    ApplyEntityChanges command; command.expected_revision = source.revision(); command.message = message;
     for (const auto& [id, entity] : actual) {
         const auto after = candidate.find(id);
         if (after != candidate.end() && exact(entity, after->second)) continue;
         removable(actual, phase, id); context(actual, organization, entity);
-        if (after == candidate.end()) command.entity_changes.push_back(EntityChange::erase(id));
-        else command.entity_changes.push_back(EntityChange::upsert(after->second));
     }
     // Only after complete analytical preflight do native factories see the
     // actual full source. Removed descriptors can never escape this admission.
@@ -783,9 +788,29 @@ std::optional<ApplyEntityChanges> derive(const DocumentSnapshot& source,
         (void)transform_assembly_shape(make_opening_assembly_geometry(component.wall, component.cut,
             component.assembly, component.operation).shape, component.transform);
     validate_active_wall_physical_dependencies(candidate, hosts, true);
-    const auto final_constraints = source.uses_active_phase_constraints()
+    const auto final_constraints = active_phase_constraints()
         ? validate_active_phase_constraint_integrity(candidate) : validate_constraint_integrity(candidate);
     if (final_constraints) reject(*final_constraints);
+    return OpeningRemoval{std::move(candidate), std::move(hosts)};
+}
+
+std::optional<ApplyEntityChanges> derive_snapshot(const DocumentSnapshot& source,
+    const std::vector<std::string>& selection, const std::string& message) {
+    const auto& actual = source.entities();
+    if (!has_selected_opening(actual, selection)) return std::nullopt;
+    if (selection.size() > selection_limit) reject("opening selection budget exceeded");
+    if (!source.is_editable()) throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
+    if (message.size() > 4096) reject("command message budget exceeded");
+    const auto removal = derive(actual, selection, [&source] { return source.uses_active_phase_constraints(); });
+    if (!removal) return std::nullopt;
+    const auto& candidate = removal->entities;
+    ApplyEntityChanges command; command.expected_revision = source.revision(); command.message = message;
+    for (const auto& [id, entity] : actual) {
+        const auto after = candidate.find(id);
+        if (after != candidate.end() && exact(entity, after->second)) continue;
+        if (after == candidate.end()) command.entity_changes.push_back(EntityChange::erase(id));
+        else command.entity_changes.push_back(EntityChange::upsert(after->second));
+    }
     // The real captured snapshot supplies history, assets and policy admission.
     // Never fabricate a snapshot from a filtered/truncated entity map.
     const auto preview = Document::preview_command(source, Command{command});
@@ -793,14 +818,31 @@ std::optional<ApplyEntityChanges> derive(const DocumentSnapshot& source,
         reject("final raw command admission changed unrelated state or made the document read-only");
     for (const auto& [id, entity] : candidate) if (!exact(entity, preview.entities().at(id)))
         reject("final raw command admission changed the exact retained source representation: " + id);
-    validate_architectural_geometry_changes(source, preview, std::vector<std::string>(hosts.begin(), hosts.end()));
+    validate_architectural_geometry_changes(source, preview,
+        std::vector<std::string>(removal->hosts.begin(), removal->hosts.end()));
     return command;
 }
 } // namespace
 
+std::optional<std::map<std::string, Entity, std::less<>>> replay_hosted_opening_removal(
+    const std::map<std::string, Entity, std::less<>>& actual,
+    const std::vector<std::string>& selected_opening_ids, bool active_phase_constraints) {
+    try {
+        auto removal = derive(actual, selected_opening_ids, [active_phase_constraints] { return active_phase_constraints; });
+        if (!removal) return std::nullopt;
+        return std::move(removal->entities);
+    }
+    catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
+    catch (const Standard_Failure& error) {
+        const auto* message_text = error.GetMessageString();
+        reject(std::string("native source/candidate admission failed: ") +
+            (message_text ? message_text : "Open CASCADE failure"));
+    }
+}
+
 std::optional<ApplyEntityChanges> prepare_hosted_opening_removal(const DocumentSnapshot& source,
     const std::vector<std::string>& selected_opening_ids, const std::string& message) {
-    try { return derive(source, selected_opening_ids, message); }
+    try { return derive_snapshot(source, selected_opening_ids, message); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message_text = error.GetMessageString();

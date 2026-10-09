@@ -48,6 +48,7 @@
 #include "sketch/hosted_opening_removal.hpp"
 #include "sketch/opening_host_geometry.hpp"
 #include "sketch/wall_join_removal.hpp"
+#include "sketch/mixed_wall_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
@@ -31463,6 +31464,103 @@ public:
         });
     }
 
+    bool hasMixedPhysicalWallSelection(const DocumentSnapshot& source) const {
+        bool wall=false,other=false;
+        for (const auto& id:m_selected_ids) {
+            const auto actual=source.entities().find(id.toStdString());
+            if (actual!=source.entities().end() && actual->second.type=="wall") wall=true;
+            else other=true;
+        }
+        return wall && other;
+    }
+
+    bool removeSelectedMixedPhysicalWalls(const DocumentSnapshot& source,bool cut) {
+        const auto authority=captureSourceEditAuthority(source);
+        if (authority.selection.isEmpty() || authority.selection.size()>1000 ||
+            !authority.selection.contains(authority.context.selected_id))
+            throw std::invalid_argument("The mixed selection changed. Select the objects again.");
+        MixedWallRemovalIntent intent;
+        std::vector<std::string> other_ids;
+        std::vector<std::pair<std::string,std::string>> components;
+        for (const auto& selected:authority.selection) {
+            if (annotationActionTarget(source,selected,false))
+                throw std::invalid_argument("Drawing annotations require their own removal review in this mixed selection.");
+            const auto id=selected.toStdString();
+            const auto actual=source.entities().find(id);
+            if (actual==source.entities().end()) {
+                const auto component=geometric_assembly_for_child(source,id);
+                if (!component) throw std::invalid_argument("The selected component no longer has an unambiguous source owner.");
+                components.emplace_back(component->assembly_catalog_id,component->instance.id);
+            } else if (actual->second.type=="wall") intent.wall_ids.push_back(id);
+            else if (actual->second.type=="roof" || actual->second.type=="slab" || actual->second.type=="stair" ||
+                actual->second.type=="railing" || structuralObject(actual->second)) other_ids.push_back(id);
+            else throw std::invalid_argument("This mixed selection includes an object requiring a separate source review: "+id);
+        }
+        std::sort(intent.wall_ids.begin(),intent.wall_ids.end());
+        const bool site=siteCanvas(m_architecturalCanvas);
+        const auto site_generation=m_site_publication_generation;
+        const auto require_current=[&] {
+            if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
+                m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The mixed removal, project, selection or workspace changed. Select the objects again.");
+            if (site) {
+                requireSitePublicationCurrent();
+                if (site_generation!=m_site_publication_generation || !m_site_publication_source ||
+                    fullSnapshotDigest(*m_site_publication_source)!=authority.source_digest)
+                    throw std::invalid_argument("The displayed Site Plan changed during mixed removal. Select the objects again.");
+            }
+        };
+        require_current();
+        validate_mixed_wall_removal_source_admission(source.entities());
+        QStringList wall_selection;
+        for (const auto& id:intent.wall_ids) wall_selection.push_back(QString::fromStdString(id));
+        const auto graph=clipboardSelectionGraph(source,true,&wall_selection);
+        for (const auto& id:intent.wall_ids)
+            if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="wall";}))
+                throw std::invalid_argument("The mixed selection no longer contains its actual physical wall roots.");
+        intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components));
+        const auto joins=inspect_physical_wall_join_removal(source.entities(),intent.wall_ids);
+        if (!joins.ready()) {
+            for (const auto& diagnostic:joins.diagnostics) if (diagnostic.blocking)
+                throw std::invalid_argument(diagnostic.reason);
+            throw std::invalid_argument("The selected walls have an unresolved join dependency.");
+        }
+        auto occupied=retainedSlabIdentityNames(source,true);
+        for (const auto& [original,ids]:intent.other.roof_additional_identities) {
+            (void)original;occupied.insert(ids.begin(),ids.end());
+        }
+        for (const auto& [original,count]:joins.additional_identity_counts)
+            for (std::size_t index=0;index<count;++index) {
+                auto id=new_id("wall_join");
+                while (!occupied.insert(id).second) id=new_id("wall_join");
+                intent.wall_additional_identities[original].push_back(std::move(id));
+            }
+        QString clipboard_text;
+        QClipboard* clipboard=nullptr;
+        if (cut) {
+            const auto encoded=clipboardSelectionPayload(source);
+            clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
+            clipboard=QGuiApplication::clipboard();
+            if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+        }
+        require_current();
+        const Command command=prepare_mixed_wall_removal(source,intent,
+            cut ? "Cut walls and selected architectural objects" : "Delete walls and selected architectural objects");
+        const auto proof=encode_mixed_wall_deletion_review_proof(source,intent,command);
+        const auto candidate=preview_physical_wall_room_review_geometry(source,command,proof);
+        const auto primary_wall=intent.wall_ids.front();
+        const auto groups=affectedPhysicalWallRoomGroups(source,candidate.entities(),primary_wall,true);
+        require_current();
+        std::optional<Command> final=command;
+        if (!groups.empty()) final=reviewPhysicalWallRoomsAfterGeometry(source,candidate,command,
+            primary_wall,authority,owner,require_current,proof);
+        if (!final) { clearError();refreshInspector();return false; }
+        require_current();
+        if (!applyAuthoredCommand(*final)) return false;
+        if (cut) clipboard->setText(clipboard_text,QClipboard::Clipboard);
+        m_selected_id.clear();m_selected_ids.clear();clearError();refresh();return true;
+    }
+
     bool removeSelectedHostedOpenings(const DocumentSnapshot& source,bool cut) {
         const auto authority=captureSourceEditAuthority(source);
         if (authority.selection.isEmpty() || !authority.selection.contains(authority.context.selected_id))
@@ -31624,6 +31722,7 @@ public:
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,true);
+            if (hasMixedPhysicalWallSelection(source)) return removeSelectedMixedPhysicalWalls(source,true);
             const auto authority = captureSourceEditAuthority(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
@@ -32157,6 +32256,7 @@ public:
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,false);
+            if (hasMixedPhysicalWallSelection(source)) return removeSelectedMixedPhysicalWalls(source,false);
             const auto authority = captureSourceEditAuthority(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
@@ -51965,9 +52065,11 @@ private:
                     // Retain the declared grouped wall inventory while resolving
                     // its original child footprint beneath the atomic room event.
                     const auto& proof=value.room_review_geometry_proof;
-                    const auto geometry_command=proof.value("kind",std::string{})=="physical_wall_deletion"
+                    const bool mixed=proof.value("kind",std::string{})=="mixed_wall_deletion";
+                    const auto geometry_command=mixed ? Command{decode_mixed_wall_deletion_review_proof(proof).command} :
+                        proof.value("kind",std::string{})=="physical_wall_deletion"
                         ? decode_physical_wall_deletion_review_proof(proof) : command_from_json(proof);
-                    const auto candidate=preview_physical_wall_room_review_geometry(source,geometry_command);
+                    const auto candidate=preview_physical_wall_room_review_geometry(source,geometry_command,mixed ? proof : json(nullptr));
                     if (is_physical_wall_room_deletion_review_command(geometry_command))
                         validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),geometry_command,proof);
                     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
@@ -59693,12 +59795,12 @@ public:
     std::optional<ApplyBoundaryConstraintChanges> reviewPhysicalWallRoomsAfterGeometry(
         const DocumentSnapshot& source, const DocumentSnapshot& candidate, const Command& geometry_command,
         const std::string& selected_wall_id, const SourceEditAuthority& authority, QWidget* parent,
-        const std::function<void()>& additional_fence = {}) {
+        const std::function<void()>& additional_fence = {},const json& retained_geometry_proof=json(nullptr)) {
         if (fullSnapshotDigest(source) != authority.source_digest)
             throw std::invalid_argument("The wall proposal does not belong to the captured original project.");
         // Source-dependent admission must precede granting grouped selection
         // authority; a broad raw deletion shape alone cannot grant it.
-        const auto derived = preview_physical_wall_room_review_geometry(source, geometry_command);
+        const auto derived = preview_physical_wall_room_review_geometry(source, geometry_command,retained_geometry_proof);
         const bool deletion = is_physical_wall_room_deletion_review_command(geometry_command);
         bool deletion_selection = false;
         if (deletion) {
@@ -59721,6 +59823,22 @@ public:
             deletion_selection = actual_wall_roots && selected_walls == removed_walls &&
                 authority.selection.contains(authority.context.selected_id) &&
                 authority.context.selected_id == QString::fromStdString(selected_wall_id);
+            if (!retained_geometry_proof.is_null()) {
+                const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
+                std::set<std::string> expected(decoded.intent.wall_ids.begin(),decoded.intent.wall_ids.end());
+                expected.insert(decoded.intent.other.object_ids.begin(),decoded.intent.other.object_ids.end());
+                const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                for (const auto& key:decoded.intent.other.components) expected.insert(aliases.at(key));
+                std::set<std::string> actual;
+                bool unambiguous=true;
+                for (const auto& id:authority.selection) {
+                    actual.insert(id.toStdString());
+                    if (annotationActionTarget(source,id,false)) unambiguous=false;
+                }
+                const std::set<std::string> declared_walls(decoded.intent.wall_ids.begin(),decoded.intent.wall_ids.end());
+                deletion_selection=unambiguous && actual==expected && declared_walls==removed_walls &&
+                    declared_walls.contains(selected_wall_id) && authority.selection.contains(authority.context.selected_id);
+            }
         }
         const auto coordinated_seed = coordinatedOrdinaryWallRoomReviewRoot(source, geometry_command, authority.selection);
         const bool grouped_geometry = !deletion && authority.selection.size()>1;
@@ -59805,7 +59923,7 @@ public:
             group_status->setTextFormat(Qt::PlainText);
             if (auto* layout = qobject_cast<QVBoxLayout*>(dialog.layout())) layout->insertWidget(0, group_status);
         };
-        if (groups.size() <= 1) {
+        if (groups.size() <= 1 && retained_geometry_proof.is_null()) {
             // An explicit curve review can still inspect fresh spaces when no
             // retained room is affected. Its seed remains the original wall.
             const auto& seed = groups.empty() ? selected_wall_id : groups.front().selected_wall_id;
@@ -59857,7 +59975,7 @@ public:
             room_commands.push_back(room_command);
             (void)current_source();
         }
-        const auto prepared = prepare_physical_wall_room_review_batch_after_geometry(source, geometry_command, room_commands);
+        const auto prepared = prepare_physical_wall_room_review_batch_after_geometry(source, geometry_command, room_commands,retained_geometry_proof);
         if (entity_map_digest(prepared.snapshot.entities()) != entity_map_digest(stage.entities()) ||
             prepared.snapshot.assets() != stage.assets())
             throw std::invalid_argument("The atomic wall and room review differs from the complete staged decisions.");

@@ -164,7 +164,7 @@ public:
         if (!is_physical_wall_room_deletion_review_command(Command{deletion}))
             throw std::invalid_argument("The wall deletion consequence list has no original removal command.");
         auto* page=new QWidget(tabs);auto* layout=new QVBoxLayout(page);
-        auto* help=new QLabel(QStringLiteral("The wall and attached objects below will be removed together. "
+        auto* help=new QLabel(QStringLiteral("The selected objects and attached items below will be removed together. "
             "Choose what happens to the remaining rooms on the Rooms tab."),page);
         help->setWordWrap(true);layout->addWidget(help);
         auto* removals=table(page,"physicalRoomReviewWallRemovals",{"Object","Removal"});
@@ -175,14 +175,42 @@ public:
             const auto& entity=found->second;
             const auto category=entity.type=="wall"?QStringLiteral("Wall"):
                 entity.type=="door"?QStringLiteral("Door"):entity.type=="window"?QStringLiteral("Window"):
-                entity.type=="constraint"?QStringLiteral("Attached constraint"):QStringLiteral("Saved dimension");
+                entity.type=="opening"?QStringLiteral("Wall opening"):entity.type=="roof"?QStringLiteral("Roof"):
+                entity.type=="slab"?QStringLiteral("Floor or ceiling"):entity.type=="stair"?QStringLiteral("Stair"):
+                entity.type=="railing"?QStringLiteral("Railing"):entity.type=="column"?QStringLiteral("Column"):
+                entity.type=="beam"?QStringLiteral("Beam"):entity.type=="wall_join"?QStringLiteral("Wall join"):
+                entity.type=="roof_join"?QStringLiteral("Roof join"):
+                entity.type=="constraint"?QStringLiteral("Attached constraint"):
+                entity.type=="boundary_dimension"?QStringLiteral("Saved dimension"):text(entity.type);
             const auto name=text(entity.properties.value("name",std::string{}));
             const auto row=removals->rowCount();removals->insertRow(row);
             removals->setItem(row,0,new QTableWidgetItem(name.isEmpty()?category:name));
             removals->setItem(row,1,new QTableWidgetItem(category));
         }
+        for (const auto& change:deletion.entity_changes) {
+            if (change.kind!=EntityChangeKind::upsert || change.entity.type!="assembly_model") continue;
+            const auto found=original.entities().find(change.entity.id);
+            if (found==original.entities().end() || found->second.type!="assembly_model")
+                throw std::invalid_argument("An original component catalog is missing.");
+            const auto& before=found->second.properties.at("model").at("instances");
+            const auto& after=change.entity.properties.at("model").at("instances");
+            if (!before.is_array() || !after.is_array())
+                throw std::invalid_argument("Component catalogs require saved instance arrays.");
+            std::set<std::string> remaining;
+            for (const auto& component:after) remaining.insert(component.at("id").get<std::string>());
+            for (const auto& component:before) {
+                const auto id=component.at("id").get<std::string>();
+                if (remaining.contains(id)) continue;
+                const auto row=removals->rowCount();removals->insertRow(row);
+                const auto name=component.value("name",id);
+                auto* item=new QTableWidgetItem(text(name));
+                item->setToolTip(text(found->first+" / "+id));
+                removals->setItem(row,0,item);
+                removals->setItem(row,1,new QTableWidgetItem(QStringLiteral("Placed component")));
+            }
+        }
         layout->addWidget(removals);
-        deletion_acknowledgement=new QCheckBox(QStringLiteral("Remove these wall objects and attached references"),page);
+        deletion_acknowledgement=new QCheckBox(QStringLiteral("Remove these objects and attached references"),page);
         deletion_acknowledgement->setObjectName(QStringLiteral("physicalRoomReviewConfirmWallRemoval"));
         layout->addWidget(deletion_acknowledgement);tabs->addTab(page,QStringLiteral("Wall deletion"));
         QObject::connect(deletion_acknowledgement,&QCheckBox::toggled,dialog,[this]{update();});

@@ -16,6 +16,7 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
-    const std::vector<std::pair<std::string, std::string>>& explicit_components = {});
+    const std::vector<std::pair<std::string, std::string>>& explicit_components = {},
+    bool allow_manufactured_opening_hosts = false);
 
 } // namespace sketch

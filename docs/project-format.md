@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v139
+# Vertex project formats v1 through v140
+
+## Mixed wall and architectural removal with room review (v140)
+
+Native reader 140 and JSON/assets extraction 138 retain the explicit
+`mixed_wall_deletion` child thirty-seven under a single room review or the
+existing batch twenty-seven. Its six fields are `version`, `kind`,
+`expected_revision`, `message`, `intent` and `proof`. The intent has exactly
+`wall_ids`, `wall_additional_identities`, `other_object_ids`, `components` and
+`roof_additional_identities`. Qualified component selections are catalog/local
+identity pairs; aliases do not grant removal authority.
+
+Every producer independently reads the same complete actual source. Selected
+walls retire their attached openings and supported components. Roofs, horizontal
+assemblies, stairs, railings, columns, beams and qualified catalog components
+compose into one candidate. Fresh split-wall and roof destinations share source,
+history, asset and presentation-namespace reservations. The raw child and whole
+candidate must equal independent replay; room identities and lineage remain
+intact until explicit room decisions are attached. Cut publishes only after the
+single completed command applies.
+
+Historical raw, thirty-one, thirty-five and thirty-six proofs retain their
+original meanings. Independent opening, room, drawing and annotation roots do
+not acquire authority through thirty-seven. The shared conservative source and
+native-work limits can refuse large unrelated inventories; this remains a
+capacity gap. Independent and root integrated source reviews are complete.
+Compilation and runtime remain unverified.
 
 ## Complete wall-join removal with room review (v139)
 

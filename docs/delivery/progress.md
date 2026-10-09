@@ -14,6 +14,36 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed wall deletion source integration
+
+Mixed wall/roof/horizontal/stair/railing/column/beam/catalog selections now have
+one source-derived removal producer and canvas Delete/Cut routing. Explicit
+child thirty-seven retains the complete intent through single and batch room
+review; native 140/extraction 138 retain the new history. Fresh wall and roof
+slots are reserved together. The room review lists actual removed object kinds
+and retired placed catalog rows, and Cut waits for successful application.
+
+Independent source review approved after moving complete lifetime admission
+ahead of detached preview and analytical source admission ahead of native
+inspectors. Root also corrected catalog aliases entering ordinary clipboard
+closure; wall-only ambiguity checks now leave catalog selection authority in
+the typed intent. Root integrated source review is complete.
+No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation and
+runtime remain unverified; the installed candidate is unchanged. Independent
+opening/room/drawing/annotation roots and mixed baseline cohorts remain gaps.
+Conservative aggregate admission also limits large unrelated inventories.
+
+An additive actual-map factory/removal option now admits manufactured
+opening-hosted legacy components from their actual wall and active sibling cuts.
+Existing default removal and retained proof paths do not enable this option.
+Wall deletion's opening-hosted row retirement still needs an explicit new lane.
+The standalone opening producer also exposes a complete actual-map replay
+facade with an explicit captured constraint policy. Its real-snapshot wrapper
+retains final Document, asset, raw-envelope and architectural admission. This
+is a source integration foundation; mixed standalone-opening removal is still
+unfinished.
+
 ### October 9 opening and wall-join removal source implementation
 
 Standalone door/window Delete/Cut now handles actual ordinary and active-proposed

@@ -9,6 +9,8 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/opening_host_geometry.hpp"
+#include "sketch/phase_hosted_opening_edit.hpp"
 #include "sketch/phase_slab_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
@@ -31,9 +33,16 @@ using Entities = std::map<std::string, Entity, std::less<>>;
 using Ids = std::set<std::string, std::less<>>;
 using Keys = std::set<std::pair<std::string, std::string>>;
 using OverlayChildren = std::map<std::pair<std::string, std::string>, Ids>;
+using OpeningWalls = std::map<std::string, Wall, std::less<>>;
+struct OpeningAdmission {
+    OpeningWalls walls;
+    std::map<std::string, std::vector<const Entity*>, std::less<>> siblings;
+    bool indexed{};
+};
 constexpr std::size_t entity_limit = 65536, selection_limit = 1000, closure_limit = 4096;
 constexpr std::size_t node_limit = 4 * 1024 * 1024, byte_limit = 64 * 1024 * 1024;
 constexpr std::size_t phase_limit = 2000000, geometry_limit = 65536;
+constexpr std::size_t opening_native_limit = 262144;
 
 [[noreturn]] void reject(const std::string& reason) {
     throw std::invalid_argument("Architectural object removal: " + reason);
@@ -164,8 +173,9 @@ bool physical(const Entity& entity) {
     return entity.type == "stair" || entity.type == "railing" || entity.type == "column" ||
         entity.type == "beam" || entity.type == "slab";
 }
-bool component_host(const Entity& entity) {
-    return physical(entity) || entity.type == "wall" || entity.type == "roof";
+bool component_host(const Entity& entity, bool allow_manufactured_opening_hosts) {
+    return physical(entity) || entity.type == "wall" || entity.type == "roof" ||
+        (allow_manufactured_opening_hosts && entity.type == "opening");
 }
 bool known_rail(const Entity& entity) {
     const auto version = field(entity.properties, "version"), form = field(entity.properties, "form");
@@ -423,11 +433,18 @@ Entity global_reference_remainder(Entity entity,bool completed) {
 }
 
 // Bound analytical physical work before any native building codec/builder.
-std::map<std::string, std::size_t, std::less<>> physical_bounds(const Entities& source, const Ids& owners) {
+std::map<std::string, std::size_t, std::less<>> physical_bounds(const Entities& source, const Ids& owners,
+    bool complete_native = false) {
     std::size_t work{};
+    const auto limit = complete_native ? opening_native_limit : geometry_limit;
     std::map<std::string, std::size_t, std::less<>> costs;
+    std::map<std::string, std::size_t, std::less<>> wall_references;
+    if (complete_native) for (const auto& [id, entity] : source) {
+        (void)id; const auto owner = field(entity.properties, "wall_id");
+        if (owner && owner->is_string()) ++wall_references[owner->get<std::string>()];
+    }
     const auto add = [&](std::size_t count) {
-        if (count > geometry_limit - work) reject("aggregate physical geometry budget exceeded");
+        if (count > limit - work) reject("aggregate physical geometry budget exceeded");
         work += count;
     };
     for (const auto& id : owners) {
@@ -460,16 +477,19 @@ std::map<std::string, std::size_t, std::less<>> physical_bounds(const Entities& 
                 reject("slab layer inventory is unbounded: " + id);
             add(segments * std::max<std::size_t>(1, layers ? layers->size() : 0));
         } else if (e.type == "wall") {
-            std::size_t count = 1;
+            std::size_t count = 1, layer_count = 1, cuts = 1;
             if (const auto layers = field(p, "layers")) {
                 if (!layers->is_array() || layers->size() > 1024) reject("wall host layer inventory is unbounded: " + id);
                 count += layers->size();
+                layer_count = std::max<std::size_t>(1, layers->size());
             }
-            for (const auto& [opening_id, opening] : source) {
+            if (complete_native) cuts += wall_references[id];
+            else for (const auto& [opening_id, opening] : source) {
                 (void)opening_id; const auto owner = field(opening.properties, "wall_id");
-                if (owner && owner->is_string() && *owner == id) ++count;
+                if (owner && owner->is_string() && *owner == id) { ++count; ++cuts; }
             }
-            add(count);
+            if (complete_native && layer_count > limit / cuts) reject("wall host layered cut budget exceeded: " + id);
+            add(complete_native ? layer_count * cuts : count);
         } else if (e.type == "roof") {
             const auto openings = field(p, "roof_openings");
             if (openings && (!openings->is_array() || openings->size() > 1024)) reject("roof host opening inventory is unbounded: " + id);
@@ -491,6 +511,65 @@ Wall actual_wall(const Entities& source, const Entity& entity) {
     if (!read_document_wall(resolve_vertical_placement(source, entity), openings, wall, error))
         reject("actual wall host codec refused " + entity.id + ": " + error);
     return wall;
+}
+// Analytical admission only. It retains all actual active sibling cuts and
+// the resolved wall frame used by make_document_opening_host_shape.
+std::size_t opening_host_work(const Entities& source, const ConstraintPhaseScope& scope,
+    const std::string& id, bool require_manufactured, OpeningAdmission& admission) {
+    const auto& opening = source.at(id);
+    validate_hosted_opening_profile_entity(opening);
+    std::string wall_id, error;
+    if (!read_document_wall_id(opening, wall_id, error)) reject(error);
+    const auto wall = source.find(wall_id);
+    if (wall == source.end() || wall->second.type != "wall" ||
+        scope.inactive_owner_ids.contains(id) || scope.inactive_owner_ids.contains(wall_id))
+        reject("opening component requires its actual active wall: " + id);
+    if (!admission.indexed) {
+        for (const auto& [sibling_id, sibling] : source) {
+            if (sibling.type != "opening" || scope.inactive_owner_ids.contains(sibling_id)) continue;
+            const auto owner = field(sibling.properties, "wall_id");
+            if (owner && owner->is_string()) admission.siblings[owner->get<std::string>()].push_back(&sibling);
+        }
+        admission.indexed = true;
+    }
+    auto cached = admission.walls.find(wall_id);
+    if (cached == admission.walls.end()) {
+        const auto layers = field(wall->second.properties, "layers");
+        if (layers && (!layers->is_array() || layers->size() > 1024)) reject("opening wall layer budget exceeded: " + wall_id);
+        const auto& siblings = admission.siblings[wall_id];
+        if (siblings.size() > 512) reject("opening component sibling cut budget exceeded: " + id);
+        for (const auto* sibling : siblings) validate_hosted_opening_profile_entity(*sibling);
+        Wall actual;
+        if (!read_document_wall(resolve_vertical_placement(source, wall->second), siblings, actual, error)) reject(error);
+        validate_wall_semantics(actual);
+        cached = admission.walls.emplace(wall_id, std::move(actual)).first;
+    }
+    const auto& actual = cached->second;
+    if (std::none_of(actual.openings.begin(), actual.openings.end(), [&](const auto& cut) { return cut.id == id; }))
+        reject("opening component is absent from its actual wall: " + id);
+    const auto kind = field(opening.properties, "opening_kind");
+    if (require_manufactured && !opening.properties.contains("opening_assembly") &&
+        !(kind && kind->is_string() && parse_opening_assembly_kind(kind->get<std::string>())))
+        reject("bare-cut opening has no manufactured body for a legacy host-copy component: " + id);
+    const auto layer_count = std::max<std::size_t>(1, actual.layers.size());
+    if (layer_count > opening_native_limit / (actual.openings.size() + 1) / 33)
+        reject("opening component layered cut geometry budget exceeded: " + id);
+    return layer_count * (actual.openings.size() + 1) * 33;
+}
+void opening_component_context(const Entities& source, const ProjectOrganization& organization, const Entity& opening) {
+    std::string wall_id, error;
+    if (!read_document_wall_id(opening, wall_id, error)) reject(error);
+    const auto wall = source.find(wall_id);
+    if (wall == source.end() || wall->second.type != "wall") reject("opening component wall is missing: " + opening.id);
+    context(source, organization, wall->second);
+    const auto scoped = [](const Entity& entity) {
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id"})
+            if (entity.properties.contains(key)) return true;
+        return false;
+    };
+    // Legacy world-default placement needs no fabricated hierarchy enrollment.
+    // Explicit context on either owner still uses the actual organization.
+    if (scoped(opening) || scoped(wall->second)) context(source, organization, opening);
 }
 void admit_physical(const Entities& source, const Ids& owners) {
     const auto organization = organize_project(source);
@@ -515,8 +594,9 @@ void admit_physical(const Entities& source, const Ids& owners) {
         }
     }
 }
-void assembly_integrity(const Entities& source) {
-    validate_document_assembly_instances(source);
+void assembly_integrity(const Entities& source, AssemblyExpansionBudget* admission = nullptr) {
+    if (admission) (void)expand_document_assembly_instances(source, *admission);
+    else validate_document_assembly_instances(source);
     for (const auto& [id, entity] : source) if (entity.type == "assembly_model") {
         const auto model = AssemblyModel::from_json(entity.properties.at("model"));
         for (const auto& row : model.instances()) if (row.placement) {
@@ -525,9 +605,57 @@ void assembly_integrity(const Entities& source) {
         }
     }
 }
+struct OpeningNativeBudget {
+    std::size_t used{};
+    void add(std::size_t count) {
+        if (count > opening_native_limit - used) reject("shared source/candidate/component native geometry budget exceeded");
+        used += count;
+    }
+};
+// The opt-in lane reserves source and candidate supported host inventories,
+// not just removed rows. Analytical expansion is already bounded per map;
+// both inventories and local factories share one conservative native allowance.
+void charge_candidate_geometry(const Entities& source, const Phases& phase,
+    const AssemblyExpansionBudget& assembly, OpeningNativeBudget& native, OpeningAdmission& admission) {
+    native.add(assembly.consumed_nodes); native.add(assembly.consumed_profile_segments);
+    Ids physical_owners;
+    for (const auto& [id, entity] : source)
+        if (!phase.scope.inactive_owner_ids.contains(id) && component_host(entity, false)) physical_owners.insert(id);
+    const auto costs = physical_bounds(source, physical_owners, true);
+    for (const auto& [id, cost] : costs) { (void)id; native.add(cost); }
+    Ids legacy_opening_hosts;
+    for (const auto& [id, entity] : source) {
+        if (entity.type == "opening" && !phase.scope.inactive_owner_ids.contains(id)) {
+            const auto wall = field(entity.properties, "wall_id");
+            if (wall && wall->is_string() && phase.scope.inactive_owner_ids.contains(wall->get<std::string>())) continue;
+            const auto kind = field(entity.properties, "opening_kind");
+            if (entity.properties.contains("opening_assembly") ||
+                (kind && kind->is_string() && parse_opening_assembly_kind(kind->get<std::string>())))
+                native.add(opening_host_work(source, phase.scope, id, true, admission));
+        }
+        if (entity.type != "assembly_model" || phase.scope.inactive_owner_ids.contains(id)) continue;
+        const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+        for (const auto& row : model.instances()) if (row.placement) {
+            AssemblyExpansionBudget row_budget;
+            if (!model.expand(row, row_budget).profiles.empty()) continue;
+            const auto& host_id = row.placement->host_entity_id;
+            const auto owner = source.find(host_id);
+            if (owner == source.end()) reject("candidate legacy component lacks actual host: " + id + "/" + row.id);
+            if (phase.scope.inactive_owner_ids.contains(host_id)) continue;
+            if (owner->second.type == "opening") {
+                const auto wall = field(owner->second.properties, "wall_id");
+                if (wall && wall->is_string() && phase.scope.inactive_owner_ids.contains(wall->get<std::string>())) continue;
+                if (legacy_opening_hosts.insert(host_id).second)
+                    native.add(opening_host_work(source, phase.scope, host_id, true, admission));
+            } else if (const auto cost = costs.find(host_id); cost != costs.end()) native.add(cost->second);
+            native.add(1); // Native transform and result validation per copy.
+        }
+    }
+}
 
 Entities derive(const Entities& source, const std::vector<std::string>& selection,
-    const std::vector<std::pair<std::string, std::string>>& components) {
+    const std::vector<std::pair<std::string, std::string>>& components,
+    bool allow_manufactured_opening_hosts) {
     bounds(source);
     if ((selection.empty() && components.empty()) || selection.size() > selection_limit || components.size() > closure_limit)
         reject("selection requires bounded actual physical roots or qualified components");
@@ -564,10 +692,12 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (retired.size() > closure_limit) reject("attached railing closure budget exceeded");
     }
     validate_stair_attachment_state(source);
-    assembly_integrity(source);
+    AssemblyExpansionBudget source_assembly_admission, candidate_assembly_admission;
+    assembly_integrity(source, allow_manufactured_opening_hosts ? &source_assembly_admission : nullptr);
     const auto aliases = embedded_assembly_presentation_ids(source);
     Entities result = source; retire_phases(result, source, phase, retired);
-    Keys instances; Ids names = retired, geometry_owners = retired;
+    Keys instances; Ids names = retired, geometry_owners = retired, opening_hosts;
+    OpeningAdmission source_opening_admission, candidate_opening_admission;
     for (const auto& [id, entity] : source) if (entity.type == "assembly_model") {
         const auto& raw = entity.properties.at("model");
         if (!supported_catalog(raw)) reject("actual catalog has unsupported schema: " + id);
@@ -580,8 +710,29 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
             if (row.placement) {
                 const auto& owner_id = row.placement->host_entity_id;
                 const auto owner = source.find(owner_id);
-                if (owner == source.end() || !component_host(owner->second)) reject("selected hosted component lacks a supported actual physical host: " + id + "/" + row.id);
-                removable(phase, owner_id); context(source, organization, owner->second); geometry_owners.insert(owner_id);
+                if (owner == source.end() || !component_host(owner->second, allow_manufactured_opening_hosts)) reject("selected hosted component lacks a supported actual physical host: " + id + "/" + row.id);
+                removable(phase, owner_id);
+                if (owner->second.type == "opening") {
+                    if (!explicit_keys.contains({id, row.id})) reject("opening host admission requires a qualified selected component: " + id + "/" + row.id);
+                    if (entity.required || owner->second.required) reject("opening component has a required catalog or opening owner: " + id + "/" + row.id);
+                    removable(phase, id); opening_component_context(source, organization, owner->second);
+                    std::string wall_id, error;
+                    if (!read_document_wall_id(owner->second, wall_id, error)) reject(error);
+                    if (source.at(wall_id).required) reject("opening component has a required wall owner: " + wall_id);
+                    removable(phase, wall_id);
+                    const auto wall_registry = phase.owners.find(wall_id), opening_registry = phase.owners.find(owner_id);
+                    if (wall_registry != phase.owners.end() && selected_registry && wall_registry->second != *selected_registry)
+                        reject("opening component wall spans foreign phase registry: " + id + "/" + row.id);
+                    if (wall_registry != phase.owners.end() && opening_registry != phase.owners.end() && wall_registry->second != opening_registry->second)
+                        reject("opening component and wall have foreign phase ownership: " + id + "/" + row.id);
+                    if (wall_registry != phase.owners.end()) selected_registry = wall_registry->second;
+                    if (opening_hosts.insert(owner_id).second) {
+                        (void)opening_host_work(source, phase.scope, owner_id, false, source_opening_admission);
+                        material_assignment(source, owner->second); material_assignment(source, source.at(wall_id));
+                        for (const auto& layer : source_opening_admission.walls.at(wall_id).layers)
+                            if (layer.material) material(source, layer.material->catalog_id, layer.material->material_id);
+                    }
+                } else { context(source, organization, owner->second); geometry_owners.insert(owner_id); }
                 const auto member = phase.owners.find(owner_id);
                 if (member != phase.owners.end()) {
                     if (selected_registry && *selected_registry != member->second) reject("selected hosted component spans foreign phase registry: " + id + "/" + row.id);
@@ -609,7 +760,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         (void)AssemblyModel::from_json(result.at(id).properties.at("model"));
     }
     for (const auto& key : explicit_keys) if (!instances.contains(key)) reject("selected qualified actual component row is missing: " + key.first + "/" + key.second);
-    const auto costs = physical_bounds(source, geometry_owners);
+    const auto costs = physical_bounds(source, geometry_owners, allow_manufactured_opening_hosts);
     Ids dimension_ids;
     for (const auto& [id, entity] : source) if (can_recognize_boundary_dimension_entity_type(entity.type) &&
         (touches(entity.properties, names) || touches(entity.extensions, names))) {
@@ -686,7 +837,8 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
             }
         }
     }
-    validate_stair_attachment_state(result); assembly_integrity(result);
+    validate_stair_attachment_state(result);
+    assembly_integrity(result, allow_manufactured_opening_hosts ? &candidate_assembly_admission : nullptr);
     const auto after = phases(result);
     if (after.scope.inactive_owner_ids != phase.scope.inactive_owner_ids)
         reject("removal changed inactive baseline/other-alternative ownership");
@@ -696,6 +848,13 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     std::vector<std::pair<std::string, AssemblyTransform>> legacy;
     std::size_t native_work{};
     for (const auto& [id, cost] : costs) { (void)id; native_work += cost; }
+    OpeningNativeBudget shared_native;
+    if (allow_manufactured_opening_hosts) {
+        charge_candidate_geometry(source, phase, source_assembly_admission, shared_native, source_opening_admission);
+        charge_candidate_geometry(result, after, candidate_assembly_admission, shared_native, candidate_opening_admission);
+        shared_native.add(native_work);
+    }
+    Ids legacy_opening_hosts;
     for (const auto& [catalog, local] : instances) {
         const auto model = AssemblyModel::from_json(source.at(catalog).properties.at("model"));
         const auto row = std::find_if(model.instances().begin(), model.instances().end(), [&](const auto& value) { return value.id == local; });
@@ -703,19 +862,40 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (!expansion.profiles.empty()) expansions.push_back(std::move(expansion));
         else if (row->placement) {
             const auto& placement = *row->placement;
-            const auto cost = costs.at(placement.host_entity_id);
-            if (cost > geometry_limit - native_work) reject("aggregate host-derived component work budget exceeded");
-            native_work += cost;
+            const auto& owner_id = placement.host_entity_id;
+            if (allow_manufactured_opening_hosts) {
+                if (source.at(owner_id).type == "opening") {
+                    if (legacy_opening_hosts.insert(owner_id).second)
+                        shared_native.add(opening_host_work(source, phase.scope, owner_id, true, source_opening_admission));
+                } else shared_native.add(costs.at(owner_id));
+                shared_native.add(1);
+            } else {
+                const auto cost = costs.at(owner_id);
+                if (cost > geometry_limit - native_work) reject("aggregate host-derived component work budget exceeded");
+                native_work += cost;
+            }
             legacy.emplace_back(placement.host_entity_id, AssemblyTransform{
                 {placement.translation_m.x, placement.translation_m.y, placement.translation_z_m},
                 placement.rotation_radians, placement.scale, placement.mirrored_y, placement.vertical_scale});
         }
         // A typed metadata-only unhosted row has no native body to admit.
     }
+    if (allow_manufactured_opening_hosts) {
+        shared_native.add(budget.consumed_nodes); shared_native.add(budget.consumed_profile_segments);
+    }
     admit_physical(source, geometry_owners);
     for (const auto& expansion : expansions) (void)make_assembly_geometry(expansion);
+    std::map<std::string, TopoDS_Shape, std::less<>> opening_shapes;
+    std::size_t opening_factory_work{};
     for (const auto& [id, transform] : legacy) {
         const auto& owner = source.at(id);
+        if (owner.type == "opening" && allow_manufactured_opening_hosts) {
+            auto found = opening_shapes.find(id);
+            if (found == opening_shapes.end())
+                found = opening_shapes.emplace(id, make_document_opening_host_shape(source, id, &opening_factory_work)).first;
+            (void)transform_assembly_shape(found->second, transform);
+            continue;
+        }
         const auto resolved = host(owner) ? owner : resolve_vertical_placement(source, owner);
         if (owner.type == "wall") (void)transform_assembly_shape(make_wall(actual_wall(source, owner)), transform);
         else if (owner.type == "slab") {
@@ -731,8 +911,9 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
 std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
-    const std::vector<std::pair<std::string, std::string>>& explicit_components) {
-    try { return derive(actual, selected_object_ids, explicit_components); }
+    const std::vector<std::pair<std::string, std::string>>& explicit_components,
+    bool allow_manufactured_opening_hosts) {
+    try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();

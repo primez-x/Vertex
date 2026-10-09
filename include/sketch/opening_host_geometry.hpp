@@ -13,5 +13,10 @@ namespace sketch {
 [[nodiscard]] TopoDS_Shape make_document_opening_host_shape(
     const DocumentSnapshot& source,const std::string& opening_id,
     std::size_t* cumulative_native_work=nullptr);
+// Retained command admission uses the same complete actual source map. Passing
+// a sliced inventory would lose saved activity, vertical placement and cuts.
+[[nodiscard]] TopoDS_Shape make_document_opening_host_shape(
+    const std::map<std::string, Entity, std::less<>>& actual,const std::string& opening_id,
+    std::size_t* cumulative_native_work=nullptr);
 
 } // namespace sketch

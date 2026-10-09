@@ -14,7 +14,12 @@ namespace sketch {
 
 TopoDS_Shape make_document_opening_host_shape(
     const DocumentSnapshot& source,const std::string& opening_id,std::size_t* cumulative_native_work) {
-    const auto& actual=source.entities();
+    return make_document_opening_host_shape(source.entities(),opening_id,cumulative_native_work);
+}
+
+TopoDS_Shape make_document_opening_host_shape(
+    const std::map<std::string, Entity, std::less<>>& actual,const std::string& opening_id,
+    std::size_t* cumulative_native_work) {
     constexpr std::size_t entity_limit=65536,phase_limit=2000000,cut_limit=512;
     if (actual.size()>entity_limit)
         throw std::invalid_argument("Opening host source exceeds the entity budget.");
@@ -53,7 +58,7 @@ TopoDS_Shape make_document_opening_host_shape(
         siblings.push_back(&entity);
     }
     Wall wall;
-    if (!read_document_wall(resolve_vertical_placement(source,host->second),siblings,wall,error))
+    if (!read_document_wall(resolve_vertical_placement(actual,host->second),siblings,wall,error))
         throw std::invalid_argument(error);
     validate_wall_semantics(wall);
     const auto cut=std::find_if(wall.openings.begin(),wall.openings.end(),
