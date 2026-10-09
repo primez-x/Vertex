@@ -655,7 +655,9 @@ void charge_candidate_geometry(const Entities& source, const Phases& phase,
 
 Entities derive(const Entities& source, const std::vector<std::string>& selection,
     const std::vector<std::pair<std::string, std::string>>& components,
-    bool allow_manufactured_opening_hosts) {
+    bool allow_manufactured_opening_hosts, std::size_t reserved_native_work = 0, bool analytical_only = false) {
+    if (!allow_manufactured_opening_hosts && reserved_native_work)
+        reject("external native reservation requires opening-host admission");
     bounds(source);
     if ((selection.empty() && components.empty()) || selection.size() > selection_limit || components.size() > closure_limit)
         reject("selection requires bounded actual physical roots or qualified components");
@@ -850,6 +852,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     for (const auto& [id, cost] : costs) { (void)id; native_work += cost; }
     OpeningNativeBudget shared_native;
     if (allow_manufactured_opening_hosts) {
+        shared_native.add(reserved_native_work);
         charge_candidate_geometry(source, phase, source_assembly_admission, shared_native, source_opening_admission);
         charge_candidate_geometry(result, after, candidate_assembly_admission, shared_native, candidate_opening_admission);
         shared_native.add(native_work);
@@ -883,6 +886,7 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     if (allow_manufactured_opening_hosts) {
         shared_native.add(budget.consumed_nodes); shared_native.add(budget.consumed_profile_segments);
     }
+    if (analytical_only) return result;
     admit_physical(source, geometry_owners);
     for (const auto& expansion : expansions) (void)make_assembly_geometry(expansion);
     std::map<std::string, TopoDS_Shape, std::less<>> opening_shapes;
@@ -912,12 +916,19 @@ std::map<std::string, Entity, std::less<>> replay_architectural_object_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
     const std::vector<std::string>& selected_object_ids,
     const std::vector<std::pair<std::string, std::string>>& explicit_components,
-    bool allow_manufactured_opening_hosts) {
-    try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts); }
+    bool allow_manufactured_opening_hosts, std::size_t reserved_native_work) {
+    try { return derive(actual, selected_object_ids, explicit_components, allow_manufactured_opening_hosts, reserved_native_work); }
     catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
     catch (const Standard_Failure& error) {
         const auto* message = error.GetMessageString();
         reject(std::string("native admission failed: ") + (message ? message : "Open CASCADE failure"));
     }
+}
+void preflight_architectural_object_removal(const Entities& actual,
+    const std::vector<std::string>& selected_object_ids,
+    const std::vector<std::pair<std::string, std::string>>& explicit_components,
+    std::size_t reserved_native_work) {
+    try { (void)derive(actual, selected_object_ids, explicit_components, true, reserved_native_work, true); }
+    catch (const Json::exception& error) { reject(std::string("malformed actual source: ") + error.what()); }
 }
 } // namespace sketch

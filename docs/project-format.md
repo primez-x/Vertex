@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v140
+# Vertex project formats v1 through v141
+
+## Wall removal with opening-hosted components (v141)
+
+Native reader 141 and JSON/assets extraction 139 retain physical-wall deletion
+child thirty-eight in single or batch room review. Its ten fields are the
+closed thirty-six fields plus exactly `complete_opening_hosted_removal: true`.
+Actual retired qualified catalog rows on the removed semantic openings justify
+the new lane. The flag grants no arbitrary retirement authority; all source,
+raw-command and candidate consequences must independently match replay.
+
+The opening body uses the actual wall, active sibling cuts, saved elevation,
+family and door operation. Legacy copies retain their world placement. Bare
+cuts cannot supply a manufactured legacy-copy body. Catalog definitions, raw
+survivors, aliases, protected phase ownership and room lineage remain intact.
+Analytical opening/component admission shares the wall/join work reservation
+before native factories. No affected join is required when the new opening
+component consequences are present.
+
+Historical raw, thirty-one, thirty-five, thirty-six and mixed thirty-seven
+proofs keep their previous meanings. Allowing the new option without actual
+opening-hosted rows retains the historical producer and proof preference.
+Independent and root integrated source reviews are complete. Compilation and
+runtime remain unverified.
 
 ## Mixed wall and architectural removal with room review (v140)
 

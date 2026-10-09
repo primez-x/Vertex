@@ -101,10 +101,13 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // memberships are reconstructed from the exact original source; room owners
 // remain unchanged until explicit context/plane review.
 // Opt-in complete removal includes actual semantic openings and qualified
-// hosted catalog rows. Only a closed v35 proof grants its additional replay
+// hosted catalog rows. A closed v35 proof grants that original replay
 // authority; historical raw singleton/v31 consequences retain their meaning.
 // Join completion additionally requires hosted completion and exact explicit
-// fresh split-join slots. Only closed v36 enables those source consequences.
+// fresh split-join slots. Closed v36 grants the original join authority.
+// Opening-hosted completion is a separate opt-in v38 authority. It includes
+// qualified rows on removed semantic openings, with actual wall/sibling cuts;
+// hosted and join completion are both required. Historical proofs stay exact.
 [[nodiscard]] ApplyEntityChanges prepare_physical_wall_deletion(
     const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal=false,
     bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
@@ -113,17 +116,24 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // groups require explicit v31 qualification; complete consequences use v35.
 [[nodiscard]] ApplyEntityChanges prepare_physical_walls_deletion(
     const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal=false,
-    bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
+    bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
+    bool complete_opening_hosted_removal=false);
 // Complete immutable actual-map replay for a larger source-derived removal
 // composition. Includes hosted and join consequences. The enclosing authoring
 // command owns snapshot/history/assets/fresh-ID reservation and room review;
 // this function grants neither supplied-candidate nor arbitrary erase authority.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_complete_physical_walls_deletion(
     const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
-    const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
+    const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={},
+    bool complete_opening_hosted_removal=false);
+// Analytical aggregate admission before native join inspection. The caller
+// must first reserve fresh identities against the complete original snapshot.
+void preflight_physical_walls_deletion_join_inference(
+    const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
+    bool complete_opening_hosted_removal=false);
 [[nodiscard]] nlohmann::json encode_physical_wall_deletion_review_proof(
     const DocumentSnapshot& source,const Command& command);
-// Accepts only bounded canonical grouped v31 or complete v35/v36 envelopes and
+// Accepts only bounded canonical grouped v31 or complete v35/v36/v38 envelopes and
 // returns their raw child. Actual source must validate all declared roots.
 [[nodiscard]] Command decode_physical_wall_deletion_review_proof(const nlohmann::json& proof);
 [[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);

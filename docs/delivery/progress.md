@@ -14,6 +14,27 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 opening-hosted wall removal source integration
+
+The wall producer now includes actual qualified component rows hosted on the
+openings removed with a wall. Actual source geometry and raw catalog/reference
+cleanup share the existing immutable producer. New child thirty-eight retains
+those consequences in single/batch room review; native 141/extraction 139
+retain its history. Historical proofs keep their prior meanings. The new
+option without these dependencies retains the historical path.
+
+The canvas opts into the new lane and admits analytical work before join
+inspection. Whole-snapshot destination reservation remains ahead of production.
+Independent source review approved; root integrated source review is complete.
+No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation and runtime
+remain unverified; the installed candidate is unchanged.
+
+Mixed standalone-opening/architectural/component removal is being implemented
+as a separate actual-source producer. Mixed wall/room/drawing/annotation and
+baseline cohorts, conservative capacity limits and production qualification
+remain unfinished.
+
 ### October 9 mixed wall deletion source integration
 
 Mixed wall/roof/horizontal/stair/railing/column/beam/catalog selections now have

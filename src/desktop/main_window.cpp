@@ -31671,6 +31671,7 @@ public:
             final_command=reviewRemodelingRoomChanges(source,*demolition,
                 PhysicalWallPhaseSelection{registry.id,phases.active_alternative()},authority,owner);
         } else {
+            preflight_physical_walls_deletion_join_inference(source.entities(),wall_ids,true);
             const auto join_plan=inspect_physical_wall_join_removal(source.entities(),wall_ids);
             if (!join_plan.ready()) {
                 std::string reasons;
@@ -31692,9 +31693,8 @@ public:
                     }
                 }
             }
-            auto deletion = wall_ids.size() == 1
-                ? prepare_physical_wall_deletion(source, wall_ids.front(),true,true,additional)
-                : prepare_physical_walls_deletion(source, wall_ids,true,true,additional);
+            validate_physical_wall_join_removal_identity_lifetime(source,additional);
+            auto deletion=prepare_physical_walls_deletion(source,wall_ids,true,true,additional,true);
             if (cut) deletion.message = "Cut walls and attached objects";
             const Command command = std::move(deletion);
             const auto candidate = preview_physical_wall_room_review_geometry(source, command);
