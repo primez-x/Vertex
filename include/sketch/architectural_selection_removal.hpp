@@ -15,7 +15,10 @@ struct ArchitecturalSelectionRemovalIntent {
 // independently admit the complete same source. Only the ordinary demolition
 // composer combines their source-derived consequences. Wall/room roots require
 // their dedicated authoring path. Inputs are never modified.
+// Opening-hosted component admission is explicit; historical/default callers
+// retain their existing body and replay authority.
 [[nodiscard]] RoofRemovalEntities replay_architectural_selection_removal(
-    const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent);
+    const RoofRemovalEntities& actual, const ArchitecturalSelectionRemovalIntent& intent,
+    bool allow_manufactured_opening_hosts = false);
 
 } // namespace sketch

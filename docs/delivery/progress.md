@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 opening-hosted mixed component source implementation
+
+Standalone component removal and mixed opening/architectural removal now use
+the actual manufactured opening host when required. Mixed wall removal also
+includes opening-hosted catalog rows through the same complete-source leaves.
+The additive opt-in leaves historical default producers unchanged.
+
+Closed mixed child thirty-nine records the explicit complete host lane; child
+thirty-seven retains its prior admission and replay meaning. The new child is
+retained by single and batch room review, with source/history destination
+reservation before reconstruction and native 142/extraction 140 format floors.
+The controller captures complete source and selection authority; Cut publishes
+only after successful application. Independent source review approved after
+moving the completion-only reserved marker check ahead of native leaves. Root
+integrated source review is complete.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged. Independent wall/opening roots, room/drawing/annotation
+cohorts, conservative capacity limits and full qualification remain unfinished.
+The next authoring batch addresses explicit rehosting or retirement of active
+proposed railings when a stair edit removes their attachment topology.
+
 ### October 9 mixed opening removal source integration
 
 Doors, windows and doorways now have a complete-source removal producer for

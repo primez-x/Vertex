@@ -2455,7 +2455,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const auto version=proof.at("version").get<int>();
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
     const bool mixed_deletion=proof.at("kind")=="mixed_wall_deletion";
-    if ((mixed_deletion && version!=37) || (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38) || (!grouped_deletion && !mixed_deletion &&
+    if ((mixed_deletion && version!=37 && version!=39) || (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38) || (!grouped_deletion && !mixed_deletion &&
         version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
@@ -2810,7 +2810,7 @@ static bool has_complete_wall_join_deletion_proof(const ApplyBoundaryConstraintC
     return command.room_review_geometry_completion && proof.is_object() &&
         proof.contains("kind") && proof.contains("version") && proof.at("version").is_number_integer() &&
         ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38)) ||
-         (proof.at("kind")=="mixed_wall_deletion" && proof.at("version")==37));
+         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39)));
 }
 static PhysicalWallJoinRemovalAdditionalIdentities complete_wall_join_deletion_destinations(
     const ApplyBoundaryConstraintChanges& command) {
@@ -7333,7 +7333,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)

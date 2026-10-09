@@ -3,6 +3,7 @@
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/constraint_phase_scope.hpp"
+#include "sketch/mixed_wall_removal.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 
 #include <Standard_Failure.hxx>
@@ -125,7 +126,7 @@ EmbeddedAssemblyPresentationIds expected_aliases(const Entities& source, const s
 } // namespace
 
 Entities replay_architectural_selection_removal(const Entities& actual,
-    const ArchitecturalSelectionRemovalIntent& intent) {
+    const ArchitecturalSelectionRemovalIntent& intent, bool allow_manufactured_opening_hosts) {
     try {
         bounds(actual);
         if (intent.object_ids.size() > selection_limit ||
@@ -153,6 +154,13 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         if (roofs.empty() && !intent.roof_additional_identities.empty())
             reject("roof destinations require an actual selected roof");
 
+        if (allow_manufactured_opening_hosts) {
+            // Reserve the complete source's conservative shared 16-pass roof,
+            // host and component inventory before any native inspector/factory.
+            validate_mixed_wall_removal_source_admission(actual, true);
+            if (!objects.empty() || !selected_components.empty())
+                preflight_architectural_object_removal(actual, objects, intent.components);
+        }
         std::vector<Entities> candidates;
         if (!roofs.empty()) {
             const auto plan = inspect_roof_removal_plan(actual, roofs, true, true, true);
@@ -169,7 +177,9 @@ Entities replay_architectural_selection_removal(const Entities& actual,
         if (!objects.empty() || !selected_components.empty()) {
             const std::vector<std::pair<std::string, std::string>> components(
                 selected_components.begin(), selected_components.end());
-            auto ordinary = replay_architectural_object_removal(actual, objects, components);
+            auto ordinary = allow_manufactured_opening_hosts ?
+                replay_architectural_object_removal(actual, objects, components, true) :
+                replay_architectural_object_removal(actual, objects, components);
             bounds(ordinary);
             candidates.push_back(std::move(ordinary));
         }

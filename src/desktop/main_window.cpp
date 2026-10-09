@@ -30109,16 +30109,23 @@ public:
 
     std::vector<EntityChange> selectionRemovalChanges(
         const DocumentSnapshot& snapshot, const std::vector<Entity>& graph,
-        const std::vector<std::pair<std::string,std::string>>& components={}) const {
+        const std::vector<std::pair<std::string,std::string>>& components={},
+        bool allow_manufactured_opening_hosts=false) const {
+        if (allow_manufactured_opening_hosts)
+            validate_mixed_wall_removal_source_admission(snapshot.entities(),true);
         std::vector<std::string> physical_roots;
         for (const auto& entity:graph)
             if (entity.type=="stair" || entity.type=="railing" || entity.type=="slab" ||
                 entity.type=="roof" || structuralObject(entity))
                 physical_roots.push_back(entity.id);
         const std::set<std::string,std::less<>> typed_roots(physical_roots.begin(),physical_roots.end());
-        auto candidate=physical_roots.empty() && components.empty() ? snapshot.entities() :
-            replay_architectural_selection_removal(snapshot.entities(),
-                captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components));
+        auto candidate=[&] {
+            if (physical_roots.empty() && components.empty()) return snapshot.entities();
+            const auto intent=captureArchitecturalSelectionRemoval(snapshot,std::move(physical_roots),components);
+            if (allow_manufactured_opening_hosts)
+                validate_physical_wall_join_removal_identity_lifetime(snapshot,intent.roof_additional_identities);
+            return replay_architectural_selection_removal(snapshot.entities(),intent,allow_manufactured_opening_hosts);
+        }();
         for (const auto& entity : graph) {
             const auto surviving=candidate.find(entity.id);
             if (surviving==candidate.end()) continue;
@@ -31592,7 +31599,7 @@ public:
             }
         };
         require_current();
-        validate_mixed_wall_removal_source_admission(source.entities());
+        validate_mixed_wall_removal_source_admission(source.entities(),true);
         QStringList wall_selection;
         for (const auto& id:intent.wall_ids) wall_selection.push_back(QString::fromStdString(id));
         const auto graph=clipboardSelectionGraph(source,true,&wall_selection);
@@ -31626,8 +31633,8 @@ public:
         }
         require_current();
         const Command command=prepare_mixed_wall_removal(source,intent,
-            cut ? "Cut walls and selected architectural objects" : "Delete walls and selected architectural objects");
-        const auto proof=encode_mixed_wall_deletion_review_proof(source,intent,command);
+            cut ? "Cut walls and selected architectural objects" : "Delete walls and selected architectural objects",true);
+        const auto proof=encode_mixed_wall_deletion_review_proof(source,intent,command,true);
         const auto candidate=preview_physical_wall_room_review_geometry(source,command,proof);
         const auto primary_wall=intent.wall_ids.front();
         const auto groups=affectedPhysicalWallRoomGroups(source,candidate.entities(),primary_wall,true);
@@ -32379,7 +32386,7 @@ public:
             }
             if (!components.empty()) {
                 const auto ordinary_graph = clipboardSelectionGraph(source, true, &ordinary_ids);
-                auto changes = selectionRemovalChanges(source, ordinary_graph, components);
+                auto changes = selectionRemovalChanges(source, ordinary_graph, components,true);
                 const Command command = ApplyEntityChanges{source.revision(), std::move(changes), {}, "Delete selected embedded assemblies"};
                 const auto authored=augmentRemovalCommand(command,source);
                 const auto candidate = Document::preview_command(source, authored); validate_document_assembly_instances(candidate.entities());

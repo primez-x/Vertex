@@ -187,7 +187,9 @@ public:
     // Reviewed proposed-room redefinition/retirement requires v85 throughout history.
     // Source-bound active-design constraint authoring requires v86, including
     // wrapped room/selection commands and an undone or abandoned edit.
-    static constexpr std::uint32_t format_version = 141;
+    // Complete mixed-wall removal with manufactured opening-hosted components
+    // requires v142 throughout retained single and batch room-review history.
+    static constexpr std::uint32_t format_version = 142;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -110,7 +110,7 @@ Entities replay_opening_architectural_removal(const Entities& actual,
         std::erase_if(other.components, [&](const auto& key) { return !opening_aliases.contains(key); });
         std::vector<Entities> candidates; candidates.push_back(std::move(*opening));
         if (!other.object_ids.empty() || !other.components.empty())
-            candidates.push_back(replay_architectural_selection_removal(actual, other));
+            candidates.push_back(replay_architectural_selection_removal(actual, other,true));
         auto expected_aliases = original_aliases;
         auto expected_inactive = constraint_phase_scope(actual).inactive_owner_ids;
         for (const auto& candidate : candidates) {

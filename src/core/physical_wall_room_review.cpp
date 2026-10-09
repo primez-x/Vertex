@@ -1484,7 +1484,8 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
         if (decoded.command.expected_revision!=source.revision() ||
             command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
             invalid("explicit mixed wall proof differs from the captured raw geometry command");
-        const auto admitted=encode_mixed_wall_deletion_review_proof(source,decoded.intent,geometry_command);
+        const auto admitted=encode_mixed_wall_deletion_review_proof(source,decoded.intent,geometry_command,
+            decoded.complete_opening_hosted_removal);
         if (admitted.dump()!=retained_geometry_proof.dump())
             invalid("explicit mixed wall proof differs from complete captured-source admission");
         return retained_geometry_proof;
