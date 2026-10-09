@@ -34,12 +34,19 @@ enum class BoundaryDimensionKind { segment_length, angle, area, wall_axis_length
 [[nodiscard]] std::string_view boundary_dimension_placement_name(
     BoundaryDimensionPlacement placement);
 
+struct BoundaryDimensionAngleGeometry {
+    Vec2 vertex;
+    Vec2 first_direction;
+    Vec2 second_direction;
+};
+
 struct BoundaryDimensionResolution {
     Segment segment;
     double segment_length_metres{};
     BoundaryDimensionKind kind{BoundaryDimensionKind::segment_length};
     double angle_radians{};
     double area_square_metres{};
+    std::optional<BoundaryDimensionAngleGeometry> angle_geometry;
 
     [[nodiscard]] double segment_length() const noexcept { return segment_length_metres; }
     [[nodiscard]] double angle() const noexcept { return angle_radians; }

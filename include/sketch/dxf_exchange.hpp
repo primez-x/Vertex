@@ -57,6 +57,16 @@ struct DxfArcDimension {
     std::string layer{"0"};
     double text_height{0.15};
 };
+// A three-point angular dimension measures the counterclockwise angle from
+// vertex->extension_start to vertex->extension_end. The nonzero rays need not
+// have equal lengths; dimension_arc locates the displayed arc within that span.
+struct DxfAngularDimension {
+    DxfPoint extension_start, extension_end, vertex, dimension_arc, text_position;
+    double text_rotation_degrees{};
+    std::string text;
+    std::string layer{"0"};
+    double text_height{0.15};
+};
 // A solid hatch is represented by one closed planar polygon. Patterned,
 // multi-loop, associative, and edge-defined hatches are reported as
 // unsupported rather than flattened into a misleading fill.
@@ -102,6 +112,7 @@ struct DxfDrawing {
     std::vector<DxfInsert> inserts;
     std::vector<DxfCircle> circles;
     std::vector<DxfArcDimension> arc_dimensions;
+    std::vector<DxfAngularDimension> angular_dimensions;
 };
 struct DxfDiagnostic {
     std::size_t entity_index{}; // One-based ENTITIES ordinal; zero for a section.
@@ -125,7 +136,7 @@ struct DxfExchangeLimits {
 [[nodiscard]] DxfImportResult parse_dxf_ascii(
     std::string_view bytes, const DxfExchangeLimits& limits = {});
 // Canonical entity order: block definitions, lines, arcs, circles, polylines,
-// linear and arc dimensions, hatches, labels, then INSERT references (vector order retained
+// linear, arc, and angular dimensions, hatches, labels, then INSERT references (vector order retained
 // within each family).
 // Unsupported style/3D information is not representable and is never synthesized.
 [[nodiscard]] std::string export_dxf_ascii(

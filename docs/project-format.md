@@ -4960,31 +4960,41 @@ DXF straight lengths use aligned `DIMENSION`; curved segment and physical-wall
 axis lengths use `ARC_DIMENSION` with their actual circular centre and extension
 points. Clockwise source arcs reverse their endpoint order for the DXF CCW
 measurement convention. Their dimension-arc definition stays in the measured
-span even when text is placed elsewhere. Both families carry anonymous picture
+span even when text is placed elsewhere. Angular dimensions retain the admitted
+vertex and tangents as three-point angular `DIMENSION`, including curved source
+edges. Native angles measure the smaller tangent angle, so the exported rays
+are ordered CCW around that same span. All three families carry anonymous picture
 blocks with ordinary analytical drawing primitives; text rotation is separate
 from linear measurement orientation, and the manual-position flag preserves
 the retained text location. Multi-edge totals that are not one
 straight span retain their measured quantity as a named text callout and report
-the loss of native chain association. Area and angle quantities retain named
-callouts in square metres or degrees, with the association loss diagnosed.
+the loss of native chain association. Area quantities retain named callouts in
+square metres, with the association loss diagnosed.
 Current physical-room quantities resolve
 against the complete actual snapshot, including source admission and holes.
 
 Foreign dimensions remain unbound to foreign owners. Import reconstructs their
 measured geometry and text, and preserves linear presentation under
 `extensions.dxf_dimension` or curved presentation under
-`extensions.dxf_arc_dimension`. Both include the remapped `annotation_id`;
+`extensions.dxf_arc_dimension`, or angular presentation under
+`extensions.dxf_angular_dimension`. All include the remapped `annotation_id`;
 curved metadata also retains the original centre and extension points. Source
 unit conversion scales their geometry and text heights together. Authored
 text overrides retain `source_metres_per_unit`: a `<>` substitution uses the
 source quantity, so a feet suffix does not label a metre value. Empty automatic
-text uses an explicit metre label. Referenced
+linear/arc text uses an explicit metre label. Angular quantities use degrees
+and remain unchanged by linear-unit normalization; only their anchors and
+text height scale. The bounded angular subset accepts three-point dimensions
+whose arc-definition point lies strictly within the declared CCW ray span.
+Two-line angular dimensions, ambiguous/out-of-span arc choices and unsupported
+styles remain diagnosed with original-source retention. Referenced
 picture blocks supply presentation only and cannot activate native wall/opening
 metadata. Case-insensitive block identity applies to references and collisions.
 The original asset and fidelity diagnostics remain recoverable.
 
 Transport details follow the [Autodesk dimension reference](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-DXF/files/GUID-EDD54EAC-A339-4EBA-AEA6-EC8066505E2B.htm)
 and the [ezdxf maintainer's arc-dimension definition](https://github.com/mozman/ezdxf/blob/master/src/ezdxf/entities/dimension.py).
+Angular anchors follow the [Autodesk angular-dimension reference](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-09821B78-9F8E-43BA-82F2-8C931485EDC9.htm).
 
 An imported IFC may retain its original STEP bytes as an asset referenced by an
 `ifc_source` entity. The record follows the same provenance shape as

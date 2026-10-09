@@ -683,8 +683,42 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 return;
             }
             if (resolved.kind == BoundaryDimensionKind::angle) {
-                callout("Angle", resolved.angle() * 180.0 / std::numbers::pi, " deg",
-                    "dimension_angle_exported_as_quantity_callout");
+                if (!resolved.angle_geometry)
+                    throw std::invalid_argument("DXF angular dimension has no admitted tangent geometry");
+                const auto& geometry = *resolved.angle_geometry;
+                auto first = geometry.first_direction;
+                auto second = geometry.second_direction;
+                auto start = std::atan2(first.y, first.x);
+                auto sweep = std::fmod(std::atan2(second.y, second.x) - start + kFullTurn, kFullTurn);
+                // Native angle targets measure the smaller angle between the
+                // admitted vertex tangents, including curved source edges.
+                if (sweep > std::numbers::pi) {
+                    std::swap(first, second);
+                    start = std::atan2(first.y, first.x);
+                    sweep = kFullTurn - sweep;
+                }
+                const auto boundary = resolve_dimension_geometry_owner(owner->second);
+                const auto secondary = std::find_if(boundary.segments.begin(), boundary.segments.end(),
+                    [&](const auto& item) { return item.segment_id == decoded.dimension->secondary_segment_id; });
+                if (secondary == boundary.segments.end())
+                    throw std::invalid_argument("DXF angular dimension is missing its admitted second edge");
+                const auto first_length = segment_length(resolved.segment);
+                const auto second_length = segment_length(secondary->segment);
+                auto radius = std::hypot(decoded.dimension->text_position.x - geometry.vertex.x,
+                                         decoded.dimension->text_position.y - geometry.vertex.y);
+                if (radius <= kGeometryTolerance)
+                    radius = std::max(0.3, std::min(first_length, second_length) * 0.5);
+                const auto ray_length = std::min(std::min(first_length, second_length), radius * 0.7);
+                const DxfPoint first_point{geometry.vertex.x + first.x * ray_length,
+                                           geometry.vertex.y + first.y * ray_length};
+                const DxfPoint second_point{geometry.vertex.x + second.x * ray_length,
+                                            geometry.vertex.y + second.y * ray_length};
+                const DxfPoint arc_point{geometry.vertex.x + radius * std::cos(start + sweep * 0.5),
+                                         geometry.vertex.y + radius * std::sin(start + sweep * 0.5)};
+                result.drawing.angular_dimensions.push_back({first_point, second_point,
+                    {geometry.vertex.x, geometry.vertex.y}, arc_point,
+                    {decoded.dimension->text_position.x, decoded.dimension->text_position.y},
+                    text_rotation, text, "Dimensions"});
                 return;
             }
             if (!linear_dimension_chain(*decoded.dimension, owner->second, resolved)) {
@@ -1038,6 +1072,52 @@ void import_arc_dimensions(const std::vector<DxfArcDimension>& dimensions,
     }
 }
 
+void import_angular_dimensions(const std::vector<DxfAngularDimension>& dimensions,
+                               DxfProjectImportResult& result, AnnotationState& annotations,
+                               std::size_t& boundary_counter, std::size_t& label_counter,
+                               Json& source_layers) {
+    for (const auto& dimension : dimensions) {
+        const auto start = std::atan2(dimension.extension_start.y - dimension.vertex.y,
+                                      dimension.extension_start.x - dimension.vertex.x);
+        const auto end = std::atan2(dimension.extension_end.y - dimension.vertex.y,
+                                    dimension.extension_end.x - dimension.vertex.x);
+        auto sweep = end - start;
+        if (sweep <= 0.0) sweep += kFullTurn;
+        const Boundary rays{
+            {{dimension.extension_start.x, dimension.extension_start.y},
+             {dimension.vertex.x, dimension.vertex.y}, 0.0},
+            {{dimension.vertex.x, dimension.vertex.y},
+             {dimension.extension_end.x, dimension.extension_end.y}, 0.0}};
+        const auto boundary_id = "dxf-boundary-" + std::to_string(++boundary_counter);
+        const auto label_id = "dxf-dimension-" + std::to_string(++label_counter);
+        result.entities.push_back(imported_boundary(boundary_id, rays,
+            "dxf_angular_dimension_rays", dimension.layer, "DIMENSION",
+            Json{{"dxf_angular_dimension", Json{
+                {"vertex", Json::array({dimension.vertex.x, dimension.vertex.y})},
+                {"extension_start", Json::array({dimension.extension_start.x, dimension.extension_start.y})},
+                {"extension_end", Json::array({dimension.extension_end.x, dimension.extension_end.y})},
+                {"dimension_arc", Json::array({dimension.dimension_arc.x, dimension.dimension_arc.y})},
+                {"text_position", Json::array({dimension.text_position.x, dimension.text_position.y})},
+                {"text_rotation_degrees", dimension.text_rotation_degrees},
+                {"text_height", dimension.text_height},
+                {"text", dimension.text},
+                {"annotation_id", label_id}}}}));
+        LabelInstance label;
+        label.id = label_id;
+        label.template_id = "dxf-dimension";
+        // Angle quantities do not scale when linear source units become metres.
+        label.content = dimension_quantity_text(sweep * 180.0 / std::numbers::pi, " deg", dimension.text);
+        label.style.text_height_metres = dimension.text_height;
+        label.style.stroke_color = "#263241";
+        label.style.fill_color = "#FFFFFF";
+        label.placement.position = {dimension.text_position.x, dimension.text_position.y};
+        label.placement.rotation_radians = radians_from_degrees(dimension.text_rotation_degrees);
+        source_layers[label.id] = dimension.layer;
+        annotations.labels.push_back(std::move(label));
+        diagnostic(result.diagnostics, boundary_id, "DIMENSION", "dimension_associativity_unbound");
+    }
+}
+
 void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& native_inserts,
                     DxfProjectImportResult& result,
                     std::size_t& boundary_counter, std::size_t& label_counter,
@@ -1343,6 +1423,14 @@ void normalize_drawing_to_metres(DxfDrawing& drawing, double factor) {
         point(dimension.text_position);
         length(dimension.text_height);
     }
+    for (auto& dimension : drawing.angular_dimensions) {
+        point(dimension.extension_start);
+        point(dimension.extension_end);
+        point(dimension.vertex);
+        point(dimension.dimension_arc);
+        point(dimension.text_position);
+        length(dimension.text_height);
+    }
     for (auto& hatch : drawing.hatches)
         for (auto& vertex : hatch.boundary) point(vertex);
     for (auto& block : drawing.blocks) { point(block.base); primitives(block); }
@@ -1394,6 +1482,10 @@ void preflight_project_expansion(const DxfDrawing& drawing, const DxfExchangeLim
         append({2, 4, true});
     }
     for (const auto& dimension : drawing.arc_dimensions) {
+        (void)dimension;
+        append({2, 5, true});
+    }
+    for (const auto& dimension : drawing.angular_dimensions) {
         (void)dimension;
         append({2, 5, true});
     }
@@ -1509,6 +1601,7 @@ DxfProjectImportResult import_project_dxf(std::string_view bytes,
     import_labels(parsed.drawing.labels, annotations, label_counter, annotation_layers);
     import_dimensions(parsed.drawing.dimensions, result, annotations, boundary_counter, label_counter, annotation_layers, *factor);
     import_arc_dimensions(parsed.drawing.arc_dimensions, result, annotations, boundary_counter, label_counter, annotation_layers, *factor);
+    import_angular_dimensions(parsed.drawing.angular_dimensions, result, annotations, boundary_counter, label_counter, annotation_layers);
     import_inserts(parsed.drawing, native_inserts, result, boundary_counter, label_counter, annotations, annotation_layers);
     if (!annotations.labels.empty()) {
         try {

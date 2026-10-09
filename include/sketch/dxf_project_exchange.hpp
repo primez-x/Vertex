@@ -49,8 +49,8 @@ struct DxfProjectImportResult {
 // inventory. Single curved lengths use analytical ARC_DIMENSION; straight
 // lengths use aligned DIMENSION. Bent/curved multi-edge totals retain their
 // measured quantity as a named text callout with an explicit fidelity diagnostic.
-// Angle/area quantities likewise retain named callouts rather than substituting
-// linear measurements; their native target association is explicitly diagnosed.
+// Angles retain their admitted vertex tangents as three-point angular DIMENSION;
+// area quantities retain named callouts with their association loss diagnosed.
 [[nodiscard]] DxfProjectExportResult export_project_dxf(
     const DocumentSnapshot& document,
     const DxfExchangeLimits& limits = {});
@@ -71,7 +71,7 @@ struct DxfProjectImportResult {
 // Inches, feet, millimetres, centimetres, metres and kilometres are normalized
 // to native SI metres before mapping. Missing/unitless or other source units
 // return no candidates, an explicit diagnostic and required source retention.
-// Linear/arc dimensions reconstruct their measured geometry and actual text,
+// Linear/arc/angular dimensions reconstruct their measured geometry and actual text,
 // retaining their presentation metadata. Foreign owner association remains
 // unbound and diagnosed; a dimension picture block supplies no native authority.
 [[nodiscard]] DxfProjectImportResult import_project_dxf(

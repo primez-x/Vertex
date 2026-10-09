@@ -693,7 +693,11 @@ static BoundaryDimensionResolution resolve_identified_dimension(
             invalid("angle dimension target tangents do not form a measurable angle");
         }
         return BoundaryDimensionResolution{first->segment, segment_length(first->segment),
-                                           BoundaryDimensionKind::angle, angle, 0.0};
+                                           BoundaryDimensionKind::angle, angle, 0.0,
+                                           BoundaryDimensionAngleGeometry{
+                                               first->start_vertex_id == dimension.vertex_id
+                                                   ? first->segment.start : first->segment.end,
+                                               first_tangent, second_tangent}};
     }
 
     Boundary boundary;

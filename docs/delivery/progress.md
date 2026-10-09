@@ -14,6 +14,31 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 angular DXF dimension source implementation
+
+Native angle resolution now exposes its admitted vertex and normalized edge
+tangents as transient geometry. DXF export uses those same tangents, including
+curved edges, for a three-point angular dimension and visible arc, extensions,
+ticks and measured text. It preserves the native smaller-angle quantity and
+manual text placement. This adds no persisted native kind or format floor.
+
+The bounded codec admits three-point angular dimensions with an unambiguous
+arc-definition point within their declared CCW span. Two-line or ambiguous
+arc selection remains explicitly unsupported with original-source retention.
+Import reconstructs the connected rays and actual degree text; linear-unit
+normalization scales every anchor and text height without scaling the angle.
+Metadata retains presentation and the remapped annotation ID. Existing record,
+pair, byte and project-expansion budgets include this additional family;
+picture references supply no native semantic authority.
+
+Independent source review found one presentation defect: authored degree
+suffixes could repeat in picture text. Numeric-only substitution now matches
+the importer, with the automatic suffix applied only to empty automatic text.
+Root reviewed that correction; no additional actionable source finding was
+reported. No builds, tests, probes, scripts, native jobs, launches, packages or installations ran.
+Compilation, round trips and external CAD rendering remain unverified; the
+installed candidate is unchanged.
+
 ### October 9 CAD block identity source correction
 
 The isolated normalizer now uses case-insensitive keys for native block
