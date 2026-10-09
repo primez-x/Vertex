@@ -23564,7 +23564,7 @@ public:
                 edited.reserve(changes.size()+1);
                 for (const auto& change:changes) edited.push_back(change.entity);
                 edited.push_back(candidate);
-                const auto compound=capture_stair_compound_edits(snapshot.entities(), edited);
+                const auto compound=capture_phase_stair_replacement_compound_edits(snapshot.entities(), edited);
                 if (compound.empty()) {
                     clearError();
                     refresh();
@@ -43199,6 +43199,7 @@ private:
             }
             throw std::invalid_argument(reasons.empty() ? "The stair replacement has an unresolved dependency." : reasons);
         }
+        replacement.preserved_inactive_rail_ids=plan.preserved_inactive_rail_ids;
         auto occupied=retainedSlabIdentityNames(source, true);
         // The edited topology can introduce child names that were absent from
         // the snapshot. They are source names in this proof, not destinations.
@@ -44504,7 +44505,7 @@ private:
             if (!demolition) throw std::invalid_argument("The stair or railing's saved alternative changed before demolition.");
             command=*demolition;
         } else command=sourceDerivedStairCompoundEditCommand(source,
-            capture_stair_compound_edits(source.entities(), edited), raw->message);
+            capture_phase_stair_replacement_compound_edits(source.entities(), edited), raw->message);
         if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
         return command;
     }

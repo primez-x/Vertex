@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v135
+# Vertex project formats v1 through v136
+
+## Stair replacement with retained inactive topology (v136)
+
+Native reader 136 and JSON/assets extraction 134 retain stair replacement child
+four under direct active-design authoring twelve or coordinated authoring
+fourteen. The closed nine fields retain the common registry, alternative and
+qualified destination maps; exactly one existing mathematical lane (`edits`,
+`transforms` or `compound_edits`) is present. The additional
+`preserved_inactive_rail_ids` is a nonempty, ascending, unique actual entity-ID
+witness. It must match independently derived inactive attachments to the
+actually changed baseline stairs. It grants no removal, supplied-source or raw
+entity authority.
+
+Replay creates only a bounded additive staging cohort derived from the actual
+source. Originals and their inactive attachments remain valid and unchanged
+while the copied active cohort receives the captured typed mathematical edit.
+Only codec-owned temporary identity slots reverse into edited descriptors;
+opaque envelopes and entered quantities still require their existing codecs.
+The final proposed cohort retains globally fresh topology, actual hosted rows,
+valid active rail references and complete Document/history/assets admission.
+Legacy children one through three keep their original replay paths. Current,
+retained and wrapped proofs preserve the child-four floor. Intermediate native
+silhouettes and bound dimensions resolve qualified owners in the full admitted
+additive map; reversed descriptors supply only host and placement bookkeeping.
+Independent and integrated source review approved; compilation and runtime
+remain unverified.
 
 ## Mixed baseline and ordinary removal (v135)
 

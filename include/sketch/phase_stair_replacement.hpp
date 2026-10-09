@@ -51,6 +51,9 @@ struct PhaseStairReplacementPlan {
     std::vector<PhaseStairReplacementHostedInstanceKey> required_hosted_instance_ids;
     std::vector<PhaseStairReplacementOverlayKey> required_overlay_ids;
     std::vector<std::string> retained_rehost_object_ids;
+    // Actual inactive rails attached to replaced baseline stairs. Nonempty
+    // discovery selects additive retained-topology staging (closed child v4).
+    std::vector<std::string> preserved_inactive_rail_ids;
     std::vector<PhaseStairReplacementDiagnostic> diagnostics;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseStairReplacementPlan&) const = default;
@@ -72,6 +75,13 @@ struct PhaseStairReplacementPlan {
     const PhaseStairReplacementEntities& actual, const std::vector<StairCompoundEditIntent>& compound_edits,
     const std::string& registry_id = {}, const std::string& alternative_id = {});
 
+// Capture complete edited owner envelopes through ordinary typed authority,
+// using additive actual-source copies when inactive baseline attachments need
+// their original topology. Never grants supplied entity-map authority. Other
+// sources retain the existing compound capture and admission contract.
+[[nodiscard]] std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
+    const PhaseStairReplacementEntities& actual, const std::vector<Entity>& edited_entities);
+
 struct PhaseStairReplacementAuthoring {
     std::string registry_id;
     std::string alternative_id;
@@ -80,10 +90,13 @@ struct PhaseStairReplacementAuthoring {
     PhaseStairReplacementChildIdentityMap child_identities;
     PhaseStairReplacementHostedInstanceIdentityMap hosted_instance_identities;
     PhaseStairReplacementOverlayIdentityMap overlay_identities;
-    // Exclusive with edits. Nonempty transforms select the closed v2 proof.
+    // Exclusive with edits. Without a retained witness, selects closed v2.
     std::vector<StairTransformIntent> transforms;
-    // Exclusive with both existing lanes. Selects the closed v3 proof.
+    // Exclusive with both existing lanes. Without a witness, selects closed v3.
     std::vector<StairCompoundEditIntent> compound_edits;
+    // Nonempty, ascending actual-source witness selects v4 for any one lane.
+    // Empty preserves the original v1/v2/v3 staging and replay meanings.
+    std::vector<std::string> preserved_inactive_rail_ids;
 };
 
 // Closed v1: version, registry_id, alternative_id, edits, identities,
@@ -95,6 +108,9 @@ struct PhaseStairReplacementAuthoring {
 // their v1 meanings. Captured operators replay against the actual source only.
 // Closed v3 replaces edits with compound_edits. Typed actual-source profiles
 // precede anchored rigid placement, including complete entered-input receipts.
+// Closed v4 adds preserved_inactive_rail_ids to exactly one existing lane.
+// The nonempty ascending witness must equal independently discovered inactive
+// actual rails; typed edits stage on additive copies before final replacement.
 [[nodiscard]] nlohmann::json encode_phase_stair_replacement_authoring(
     const PhaseStairReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(

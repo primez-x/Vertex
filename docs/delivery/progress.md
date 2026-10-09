@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 retained stair topology replacement source integration
+
+Active-alternative stair replacement now has an actual-source staging path for
+inactive attached railings that still use the original stair topology. The
+producer creates a bounded additive temporary cohort, applies the captured
+typed edit to copies, and derives the proposed descriptors while original
+baseline/inactive owners remain intact. Active attachments must still resolve
+against the edited topology. A source-derived inactive-rail witness selects
+closed child four; older child meanings remain unchanged. The object editor
+captures this witness, and native 136/extraction 134 retains it in direct,
+coordinated, retained and wrapped authoring.
+
+Intermediate silhouette and bound-dimension derivation use the full admitted
+additive map with qualified temporary identities. Reversed descriptors serve
+only host and placement bookkeeping. Independent source review approved after
+closing that intermediate-map finding; root integrated source review is complete.
+No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation and runtime
+remain unverified; the installed candidate is unchanged. Retired active rail
+dependencies still require explicit valid rehosting; broader removal and
+production qualification remain unfinished scope.
+
 ### October 9 mixed baseline and ordinary removal source integration
 
 Delete/Cut now partition one actual selection into retained baseline demolition

@@ -9,6 +9,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
+#include "sketch/stair_clone.hpp"
 #include "sketch/site_frame.hpp"
 
 #include <BRepBndLib.hxx>
@@ -393,12 +394,22 @@ Entity catalog_local_remainder(Entity entity) {
     }
     return entity;
 }
+struct ProfilePresentationSource {
+    // A complete, admitted authored map. V4 retains the additive copied owners
+    // and original historical attachments rather than reversing their IDs.
+    Entities entities;
+    // Actual owner/render spelling -> qualified owner/render in entities.
+    PhaseStairReplacementIdentityMap identities;
+};
 struct Derivation {
     PhaseStairReplacementPlan plan;
+    // Typed edited descriptors used to assemble the eventual full candidate;
+    // v4 reverses qualification here without claiming physical-map admission.
     Entities physical;
-    // Only child three needs an intermediate silhouette. It is independently
-    // replayed typed profile authority over actual, never supplied source bytes.
-    Entities profile_stage;
+    // Reversed typed descriptors are only for replacement/placement bookkeeping;
+    // they are never a physical source map for silhouette/host derivation.
+    Entities profile_descriptors;
+    ProfilePresentationSource profile_source;
     Ids copied_owners;
     Ids catalogs;
     EmbeddedAssemblyPresentationIds original_aliases;
@@ -436,25 +447,273 @@ void topology_dependencies(const Entities& actual, const std::vector<StairObject
         }
     }
 }
+void remap_field(Json& value, const char* name, const PhaseStairReplacementIdentityMap& mapping);
+std::vector<std::string> inactive_attached_rails(const Entities& actual, const Ids& stairs) {
+    const auto active = constraint_phase_scope(actual);
+    std::vector<std::string> result;
+    for (const auto& [id, entity] : actual) {
+        if (!active.inactive_owner_ids.contains(id)) continue;
+        const auto host = host_id(entity);
+        if (host && stairs.contains(*host)) result.push_back(id);
+    }
+    if (result.size() > identity_limit) reject("retained inactive rail witness budget exceeded");
+    return result;
+}
+template<class Intent>
+Json intent_wire(const Intent& intent) {
+    if constexpr (std::is_same_v<Intent, StairObjectEditIntent>) return encode_stair_object_edit_intent(intent);
+    else if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) return encode_stair_compound_edit_intent(intent);
+    else return encode_stair_transform_intent(intent);
+}
+// These descriptors are private typed results, never an admitted entity map or
+// a publication candidate. Every physical stage below uses the full additive
+// actual-source clone candidate, keeping historical attachment owners intact.
+template<class Intent>
+bool stage_retained_topology(const Entities& actual, const std::vector<Intent>& intents,
+    const Memberships& scope, Entities& physical, Entities& profile_descriptors,
+    std::vector<StairCompoundEditIntent>* captured = nullptr,
+    ProfilePresentationSource* presentation_source = nullptr) {
+    Ids baseline_stairs;
+    Strings occupied = source_budget(actual);
+    std::size_t bytes{};
+    for (const auto& intent : intents) {
+        const auto wire = intent_wire(intent); const auto size = wire.dump().size();
+        if (size > proof_limit - bytes) reject("typed staging batch byte budget exceeded");
+        bytes += size; occupied.read(wire);
+        const auto& id = intent_owner(intent);
+        const auto owner = actual.find(id);
+        if (owner == actual.end() || !physical_owner(owner->second)) reject("typed staging target requires its actual physical owner: " + id);
+        const auto member = scope.owners.find(id);
+        if (owner->second.type != "stair" || member == scope.owners.end()) continue;
+        const auto& model = scope.models.at(member->second);
+        const auto states = model.active_state(); const auto state = states.find(id);
+        if (model.active_alternative() && baseline(model, id) && state != states.end() && state->second != ModelPhase::demolished)
+            baseline_stairs.insert(id);
+    }
+    if (inactive_attached_rails(actual, baseline_stairs).empty()) return false;
+    const auto aliases = embedded_assembly_presentation_ids(actual);
+    for (const auto& [key, alias] : aliases) { (void)key; occupied.text(alias); }
+    Ids roots;
+    for (const auto& intent : intents) {
+        const auto& id = intent_owner(intent); roots.insert(id);
+        // Identity-copy selection still needs the actual host of an explicitly
+        // selected hosted rail. It gives no placement authority to that host.
+        if (const auto host = host_id(actual.at(id))) roots.insert(*host);
+        if constexpr (!std::is_same_v<Intent, StairTransformIntent>) {
+            const auto& profile = [&]() -> const StairObjectEditIntent& {
+                if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) return intent.profile_edit;
+                else return intent;
+            }();
+            // An explicit typed rehost also needs a copied actual destination:
+            // an unregistered scratch rail cannot borrow a registered host.
+            if (actual.at(id).type == "railing") {
+                const auto host = field(profile.profile_fields, "host");
+                const auto stair = host ? field(*host, "stair_id") : nullptr;
+                if (stair && stair->is_string()) roots.insert(stair->get<std::string>());
+            }
+        }
+    }
+    StairCloneAuthoring clone;
+    for (const auto& id : roots) clone.transforms.push_back({id, ArchitecturalGroupTransform{}, nullptr});
+    const auto plan = inspect_stair_clone_plan(actual, clone.transforms);
+    if (!plan.ready()) reject("additive staging: " + plan.diagnostics.front().entity_id + ": " + plan.diagnostics.front().reason);
+    std::size_t serial{};
+    const auto fresh = [&]() {
+        std::string id;
+        do { id = "phase-stair-stage-" + std::to_string(++serial); } while (occupied.values.contains(id));
+        occupied.text(id); return id;
+    };
+    for (const auto& id : plan.required_entity_ids) clone.identities.emplace(id, fresh());
+    for (const auto& key : plan.required_child_ids) clone.child_identities.emplace(key, fresh());
+    for (const auto& key : plan.required_hosted_instance_ids) clone.hosted_instance_identities.emplace(key, fresh());
+    for (const auto& key : plan.required_overlay_ids) clone.overlay_identities.emplace(key, fresh());
+    // Copy authority is derived only from the actual source. Introduced typed
+    // topology gets its own qualified temporary identity, never a borrowed
+    // source child. The original spelling is checked again on extraction.
+    auto children = clone.child_identities;
+    std::size_t temporary_inventory = plan.required_entity_ids.size() + plan.required_child_ids.size() +
+        plan.required_hosted_instance_ids.size() + plan.required_overlay_ids.size();
+    if constexpr (!std::is_same_v<Intent, StairTransformIntent>) {
+        for (const auto& intent : intents) {
+            const auto& profile = [&]() -> const StairObjectEditIntent& {
+                if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) return intent.profile_edit;
+                else return intent;
+            }();
+            if (actual.at(profile.object_id).type != "stair") continue;
+            for (const auto* name : {"flights", "landings"}) {
+                const auto rows = field(profile.profile_fields, name);
+                if (!rows || !rows->is_array()) continue;
+                for (const auto& row : *rows) {
+                    const PhaseStairReplacementChildKey key{profile.object_id, identity(row.at("id"))};
+                    if (!children.contains(key)) {
+                        if (temporary_inventory == identity_limit) reject("combined temporary topology identity budget exceeded");
+                        ++temporary_inventory; children.emplace(key, fresh());
+                    }
+                }
+            }
+        }
+    }
+    const auto rebound_profile = [&](StairObjectEditIntent profile) {
+        const auto owner = profile.object_id;
+        profile.object_id = clone.identities.at(owner);
+        if (actual.at(owner).type == "stair") {
+            for (const auto* name : {"flights", "landings"}) {
+                auto rows = profile.profile_fields.find(name);
+                if (rows == profile.profile_fields.end() || !rows->is_array()) continue;
+                for (auto& row : *rows) row.at("id") = children.at({owner, row.at("id").get<std::string>()});
+            }
+        } else {
+            auto host = profile.profile_fields.find("host");
+            if (host != profile.profile_fields.end() && host->is_object()) {
+                const auto stair = host->at("stair_id").get<std::string>();
+                if (clone.identities.contains(stair)) {
+                    for (const auto* name : {"flight_id", "landing_id", "incoming_flight_id", "outgoing_flight_id"})
+                        if (host->contains(name)) host->at(name) = children.at({stair, host->at(name).get<std::string>()});
+                    host->at("stair_id") = clone.identities.at(stair);
+                }
+            }
+        }
+        return profile;
+    };
+    const auto copied_source = replay_stair_clone_authoring(actual, clone);
+    Entities edited, profiled;
+    if constexpr (std::is_same_v<Intent, StairObjectEditIntent>) {
+        std::vector<StairObjectEditIntent> rebound;
+        for (const auto& intent : intents) rebound.push_back(rebound_profile(intent));
+        topology_dependencies(copied_source, rebound);
+        edited = replay_stair_object_edit_entities(copied_source, rebound);
+    } else if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) {
+        std::vector<StairCompoundEditIntent> rebound;
+        for (auto intent : intents) {
+            intent.profile_edit = rebound_profile(std::move(intent.profile_edit));
+            intent.placement_edit.object_id = intent.profile_edit.object_id;
+            rebound.push_back(std::move(intent));
+        }
+        const auto profiles = compound_profiles(rebound);
+        topology_dependencies(copied_source, profiles);
+        profiled = replay_stair_object_edit_entities(copied_source, profiles);
+        edited = replay_stair_compound_edit_entities(copied_source, rebound);
+    } else {
+        std::vector<StairTransformIntent> rebound;
+        for (auto intent : intents) { intent.object_id = clone.identities.at(intent.object_id); rebound.push_back(std::move(intent)); }
+        edited = replay_stair_transform_entities(copied_source, rebound);
+    }
+    PhaseStairReplacementIdentityMap inverse;
+    for (const auto& [id, temporary] : clone.identities) inverse.emplace(temporary, id);
+    std::map<PhaseStairReplacementChildKey, std::string> inverse_children;
+    for (const auto& [key, temporary] : children) inverse_children.emplace(std::pair{clone.identities.at(key.first), temporary}, key.second);
+    const auto extract = [&](const Entities& staged) {
+        auto descriptors = actual;
+        for (const auto& [id, temporary] : clone.identities) {
+            if (!exact(staged.at(id), copied_source.at(id))) reject("typed staging changed an original owner: " + id);
+            const auto& original = actual.at(id);
+            if (!physical_owner(original)) continue;
+            auto copy = staged.at(temporary); copy.id = id;
+            if (copy.type == "stair") {
+                for (const auto* name : {"flights", "landings"}) if (copy.properties.contains(name))
+                    for (auto& row : copy.properties.at(name)) row.at("id") = inverse_children.at({temporary, row.at("id").get<std::string>()});
+            } else if (const auto host = host_id(copy); host && inverse.contains(*host)) {
+                auto& binding = copy.properties.at("host");
+                for (const auto* name : {"flight_id", "landing_id", "incoming_flight_id", "outgoing_flight_id"})
+                    if (binding.contains(name)) binding.at(name) = inverse_children.at({*host, binding.at(name).get<std::string>()});
+                binding.at("stair_id") = inverse.at(*host);
+            }
+            // Independently check envelopes/entered inputs against the actual
+            // owner after reversing only codec-owned qualification slots.
+            (void)capture_stair_object_edit(original, copy);
+            descriptors.at(id) = std::move(copy);
+        }
+        for (const auto& [key, temporary] : clone.hosted_instance_identities) {
+            auto& raw = descriptors.at(key.first).properties.at("model");
+            const auto& typed = staged.at(clone.identities.at(key.first)).properties.at("model");
+            const auto row = std::find_if(typed.at("instances").begin(), typed.at("instances").end(), [&](const auto& item) { return item.at("id") == temporary; });
+            if (row == typed.at("instances").end()) reject("typed staged hosted row disappeared");
+            auto replacement = *row; replacement.at("id") = key.second;
+            remap_field(replacement.at("placement"), "host_entity_id", inverse);
+            auto& rows = raw.at("instances");
+            const auto target = std::find_if(rows.begin(), rows.end(), [&](const auto& item) { return item.at("id") == key.second; });
+            if (target == rows.end()) reject("actual qualified hosted row disappeared");
+            *target = std::move(replacement); raw.at("schema") = typed.at("schema");
+        }
+        validate_stair_identity_transition(actual, descriptors, std::span<const RevisionRecord>{});
+        return descriptors;
+    };
+    physical = extract(edited);
+    if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) {
+        profile_descriptors = extract(profiled);
+        if (presentation_source) {
+            // Resolve aliases only against the valid full additive map. Original
+            // aliases stay exact; copied hosted rows get qualified render names.
+            const auto profiled_aliases = embedded_assembly_presentation_ids(profiled);
+            for (const auto& [key, alias] : aliases)
+                if (profiled_aliases.at(key) != alias) reject("typed additive profiles changed an original component alias");
+            presentation_source->identities = clone.identities;
+            for (const auto& [key, temporary] : clone.hosted_instance_identities) {
+                const PhaseStairReplacementHostedInstanceKey copied{clone.identities.at(key.first), temporary};
+                if (!presentation_source->identities.emplace(aliases.at(key), profiled_aliases.at(copied)).second)
+                    reject("qualified profile presentation overlaps an actual owner");
+            }
+            presentation_source->entities = std::move(profiled);
+        }
+    }
+    if constexpr (std::is_same_v<Intent, StairObjectEditIntent>) {
+        if (captured) {
+            std::vector<Entity> edited_owners;
+            for (const auto& intent : intents) edited_owners.push_back(edited.at(clone.identities.at(intent.object_id)));
+            auto temporary = capture_stair_compound_edits(copied_source, edited_owners);
+            for (auto& intent : temporary) {
+                auto& profile = intent.profile_edit;
+                const auto temporary_owner = profile.object_id;
+                const auto& owner = inverse.at(temporary_owner);
+                if (actual.at(owner).type == "stair") {
+                    for (const auto* name : {"flights", "landings"}) {
+                        auto rows = profile.profile_fields.find(name);
+                        if (rows == profile.profile_fields.end() || !rows->is_array()) continue;
+                        for (auto& row : *rows) row.at("id") = inverse_children.at({temporary_owner, row.at("id").get<std::string>()});
+                    }
+                } else {
+                    auto host = profile.profile_fields.find("host");
+                    if (host != profile.profile_fields.end() && host->is_object()) {
+                        const auto stair = host->at("stair_id").get<std::string>();
+                        if (inverse.contains(stair)) {
+                            for (const auto* name : {"flight_id", "landing_id", "incoming_flight_id", "outgoing_flight_id"})
+                                if (host->contains(name)) host->at(name) = inverse_children.at({stair, host->at(name).get<std::string>()});
+                            host->at("stair_id") = inverse.at(stair);
+                        }
+                    }
+                }
+                profile.object_id = owner; intent.placement_edit.object_id = owner;
+                (void)encode_stair_compound_edit_intent(intent);
+            }
+            *captured = std::move(temporary);
+        }
+    }
+    return true;
+}
 template<class Intent>
 Derivation derive(const Entities& actual, const std::vector<Intent>& edits,
-    const std::string& registry_id, const std::string& alternative_id) {
+    const std::string& registry_id, const std::string& alternative_id, bool retained_staging = true) {
     Derivation result;
     auto& plan = result.plan;
     plan.registry_id = registry_id; plan.alternative_id = alternative_id;
     try {
         (void)source_budget(actual);
         if (edits.empty() || edits.size() > identity_limit) reject("requires a bounded nonempty typed profile batch");
-        if constexpr (std::is_same_v<Intent, StairObjectEditIntent>) {
-            topology_dependencies(actual, edits);
-            result.physical = replay_stair_object_edit_entities(actual, edits);
-        } else if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) {
-            const auto profiles = compound_profiles(edits);
-            topology_dependencies(actual, profiles);
-            result.physical = replay_stair_compound_edit_entities(actual, edits);
-            result.profile_stage = replay_stair_object_edit_entities(actual, profiles);
-        } else result.physical = replay_stair_transform_entities(actual, edits);
         const auto scope = memberships(actual);
+        const bool staged = retained_staging && stage_retained_topology(actual, edits, scope, result.physical,
+            result.profile_descriptors, nullptr, &result.profile_source);
+        if (!staged) {
+            if constexpr (std::is_same_v<Intent, StairObjectEditIntent>) {
+                topology_dependencies(actual, edits);
+                result.physical = replay_stair_object_edit_entities(actual, edits);
+            } else if constexpr (std::is_same_v<Intent, StairCompoundEditIntent>) {
+                const auto profiles = compound_profiles(edits);
+                topology_dependencies(actual, profiles);
+                result.physical = replay_stair_compound_edit_entities(actual, edits);
+                result.profile_descriptors = replay_stair_object_edit_entities(actual, profiles);
+                result.profile_source.entities = result.profile_descriptors;
+            } else result.physical = replay_stair_transform_entities(actual, edits);
+        }
         const auto request = classify(actual, result.physical, edits, scope);
         if (!request) reject("batch has no actually changed active shared-baseline owner");
         if ((!registry_id.empty() && registry_id != request->registry_id) ||
@@ -462,6 +721,7 @@ Derivation derive(const Entities& actual, const std::vector<Intent>& edits,
             reject("supplied destination differs from actual saved active membership");
         plan.registry_id = request->registry_id; plan.alternative_id = request->alternative_id;
         plan.seed_object_ids = request->seed_object_ids;
+        if (staged) plan.preserved_inactive_rail_ids = inactive_attached_rails(actual, Ids(plan.seed_object_ids.begin(), plan.seed_object_ids.end()));
         result.copied_owners.insert(plan.seed_object_ids.begin(), plan.seed_object_ids.end());
         const auto& model = scope.models.at(plan.registry_id);
         const auto states = model.active_state();
@@ -746,10 +1006,18 @@ std::size_t presentation_cost(const Entities& source, const std::string& owner,
     if (!expansion.profiles.empty()) return budget.consumed_nodes + budget.consumed_profile_segments;
     return presentation_cost(source, row->placement->host_entity_id, aliases);
 }
+const std::string& qualified_profile_presentation_owner(
+    const PhaseStairReplacementIdentityMap& identities, const std::string& owner) {
+    if (identities.empty()) return owner; // Original v1/v2/v3 source vocabulary.
+    const auto found = identities.find(owner);
+    if (found == identities.end()) reject("additive profile presentation lacks its qualified actual owner: " + owner);
+    return found->second;
+}
 void transform_overlay(Json& row, const CoordinatedView& view, const Entities& actual, const Entities& candidate,
     const PhaseStairReplacementIdentityMap& mapping, const PresentationTransforms& transforms,
     const EmbeddedAssemblyPresentationIds& source_aliases, const EmbeddedAssemblyPresentationIds& candidate_aliases,
-    const std::string& qualified_view, OverlayGeometryCache& source_cache, OverlayGeometryCache& candidate_cache) {
+    const PhaseStairReplacementIdentityMap& source_identities, const std::string& qualified_view,
+    OverlayGeometryCache& source_cache, OverlayGeometryCache& candidate_cache) {
     const auto binding = field(row, "dimension_binding");
     const auto owner = binding && !binding->is_null() ? binding->at("object_id").get<std::string>()
         : row.value("object_id", std::string{});
@@ -766,7 +1034,8 @@ void transform_overlay(Json& row, const CoordinatedView& view, const Entities& a
         const bool next_horizontal = std::abs(dy) <= 1e-10 && std::abs(dx) > 1e-10;
         const bool next_vertical = std::abs(dx) <= 1e-10 && std::abs(dy) > 1e-10;
         if (!next_horizontal && !next_vertical) reject("transformed bound dimension axis is not representable in its saved view");
-        const auto before = source_cache.get(actual, owner, qualified_view, frame, source_aliases);
+        const auto before = source_cache.get(actual, qualified_profile_presentation_owner(source_identities, owner),
+            qualified_view, frame, source_aliases);
         const auto after = candidate_cache.get(candidate, mapping.at(owner), qualified_view, frame, candidate_aliases);
         const double location = (horizontal ? before.maximum.y : before.maximum.x) + binding->at("line_offset_m").get<double>();
         const auto moved = frame.move(horizontal ? std::array<double, 2>{0, location} : std::array<double, 2>{location, 0}, transform);
@@ -779,15 +1048,21 @@ void transform_overlay(Json& row, const CoordinatedView& view, const Entities& a
 }
 void presentation(Entities& candidate, const Entities& actual, const PhaseStairReplacementIdentityMap& mapping,
     const PhaseStairReplacementOverlayIdentityMap& overlay_ids, const PresentationTransforms& transforms = {},
-    const Entities* profile_stage = nullptr) {
-    const auto& silhouette_source = profile_stage ? *profile_stage : actual;
+    const ProfilePresentationSource* profile_source = nullptr) {
+    const auto& silhouette_source = profile_source ? profile_source->entities : actual;
+    const PhaseStairReplacementIdentityMap identity_source;
+    const auto& source_identities = profile_source ? profile_source->identities : identity_source;
     Ids owners; for (const auto& [old, proposed] : mapping) { (void)proposed; owners.insert(old); }
     EmbeddedAssemblyPresentationIds source_aliases, candidate_aliases;
     OverlayGeometryCache source_cache, candidate_cache;
     if (!transforms.empty() && std::any_of(mapping.begin(), mapping.end(), [&](const auto& row) { return !actual.contains(row.first); })) {
-        source_aliases = embedded_assembly_presentation_ids(actual); candidate_aliases = embedded_assembly_presentation_ids(candidate);
-        if (profile_stage && embedded_assembly_presentation_ids(*profile_stage) != source_aliases)
+        const auto original_aliases = embedded_assembly_presentation_ids(actual);
+        source_aliases = embedded_assembly_presentation_ids(silhouette_source);
+        candidate_aliases = embedded_assembly_presentation_ids(candidate);
+        if (profile_source && source_identities.empty() && source_aliases != original_aliases)
             reject("typed intermediate profiles changed actual qualified component aliases");
+        if (profile_source && !source_identities.empty()) for (const auto& [key, alias] : original_aliases)
+            if (source_aliases.at(key) != alias) reject("additive profile presentation changed an original component alias");
     }
     if (!transforms.empty()) {
         std::set<PhaseStairReplacementOverlayKey> projected;
@@ -803,7 +1078,8 @@ void presentation(Entities& candidate, const Entities& actual, const PhaseStairR
                 if (!mapping.contains(owner)) reject("copied bound overlay refers to a source outside the copied transform cohort");
                 if (!projected.emplace(id, view.id, owner).second) continue;
                 const auto& proposed = mapping.at(owner);
-                if (!source_costs.contains(owner)) source_costs.emplace(owner, presentation_cost(silhouette_source, owner, source_aliases));
+                if (!source_costs.contains(owner)) source_costs.emplace(owner, presentation_cost(silhouette_source,
+                    qualified_profile_presentation_owner(source_identities, owner), source_aliases));
                 if (!candidate_costs.contains(proposed)) candidate_costs.emplace(proposed, presentation_cost(candidate, proposed, candidate_aliases));
                 for (const auto cost : {source_costs.at(owner), candidate_costs.at(proposed)}) {
                     if (cost > geometry_limit - work) reject("aggregate bound saved-view native work budget exceeded");
@@ -839,7 +1115,7 @@ void presentation(Entities& candidate, const Entities& actual, const PhaseStairR
                             // without inventing an ambiguous concatenated alias.
                             const auto qualified = Json::array({id, view_id}).dump();
                             transform_overlay(row, *saved, silhouette_source, candidate, mapping, transforms, source_aliases, candidate_aliases,
-                                qualified, source_cache, candidate_cache);
+                                source_identities, qualified, source_cache, candidate_cache);
                         }
                         row.at("id") = overlay_ids.at({id, view_id, row.at("id").get<std::string>()});
                         remap_field(row, "object_id", mapping);
@@ -887,14 +1163,39 @@ void admit_physical(const Entities& candidate, const Ids& owners) {
 bool PhaseStairReplacementPlan::ready() const noexcept {
     return std::none_of(diagnostics.begin(), diagnostics.end(), [](const auto& row) { return row.blocking; });
 }
+std::vector<StairCompoundEditIntent> capture_phase_stair_replacement_compound_edits(
+    const Entities& actual, const std::vector<Entity>& edited_entities) {
+    (void)source_budget(actual);
+    if (edited_entities.size() > maximum_architectural_group_targets) reject("compound capture target budget exceeded");
+    std::vector<StairObjectEditIntent> profiles;
+    Ids targets; Strings edited_budget;
+    for (const auto& edited : edited_entities) {
+        identity(edited.id);
+        edited_budget.text(edited.id); edited_budget.text(edited.type);
+        edited_budget.read(edited.properties); edited_budget.read(edited.extensions);
+        if (!targets.insert(edited.id).second) reject("duplicate compound capture owner");
+        const auto original = actual.find(edited.id);
+        if (original == actual.end() || !physical_owner(original->second)) reject("compound capture requires an actual stair or railing: " + edited.id);
+        if (const auto intent = capture_stair_object_edit(original->second, edited)) profiles.push_back(*intent);
+    }
+    std::vector<StairCompoundEditIntent> result;
+    Entities physical, intermediate;
+    if (!stage_retained_topology(actual, profiles, memberships(actual), physical, intermediate, &result))
+        return capture_stair_compound_edits(actual, edited_entities);
+    return result;
+}
 std::optional<PhaseStairReplacementRequest> phase_stair_replacement_request(const Entities& actual,
     const std::vector<StairObjectEditIntent>& edits) {
     try {
         (void)source_budget(actual);
         if (edits.size() > identity_limit) reject("typed profile target budget exceeded");
-        topology_dependencies(actual, edits);
-        const auto physical = replay_stair_object_edit_entities(actual, edits);
-        return classify(actual, physical, edits, memberships(actual));
+        const auto scope = memberships(actual);
+        Entities physical, profiles;
+        if (!stage_retained_topology(actual, edits, scope, physical, profiles)) {
+            topology_dependencies(actual, edits);
+            physical = replay_stair_object_edit_entities(actual, edits);
+        }
+        return classify(actual, physical, edits, scope);
     } catch (const Standard_Failure& error) {
         const auto message = error.GetMessageString(); reject(std::string("native geometry admission failed: ") + (message ? message : "Open CASCADE failure"));
     } catch (const Json::exception& error) { reject(std::string("malformed actual profile request: ") + error.what()); }
@@ -908,8 +1209,10 @@ std::optional<PhaseStairReplacementRequest> phase_stair_replacement_request(cons
     try {
         (void)source_budget(actual);
         if (transforms.size() > identity_limit) reject("typed transform target budget exceeded");
-        const auto physical = replay_stair_transform_entities(actual, transforms);
-        return classify(actual, physical, transforms, memberships(actual));
+        const auto scope = memberships(actual);
+        Entities physical, profiles;
+        if (!stage_retained_topology(actual, transforms, scope, physical, profiles)) physical = replay_stair_transform_entities(actual, transforms);
+        return classify(actual, physical, transforms, scope);
     } catch (const Standard_Failure& error) {
         const auto message = error.GetMessageString(); reject(std::string("native geometry admission failed: ") + (message ? message : "Open CASCADE failure"));
     } catch (const Json::exception& error) { reject(std::string("malformed actual transform request: ") + error.what()); }
@@ -923,9 +1226,13 @@ std::optional<PhaseStairReplacementRequest> phase_stair_replacement_request(cons
     try {
         (void)source_budget(actual);
         if (compound_edits.size() > identity_limit) reject("typed compound target budget exceeded");
-        topology_dependencies(actual, compound_profiles(compound_edits));
-        const auto physical = replay_stair_compound_edit_entities(actual, compound_edits);
-        return classify(actual, physical, compound_edits, memberships(actual));
+        const auto scope = memberships(actual);
+        Entities physical, profiles;
+        if (!stage_retained_topology(actual, compound_edits, scope, physical, profiles)) {
+            topology_dependencies(actual, compound_profiles(compound_edits));
+            physical = replay_stair_compound_edit_entities(actual, compound_edits);
+        }
+        return classify(actual, physical, compound_edits, scope);
     } catch (const Standard_Failure& error) {
         const auto message = error.GetMessageString(); reject(std::string("native geometry admission failed: ") + (message ? message : "Open CASCADE failure"));
     } catch (const Json::exception& error) { reject(std::string("malformed actual compound request: ") + error.what()); }
@@ -939,6 +1246,14 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
     identity(authoring.registry_id); identity(authoring.alternative_id);
     const bool transformed = !authoring.transforms.empty();
     const bool compound = !authoring.compound_edits.empty();
+    const bool retained = !authoring.preserved_inactive_rail_ids.empty();
+    if (authoring.preserved_inactive_rail_ids.size() > identity_limit) reject("inactive rail witness budget exceeded");
+    std::string previous;
+    for (const auto& id : authoring.preserved_inactive_rail_ids) {
+        identity(id);
+        if (!previous.empty() && id <= previous) reject("inactive rail witness must be ascending and unique");
+        previous = id;
+    }
     const auto lanes = static_cast<unsigned>(!authoring.edits.empty()) + static_cast<unsigned>(transformed) + static_cast<unsigned>(compound);
     if (lanes != 1 || authoring.edits.size() > identity_limit || authoring.transforms.size() > identity_limit ||
         authoring.compound_edits.size() > identity_limit || authoring.identities.empty() ||
@@ -996,25 +1311,34 @@ Json encode_phase_stair_replacement_authoring(const PhaseStairReplacementAuthori
         overlays.push_back({{"view_entity_id", std::get<0>(key)}, {"saved_view_id", std::get<1>(key)},
             {"overlay_id", std::get<2>(key)}, {"proposed_overlay_id", proposed}});
     }
-    Json result{{"version", compound ? 3 : (transformed ? 2 : 1)}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+    Json result{{"version", retained ? 4 : (compound ? 3 : (transformed ? 2 : 1))}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
         {compound ? "compound_edits" : (transformed ? "transforms" : "edits"), std::move(edits)}, {"identities", std::move(identities)}, {"child_identities", std::move(children)},
         {"hosted_instance_identities", std::move(hosted)}, {"overlay_identities", std::move(overlays)}};
+    if (retained) result["preserved_inactive_rail_ids"] = authoring.preserved_inactive_rail_ids;
     proof_budget(result); return result;
 }
 PhaseStairReplacementAuthoring decode_phase_stair_replacement_authoring(const Json& value) {
     try {
         proof_budget(value);
         if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3)) reject("unsupported authoring version");
-        const bool transformed = value.at("version") == 2;
-        const bool compound = value.at("version") == 3;
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4)) reject("unsupported authoring version");
+        const bool retained = value.at("version") == 4;
+        const bool transformed = value.at("version") == 2 || (retained && value.contains("transforms"));
+        const bool compound = value.at("version") == 3 || (retained && value.contains("compound_edits"));
         const auto* operations = compound ? "compound_edits" : (transformed ? "transforms" : "edits");
-        keys(value, {"version", "registry_id", "alternative_id", operations, "identities", "child_identities", "hosted_instance_identities", "overlay_identities"});
+        Ids expected{"version", "registry_id", "alternative_id", operations, "identities", "child_identities", "hosted_instance_identities", "overlay_identities"};
+        if (retained) expected.insert("preserved_inactive_rail_ids");
+        keys(value, expected);
         if (!value.at(operations).is_array() ||
             !value.at("identities").is_object() || !value.at("child_identities").is_array() ||
             !value.at("hosted_instance_identities").is_array() || !value.at("overlay_identities").is_array()) reject("unsupported authoring shape");
         PhaseStairReplacementAuthoring result;
         result.registry_id = identity(value.at("registry_id")); result.alternative_id = identity(value.at("alternative_id"));
+        if (retained) {
+            const auto& witness = value.at("preserved_inactive_rail_ids");
+            if (!witness.is_array() || witness.empty() || witness.size() > identity_limit) reject("v4 requires a bounded nonempty inactive rail witness");
+            for (const auto& id : witness) result.preserved_inactive_rail_ids.push_back(identity(id));
+        }
         if (compound) for (const auto& edit : value.at(operations)) result.compound_edits.push_back(decode_stair_compound_edit_intent(edit));
         else if (transformed) for (const auto& transform : value.at(operations)) result.transforms.push_back(decode_stair_transform_intent(transform));
         else for (const auto& edit : value.at(operations)) result.edits.push_back(decode_stair_object_edit_intent(edit));
@@ -1049,11 +1373,13 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
         const auto proof = encode_phase_stair_replacement_authoring(authoring);
         const bool compound = !authoring.compound_edits.empty();
         const bool transformed = !authoring.transforms.empty() || compound;
-        const auto derived = compound ? derive(actual, authoring.compound_edits, authoring.registry_id, authoring.alternative_id)
-            : (!authoring.transforms.empty() ? derive(actual, authoring.transforms, authoring.registry_id, authoring.alternative_id)
-                : derive(actual, authoring.edits, authoring.registry_id, authoring.alternative_id));
+        const bool retained = !authoring.preserved_inactive_rail_ids.empty();
+        const auto derived = compound ? derive(actual, authoring.compound_edits, authoring.registry_id, authoring.alternative_id, retained)
+            : (!authoring.transforms.empty() ? derive(actual, authoring.transforms, authoring.registry_id, authoring.alternative_id, retained)
+                : derive(actual, authoring.edits, authoring.registry_id, authoring.alternative_id, retained));
         const auto& plan = derived.plan;
         if (!plan.ready()) reject(plan.diagnostics.front().entity_id + ": " + plan.diagnostics.front().reason);
+        if (authoring.preserved_inactive_rail_ids != plan.preserved_inactive_rail_ids) reject("inactive rail witness differs from actual-source discovery");
         const Ids entities(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         const std::set<PhaseStairReplacementChildKey> children(plan.required_child_ids.begin(), plan.required_child_ids.end());
         const std::set<PhaseStairReplacementHostedInstanceKey> hosted(plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
@@ -1096,7 +1422,7 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
         for (const auto& edit : authoring.compound_edits) ordinary.insert(intent_owner(edit));
         if (transformed) {
             const auto active = constraint_phase_scope(actual);
-            const auto& placement_source = compound ? derived.profile_stage : actual;
+            const auto& placement_source = compound ? derived.profile_descriptors : actual;
             // A host operator may propagate to active attached rails. Inactive
             // alternatives never acquire authority from scratch geometry.
             for (const auto& [id, entity] : placement_source) if (const auto host = host_id(entity); host && ordinary.contains(*host)) {
@@ -1236,7 +1562,7 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
             for (const auto& edit : authoring.compound_edits)
                 captured.emplace(intent_owner(edit), edit.placement_edit.transform);
             const auto active = constraint_phase_scope(actual);
-            const auto& placement_source = compound ? derived.profile_stage : actual;
+            const auto& placement_source = compound ? derived.profile_descriptors : actual;
             for (const auto& [id, entity] : placement_source) if (const auto host = host_id(entity); host && captured.contains(*host)) {
                 if (compound && active.inactive_owner_ids.contains(id)) continue;
                 // A dependent rail uses its selected admitted host G once. Child
@@ -1257,12 +1583,14 @@ Entities replay_phase_stair_replacement_authoring(const Entities& actual, const 
             }
         }
         presentation(candidate, actual, presentation_ids, authoring.overlay_identities, presentation_operations,
-            compound ? &derived.profile_stage : nullptr);
+            compound ? &derived.profile_source : nullptr);
         if (!hosted.empty() && embedded_assembly_presentation_ids(candidate) != before_presentation)
             reject("presentation append changed a qualified source or proposed component alias");
         (void)source_budget(candidate);
         (void)constraint_phase_scope(candidate);
         for (const auto& id : derived.copied_owners) if (!exact(candidate.at(id), actual.at(id))) reject("baseline physical source changed");
+        for (const auto& id : plan.preserved_inactive_rail_ids)
+            if (!exact(candidate.at(id), actual.at(id))) reject("retained inactive railing changed: " + id);
         for (const auto& id : derived.catalogs) if (!transformed && !exact(candidate.at(id), actual.at(id))) reject("actual catalog source changed");
         ordinary.insert(plan.retained_rehost_object_ids.begin(), plan.retained_rehost_object_ids.end());
         for (const auto& [id, entity] : actual) {
