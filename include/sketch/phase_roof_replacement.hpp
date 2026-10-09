@@ -30,6 +30,10 @@ struct PhaseRoofReplacementPlan {
     // Roof openings and copied bound view overlays share the document namespace.
     std::vector<std::string> required_child_ids;
     std::vector<PhaseRoofReplacementDiagnostic> diagnostics;
+    // Opt-in source-derived sharing. Retained members never receive copy or
+    // role authority from the caller's identity map.
+    bool phase_qualified_joins{};
+    std::vector<std::string> retained_join_roof_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseRoofReplacementPlan&) const = default;
 };
@@ -43,7 +47,8 @@ struct PhaseRoofReplacementResult {
 
 [[nodiscard]] PhaseRoofReplacementPlan inspect_phase_roof_replacement_plan(
     const PhaseRoofReplacementEntities& source, const std::vector<std::string>& seed_roof_ids,
-    const std::string& registry_id, const std::string& alternative_id);
+    const std::string& registry_id, const std::string& alternative_id,
+    bool phase_qualified_joins = false);
 
 // Reinspects the full retained map, independently replays typed edits on source
 // owners, then derives copies. Registry and qualified presentation owners change
@@ -51,15 +56,16 @@ struct PhaseRoofReplacementResult {
 // with their existing IDs. The enclosing Document reserves identities across history.
 // Historical profile/opening slices remain separate. The combined roof edit
 // dialect composes profile, openings and pose against the same actual source.
-// A source join spanning baseline and ordinary roles has no qualified replacement
-// codec; complete baseline join cohorts and independent ordinary joins are admitted.
+// Phase-qualified combined edits copy baseline join members and retain actual
+// ordinary/proposed members, with mutually exclusive join roles proved from source.
 [[nodiscard]] PhaseRoofReplacementResult replay_phase_roof_replacement(
     const PhaseRoofReplacementEntities& source, const PhaseRoofReplacementPlan& plan,
     const PhaseRoofReplacementIdentityMap& identities,
     const std::vector<RoofProfileEditIntent>& roof_profiles,
     const std::vector<RoofOpeningEditIntent>& roof_opening_edits = {},
     const std::vector<RoofEditIntent>& roof_edits = {},
-    const std::vector<RoofEditIntent>& ordinary_roof_edits = {});
+    const std::vector<RoofEditIntent>& ordinary_roof_edits = {},
+    bool phase_qualified_joins = false);
 
 struct PhaseRoofReplacementAuthoring {
     std::string registry_id;
@@ -77,6 +83,9 @@ struct PhaseRoofReplacementAuthoring {
     // Version five independently classifies both combined edit lists from the
     // actual saved source. Ordinary owners retain their identities in place.
     std::vector<RoofEditIntent> ordinary_roof_edits{};
+    // Version six qualifies joins from actual registry activity. It also admits
+    // pure baseline combined edits with an empty ordinary edit list.
+    bool phase_qualified_joins{};
 };
 
 // Version 1 retains exactly its six profile fields. Version 2 adds only
@@ -87,6 +96,8 @@ struct PhaseRoofReplacementAuthoring {
 // identities, demolition:true, demolition_additional_identities.
 // Version 5 adds only ordinary_roof_edits to version 3's eight fields. Both
 // combined lists must be nonempty, historical arrays empty, and targets disjoint.
+// Version 6 has the nine version-five fields plus phase_qualified_joins:true.
+// Its ordinary list may be empty; its baseline combined list remains nonempty.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(

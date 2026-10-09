@@ -4,6 +4,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
 
 #include <algorithm>
 #include <initializer_list>
@@ -103,6 +104,7 @@ void merge_component(Entity& result, const Entity& source, const Entity& staged,
     }
 }
 void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resize_targets) {
+    const auto qualified_cohorts = phase_qualified_roof_join_cohort_ids(entities);
     const auto scope = constraint_phase_scope(entities);
     for (const auto& id : targets)
         (void)make_roof_shape(decode_roof_entity(resolve_vertical_placement(entities, entities.at(id))));
@@ -110,6 +112,9 @@ void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resi
     for (const auto& [id, entity] : entities) {
         if (entity.type != "roof_join") continue;
         const auto join = parse_roof_join(entity.properties, id);
+        // Actual ownership was admitted above. A preserved alternative's join
+        // cannot constrain the active geometry of its shared ordinary member.
+        if (scope.inactive_owner_ids.contains(id) && qualified_cohorts.contains(id)) continue;
         for (const auto& member : join.roof_ids) {
             const auto found = entities.find(member);
             if (found == entities.end() || found->second.type != "roof" || found->second.id != member)

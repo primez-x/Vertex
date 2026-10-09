@@ -42056,7 +42056,7 @@ private:
             return command;
         }
         const auto plan = inspect_phase_roof_replacement_plan(source.entities(), request->seed_roof_ids,
-            request->registry_id, request->alternative_id);
+            request->registry_id, request->alternative_id, true);
         if (!plan.ready()) {
             std::string reasons;
             for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking) {
@@ -42071,6 +42071,7 @@ private:
         replacement.seed_roof_ids = request->seed_roof_ids;
         replacement.roof_edits = partition.baseline_roof_edits;
         replacement.ordinary_roof_edits = partition.ordinary_roof_edits;
+        replacement.phase_qualified_joins = true;
         auto occupied = retainedSlabIdentityNames(source);
         for (const auto* ids : {&plan.required_entity_ids, &plan.required_child_ids})
             for (const auto& id : *ids) {
@@ -42597,7 +42598,7 @@ private:
         const auto& request=partition.replacement;
         if (!request) throw std::invalid_argument("The roof's active baseline membership changed before replacement.");
         const auto plan=inspect_phase_roof_replacement_plan(source.entities(),request->seed_roof_ids,
-            request->registry_id,request->alternative_id);
+            request->registry_id,request->alternative_id,true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking)
@@ -42610,6 +42611,7 @@ private:
         replacement.seed_roof_ids=request->seed_roof_ids;
         replacement.roof_edits=partition.baseline_roof_edits;
         replacement.ordinary_roof_edits=partition.ordinary_roof_edits;
+        replacement.phase_qualified_joins=true;
         // Current and retained entity names are reserved before allocation;
         // replay and Document also check owned children, opaque retained names
         // and every declared replacement identity, including after Undo.

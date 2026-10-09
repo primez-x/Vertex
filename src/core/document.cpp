@@ -32,6 +32,7 @@
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/roof_join_semantics.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/survey_source_version.hpp"
 #include "sketch/document_digest.hpp"
@@ -541,6 +542,7 @@ void validate_entity(const Entity& entity) {
     if (entity.type == "roof_join") {
         try {
             (void)parse_roof_join(entity.properties, entity.id);
+            (void)has_phase_qualified_roof_join_ownership(entity);
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid roof join entity: ") + error.what());
@@ -1182,20 +1184,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             }
         }
     }
-    {
-        std::map<std::string, std::string, std::less<>> roof_join_owners;
-        for (const auto& [id, entity] : entities) {
-            if (entity.type != "roof_join") continue;
-            const auto join = parse_roof_join(entity.properties, id);
-            for (const auto& roof_id : join.roof_ids) {
-                const auto [owner, inserted] = roof_join_owners.emplace(roof_id, id);
-                if (!inserted) {
-                    document_error(DocumentErrorCode::invalid_entity,
-                                   "roof " + roof_id + " belongs to multiple roof joins: " +
-                                   owner->second + " and " + id);
-                }
-            }
-        }
+    try {
+        validate_roof_join_ownership(entities);
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity, error.what());
     }
     std::map<std::string, AssemblyModel> material_catalogs;
     for (const auto& [id, entity] : entities) {
@@ -2731,7 +2723,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
-            roof_mixed_asset_reservation=roof_mixed_asset_reservation || !replacement.ordinary_roof_edits.empty();
+            roof_mixed_asset_reservation=roof_mixed_asset_reservation ||
+                !replacement.ordinary_roof_edits.empty() || replacement.phase_qualified_joins;
             complete_envelope_reservation=complete_envelope_reservation ||
                 !replacement.roof_opening_edits.empty() || !replacement.roof_edits.empty() || replacement.demolition;
             for (const auto& [original,id]:replacement.identities) {

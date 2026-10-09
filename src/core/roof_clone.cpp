@@ -10,6 +10,7 @@
 #include "sketch/phase_roof_resize.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
@@ -171,6 +172,7 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
         if (std::adjacent_find(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end()) != plan.selected_roof_ids.end())
             reject("selected roof owners must be unique");
         const auto scope = constraint_phase_scope(source);
+        const auto qualified_cohorts = phase_qualified_roof_join_cohort_ids(source);
         std::map<std::string, std::string, std::less<>> memberships;
         for (const auto& registry : scope.registries) for (const auto& id : registry.registered_entity_ids)
             if (!memberships.emplace(id, registry.registry_id).second) reject("overlapping all-registry membership: " + id);
@@ -220,15 +222,23 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
         std::map<std::string, std::string, std::less<>> joined;
         for (const auto& [id, entity] : source) if (entity.type == "roof_join") {
             const auto join = parse_roof_join(entity.properties, id);
+            if (scope.inactive_owner_ids.contains(id) && qualified_cohorts.contains(id)) continue;
             for (const auto& roof : join.roof_ids) {
                 if (!source.contains(roof) || source.at(roof).type != "roof") reject("retained join has a dangling/non-roof member: " + roof);
                 if (!joined.emplace(roof, id).second) reject("a roof belongs to multiple retained joins: " + roof);
             }
             if (std::none_of(join.roof_ids.begin(), join.roof_ids.end(), [&](const auto& roof) { return roofs.contains(roof); })) continue;
             if (scope.inactive_owner_ids.contains(id)) reject("selected roof belongs to an inactive join: " + id);
+            if (entity.extensions.contains(std::string(roof_join_phase_ownership_extension_key)) &&
+                !has_phase_qualified_roof_join_ownership(entity))
+                reject("affected join has unsupported phase ownership metadata: " + id);
+            const bool qualified = qualified_cohorts.contains(id);
             std::vector<TopoDS_Shape> members;
             for (const auto& roof : join.roof_ids) {
-                if (scope.inactive_owner_ids.contains(roof) || membership(roof) != membership(id) || role(roof) != role(id))
+                // Validated active qualified joins may combine ordinary and
+                // proposed members. Independent copies receive fresh owners.
+                if (scope.inactive_owner_ids.contains(roof) ||
+                    (!qualified && (membership(roof) != membership(id) || role(roof) != role(id))))
                     reject("affected join spans inactive, foreign or different-phase owners: " + id);
                 admit_roof(roof); members.push_back(shapes.at(roof));
             }
@@ -431,6 +441,11 @@ RoofCloneResult replay_roof_clone(const RoofCloneEntities& source, const RoofClo
                 validate_roof_rigid_transform_source_entity(copy);
             } else if (copy.type == "roof_join") {
                 for (auto& roof : copy.properties.at("roof_ids")) roof = identities.at(roof.get<std::string>());
+                // Independent copies own fresh members and do not inherit the
+                // source join's registry authority. Unsupported source envelopes
+                // refused during discovery and are never rewritten here.
+                if (has_phase_qualified_roof_join_ownership(copy))
+                    copy.extensions.erase(std::string(roof_join_phase_ownership_extension_key));
                 (void)parse_roof_join(copy.properties, copy.id);
             } else if (can_recognize_boundary_dimension_entity_type(copy.type)) {
                 copy.properties.at("target").at("entity_id") = identities.at(copy.properties.at("target").at("entity_id").get<std::string>());
@@ -443,6 +458,21 @@ RoofCloneResult replay_roof_clone(const RoofCloneEntities& source, const RoofClo
         complete_presentation(result.entities, source, owners, identities);
         if (result.entities.size() > maximum_entities) reject("final entity budget exceeded");
         (void)occupied_strings(result.entities);
+        validate_roof_join_ownership(result.entities);
+        std::map<std::string, TopoDS_Shape, std::less<>> copied_shapes;
+        for (const auto& id : plan.required_entity_ids) {
+            const auto& copy = result.entities.at(identities.at(id));
+            if (copy.type != "roof_join") continue;
+            const auto join = parse_roof_join(copy.properties, copy.id);
+            std::vector<TopoDS_Shape> members;
+            for (const auto& roof : join.roof_ids) {
+                if (!copied_shapes.contains(roof))
+                    copied_shapes.emplace(roof, make_roof_shape(decode_roof_entity(
+                        resolve_vertical_placement(result.entities, result.entities.at(roof)))));
+                members.push_back(copied_shapes.at(roof));
+            }
+            (void)make_roof_join(join, members);
+        }
         result.fresh_identity_ids.assign(fresh.begin(), fresh.end());
         return result;
     } catch (const Json::exception& error) { reject(std::string("malformed source-derived replay: ") + error.what()); }

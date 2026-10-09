@@ -273,7 +273,7 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/annotation_entity_codec.cpp src/core/presentation_transform.cpp src/core/georeferencing_entity_codec.cpp
   src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp
   src/core/physical_wall_room_data.cpp src/core/stair_attachment_integrity.cpp
-  src/core/assembly_document_adapter.cpp src/core/site_frame.cpp)
+  src/core/assembly_document_adapter.cpp src/core/site_frame.cpp src/core/roof_join_phase_ownership.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json sketch_stair_semantics PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
   sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases

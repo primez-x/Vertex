@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 phase-qualified roof join source integration
+
+The roof model now has explicit phase-qualified join ownership. A proposed join
+can retain an ordinary/proposed neighbor while the original baseline join stays
+exact. Actual registry membership proves exclusion in baseline and every
+alternative; current selection and a marker alone confer no sharing authority.
+Global, coactive and foreign-registry sharing still refuses. New combined
+replacement six/native 114/extraction 112 retains this opt-in meaning through
+saved history without changing older authoring contracts.
+
+Both mathematical and property-edit controllers use actual role partitioning
+and the qualified producer. Document publication and format scanning consume
+the same ownership policy. Editing, resizing, pose and transform producers
+admit actual active join cohorts while preserving inactive original joins.
+Independent complete/partial copying admits qualified mixed member roles and
+strips only understood ownership metadata from fresh join copies. Schedule
+producers filter actual saved activity before deriving or attributing joined
+quantities; section dimensions require every referenced roof to be active.
+Independent source review approved this slice after scoping a new inventory
+limit to qualified joins instead of reducing every legacy document's capacity.
+Physical deletion of a roof referenced by a preserved join still needs a typed
+phase-preserving path. Compilation, runtime behavior and storage round trips
+remain unverified.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. The installed candidate remains unchanged. No production
+acceptance, completion percentage or ETA is claimed.
+
 ### October 8 mixed roof roles and architectural floor-group source integration
 
 Roof group edits now derive actual changed baseline and ordinary/proposed roles

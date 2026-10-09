@@ -987,13 +987,16 @@ void append_building_rows(const DocumentSnapshot& document,
 
 void append_roof_join_rows(const DocumentSnapshot& document,
                           DocumentScheduleProjection& projection,
-                          const std::set<std::string, std::less<>>* visible_entity_ids) {
+                          const std::set<std::string, std::less<>>* visible_entity_ids,
+                          const ConstraintPhaseScope& phase_scope) {
     constexpr auto explanation = "Net joined material after source openings; authored roof_ids order is overlap priority (earlier members own shared volume); no waste allowance";
     for (const auto& [id, entity] : document.entities()) {
-        if (entity.type != "roof_join" ||
+        if (entity.type != "roof_join" || phase_scope.inactive_owner_ids.contains(id) ||
             (visible_entity_ids && !visible_entity_ids->contains(id))) continue;
         try {
             const auto join = parse_roof_join(entity.properties, id);
+            if (std::any_of(join.roof_ids.begin(), join.roof_ids.end(),
+                [&](const auto& source) { return phase_scope.inactive_owner_ids.contains(source); })) continue;
             if (visible_entity_ids && std::any_of(join.roof_ids.begin(), join.roof_ids.end(),
                 [&](const auto& source) { return !visible_entity_ids->contains(source); })) continue;
             // Gross source quantities remain reviewable but never contribute
@@ -1106,10 +1109,10 @@ void append_roof_join_rows(const DocumentSnapshot& document,
 }
 
 DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection,
-                                   const std::set<std::string, std::less<>>* visible_entity_ids) {
+                                   const std::set<std::string, std::less<>>* visible_entity_ids,
+                                   const ConstraintPhaseScope& phase_scope) {
     // Physical cuts follow the complete document's saved phase choices;
     // presentation visibility only controls which schedule rows are emitted.
-    const auto phase_scope = constraint_phase_scope(document.entities());
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
     for (const auto& [id, entity] : document.entities()) {
         if (entity.type != "opening" || phase_scope.inactive_owner_ids.contains(id)) continue;
@@ -1174,21 +1177,37 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
         return row.kind == ScheduleRowKind::material && source != document.entities().end() &&
                source->second.type == "roof_join";
     });
-    append_roof_join_rows(document, projection, visible_entity_ids);
+    append_roof_join_rows(document, projection, visible_entity_ids, phase_scope);
     append_material_summaries(document, projection);
     std::sort(projection.diagnostics.begin(), projection.diagnostics.end());
     projection.diagnostics.erase(std::unique(projection.diagnostics.begin(), projection.diagnostics.end()),
         projection.diagnostics.end());
     return projection;
 }
+
+DocumentScheduleProjection project_active_architectural_schedules(const DocumentSnapshot& document,
+    const std::set<std::string, std::less<>>* visible_entity_ids) {
+    const auto phase_scope = constraint_phase_scope(document.entities());
+    if (!visible_entity_ids && phase_scope.inactive_owner_ids.empty())
+        return augment(document, build_document_schedules(document), nullptr, phase_scope);
+    std::set<std::string, std::less<>> active_entity_ids;
+    for (const auto& [id, entity] : document.entities()) {
+        if (phase_scope.inactive_owner_ids.contains(id) ||
+            (visible_entity_ids && !visible_entity_ids->contains(id))) continue;
+        active_entity_ids.insert(id);
+    }
+    // Saved activity is authoritative for every schedule producer; a supplied
+    // presentation selection can further restrict it, never reactivate it.
+    return augment(document, build_document_schedules(document, active_entity_ids),
+                   &active_entity_ids, phase_scope);
+}
 } // namespace
 
 DocumentScheduleProjection build_architectural_schedules(const DocumentSnapshot& document) {
-    return augment(document, build_document_schedules(document), nullptr);
+    return project_active_architectural_schedules(document, nullptr);
 }
 DocumentScheduleProjection build_architectural_schedules(const DocumentSnapshot& document,
     const std::set<std::string, std::less<>>& visible_entity_ids) {
-    return augment(document, build_document_schedules(document, visible_entity_ids),
-                   &visible_entity_ids);
+    return project_active_architectural_schedules(document, &visible_entity_ids);
 }
 } // namespace sketch

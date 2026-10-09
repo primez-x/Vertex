@@ -1,4 +1,37 @@
-# Vertex project formats v1 through v113
+# Vertex project formats v1 through v114
+
+## Phase-qualified roof joins (v114)
+
+Native format 114 and JSON/assets extraction version 112 retain roof replacement
+authoring version six and understood phase-qualified join ownership through
+direct, wrapped and historical commands, including Undo. Version six has the
+nine version-five fields plus `phase_qualified_joins: true`. The baseline combined
+edit list is nonempty; the ordinary list may be empty. Historical profile and
+opening arrays remain empty. Earlier authoring retains its saved meaning.
+
+An affected active join copies its actual target-registry baseline members and
+retains actual ordinary/proposed member identities. Original roofs and joins
+remain exact. Only fresh joins receive the extension
+`roof_join_phase_ownership: {version: 1, registry_id: "..."}`. Replay derives the
+role partition, complete mapping and retained member roster from the source,
+then admits actual candidate geometry, contexts, materials and registry changes.
+
+Known ownership metadata contains exactly `version` and `registry_id`; identifiers
+use the bounded document alphabet. Sharing requires a known qualifier on at
+least one join and unique membership of both joins in the same actual registry.
+Two baseline joins always conflict. Two proposed joins exclude each other only
+in different alternatives. A baseline and proposed join exclude each other only
+when that proposal's alternative demolishes the baseline join. This admission
+covers baseline and every retained alternative, regardless of current selection.
+Ordinary, unqualified, foreign-registry or coactive sharing still refuses.
+Future qualifier versions remain opaque and confer no sharing authority.
+
+Current-design edit producers omit inactive preserved joins only in this
+validated qualified cohort. Independent fresh join copies drop only understood
+version-one ownership metadata. Physical deletion cannot remove a roof still
+referenced by a preserved join; phase-preserving removal remains a separate
+typed lifecycle. Source implementation has not been compiled or qualified
+through interaction or storage round trips.
 
 ## Mixed baseline and ordinary roof authoring (v113)
 

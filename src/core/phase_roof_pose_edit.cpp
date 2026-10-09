@@ -7,6 +7,7 @@
 #include "sketch/phase_roof_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
 
 #include <algorithm>
 #include <array>
@@ -200,12 +201,14 @@ TopoDS_Shape resolved_shape(const Entities& source, const std::string& id) {
 }
 std::vector<RoofJoin> affected_joins(const Entities& source, const Ids& targets,
     const ConstraintPhaseScope& scope) {
+    const auto qualified_cohorts = phase_qualified_roof_join_cohort_ids(source);
     std::vector<RoofJoin> result;
     std::map<std::string, std::string, std::less<>> owners;
     for (const auto& [id, entity] : source) {
         if (entity.id != id) invalid("Roof pose actual source contains inconsistent entity identities");
         if (entity.type != "roof_join") continue;
         const auto join = parse_roof_join(entity.properties, id);
+        if (scope.inactive_owner_ids.contains(id) && qualified_cohorts.contains(id)) continue;
         const bool affected = std::any_of(join.roof_ids.begin(), join.roof_ids.end(),
             [&](const auto& member) { return targets.contains(member); });
         for (const auto& member : join.roof_ids) {
@@ -225,6 +228,7 @@ std::vector<RoofJoin> affected_joins(const Entities& source, const Ids& targets,
     return result;
 }
 void admit_joins(const Entities& source, const std::vector<RoofJoin>& joins) {
+    validate_roof_join_ownership(source);
     for (const auto& join : joins) {
         std::vector<TopoDS_Shape> members;
         members.reserve(join.roof_ids.size());

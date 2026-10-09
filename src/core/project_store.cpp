@@ -10,6 +10,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
 
 #include <sqlite3.h>
 
@@ -414,6 +415,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 }
                 if (intent.is_object() && intent.value("version",0)==4) {
                     const auto replacement=intent.find("roof_replacement");
+                    if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==6) return 114U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==5) return 113U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==4) return 97U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==3) {
@@ -585,6 +587,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         }
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
+            if (has_phase_qualified_roof_join_ownership(entity)) required = std::max(required, 114U);
             (void)id;
             if (entity.type == "assembly_model" && entity.properties.is_object()) {
                 const auto model = entity.properties.find("model");
@@ -2247,6 +2250,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 114 &&
          sqlite3_column_int(user_version.get(), 0) != 113 &&
          sqlite3_column_int(user_version.get(), 0) != 112 &&
          sqlite3_column_int(user_version.get(), 0) != 111 &&
@@ -2815,6 +2819,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=114)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 114 for phase-qualified roof joins");
         if (required_format>=113)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 113 for mixed baseline and ordinary roof authoring");
         if (required_format>=112)

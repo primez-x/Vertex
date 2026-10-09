@@ -131,6 +131,7 @@ TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input,
     if (input.type == "roof_join") {
         const auto join = parse_roof_join(input.properties, input.id);
         std::vector<TopoDS_Shape> roofs;
+        for (const auto& id : join.roof_ids) require_active_source(source, id, scope);
         for (const auto& id : join.roof_ids) {
             const auto& roof = entity(source, id, "roof");
             roofs.push_back(make_building_shape(decode_building_entity(resolve_vertical_placement(source, roof))));

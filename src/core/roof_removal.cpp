@@ -10,6 +10,7 @@
 #include "sketch/phase_roof_profile_edit.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/roof_join_phase_ownership.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
@@ -173,6 +174,7 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
         if (std::adjacent_find(plan.selected_roof_ids.begin(), plan.selected_roof_ids.end()) != plan.selected_roof_ids.end())
             reject("explicit selected roof owners must be unique");
         const auto scope = constraint_phase_scope(source);
+        const auto qualified_cohorts = phase_qualified_roof_join_cohort_ids(source);
         for (const auto& registry : scope.registries) for (const auto& id : registry.registered_entity_ids)
             if (!result.memberships.emplace(id, registry.registry_id).second) reject("overlapping all-registry membership: " + id);
         // This helper cannot borrow shared-baseline demolition authority.
@@ -207,6 +209,12 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
         std::map<std::string, std::string, std::less<>> joined;
         for (const auto& [id, entity] : source) if (entity.type == "roof_join") {
             const auto join = parse_roof_join(entity.properties, id);
+            if (scope.inactive_owner_ids.contains(id) && qualified_cohorts.contains(id)) {
+                for (const auto& roof : join.roof_ids) if (seeds.contains(roof))
+                    diagnostic(plan, roof, "selected roof remains referenced by preserved inactive join " + id +
+                        "; requires typed phase-preserving roof/join removal instead of physical deletion");
+                continue;
+            }
             for (const auto& roof : join.roof_ids) {
                 if (!source.contains(roof) || source.at(roof).type != "roof") reject("retained join has a dangling/non-roof member: " + roof);
                 if (!joined.emplace(roof, id).second) reject("retained roof belongs to multiple joins: " + roof);
@@ -555,6 +563,7 @@ RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
         complete_presentation(result.entities, source, removed, copies, additional_identities);
         if (result.entities.size() > maximum_entities) reject("final entity budget exceeded");
         (void)occupied_strings(result.entities);
+        validate_roof_join_ownership(result.entities);
         Ids admitted_roofs, admitted_joins;
         for (const auto& [id, components] : derived.plan.surviving_join_components) {
             for (const auto& component : components) admitted_roofs.insert(component.begin(), component.end());
