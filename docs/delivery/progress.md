@@ -14,6 +14,27 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 toolbar-vector source implementation
+
+The compact toolbar now uses a shared SVG icon engine instead of fixed-color
+18-pixel bitmap variants. It paints source-owned glyphs at the actual requested
+size and display ratio, including fractional scaling, and reads current normal,
+disabled and selected palette colors from the owning window. A guarded widget
+reference follows window-local theme changes without changing other windows.
+Theme changes no longer depend on icons
+retaining the initial light-theme stroke. Existing glyphs, compact toolbar
+layout and SVG admission remain; no new dependency or temporary icon file is
+introduced. The CMake desktop target includes the new utility.
+
+The overrides were read against pinned Qt 6.11.2 headers; logical-size/DPR
+handling agrees with the [Qt icon-engine contract](https://doc.qt.io/qt-6/qiconengine.html#scaledPixmap).
+Root integrated source review is complete. It corrected the initial application-
+palette lookup to use the owning window, matching the existing theme contract.
+No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation, appearance
+at 100/150/200 percent DPI and runtime theme refresh remain unverified; the
+installed candidate is unchanged.
+
 ### October 9 export-publication and assistance-label source implementation
 
 Sketch PDF, sheet PDF, ordered drawing-set PDF, SVG, PNG, native 3D image, DXF

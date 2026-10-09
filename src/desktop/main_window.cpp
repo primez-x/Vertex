@@ -17,6 +17,7 @@
 #include "site_canvas_presentation.hpp"
 #include "draft_image_stamp.hpp"
 #include "sketch_pdf_output.hpp"
+#include "toolbar_svg_icon.hpp"
 #include "reference_import.hpp"
 #include "assistance_ocr.hpp"
 #include "pinc_project_admission.hpp"
@@ -1219,30 +1220,9 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
     return result;
 }
 
-// Qt's stock Fusion icons are intentionally conservative and read as legacy
-// desktop chrome at the scale used by this workspace. These small inline SVG
-// glyphs keep the toolbar crisp, theme-independent, and redistributable.
-QIcon modern_toolbar_icon(const char* paths) {
-    const QByteArray svg = QByteArrayLiteral(
-        "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
-        "<g fill='none' stroke='#52657d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>") +
-        QByteArray(paths) + QByteArrayLiteral("</g></svg>");
-    QSvgRenderer renderer;
-    load_admitted_svg(renderer, svg);
-    QIcon icon;
-    constexpr int logical_size = 18;
-    for (const qreal ratio : {1.0, 2.0, 3.0}) {
-        const auto pixels = qRound(logical_size * ratio);
-        QPixmap pixmap(pixels, pixels);
-        pixmap.setDevicePixelRatio(ratio);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        renderer.render(&painter, QRectF(0, 0, logical_size, logical_size));
-        painter.end();
-        icon.addPixmap(pixmap);
-    }
-    return icon;
+// Source-owned vector glyphs follow the current theme and actual display scale.
+QIcon modern_toolbar_icon(const char* paths, QWidget* palette_owner) {
+    return toolbar_svg_icon(QByteArray(paths), palette_owner);
 }
 
 QString id_from(std::string value) {
@@ -47217,7 +47197,7 @@ private:
         toolbar->setMinimumHeight(28);
         toolbar->setMaximumHeight(28);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
-            auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
+            auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths, owner), label);
             action->setToolTip(label);
             action->setStatusTip(label);
             return action;
@@ -47232,13 +47212,13 @@ private:
         m_redo_action = add_toolbar_action(QStringLiteral("Redo"), "<path d='m15 7 5 5-5 5'/><path d='M20 12h-9a7 7 0 0 0-7 7'/>");
         toolbar->addSeparator();
         m_measurement_action = toolbar->addAction(
-            modern_toolbar_icon("<path d='M4 5h16v14H4z'/><path d='M8 9h8M8 13h5'/><path d='M17 17l3 3'/><path d='m17 17 2-2'/>"),
+            modern_toolbar_icon("<path d='M4 5h16v14H4z'/><path d='M8 9h8M8 13h5'/><path d='M17 17l3 3'/><path d='m17 17 2-2'/>", owner),
             QStringLiteral("2D"));
         m_measurement_action->setToolTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
         m_measurement_action->setObjectName(QStringLiteral("workspace2D"));
         m_measurement_action->setStatusTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
         m_architectural_action = toolbar->addAction(
-            modern_toolbar_icon("<path d='M4 20V9l8-5 8 5v11'/><path d='M8 20v-6h8v6'/><path d='M10 10h4'/>"),
+            modern_toolbar_icon("<path d='M4 20V9l8-5 8 5v11'/><path d='M8 20v-6h8v6'/><path d='M10 10h4'/>", owner),
             QStringLiteral("3D"));
         m_architectural_action->setToolTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
         m_architectural_action->setObjectName(QStringLiteral("workspace3D"));
@@ -47568,7 +47548,7 @@ private:
                          [this] { (void)completeBayWindowReturn(); });
         auto* more_button = new QToolButton(toolbar);
         more_button->setObjectName(QStringLiteral("moreTools"));
-        more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>"));
+        more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>", owner));
         more_button->setToolTip(QStringLiteral("Annotations, references, phases, sheets, and view settings"));
         more_button->setStatusTip(QStringLiteral("Annotations, references, phases, sheets, and view settings"));
         more_button->setAccessibleName(QStringLiteral("More tools"));
@@ -47592,7 +47572,7 @@ private:
         auto* theme_button = new QToolButton(toolbar);
         theme_button->setObjectName(QStringLiteral("themeMenu"));
         theme_button->setIcon(modern_toolbar_icon(
-            "<circle cx='12' cy='12' r='4'/><path d='M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1'/>"));
+            "<circle cx='12' cy='12' r='4'/><path d='M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1'/>", owner));
         theme_button->setToolTip(QStringLiteral("Select light, dark, or high-contrast workspace theme"));
         theme_button->setStatusTip(QStringLiteral("Select light, dark, or high-contrast workspace theme"));
         theme_button->setAccessibleName(QStringLiteral("Theme"));
@@ -48273,7 +48253,7 @@ private:
         m_object_button = new QToolButton(components_header);
         m_object_button->setText(QStringLiteral("Object"));
         m_object_button->setIcon(modern_toolbar_icon(
-            "<path d='M4 10 12 4l8 6v10H4z'/><path d='M9 20v-6h6v6'/>"));
+            "<path d='M4 10 12 4l8 6v10H4z'/><path d='M9 20v-6h6v6'/>", owner));
         m_object_button->setIconSize(QSize(16, 16));
         m_object_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         m_object_button->setAccessibleName(QStringLiteral("Create architectural object"));
@@ -48426,7 +48406,7 @@ private:
         m_grid_button = new QToolButton(canvas_status_controls);
         m_grid_button->setText(QStringLiteral("Grid"));
         m_grid_button->setIcon(modern_toolbar_icon(
-            "<path d='M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'/>"));
+            "<path d='M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'/>", owner));
         m_grid_button->setIconSize(QSize(16, 16));
         m_grid_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_grid_button->setAccessibleName(QStringLiteral("Grid"));
@@ -48440,7 +48420,7 @@ private:
         m_snap_button = new QToolButton(canvas_status_controls);
         m_snap_button->setText(QStringLiteral("Snap"));
         m_snap_button->setIcon(modern_toolbar_icon(
-            "<path fill='#92a6be' d='M4 4h5v9a3 3 0 0 0 6 0V4h5v9a8 8 0 0 1-16 0z'/><path fill='#e9eef5' d='M4 4h5v4H4zM15 4h5v4h-5z'/>"));
+            "<path fill='#92a6be' d='M4 4h5v9a3 3 0 0 0 6 0V4h5v9a8 8 0 0 1-16 0z'/><path fill='#e9eef5' d='M4 4h5v4H4zM15 4h5v4h-5z'/>", owner));
         m_snap_button->setIconSize(QSize(16, 16));
         m_snap_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_snap_button->setAccessibleName(QStringLiteral("Snap"));
@@ -48454,7 +48434,7 @@ private:
         m_fit_button = new QToolButton(canvas_status_controls);
         m_fit_button->setText(QStringLiteral("Fit"));
         m_fit_button->setIcon(modern_toolbar_icon(
-            "<path d='M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5'/>"));
+            "<path d='M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5'/>", owner));
         m_fit_button->setIconSize(QSize(16, 16));
         m_fit_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_fit_button->setAccessibleName(QStringLiteral("Fit"));
@@ -48466,7 +48446,7 @@ private:
         m_overview_button = new QToolButton(canvas_status_controls);
         m_overview_button->setText(QStringLiteral("Map"));
         m_overview_button->setIcon(modern_toolbar_icon(
-            "<rect x='4' y='5' width='16' height='14' rx='2'/><path d='m6 16 4-4 3 3 2-2 3 3'/><circle cx='9' cy='9' r='1'/>"));
+            "<rect x='4' y='5' width='16' height='14' rx='2'/><path d='m6 16 4-4 3 3 2-2 3 3'/><circle cx='9' cy='9' r='1'/>", owner));
         m_overview_button->setIconSize(QSize(16, 16));
         m_overview_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_overview_button->setAccessibleName(QStringLiteral("Map"));

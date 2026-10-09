@@ -1092,6 +1092,7 @@ if(SKETCH_BUILD_DESKTOP)
     target_compile_options(sketch_sheet_layout PRIVATE /W4 /permissive- /utf-8)
   endif()
   add_library(sketch_desktop src/desktop/main_window.cpp src/desktop/sketch_pdf_output.cpp
+    src/desktop/toolbar_svg_icon.cpp
     src/desktop/phase_wall_canvas_projection.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/physical_wall_room_review_dialog.cpp
