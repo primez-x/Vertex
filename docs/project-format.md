@@ -1,4 +1,28 @@
-# Vertex project formats v1 through v127
+# Vertex project formats v1 through v128
+
+## Stair and railing alternative profile replacement (v128)
+
+Native reader 128 and JSON/assets extraction 126 retain active-design authoring
+twelve: the eight common source-binding fields plus the exclusive
+`stair_replacement` child. The closed child one has `version`, `registry_id`,
+`alternative_id`, `edits`, `identities`, `child_identities`,
+`hosted_instance_identities` and `overlay_identities`. Typed profile edits bind
+the actual source; they cannot change object pose or vertical placement.
+
+Replay derives the changed baseline owners and their attached baseline rails.
+Their proposed copies use fresh physical and topology identities. Existing
+proposed rails retain their identities and move to the proposed host through
+known attachment fields. Actual selected hosted rows enter private catalogs;
+source catalogs, baseline physical records and other alternatives remain exact.
+Known saved view and object annotation rows append corresponding presentations.
+Unresolved affected bindings refuse instead of acquiring arbitrary remapping.
+
+Current and retained-history reservation includes physical owners, stair
+children, qualified component and overlay identities, assets and computed
+canvas aliases. Direct and wrapped source proofs retain the reader floor.
+Independent integrated source review approved after retaining ordinary no-copy
+edits and source-valid saved view identities. Compilation, interaction, geometry
+and storage qualification remain pending.
 
 ## Typed ordinary stair and railing profile authoring
 
@@ -14,7 +38,8 @@ The intent itself is not persisted in ordinary entity commands and introduces
 no additional reader floor. Existing stair/railing entity dialects remain
 authoritative. Actual attachment, levels and native geometry are admitted before
 staging; retained-history child reservation remains the enclosing Document's
-responsibility. Baseline profile replacement is separate unfinished scope.
+responsibility. Baseline profile replacement uses the separate source-bound
+authoring twelve described above; broader transforms remain additional scope.
 
 ## Stair and railing alternative demolition (v127)
 

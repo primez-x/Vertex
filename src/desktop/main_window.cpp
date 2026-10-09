@@ -46,6 +46,7 @@
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_stair_demolition.hpp"
+#include "sketch/phase_stair_replacement.hpp"
 #include "sketch/stair_object_edit.hpp"
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/structural_hosted_components.hpp"
@@ -23225,6 +23226,7 @@ public:
             const auto snapshot = authoringSnapshot();
             if (snapshot.revision() != expected_revision)
                 throw std::runtime_error("The project changed. Reopen the object editor.");
+            const auto source_authority=captureSourceEditAuthority(snapshot);
             std::vector<EntityChange> changes;
             std::map<std::string, json, std::less<>> related_context_completions;
             for (auto& related : related_candidates) {
@@ -23384,6 +23386,20 @@ public:
             if (edited_stair_profile)
                 if (const auto edit=capture_stair_object_edit(snapshot.entities().at(candidate.id), candidate))
                     stair_edits.push_back(*edit);
+            if (edited_stair_profile && !stair_edits.empty()) {
+                if (const auto replacement=sourceDerivedStairProfileEditCommand(
+                        snapshot, stair_edits, "Edit stair or railing in alternative")) {
+                    if (!related_context_completions.empty())
+                        throw std::invalid_argument("A replacement profile cannot borrow a new hosted object's hierarchy completion.");
+                    const auto proposed_id=alternativeReplacementTargetID(*replacement, candidate.id);
+                    if (!sourceEditAuthorityUnchanged(source_authority) || !applyAuthoredCommand(*replacement)) return {};
+                    m_selected_id=id_from(proposed_id);
+                    m_selected_ids={m_selected_id};
+                    clearError();
+                    refresh();
+                    return m_selected_id;
+                }
+            }
             if (!stair_edits.empty()) {
                 const auto replay=replay_stair_object_edit_entities(snapshot.entities(), stair_edits);
                 changes.clear();
@@ -42728,6 +42744,64 @@ private:
         return Command{std::move(command)};
     }
 
+    static std::optional<Command> sourceDerivedStairProfileEditCommand(const DocumentSnapshot& source,
+        const std::vector<StairObjectEditIntent>& edits, const std::string& message) {
+        const auto request=phase_stair_replacement_request(source.entities(), edits);
+        if (!request) return std::nullopt;
+        const auto plan=inspect_phase_stair_replacement_plan(source.entities(), edits,
+            request->registry_id, request->alternative_id);
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons+='\n';
+                reasons+=diagnostic.entity_id+": "+diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons.empty() ? "The stair replacement has an unresolved dependency." : reasons);
+        }
+        PhaseStairReplacementAuthoring replacement;
+        replacement.registry_id=request->registry_id;
+        replacement.alternative_id=request->alternative_id;
+        replacement.edits=edits;
+        auto occupied=retainedSlabIdentityNames(source, true);
+        // The edited topology can introduce child names that were absent from
+        // the snapshot. They are source names in this proof, not destinations.
+        for (const auto& original:plan.required_child_ids) occupied.insert(original.second);
+        const auto allocate=[&](const char* prefix) {
+            auto proposed=new_id(prefix);
+            while (!occupied.insert(proposed).second) proposed=new_id(prefix);
+            return proposed;
+        };
+        for (const auto& original:plan.required_entity_ids)
+            replacement.identities.emplace(original, allocate("proposed-stair"));
+        for (const auto& original:plan.required_child_ids)
+            replacement.child_identities.emplace(original, allocate("proposed-stair-child"));
+        for (const auto& original:plan.required_hosted_instance_ids)
+            replacement.hosted_instance_identities.emplace(original, allocate("proposed-stair-component"));
+        for (const auto& original:plan.required_overlay_ids)
+            replacement.overlay_identities.emplace(original, allocate("proposed-stair-overlay"));
+        const auto candidate=replay_phase_stair_replacement_authoring(source.entities(), replacement);
+        if (!replacement.hosted_instance_identities.empty()) {
+            const auto aliases=embedded_assembly_presentation_ids(candidate);
+            for (const auto& [original, proposed]:replacement.hosted_instance_identities) {
+                const auto& alias=aliases.at({replacement.identities.at(original.first), proposed});
+                if (!occupied.insert(alias).second)
+                    throw std::invalid_argument("A proposed stair component's canvas identity is retained in source or history.");
+            }
+        }
+        ConstraintAuthoringIntent semantic;
+        semantic.message=message;
+        auto intent=make_phase_constraint_authoring_intent(source, semantic);
+        intent.stair_replacement=encode_phase_stair_replacement_authoring(replacement);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();
+        command.message=message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        const auto preview=Document::preview_command(source, Command{command});
+        validate_architectural_geometry_changes(source, preview);
+        return Command{std::move(command)};
+    }
+
     static Command physicalPlanAxisResizeCommand(const DocumentSnapshot& source, const std::string& id,
         double scale_x, double scale_y, Vec2 anchor, double frame_rotation_radians) {
         if (source.entities().at(id).type == "roof")
@@ -42763,6 +42837,8 @@ private:
             }
             else if (!component.structural_replacement.is_null())
                 identities = decode_phase_structural_replacement_authoring(component.structural_replacement).identities;
+            else if (!component.stair_replacement.is_null())
+                identities = decode_phase_stair_replacement_authoring(component.stair_replacement).identities;
             for (const auto& [old_id, new_id] : identities) {
                 const auto [found, inserted] = result.emplace(old_id, new_id);
                 if (!inserted && found->second != new_id)
@@ -42773,7 +42849,8 @@ private:
     }
 
     static PhaseWallReplacementIdentityMap alternativeCommandReplacementIdentities(const Command& command,
-        std::vector<PhaseStructuralReplacementAuthoring>* structural_components=nullptr) {
+        std::vector<PhaseStructuralReplacementAuthoring>* structural_components=nullptr,
+        std::vector<PhaseStairReplacementAuthoring>* stair_components=nullptr) {
         PhaseWallReplacementIdentityMap identities;
         if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command)) return identities;
         // Room completion retains the complete geometry command in its closed
@@ -42789,6 +42866,10 @@ private:
                     for (const auto& component:phase_constraint_replacement_components(intent))
                         if (!component.structural_replacement.is_null())
                             structural_components->push_back(decode_phase_structural_replacement_authoring(component.structural_replacement));
+                if (stair_components)
+                    for (const auto& component:phase_constraint_replacement_components(intent))
+                        if (!component.stair_replacement.is_null())
+                            stair_components->push_back(decode_phase_stair_replacement_authoring(component.stair_replacement));
                 for (const auto& [original, proposed] : alternativePhysicalReplacementIdentities(intent)) {
                     const auto [found, inserted] = identities.emplace(original, proposed);
                     if (!inserted && found->second != proposed)
@@ -42812,14 +42893,16 @@ private:
         const DocumentSnapshot& source, const DocumentSnapshot& candidate, const Command& command) {
         PhaseWallReplacementIdentityMap result;
         std::vector<PhaseStructuralReplacementAuthoring> structural_components;
-        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components);
+        std::vector<PhaseStairReplacementAuthoring> stair_components;
+        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components,&stair_components);
         for (const auto& [original_id, proposed_id] : identities) {
             const auto original = source.entities().find(original_id);
             if (original == source.entities().end() ||
                 (original->second.type != "roof" && original->second.type != "roof_join" &&
                  original->second.type != "slab" && original->second.type != "wall" &&
                  original->second.type != "opening" && original->second.type != "column" &&
-                 original->second.type != "beam" && original->second.type != "assembly_model")) continue;
+                 original->second.type != "beam" && original->second.type != "assembly_model" &&
+                 original->second.type != "stair" && original->second.type != "railing")) continue;
             const auto proposed = candidate.entities().find(proposed_id);
             if (proposed == candidate.entities().end() || proposed->second.type != original->second.type)
                 throw std::invalid_argument("The admitted alternative edit lost its proposed selection owner.");
@@ -42827,18 +42910,24 @@ private:
         }
         const bool hosted=std::any_of(structural_components.begin(),structural_components.end(),[](const auto& component) {
             return !component.hosted_instance_identities.empty();
+        }) || std::any_of(stair_components.begin(),stair_components.end(),[](const auto& component) {
+            return !component.hosted_instance_identities.empty();
         });
         if (hosted) {
             const auto before=embedded_assembly_presentation_ids(source.entities());
             const auto after=embedded_assembly_presentation_ids(candidate.entities());
-            for (const auto& component:structural_components)
+            const auto append=[&](const auto& components) {
+            for (const auto& component:components)
                 for (const auto& [original,proposed]:component.hosted_instance_identities) {
                     const auto& old_id=before.at(original);
                     const auto& new_id=after.at({component.identities.at(original.first),proposed});
                     const auto [existing,inserted]=result.emplace(old_id,new_id);
                     if (!inserted && existing->second!=new_id)
-                        throw std::invalid_argument("The admitted structural edit has conflicting component selections.");
+                        throw std::invalid_argument("The admitted alternative edit has conflicting component selections.");
                 }
+            };
+            append(structural_components);
+            append(stair_components);
         }
         return result;
     }
@@ -43715,6 +43804,77 @@ private:
         return command;
     }
 
+    std::optional<Command> reviewAlternativeStairEdit(const Command& requested) {
+        const auto* raw=std::get_if<ApplyEntityChanges>(&requested);
+        if (!raw) return requested;
+        const auto source=authoringSnapshot();
+        const auto changed=[&](const EntityChange& change) {
+            const auto& id=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+            const auto before=source.entities().find(id);
+            return before!=source.entities().end() && (change.kind!=EntityChangeKind::upsert ||
+                before->second!=change.entity || before->second.properties.dump()!=change.entity.properties.dump() ||
+                before->second.extensions.dump()!=change.entity.extensions.dump());
+        };
+        bool shared=false;
+        for (const auto& [id, registry]:source.entities()) {
+            (void)id;
+            if (registry.type!="model_phases") continue;
+            const auto model=ModelPhases::from_json(registry.properties.at("model"));
+            if (!model.active_alternative()) continue;
+            for (const auto& change:raw->entity_changes) {
+                const auto& target=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+                const auto before=source.entities().find(target);
+                if (before!=source.entities().end() &&
+                    (before->second.type=="stair" || before->second.type=="railing") && changed(change) &&
+                    std::binary_search(model.baseline_ids().begin(), model.baseline_ids().end(), target)) shared=true;
+            }
+        }
+        if (!shared) return requested;
+        if (raw->expected_revision!=source.revision() || !raw->asset_changes.empty() || raw->entity_changes.size()>2048)
+            throw std::invalid_argument("Proposed stair and railing edits require a bounded edit of the unchanged source.");
+        const auto authority=captureSourceEditAuthority(source);
+        std::vector<StairObjectEditIntent> edits;
+        std::vector<std::string> removed;
+        std::set<std::string, std::less<>> targets;
+        for (const auto& change:raw->entity_changes) {
+            if (!changed(change)) {
+                if (change.kind!=EntityChangeKind::upsert || !source.entities().contains(change.entity.id))
+                    throw std::invalid_argument("Edit proposed stairs and railings separately from new objects.");
+                continue;
+            }
+            const auto& id=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+            const auto before=source.entities().find(id);
+            if (before==source.entities().end() || (before->second.type!="stair" && before->second.type!="railing") ||
+                !targets.insert(id).second)
+                throw std::invalid_argument("This alternative profile edit requires existing stairs and railings.");
+            if (change.kind==EntityChangeKind::erase) removed.push_back(id);
+            else if (const auto edit=capture_stair_object_edit(before->second, change.entity)) edits.push_back(*edit);
+        }
+        Command command;
+        if (!removed.empty()) {
+            if (!edits.empty()) throw std::invalid_argument("Demolish stairs and railings separately from profile edits.");
+            const auto demolition=stairDemolitionCommand(source, removed, raw->message);
+            if (!demolition) throw std::invalid_argument("The stair or railing's saved alternative changed before demolition.");
+            command=*demolition;
+        } else if (!edits.empty()) {
+            const auto replacement=sourceDerivedStairProfileEditCommand(source, edits, raw->message);
+            if (replacement) command=*replacement;
+            else {
+                const auto candidate=replay_stair_object_edit_entities(source.entities(), edits);
+                ApplyEntityChanges ordinary{source.revision(), {}, {}, raw->message};
+                for (const auto& [id, after]:candidate) {
+                    const auto& before=source.entities().at(id);
+                    if (before!=after || before.properties.dump()!=after.properties.dump() ||
+                        before.extensions.dump()!=after.extensions.dump())
+                        ordinary.entity_changes.push_back(EntityChange::upsert(after));
+                }
+                command=augmentAuthoredCommand(ordinary, source);
+            }
+        } else command=ApplyEntityChanges{source.revision(), {}, {}, raw->message};
+        if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
+        return command;
+    }
+
     std::optional<Command> reviewAlternativeSlabEdit(const Command& requested) {
         const auto* raw = std::get_if<ApplyEntityChanges>(&requested);
         if (!raw) return requested;
@@ -44472,9 +44632,12 @@ private:
         const auto structural_profiled=reviewAlternativeStructuralEdit(requested);
         if (!structural_profiled) return false;
         if (convertedEntityEditNoOp(requested,*structural_profiled)) return true;
-        const auto slab_profiled=reviewAlternativeSlabEdit(*structural_profiled);
+        const auto stair_profiled=reviewAlternativeStairEdit(*structural_profiled);
+        if (!stair_profiled) return false;
+        if (convertedEntityEditNoOp(*structural_profiled,*stair_profiled)) return true;
+        const auto slab_profiled=reviewAlternativeSlabEdit(*stair_profiled);
         if (!slab_profiled) return false;
-        if (convertedEntityEditNoOp(*structural_profiled,*slab_profiled)) return true;
+        if (convertedEntityEditNoOp(*stair_profiled,*slab_profiled)) return true;
         const auto roof_profiled=reviewAlternativeRoofEdit(*slab_profiled);
         if (!roof_profiled) return false;
         if (convertedEntityEditNoOp(*slab_profiled,*roof_profiled)) return true;
@@ -44520,9 +44683,12 @@ private:
         const auto structural_profiled=reviewAlternativeStructuralEdit(command);
         if (!structural_profiled) return false;
         if (convertedEntityEditNoOp(command,*structural_profiled)) return true;
-        const auto slab_profiled=reviewAlternativeSlabEdit(*structural_profiled);
+        const auto stair_profiled=reviewAlternativeStairEdit(*structural_profiled);
+        if (!stair_profiled) return false;
+        if (convertedEntityEditNoOp(*structural_profiled,*stair_profiled)) return true;
+        const auto slab_profiled=reviewAlternativeSlabEdit(*stair_profiled);
         if (!slab_profiled) return false;
-        if (convertedEntityEditNoOp(*structural_profiled,*slab_profiled)) return true;
+        if (convertedEntityEditNoOp(*stair_profiled,*slab_profiled)) return true;
         const auto roof_profiled=reviewAlternativeRoofEdit(*slab_profiled);
         if (!roof_profiled) return false;
         if (convertedEntityEditNoOp(*slab_profiled,*roof_profiled)) return true;

@@ -52,6 +52,8 @@
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
+#include "sketch/phase_stair_demolition.hpp"
+#include "sketch/phase_stair_replacement.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
@@ -2577,7 +2579,9 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
             (intent.contains("slab_replacement") && !intent.at("slab_replacement").is_null()) ||
             (intent.contains("slab_demolition") && !intent.at("slab_demolition").is_null()) ||
             (intent.contains("coordinated_replacements") && !intent.at("coordinated_replacements").is_null()) ||
-            (intent.contains("structural_replacement") && !intent.at("structural_replacement").is_null());
+            (intent.contains("structural_replacement") && !intent.at("structural_replacement").is_null()) ||
+            (intent.contains("stair_demolition") && !intent.at("stair_demolition").is_null()) ||
+            (intent.contains("stair_replacement") && !intent.at("stair_replacement").is_null());
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2621,6 +2625,18 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
                 decode_phase_structural_replacement_authoring(intent.structural_replacement));
             if (entity_map_digest(replay)!=entity_map_digest(candidate))
                 throw std::invalid_argument("Structural replacement cannot change retained owners or borrow other edit authority");
+        }
+        if (!intent.stair_demolition.is_null()) {
+            const auto replay=replay_phase_stair_demolition_entities(source,
+                decode_stair_demolition_intent(intent.stair_demolition));
+            if (entity_map_digest(replay)!=entity_map_digest(candidate))
+                throw std::invalid_argument("Stair demolition cannot change retained owners or borrow other edit authority");
+        }
+        if (!intent.stair_replacement.is_null()) {
+            const auto replay=replay_phase_stair_replacement_authoring(source,
+                decode_phase_stair_replacement_authoring(intent.stair_replacement));
+            if (entity_map_digest(replay)!=entity_map_digest(candidate))
+                throw std::invalid_argument("Stair replacement differs from its actual source profile replay");
         }
     }
 #endif
@@ -2773,6 +2789,28 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
     }
     for (const auto& intent : phase_constraint_authoring_components(command)) {
+        if (!intent.stair_replacement.is_null()) {
+            const auto replacement=decode_phase_stair_replacement_authoring(intent.stair_replacement);
+            complete_envelope_reservation=true;
+            structural_asset_reservation=true;
+            structural_hosted_alias_reservation=true;
+            for (const auto& [original,id]:replacement.identities) {
+                (void)original;fresh.insert(id);nested_fresh.insert(id);
+            }
+            const auto reserve_nested=[&](const auto& identities) {
+                for (const auto& [original,id]:identities) {
+                    (void)original;
+                    if (!fresh.insert(id).second)
+                        throw std::invalid_argument("A proposed stair child overlaps another fresh identity: "+id);
+                    nested_fresh.insert(id);
+                }
+            };
+            reserve_nested(replacement.child_identities);
+            reserve_nested(replacement.hosted_instance_identities);
+            reserve_nested(replacement.overlay_identities);
+            for (const auto& [original,id]:replacement.hosted_instance_identities)
+                proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
+        }
         if (!intent.structural_replacement.is_null()) {
             const auto replacement=decode_phase_structural_replacement_authoring(intent.structural_replacement);
             complete_envelope_reservation=true;
@@ -2959,6 +2997,13 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                     const auto structural=decode_phase_structural_replacement_authoring(intent.structural_replacement);
                     require_unused(structural.identities);
                     require_unused(structural.hosted_instance_identities);
+                }
+                if (!intent.stair_replacement.is_null()) {
+                    const auto stair=decode_phase_stair_replacement_authoring(intent.stair_replacement);
+                    require_unused(stair.identities);
+                    require_unused(stair.child_identities);
+                    require_unused(stair.hosted_instance_identities);
+                    require_unused(stair.overlay_identities);
                 }
             }
         if (structural_hosted_alias_reservation)

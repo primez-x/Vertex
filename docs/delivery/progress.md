@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 stair and railing alternative profiles source implementation
+
+The object editor now stages actual-source proposed stair/railing profiles in
+the saved active alternative. Changed baseline owners and attached baseline
+rails receive proposed identities; already-proposed attached rails retain their
+owners and rehost to the proposed topology. Actual hosted components receive
+private catalog rows, and known saved presentations append corresponding copies.
+Original baseline physical owners/catalogs and other alternatives stay exact.
+Selection follows the admitted proposed owner after the edit.
+
+Source-bound authoring twelve and native 128/extraction 126 preserve this meaning
+in current/history and wrapped proofs. Document reserves new physical, child,
+component, overlay and computed canvas names against retained history/assets.
+The stair demolition registry-mutation predicate also now recognizes its typed
+operation and requires the complete candidate to equal actual-source replay.
+Independent integrated source review approved after preserving ordinary edits
+when no copy is required and admitting source-valid long saved-view identities.
+Root source review and the scoped whitespace check passed. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations ran; compilation and runtime remain
+unverified. The installed candidate is unchanged. Pose transforms, mixed-family
+stair edits and proposed-dependent retirement remain additional source scope.
+
 ### October 8 typed stair and railing profiles source integration
 
 The building-object editor now replays stair/railing profile edits and related

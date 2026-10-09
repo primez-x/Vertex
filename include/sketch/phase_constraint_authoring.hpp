@@ -58,6 +58,10 @@ struct PhaseConstraintAuthoringIntent {
     // retain their physical records; actual attached baseline rails follow
     // their host into the saved alternative's demolition membership.
     nlohmann::json stair_demolition=nullptr;
+    // Dialect twelve: typed stair/railing profile replacement in the actual
+    // saved alternative. Baseline owners stay exact; attached baseline rails
+    // and hosted parts receive copies, while proposed rails retain identity.
+    nlohmann::json stair_replacement=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(
