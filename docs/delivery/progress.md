@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 independent stair and railing copies source implementation
+
+Independent stair copies now include actual active attached rails, fresh
+owner-qualified flights/landings and private rows for hosted components. Canvas
+selection copying, numeric XYZ/mirror/scale copying and architectural duplicate
+commands use the same complete source-derived producer. Mixed roof, horizontal,
+column/beam and stair selections compose their additive family candidates once.
+Original owners, catalogs, phase registries, levels and shared assets stay exact.
+
+Known saved view/annotation rows append copies. Unbound coordinates and bound
+dimension axes/line offsets follow the actual saved plane and source/world
+convention; styles and opaque fields remain retained. The command reserves new
+body/child/component/overlay names against source/history/assets/render aliases
+before captured scope enrollment. Unsupported affected references and
+unrepresentable bound axes refuse explicitly. Independent integrated source
+review approved after excluding inactive derived rail seeds and preserving the
+canonical reflection base shift. Anchored rigid yaw retains exact unchanged
+coordinates and their input evidence. Root source review is complete.
+No builds, tests, probes, scripts, native jobs, launches,
+packages or installations ran; compilation and runtime remain unverified.
+The installed candidate is unchanged. Mixed wall/room and independent
+presentation copying remain additional source scope.
+
 ### October 8 stair movement and alternative transforms source implementation
 
 Stair and railing canvas translation, rotation, mirroring, uniform scaling,

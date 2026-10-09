@@ -366,8 +366,24 @@ Entities replay_stair_transform_entities(const Entities& source, const std::vect
     std::vector<StairObjectEditIntent> profiles;
     profiles.reserve(operations.size());
     for (const auto& [id,operation] : operations) {
-        (void)operation;
         auto profile=profile_intent(geometry.at(id));
+        const auto base=field(source.at(id).properties,"base_position_m");
+        if (base && base->is_array() && operation.scale==1.0) {
+            const auto resolved=resolve_vertical_placement(source,source.at(id));
+            const auto& pivot=resolved.properties.at("base_position_m");
+            if (operation.pivot.x==scalar(pivot.at(0)) && operation.pivot.y==scalar(pivot.at(1)) &&
+                operation.pivot.z==scalar(pivot.at(2))) {
+                const double offsets[]{operation.offset.x,operation.offset.y,operation.offset.z};
+                const bool reflected_stair=source.at(id).type=="stair" &&
+                    operation.flip_horizontal!=operation.flip_vertical;
+                // A stair's odd reflection changes its canonical XY base to
+                // the first flight's far side. Preserve that producer shift;
+                // anchored yaw and unmoved Z retain exact source encodings.
+                for (std::size_t axis=0;axis<3;++axis)
+                    if (offsets[axis]==0.0 && (axis==2 || !reflected_stair))
+                        profile.profile_fields.at("base_position_m").at(axis)=base->at(axis);
+            }
+        }
         if (const auto entered=entered_quantities.find(id); entered!=entered_quantities.end()) {
             profile.quantity_entries=*entered->second;
             // Numeric placement inputs own their exact entered metres. Restore

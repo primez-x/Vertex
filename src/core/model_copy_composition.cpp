@@ -148,10 +148,16 @@ void copied_row(const Json& row, const Json& retained, Rows kind, const Ids& fre
         };
         const auto remainder = [&](Json value) {
             value.erase("id"); value.erase("object_id");
-            if (bound(value)) value.at("dimension_binding").erase("object_id");
+            if (bound(value)) {
+                auto& binding = value.at("dimension_binding");
+                binding.erase("object_id");
+                // The independently admitted leaf derives the copied axis and
+                // line position from its actual source/candidate silhouettes.
+                binding.erase("axis"); binding.erase("line_offset_m");
+            }
             else {
                 // The independently admitted leaf owns projected geometry.
-                // Binding offsets and every style/opaque sibling stay exact.
+                // Every style and opaque sibling stays exact.
                 value.erase("start_m"); value.erase("end_m");
             }
             return value;

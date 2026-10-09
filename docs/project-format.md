@@ -1,5 +1,28 @@
 # Vertex project formats v1 through v131
 
+## Source-derived independent stair and railing copies
+
+The internal closed clone intent one has `version`, `transforms`, `identities`,
+`child_identities`, `hosted_instance_identities` and `overlay_identities`.
+Captured transforms replay against the complete actual source. Physical,
+owner-qualified topology, catalog-local hosted rows and view-local overlays
+require complete exact mapping inventories. Active attached rails accompany the
+selected host. Fresh private catalogs contain only actual transformed selected
+rows, retaining their definitions and opaque metadata. Original physical owners,
+catalogs, registries, levels and organization remain exact.
+
+Saved view and object annotation arrays append corresponding copied records.
+Physical and legacy host-derived geometry uses source coordinates; expanded
+type-owned components use world coordinates. The shared effective section plane
+governs overlay projection. Bound dimension axis/line placement is derived from
+the source and copied silhouettes; other style and opaque fields stay exact.
+Mixed family composition retains each leaf's aliases and appended records.
+The caller reserves retained history/assets and computed names before Document
+admission and explicit scope enrollment. Ordinary entity commands persist the
+resulting data, not this internal clone proof; existing entity/catalog dialect
+floors govern the result. Independent integrated source review approved.
+Compilation and runtime qualification remain pending.
+
 ## Entered stair and railing transform quantities (v131)
 
 Native reader 131 and JSON/assets extraction 129 retain transform intent two

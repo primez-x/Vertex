@@ -49,6 +49,7 @@
 #include "sketch/phase_stair_demolition_retirement.hpp"
 #include "sketch/phase_stair_replacement.hpp"
 #include "sketch/stair_transform.hpp"
+#include "sketch/stair_clone.hpp"
 #include "sketch/stair_object_edit.hpp"
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/structural_hosted_components.hpp"
@@ -1178,8 +1179,9 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
         }
     }
     if (multi_flight_stair(root->second)) {
+        const auto phase_scope = constraint_phase_scope(snapshot.entities());
         for (const auto& [id, entity] : snapshot.entities()) {
-            (void)id;
+            if (phase_scope.inactive_owner_ids.contains(id)) continue;
             if (hosted_stair_railing(entity) &&
                 stair_railing_host_id(decode_railing_properties(entity.id, entity.properties)) == root_id)
                 add_unique(entity);
@@ -7802,6 +7804,17 @@ public:
                 std::get<ApplyEntityChanges>(complete), &capture);
             return {std::move(complete), identities.at(original.id)};
         }
+        if (clone && (original.type == "stair" || original.type == "railing")) {
+            StairCloneIdentityMap identities;
+            StairCloneChildIdentityMap children;
+            IndependentModelCopyCapture capture;
+            auto command = sourceDerivedStairCloneCommand(source, {{original.id, transform}},
+                "Copy transformed stair or railing", identities, children, &capture);
+            auto complete = augmentAuthoredCommand(command, source);
+            requireIndependentCopyRegistrations(source, command,
+                std::get<ApplyEntityChanges>(complete), &capture);
+            return {std::move(complete), identities.at(original.id)};
+        }
         if (!clone) {
             if (original.type == "roof")
                 return {sourceDerivedRoofTransformCommand(source, {{original.id, transform}},
@@ -9421,7 +9434,8 @@ public:
         const std::function<PlanarTransform(const std::string&)>& owner_transform = {},
         IndependentModelCopyCapture* model_copy = nullptr) {
         if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
-                return structuralObject(entity) || entity.type == "roof" || entity.type == "roof_join" || entity.type == "slab";
+                return structuralObject(entity) || entity.type == "roof" || entity.type == "roof_join" ||
+                    entity.type == "slab" || entity.type == "stair" || entity.type == "railing";
             })) {
             std::set<std::string, std::less<>> owners;
             std::set<std::string, std::less<>> families;
@@ -9435,7 +9449,8 @@ public:
                     families.insert("roof");
                 } else {
                     owners.insert(entity.id);
-                    families.insert(structuralObject(entity) ? "structural" : entity.type);
+                    families.insert(structuralObject(entity) ? "structural" :
+                        (entity.type == "stair" || entity.type == "railing") ? "stair" : entity.type);
                 }
             }
             if (families.size() > 1) {
@@ -9455,6 +9470,29 @@ public:
                     throw std::invalid_argument("The complete architectural copy exceeds the selection entity limit.");
                 return command;
             }
+        }
+        if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
+                return entity.type == "stair" || entity.type == "railing";
+            })) {
+            std::vector<ArchitecturalGroupTransformTarget> operations;
+            for (const auto& entity : seeds) {
+                const auto& actual = source.entities().at(entity.id);
+                if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
+                    actual.extensions.dump() != entity.extensions.dump())
+                    throw std::invalid_argument("The stair copy no longer matches its captured source.");
+                const auto operation = owner_transform ? owner_transform(entity.id) : transform;
+                operations.push_back({entity.id, {{operation.pivot.x, operation.pivot.y, 0.0},
+                    {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
+                    operation.flip_horizontal, operation.flip_vertical}});
+            }
+            if (!presentation.entity_changes.empty() || !presentation.asset_changes.empty() ||
+                presentation.expected_revision != source.revision())
+                throw std::invalid_argument("Copy stairs separately from independent labels and references.");
+            auto command = sourceDerivedStairCloneCommand(source, operations,
+                "Copy stairs and railings", identities, child_identities, model_copy);
+            if (command.entity_changes.size() > maximum_entities)
+                throw std::invalid_argument("The complete stair copy exceeds the selection entity limit.");
+            return command;
         }
         if (!seeds.empty() && std::all_of(seeds.begin(), seeds.end(), [](const auto& entity) {
                 return structuralObject(entity);
@@ -24411,6 +24449,21 @@ public:
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
         const Entity& original, const ArchitecturalTransaction& transaction) {
         const auto& operations=transaction.operations();
+        if ((original.type=="stair" || original.type=="railing") && operations.size()==2 &&
+            operations[0].action==ArchitecturalAction::duplicate && operations[0].object_id==original.id &&
+            operations[1].action==ArchitecturalAction::transform &&
+            operations[1].object_id==operations[0].duplicate_id && operations[1].transform) {
+            const auto& movement= *operations[1].transform;
+            StairCloneIdentityMap identities{{original.id,operations[0].duplicate_id}};
+            StairCloneChildIdentityMap children;
+            IndependentModelCopyCapture capture;
+            auto command=sourceDerivedStairCloneCommand(source, {{original.id,
+                {{}, {movement.x,movement.y,movement.z},movement.rotation_z_radians,movement.scale,false,false}}},
+                transaction.undo_label(),identities,children,&capture);
+            auto complete=augmentAuthoredCommand(command,source);
+            requireIndependentCopyRegistrations(source,command,std::get<ApplyEntityChanges>(complete),&capture);
+            return complete;
+        }
         if ((original.type=="stair" || original.type=="railing") && operations.size()==1 &&
             operations.front().action==ArchitecturalAction::transform &&
             operations.front().object_id==original.id && operations.front().transform) {
@@ -43106,6 +43159,65 @@ private:
         return intent;
     }
 
+    static ApplyEntityChanges sourceDerivedStairCloneCommand(const DocumentSnapshot& source,
+        const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
+        StairCloneIdentityMap& identities, StairCloneChildIdentityMap& children,
+        IndependentModelCopyCapture* capture = nullptr) {
+        StairCloneAuthoring authoring;
+        for (const auto& operation : operations)
+            authoring.transforms.push_back({operation.entity_id,operation.transform});
+        const auto plan=inspect_stair_clone_plan(source.entities(),authoring.transforms);
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons+='\n';
+                reasons+=diagnostic.entity_id+": "+diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons);
+        }
+        const std::set<std::string,std::less<>> required(plan.required_entity_ids.begin(),plan.required_entity_ids.end());
+        const std::set<StairCloneChildKey> required_children(plan.required_child_ids.begin(),plan.required_child_ids.end());
+        auto occupied=retainedSlabIdentityNames(source,true);
+        for (const auto& [original,copied]:identities)
+            if (!required.contains(original) || !occupied.insert(copied).second)
+                throw std::invalid_argument("A stair copy identity is unrequested or reserved in source or history.");
+        for (const auto& [original,copied]:children)
+            if (!required_children.contains(original) || !occupied.insert(copied).second)
+                throw std::invalid_argument("A stair child copy identity is unrequested or reserved in source or history.");
+        const auto allocate=[&](const char* prefix) {
+            auto copied=new_id(prefix);
+            while (!occupied.insert(copied).second) copied=new_id(prefix);
+            return copied;
+        };
+        for (const auto& original:plan.required_entity_ids)
+            if (!identities.contains(original)) identities.emplace(original,allocate("stair-copy"));
+        for (const auto& original:plan.required_child_ids)
+            if (!children.contains(original)) children.emplace(original,allocate("stair-child-copy"));
+        authoring.identities=identities; authoring.child_identities=children;
+        for (const auto& original:plan.required_hosted_instance_ids)
+            authoring.hosted_instance_identities.emplace(original,allocate("stair-component-copy"));
+        for (const auto& original:plan.required_overlay_ids)
+            authoring.overlay_identities.emplace(original,allocate("stair-overlay-copy"));
+        const auto candidate=replay_stair_clone_authoring(source.entities(),authoring);
+        if (!authoring.hosted_instance_identities.empty()) {
+            const auto aliases=embedded_assembly_presentation_ids(candidate);
+            for (const auto& [original,copied]:authoring.hosted_instance_identities)
+                if (!occupied.insert(aliases.at({identities.at(original.first),copied})).second)
+                    throw std::invalid_argument("A copied stair component canvas identity is reserved in source or history.");
+        }
+        ApplyEntityChanges creation{source.revision(),{},{},message};
+        for (const auto& [id,entity]:candidate) {
+            const auto before=source.entities().find(id);
+            if (before==source.entities().end() || before->second!=entity ||
+                before->second.properties.dump()!=entity.properties.dump() || before->second.extensions.dump()!=entity.extensions.dump())
+                creation.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        const auto preview=Document::preview_command(source,Command{creation});
+        validate_architectural_geometry_changes(source,preview);
+        if (capture) { capture->source_digest=document_snapshot_digest(source); capture->intent=creation; }
+        return creation;
+    }
+
     static ApplyEntityChanges sourceDerivedStructuralCloneCommand(const DocumentSnapshot& source,
         const std::vector<ArchitecturalGroupTransformTarget>& operations, const std::string& message,
         StructuralCloneIdentityMap& identities, IndependentModelCopyCapture* capture = nullptr) {
@@ -43186,7 +43298,7 @@ private:
         IndependentModelCopyCapture* capture = nullptr) {
         if (operations.empty() || operations.size() > maximum_architectural_group_targets)
             throw std::invalid_argument("Select a bounded group of actual architectural objects to copy.");
-        std::vector<ArchitecturalGroupTransformTarget> structural, roofs, slabs;
+        std::vector<ArchitecturalGroupTransformTarget> structural, roofs, slabs, stairs;
         std::vector<std::string> roof_owners, slab_owners;
         std::set<std::string, std::less<>> selected;
         for (const auto& operation : operations) {
@@ -43196,13 +43308,17 @@ private:
             if (structuralObject(found->second)) structural.push_back(operation);
             else if (found->second.type == "roof") { roofs.push_back(operation); roof_owners.push_back(operation.entity_id); }
             else if (found->second.type == "slab") { slabs.push_back(operation); slab_owners.push_back(operation.entity_id); }
-            else throw std::invalid_argument("This mixed copy requires actual columns, beams, roofs or horizontal assemblies.");
+            else if (found->second.type == "stair" || found->second.type == "railing") stairs.push_back(operation);
+            else throw std::invalid_argument("This mixed copy requires actual columns, beams, roofs, horizontal assemblies, stairs or railings.");
         }
-        if (static_cast<int>(!structural.empty()) + static_cast<int>(!roofs.empty()) + static_cast<int>(!slabs.empty()) < 2)
+        if (static_cast<int>(!structural.empty()) + static_cast<int>(!roofs.empty()) +
+            static_cast<int>(!slabs.empty()) + static_cast<int>(!stairs.empty()) < 2)
             throw std::invalid_argument("A mixed architectural copy requires at least two object families.");
         StructuralCloneIdentityMap structural_ids;
         RoofCloneIdentityMap roof_ids;
         SlabCloneIdentityMap slab_ids;
+        StairCloneIdentityMap stair_ids;
+        StairCloneChildIdentityMap stair_children;
         for (const auto& [original, copied] : identities) {
             const auto found = source.entities().find(original);
             if (found == source.entities().end())
@@ -43211,9 +43327,14 @@ private:
             else if ((found->second.type == "roof" && selected.contains(original)) || found->second.type == "roof_join")
                 roof_ids.emplace(original, copied);
             else if (found->second.type == "slab" && selected.contains(original)) slab_ids.emplace(original, copied);
+            else if (found->second.type == "stair" || found->second.type == "railing") stair_ids.emplace(original,copied);
             else throw std::invalid_argument("A supplied mixed-copy identity has no selected family authority.");
         }
         auto occupied = retainedSlabIdentityNames(source, true);
+        for (const auto& [key,copied]:child_identities) {
+            const auto owner=source.entities().find(key.first);
+            if (owner!=source.entities().end() && owner->second.type=="stair") stair_children.emplace(key,copied);
+        }
         std::vector<ModelCopyEntities> candidates;
         const auto append_family = [&](const ApplyEntityChanges& command) {
             if (command.expected_revision != source.revision() || !command.asset_changes.empty())
@@ -43225,8 +43346,16 @@ private:
         if (!structural.empty()) append_family(sourceDerivedStructuralCloneCommand(source, structural, message, structural_ids));
         if (!roofs.empty()) append_family(sourceDerivedRoofCloneCommand(source, roof_owners, roofs, message, roof_ids));
         if (!slabs.empty()) append_family(sourceDerivedSlabCloneCommand(source, slab_owners, slabs, message, slab_ids));
+        if (!stairs.empty()) append_family(sourceDerivedStairCloneCommand(source,stairs,message,stair_ids,stair_children));
         std::set<std::string, std::less<>> fresh;
-        for (const auto* family : {&structural_ids, &roof_ids, &slab_ids})
+        for (const auto& [key,copied]:stair_children) {
+            if (occupied.contains(copied) || !fresh.insert(copied).second)
+                throw std::invalid_argument("A mixed stair child identity overlaps a retained or fresh destination.");
+            const auto [found,inserted]=child_identities.emplace(key,copied);
+            if (!inserted && found->second!=copied)
+                throw std::invalid_argument("A mixed stair child has conflicting identity redirects.");
+        }
+        for (const auto* family : {&structural_ids, &roof_ids, &slab_ids, &stair_ids})
             for (const auto& [original, copied] : *family) {
                 if (occupied.contains(copied) || !fresh.insert(copied).second)
                     throw std::invalid_argument("Mixed-copy destinations overlap another family or retained identity.");
