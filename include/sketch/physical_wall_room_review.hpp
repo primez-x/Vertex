@@ -143,7 +143,7 @@ void preflight_physical_walls_deletion_join_inference(
 void validate_physical_wall_room_deletion_review_source(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,const Command& command,
-    const nlohmann::json& retained_proof=nlohmann::json(nullptr));
+    const nlohmann::json& retained_proof=nlohmann::json(nullptr),bool active_phase_constraints=false);
 // Source-dependent profile admission preserves exact identity, extensions and
 // every nonprofile property, including opaque geometry and drawing context.
 // The declared profile includes height, thickness, layers and sloped top fields.

@@ -41,6 +41,7 @@
 #include "sketch/physical_wall_room_review.hpp"
 #include "sketch/physical_wall_phase_review.hpp"
 #include "sketch/mixed_wall_removal.hpp"
+#include "sketch/mixed_wall_opening_removal.hpp"
 #endif
 #include "sketch/joint_translation_replay.hpp"
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
@@ -2449,21 +2450,25 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const auto& proof=command.room_review_geometry_proof;
     if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
         !proof.contains("kind") || (proof.at("kind")!="apply_boundary_constraint_changes" &&
-            proof.at("kind")!="apply_entity_changes" && proof.at("kind")!="physical_wall_deletion" && proof.at("kind")!="mixed_wall_deletion") ||
+            proof.at("kind")!="apply_entity_changes" && proof.at("kind")!="physical_wall_deletion" && proof.at("kind")!="mixed_wall_deletion" &&
+            proof.at("kind")!="mixed_wall_opening_deletion") ||
         proof.dump().size()>1024*1024)
         throw std::invalid_argument("Room review requires one bounded direct physical-wall proof");
     const auto version=proof.at("version").get<int>();
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
     const bool mixed_deletion=proof.at("kind")=="mixed_wall_deletion";
-    if ((mixed_deletion && version!=37 && version!=39) || (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38) || (!grouped_deletion && !mixed_deletion &&
+    const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
+    if ((mixed_opening_deletion && version!=40) || (mixed_deletion && version!=37 && version!=39) ||
+        (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
         version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
         if (grouped_deletion) return decode_physical_wall_deletion_review_proof(proof);
         if (mixed_deletion) return Command{decode_mixed_wall_deletion_review_proof(proof).command};
+        if (mixed_opening_deletion) return Command{decode_mixed_wall_opening_deletion_review_proof(proof).command};
 #else
-        if (grouped_deletion || mixed_deletion) throw std::invalid_argument("Physical wall deletion review is unavailable");
+        if (grouped_deletion || mixed_deletion || mixed_opening_deletion) throw std::invalid_argument("Physical wall deletion review is unavailable");
 #endif
         return command_from_json(proof);
     }();
@@ -2478,7 +2483,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
         for (const auto& encoded:room_review_intents(command))
             if (!decode_physical_wall_room_review_intent(encoded).context_plane_selection)
                 throw std::invalid_argument("Wall deletion requires explicit context and plane room review");
-        if (command_to_json(decoded)!=((grouped_deletion || mixed_deletion) ? proof.at("proof") : proof))
+        if (command_to_json(decoded)!=((grouped_deletion || mixed_deletion || mixed_opening_deletion) ? proof.at("proof") : proof))
             throw std::invalid_argument("Room review wall deletion proof must be canonical");
         return decoded;
     }
@@ -2537,7 +2542,8 @@ static int room_review_geometry_dialect(const ApplyBoundaryConstraintChanges& co
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
     if (is_physical_wall_room_deletion_review_command(geometry))
         return (completion.room_review_geometry_proof.at("kind")=="physical_wall_deletion" ||
-            completion.room_review_geometry_proof.at("kind")=="mixed_wall_deletion")
+            completion.room_review_geometry_proof.at("kind")=="mixed_wall_deletion" ||
+            completion.room_review_geometry_proof.at("kind")=="mixed_wall_opening_deletion")
             ? completion.room_review_geometry_proof.at("version").get<int>() : 30;
     if (is_physical_wall_room_rigid_review_command(geometry)) return 28;
     if (is_physical_wall_room_joint_review_command(geometry)) return 32;
@@ -2825,12 +2831,21 @@ static bool has_complete_wall_join_deletion_proof(const ApplyBoundaryConstraintC
     return command.room_review_geometry_completion && proof.is_object() &&
         proof.contains("kind") && proof.contains("version") && proof.at("version").is_number_integer() &&
         ((proof.at("kind")=="physical_wall_deletion" && (proof.at("version")==36 || proof.at("version")==38)) ||
-         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39)));
+         (proof.at("kind")=="mixed_wall_deletion" && (proof.at("version")==37 || proof.at("version")==39)) ||
+         (proof.at("kind")=="mixed_wall_opening_deletion" && proof.at("version")==40));
 }
 static PhysicalWallJoinRemovalAdditionalIdentities complete_wall_join_deletion_destinations(
     const ApplyBoundaryConstraintChanges& command) {
     if (!has_complete_wall_join_deletion_proof(command)) return {};
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (command.room_review_geometry_proof.at("kind")=="mixed_wall_opening_deletion") {
+        const auto decoded=decode_mixed_wall_opening_deletion_review_proof(command.room_review_geometry_proof);
+        auto result=decoded.intent.wall_additional_identities;
+        for (const auto& [owner,ids]:decoded.intent.other.roof_additional_identities)
+            if (!result.emplace(owner,ids).second)
+                throw std::invalid_argument("Mixed wall/opening and roof split destination owners overlap");
+        return result;
+    }
     if (command.room_review_geometry_proof.at("kind")=="mixed_wall_deletion") {
         const auto decoded=decode_mixed_wall_deletion_review_proof(command.room_review_geometry_proof);
         auto result=decoded.intent.wall_additional_identities;
@@ -5101,7 +5116,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                     validate_physical_wall_room_profile_review_source(source,reviewed_source,geometry);
                 const bool deletion=is_physical_wall_room_deletion_review_command(geometry);
                 if (deletion) validate_physical_wall_room_deletion_review_source(source,reviewed_source,geometry,
-                    command.room_review_geometry_proof);
+                    command.room_review_geometry_proof,active_policy);
                 (void)validate_state(reviewed_source,source_assets,active_policy);
                 std::set<std::string> changed_walls,reviewed_rooms;
                 for (const auto& [id,entity] : source) {
@@ -7348,7 +7363,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36 || value.at("version")==37 || value.at("version")==38 || value.at("version")==39 || value.at("version")==40) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)

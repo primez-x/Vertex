@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed wall and semantic opening source implementation
+
+Mixed wall, door/window/doorway and optional architectural/component Delete/Cut
+now has a single source-derived producer and canvas route. Selected openings
+on selected walls collapse into wall consequences; independent openings retain
+their own complete-source leaf. All leaves use the same immutable source.
+Identical supported reference erasures and known catalog/presentation row
+omissions can be shared once while conflicting consequences remain refused.
+
+Closed child forty retains the full wall/opening intent through single and
+batch room review. Native 144/extraction 142 retain direct, wrapped and undone
+history. Fresh wall and roof destinations share complete source/history/asset
+reservation before geometry production. Exact candidate replay, surviving
+aliases, inactive ownership, retained room lineage, real constraint policy,
+source/selection/Site fences and clipboard-after-apply remain enforced.
+
+Independent source review approved after limiting shared row omissions to
+catalog and presentation containers; repeated phase-membership omissions keep
+their existing overlap rejection. Root integrated source review is complete.
+No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation and runtime
+remain unverified; the installed candidate is unchanged. Mixed room/drawing/
+annotation and shared-baseline wall cohorts, conservative capacity limits,
+ordinary stair dependency dispositions and production qualification remain
+unfinished. The next source discovery addresses ordinary stair attachment
+choices when a flight or landing is removed.
+
 ### October 9 explicit stair attachment source implementation
 
 Editing a baseline stair in an active alternative now discovers proposed

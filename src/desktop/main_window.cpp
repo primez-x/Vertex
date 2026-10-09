@@ -49,6 +49,7 @@
 #include "sketch/opening_host_geometry.hpp"
 #include "sketch/wall_join_removal.hpp"
 #include "sketch/mixed_wall_removal.hpp"
+#include "sketch/mixed_wall_opening_removal.hpp"
 #include "sketch/opening_architectural_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
@@ -31574,6 +31575,7 @@ public:
             throw std::invalid_argument("The mixed selection changed. Select the objects again.");
         MixedWallRemovalIntent intent;
         std::vector<std::string> other_ids;
+        std::vector<std::string> opening_ids;
         std::vector<std::pair<std::string,std::string>> components;
         for (const auto& selected:authority.selection) {
             if (annotationActionTarget(source,selected,false))
@@ -31585,11 +31587,13 @@ public:
                 if (!component) throw std::invalid_argument("The selected component no longer has an unambiguous source owner.");
                 components.emplace_back(component->assembly_catalog_id,component->instance.id);
             } else if (actual->second.type=="wall") intent.wall_ids.push_back(id);
+            else if (actual->second.type=="opening") opening_ids.push_back(id);
             else if (actual->second.type=="roof" || actual->second.type=="slab" || actual->second.type=="stair" ||
                 actual->second.type=="railing" || structuralObject(actual->second)) other_ids.push_back(id);
             else throw std::invalid_argument("This mixed selection includes an object requiring a separate source review: "+id);
         }
         std::sort(intent.wall_ids.begin(),intent.wall_ids.end());
+        std::sort(opening_ids.begin(),opening_ids.end());
         const bool site=siteCanvas(m_architecturalCanvas);
         const auto site_generation=m_site_publication_generation;
         const auto require_current=[&] {
@@ -31607,6 +31611,7 @@ public:
         validate_mixed_wall_removal_source_admission(source.entities(),true);
         QStringList wall_selection;
         for (const auto& id:intent.wall_ids) wall_selection.push_back(QString::fromStdString(id));
+        for (const auto& id:opening_ids) wall_selection.push_back(QString::fromStdString(id));
         const auto graph=clipboardSelectionGraph(source,true,&wall_selection);
         for (const auto& id:intent.wall_ids)
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="wall";}))
@@ -31637,9 +31642,16 @@ public:
             if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
         }
         require_current();
-        const Command command=prepare_mixed_wall_removal(source,intent,
-            cut ? "Cut walls and selected architectural objects" : "Delete walls and selected architectural objects",true);
-        const auto proof=encode_mixed_wall_deletion_review_proof(source,intent,command,true);
+        const MixedWallOpeningRemovalIntent opening_intent{
+            intent.wall_ids,opening_ids,intent.wall_additional_identities,intent.other};
+        const std::string message=cut ? "Cut walls and selected architectural objects" :
+            "Delete walls and selected architectural objects";
+        const Command command=opening_ids.empty()
+            ? prepare_mixed_wall_removal(source,intent,message,true)
+            : prepare_mixed_wall_opening_removal(source,opening_intent,message);
+        const auto proof=opening_ids.empty()
+            ? encode_mixed_wall_deletion_review_proof(source,intent,command,true)
+            : encode_mixed_wall_opening_deletion_review_proof(source,opening_intent,command);
         const auto candidate=preview_physical_wall_room_review_geometry(source,command,proof);
         const auto primary_wall=intent.wall_ids.front();
         const auto groups=affectedPhysicalWallRoomGroups(source,candidate.entities(),primary_wall,true);
@@ -52218,12 +52230,16 @@ private:
                     // its original child footprint beneath the atomic room event.
                     const auto& proof=value.room_review_geometry_proof;
                     const bool mixed=proof.value("kind",std::string{})=="mixed_wall_deletion";
-                    const auto geometry_command=mixed ? Command{decode_mixed_wall_deletion_review_proof(proof).command} :
+                    const bool mixed_opening=proof.value("kind",std::string{})=="mixed_wall_opening_deletion";
+                    const auto geometry_command=mixed_opening ? Command{decode_mixed_wall_opening_deletion_review_proof(proof).command} :
+                        mixed ? Command{decode_mixed_wall_deletion_review_proof(proof).command} :
                         proof.value("kind",std::string{})=="physical_wall_deletion"
                         ? decode_physical_wall_deletion_review_proof(proof) : command_from_json(proof);
-                    const auto candidate=preview_physical_wall_room_review_geometry(source,geometry_command,mixed ? proof : json(nullptr));
+                    const auto candidate=preview_physical_wall_room_review_geometry(source,geometry_command,
+                        mixed || mixed_opening ? proof : json(nullptr));
                     if (is_physical_wall_room_deletion_review_command(geometry_command))
-                        validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),geometry_command,proof);
+                        validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),geometry_command,proof,
+                            source.uses_active_phase_constraints());
                     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
                     if (geometry) {
                         phase_constraint_targets(*geometry);
@@ -59976,18 +59992,27 @@ public:
                 authority.selection.contains(authority.context.selected_id) &&
                 authority.context.selected_id == QString::fromStdString(selected_wall_id);
             if (!retained_geometry_proof.is_null()) {
-                const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
-                std::set<std::string> expected(decoded.intent.wall_ids.begin(),decoded.intent.wall_ids.end());
-                expected.insert(decoded.intent.other.object_ids.begin(),decoded.intent.other.object_ids.end());
+                std::vector<std::string> wall_ids,opening_ids;
+                ArchitecturalSelectionRemovalIntent other;
+                if (retained_geometry_proof.value("kind",std::string{})=="mixed_wall_opening_deletion") {
+                    const auto decoded=decode_mixed_wall_opening_deletion_review_proof(retained_geometry_proof);
+                    wall_ids=decoded.intent.wall_ids;opening_ids=decoded.intent.opening_ids;other=decoded.intent.other;
+                } else {
+                    const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
+                    wall_ids=decoded.intent.wall_ids;other=decoded.intent.other;
+                }
+                std::set<std::string> expected(wall_ids.begin(),wall_ids.end());
+                expected.insert(opening_ids.begin(),opening_ids.end());
+                expected.insert(other.object_ids.begin(),other.object_ids.end());
                 const auto aliases=embedded_assembly_presentation_ids(source.entities());
-                for (const auto& key:decoded.intent.other.components) expected.insert(aliases.at(key));
+                for (const auto& key:other.components) expected.insert(aliases.at(key));
                 std::set<std::string> actual;
                 bool unambiguous=true;
                 for (const auto& id:authority.selection) {
                     actual.insert(id.toStdString());
                     if (annotationActionTarget(source,id,false)) unambiguous=false;
                 }
-                const std::set<std::string> declared_walls(decoded.intent.wall_ids.begin(),decoded.intent.wall_ids.end());
+                const std::set<std::string> declared_walls(wall_ids.begin(),wall_ids.end());
                 deletion_selection=unambiguous && actual==expected && declared_walls==removed_walls &&
                     declared_walls.contains(selected_wall_id) && authority.selection.contains(authority.context.selected_id);
             }

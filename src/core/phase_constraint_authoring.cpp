@@ -1,6 +1,8 @@
 #include "sketch/phase_constraint_authoring.hpp"
 
 #include "sketch/boundary_transform.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -546,7 +548,7 @@ Entity merge_append_container(const Entity& source,const Entity& roof,const Enti
 // removal); all other source rows keep their exact order and bytes. Fresh rows
 // remain disjoint suffixes in wall/roof/horizontal order.
 Entity merge_source_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
-    bool ordinary_removal_rosters=false) {
+    bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false) {
     auto paths=append_paths(source,ordinary_removal_rosters);
     if (source.type==kAnnotationEntityType) {
         paths.push_back({Json::json_pointer("/state/labels"),"id"});
@@ -612,7 +614,11 @@ Entity merge_source_row_container(const Entity& source,const std::vector<const E
                 const auto found=lane.find(identity);
                 const Json* next=found==lane.end()?nullptr:found->second;
                 if (next && exact_json(original,*next)) continue;
-                if (changed) invalid("Coordinated families change the same retained source row");
+                if (changed) {
+                    if (allow_shared_reference_retirement && !consequence && !next &&
+                        (source.type==kAnnotationEntityType || source.type==kSheetViewEntityType)) continue;
+                    invalid("Coordinated families change the same retained source row");
+                }
                 changed=true; consequence=next;
             }
             if (consequence) rows.push_back(*consequence);
@@ -738,7 +744,8 @@ Entity compose_source_container(const Entity& source,const std::vector<const Ent
 
 // Retirement can remove disjoint hosted rows from a shared catalog. It cannot
 // change retained definitions, material assignments, row bytes or order.
-Entity merge_demolition_catalog(const Entity& source,const std::vector<const Entity*>& candidates) {
+Entity merge_demolition_catalog(const Entity& source,const std::vector<const Entity*>& candidates,
+    bool allow_shared_reference_retirement=false) {
     const auto& retained=source.properties.at("model").at("instances");
     std::map<std::string,std::size_t,std::less<>> positions;
     for (std::size_t i=0;i<retained.size();++i)
@@ -761,7 +768,7 @@ Entity merge_demolition_catalog(const Entity& source,const std::vector<const Ent
         }
         for (const auto& [name,index]:positions) {
             (void)index;
-            if (!surviving.contains(name) && !removed.insert(name).second)
+            if (!surviving.contains(name) && !removed.insert(name).second && !allow_shared_reference_retirement)
                 invalid("Coordinated demolition repeats the same hosted row retirement");
         }
         envelope.properties.at("model").at("instances")=retained;
@@ -777,8 +784,9 @@ Entity merge_demolition_catalog(const Entity& source,const std::vector<const Ent
 }
 
 Entity merge_demolition_row_container(const Entity& source,const std::vector<const Entity*>& candidates,
-    bool ordinary_removal_rosters=false) {
-    if (source.type!=kSheetViewEntityType) return merge_source_row_container(source,candidates,ordinary_removal_rosters);
+    bool ordinary_removal_rosters=false,bool allow_shared_reference_retirement=false) {
+    if (source.type!=kSheetViewEntityType)
+        return merge_source_row_container(source,candidates,ordinary_removal_rosters,allow_shared_reference_retirement);
     std::vector<Entity> normalized;
     normalized.reserve(candidates.size());
     const auto& source_views=source.properties.at("model").at("views");
@@ -804,7 +812,7 @@ Entity merge_demolition_row_container(const Entity& source,const std::vector<con
     }
     std::vector<const Entity*> rows;
     for (const auto& candidate:normalized) rows.push_back(&candidate);
-    auto result=merge_source_row_container(source,rows);
+    auto result=merge_source_row_container(source,rows,false,allow_shared_reference_retirement);
     auto& views=result.properties.at("model").at("views");
     for (std::size_t i=0;i<views.size();++i)
         if (source_views.at(i).contains("object_ids") && views.at(i).contains("object_ids") &&
@@ -1498,7 +1506,8 @@ Entities compose_architectural_family_candidates(const Entities& source,const st
 
 namespace {
 Entities compose_removal_candidates(const Entities& source,const std::vector<Entities>& candidates,
-    bool include_ordinary_removal, bool complete_roof_removal, bool preserve_all_baselines) {
+    bool include_ordinary_removal, bool complete_roof_removal, bool preserve_all_baselines,
+    bool allow_shared_reference_retirement=false) {
     coordinated_map_budget(source);
     if (candidates.size()<2 || candidates.size()>(include_ordinary_removal ? 6u : 5u))
         invalid("Coordinated demolition exceeds its complete family candidate bounds");
@@ -1525,14 +1534,18 @@ Entities compose_removal_candidates(const Entities& source,const std::vector<Ent
         if (erased) {
             if (complete_roof_removal && entity.required)
                 invalid("Complete architectural removal cannot erase a required source entity");
-            if (erased!=1 || !changed.empty())
+            const bool shared_reference=allow_shared_reference_retirement &&
+                ((entity.type=="constraint" && decode_constraint_entity(entity).supported()) ||
+                 (can_recognize_boundary_dimension_entity_type(entity.type) && decode_boundary_dimension_entity(entity).supported()));
+            if ((erased!=1 && !shared_reference) || !changed.empty())
                 invalid("Coordinated demolition has overlapping retirement consequences");
             result.erase(key);
         } else if (include_ordinary_removal && entity.type=="assembly_model" && !changed.empty())
-            result.at(key)=merge_demolition_catalog(entity,changed);
+            result.at(key)=merge_demolition_catalog(entity,changed,allow_shared_reference_retirement);
         else if (changed.size()==1) result.at(key)=*changed.front();
         else if (changed.size()>1) result.at(key)=entity.type=="assembly_model"
-            ? merge_demolition_catalog(entity,changed) : merge_demolition_row_container(entity,changed,complete_roof_removal);
+            ? merge_demolition_catalog(entity,changed,allow_shared_reference_retirement) :
+                merge_demolition_row_container(entity,changed,complete_roof_removal,allow_shared_reference_retirement);
     }
     for (const auto& candidate:candidates) for (const auto& [key,entity]:candidate) {
         if (source.contains(key)) continue;
@@ -1562,7 +1575,8 @@ Entities compose_phase_demolition_candidates(const Entities& source,const std::v
     return compose_removal_candidates(source,candidates,include_ordinary_removal,complete_roof_removal,true);
 }
 
-Entities compose_ordinary_architectural_removal_candidates(const Entities& source,const std::vector<Entities>& candidates) {
-    return compose_removal_candidates(source,candidates,true,true,false);
+Entities compose_ordinary_architectural_removal_candidates(const Entities& source,const std::vector<Entities>& candidates,
+    bool allow_shared_reference_retirement) {
+    return compose_removal_candidates(source,candidates,true,true,false,allow_shared_reference_retirement);
 }
 } // namespace sketch

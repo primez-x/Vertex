@@ -116,9 +116,13 @@ struct PhaseConstraintAuthoringIntent {
 // Complete ordinary removal leaves may retire baseline-only registries with
 // no alternatives. Shared baseline owners stay protected. Roof contact splits
 // and hosted retirements still require independent typed leaf admission.
+// Explicit shared-reference completion treats identical codec-known reference
+// erasures and source-row omissions as one consequence. Physical owner overlap
+// and conflicting edits still refuse; the default retains historical rules.
 [[nodiscard]] std::map<std::string,Entity,std::less<>> compose_ordinary_architectural_removal_candidates(
     const std::map<std::string,Entity,std::less<>>& source,
-    const std::vector<std::map<std::string,Entity,std::less<>>>& candidates);
+    const std::vector<std::map<std::string,Entity,std::less<>>>& candidates,
+    bool allow_shared_reference_retirement=false);
 
 // Independently evaluated saved selections, including the empty-registry case.
 [[nodiscard]] nlohmann::json phase_constraint_authoring_selections(

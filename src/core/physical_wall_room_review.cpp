@@ -1,5 +1,6 @@
 #include "sketch/physical_wall_room_review.hpp"
 #include "sketch/mixed_wall_removal.hpp"
+#include "sketch/mixed_wall_opening_removal.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/assembly_document_adapter.hpp"
@@ -1480,6 +1481,17 @@ bool exact_assets(const std::map<std::string,Asset,std::less<>>& left,
 Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& geometry_command,
     const Json& retained_geometry_proof=Json(nullptr)) {
     if (!retained_geometry_proof.is_null()) {
+        if (retained_geometry_proof.is_object() &&
+            retained_geometry_proof.value("kind",std::string{})=="mixed_wall_opening_deletion") {
+            const auto decoded=decode_mixed_wall_opening_deletion_review_proof(retained_geometry_proof);
+            if (decoded.command.expected_revision!=source.revision() ||
+                command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
+                invalid("explicit mixed wall/opening proof differs from the captured raw geometry command");
+            const auto admitted=encode_mixed_wall_opening_deletion_review_proof(source,decoded.intent,geometry_command);
+            if (admitted.dump()!=retained_geometry_proof.dump())
+                invalid("explicit mixed wall/opening proof differs from complete captured-source admission");
+            return retained_geometry_proof;
+        }
         const auto decoded=decode_mixed_wall_deletion_review_proof(retained_geometry_proof);
         if (decoded.command.expected_revision!=source.revision() ||
             command_to_json(Command{decoded.command}).dump()!=command_to_json(geometry_command).dump())
@@ -1966,7 +1978,11 @@ Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,c
 }
 
 void validate_physical_wall_room_deletion_review_source(const Entities& source,const Entities& candidate,const Command& command,
-    const Json& retained_proof) {
+    const Json& retained_proof,bool active_phase_constraints) {
+    if (retained_proof.is_object() && retained_proof.value("kind",std::string{})=="mixed_wall_opening_deletion") {
+        validate_mixed_wall_opening_deletion_review_source(source,candidate,command,retained_proof,active_phase_constraints);
+        return;
+    }
     if (retained_proof.is_object() && retained_proof.value("kind",std::string{})=="mixed_wall_deletion") {
         validate_mixed_wall_deletion_review_source(source,candidate,command,retained_proof);
         return;
@@ -2060,7 +2076,8 @@ ApplyEntityChanges prepare_physical_walls_deletion(const DocumentSnapshot& sourc
         roots.size()==1 ? "Delete wall and attached objects" : "Delete walls and attached objects"};
     const auto proof=encode_physical_wall_deletion_review_proof(source,Command{command});
     const auto candidate=Document::preview_command(source,Command{command});
-    validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),Command{command},proof);
+    validate_physical_wall_room_deletion_review_source(source.entities(),candidate.entities(),Command{command},proof,
+        source.uses_active_phase_constraints());
     return command;
 }
 
@@ -2158,7 +2175,8 @@ DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapsh
     // The original child command owns all ordinary admission and consequences.
     auto derived=Document::preview_command(source,geometry_command);
     const bool deletion=is_physical_wall_room_deletion_review_command(geometry_command);
-    if (deletion) validate_physical_wall_room_deletion_review_source(source.entities(),derived.entities(),geometry_command,proof);
+    if (deletion) validate_physical_wall_room_deletion_review_source(source.entities(),derived.entities(),geometry_command,proof,
+        source.uses_active_phase_constraints());
     if (is_physical_wall_room_profile_review_command(geometry_command))
         validate_physical_wall_room_profile_review_source(source.entities(),derived.entities(),geometry_command);
     if (derived.assets()!=source.assets()) invalid("wall geometry review cannot change assets");

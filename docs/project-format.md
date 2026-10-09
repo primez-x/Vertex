@@ -1,4 +1,36 @@
-# Vertex project formats v1 through v143
+# Vertex project formats v1 through v144
+
+## Mixed wall and semantic opening removal with room review (v144)
+
+Native reader 144 and JSON/assets extraction 142 retain child forty under a
+single room review or the existing batch twenty-seven, including retained and
+undone history. The closed `mixed_wall_opening_deletion` envelope has exactly
+`version`, `kind`, `expected_revision`, `message`, `intent` and `proof`.
+Its six-field intent has `wall_ids`, `opening_ids`,
+`wall_additional_identities`, `other_object_ids`, `components` and
+`roof_additional_identities`. At least one actual wall and one actual semantic
+opening are required; other architectural owners and qualified catalog rows
+are optional. The child is the exact bounded, asset-free raw version-one
+command. Declared wall and opening roots must be erased, and declared fresh
+destinations must be upserted.
+
+Openings hosted by selected walls collapse into those walls' complete
+consequences. Independently selected openings use their own complete-source
+leaf. Optional roof, horizontal, stair, railing, column, beam and component
+leaves read the same immutable actual source. Identical supported reference
+erasures and actual catalog/presentation row omissions can be shared once;
+conflicting edits, required relationships and duplicate physical-owner changes
+are refused. Historical composers keep their default overlap policy.
+
+Fresh wall and roof destinations share actual snapshot, retained history,
+asset and presentation reservations before geometry production. The actual
+snapshot/history supplies the explicit active-constraint policy. Independent
+replay must reproduce the entire raw command and candidate, preserve surviving
+aliases, inactive ownership and room lineage, and admit the result through the
+real document preview. Reviewed room consequences apply in the same command;
+Cut publishes its clipboard only after successful application. Historical
+children keep their prior meanings. Compilation and runtime remain unverified
+under the source-only instruction.
 
 ## Reviewed proposed railing attachments in stair replacement (v143)
 
