@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v119
+# Vertex project formats v1 through v120
+
+## Complete proposed wall presentation references (v120)
+
+Native format 120 and JSON/assets extraction version 118 retain the opt-in wall
+replacement leaf seven. Its exact fields are `version`, `complete_presentations`
+and `authoring`; the flag must be true. The body retains the closed fields of
+wall authoring one through six. Only this wrapper admits nonblank old overlay
+map keys of up to 128 bytes, matching saved-view IDs. Replay admits those keys
+only from the actual affected overlay inventory. New destinations and every
+other identity field remain strict ASCII tokens. Another wrapper, extra fields
+or a false flag refuses. Older flat leaves retain their exact admission and
+meanings.
+
+The actual source still owns every reference and identity. Known saved views
+retain their original object IDs, appearance rows and overlays, adding mapped
+copies for proposed owners. Bound overlay targets follow their actual copies;
+overlay children reserve distinct entity/view scopes using structural owner
+keys. Annotation overrides retain original rows and append mapped model-owner
+copies. Output-view overrides remain in their distinct domain. All envelope
+fields, retained row order and raw source values remain exact.
+
+Final closure drops only new rows targeting declared entity copies removed by
+a semantic relation edit or explicit room relationship omission. Original rows
+and all allocated identity reservations survive. Owned overlay, segment and
+layer IDs are not mistaken for missing entities. Unknown, future or opaque
+affected references still require a typed codec and refuse explicitly.
+
+Current wall geometry, profile, layers/materials and hosted opening edit,
+rehost and family-conversion producers opt in. Mandatory source-bound room and
+relationship review remains unchanged. Coordinated outer-eight/inner-two edits
+retain the same leaf flag through plan discovery, detached preview and final
+replay. Direct, wrapped and historical proofs raise the required reader floor;
+complete source/history/asset reservations prevent identity reuse after Undo.
+
+Source implementation is uncompiled. Interaction, output, Undo/Redo and storage
+round trips remain unverified; no build or package was produced.
 
 ## Coordinated wall, roof and horizontal replacement (v119)
 

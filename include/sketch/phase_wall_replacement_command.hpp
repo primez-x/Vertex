@@ -48,6 +48,10 @@ struct PhaseWallReplacementAuthoring {
     // Existing original children map once; authored fresh row IDs stay exact.
     // Exclusive from every other edit dialect, geometry and relationships.
     std::vector<WallLayerStackEditIntent> wall_stacks;
+    // Leaf seven retains v1..v6 fields and edit semantics, with bounded old
+    // overlay map keys matching actual saved-view IDs. Historical flat admission
+    // and fresh destinations stay strict. This adds no other edit authority.
+    bool complete_presentations{false};
 };
 struct PhaseWallReplacementAuthoringPreview {
     PhaseWallReplacementResult replacement;

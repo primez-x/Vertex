@@ -631,7 +631,8 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             if (requests.size()!=1 || requests.front().registry_id!=leaf.registry_id ||
                 requests.front().alternative_id!=leaf.alternative_id || requests.front().seed_wall_ids!=leaf.seed_wall_ids)
                 invalid("Coordinated wall replacement roots differ from the actual typed geometry authority");
-            const auto plan=inspect_phase_wall_replacement_plan(source,leaf.seed_wall_ids,leaf.registry_id,leaf.alternative_id);
+            const auto plan=inspect_phase_wall_replacement_plan(source,leaf.seed_wall_ids,leaf.registry_id,
+                leaf.alternative_id,leaf.complete_presentations);
             retained_baselines.insert(plan.required_entity_ids.begin(),plan.required_entity_ids.end());
         } else if (!requests.empty())
             invalid("Coordinated ordinary wall lane cannot borrow replacement authority for actual baseline owners");

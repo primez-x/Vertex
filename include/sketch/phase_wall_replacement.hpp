@@ -36,6 +36,9 @@ struct PhaseWallReplacementPlan {
     // a baseline room otherwise suspends the relation in the proposed design.
     std::vector<std::string> room_constraint_ids_requiring_review;
     std::vector<PhaseWallReplacementDiagnostic> diagnostics;
+    // Opt-in additive typed presentation completion; legacy plans retain their
+    // historical refusal of affected saved views and annotation overrides.
+    bool complete_presentations{false};
 
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseWallReplacementPlan&) const = default;
@@ -62,12 +65,14 @@ struct PhaseWallReplacementResult {
     const PhaseWallReplacementEntities& source,
     const std::vector<std::string>& seed_wall_ids,
     const std::string& registry_id,
-    const std::string& alternative_id);
+    const std::string& alternative_id,
+    bool complete_presentations = false);
 
 // Reinspects source and requires exactly the derived plan and a complete,
 // injective fresh mapping. Never generates identities or accepts clone JSON.
 // Originals are byte-for-byte retained except the selected registry's model
-// field. Retained-history reservations and the enclosing source snapshot fence
+// field and, when opted in, additive typed presentation rows on retained owners.
+// Retained-history reservations and the enclosing source snapshot fence
 // remain the Document's responsibility. Result is an intermediate physical
 // source: affected rooms still require reviewed room completion before commit.
 [[nodiscard]] PhaseWallReplacementResult replay_phase_wall_replacement(

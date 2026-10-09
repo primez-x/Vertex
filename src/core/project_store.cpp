@@ -390,7 +390,18 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 replacement_proof(replacement_proof,command.room_review_geometry_proof,0))
                 required=std::max(required,87U);
             const auto profile_intent=[](const nlohmann::json& intent)->std::uint32_t {
-                if (intent.is_object() && intent.value("version",0)==8) return 119U;
+                if (intent.is_object() && intent.value("version",0)==8) {
+                    const auto coordinated = intent.find("coordinated_replacements");
+                    if (coordinated != intent.end() && coordinated->is_object()) {
+                        const auto wall = coordinated->find("wall_authoring");
+                        if (wall != coordinated->end() && wall->is_object()) {
+                            const auto replacement = wall->find("wall_replacement");
+                            if (replacement != wall->end() && replacement->is_object() &&
+                                replacement->value("version",0)==7) return 120U;
+                        }
+                    }
+                    return 119U;
+                }
                 if (intent.is_object() && intent.value("version",0)==7) return 117U;
                 if (intent.is_object() && intent.value("version",0)==6) return 102U;
                 if (intent.is_object() && intent.value("version",0)==5) {
@@ -446,6 +457,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (!intent.is_object() || intent.value("version",0)!=2 || replacement==intent.end() ||
                     !replacement->is_object()) return 0;
                 const auto version=replacement->value("version",0);
+                if (version==7) return 120U;
                 if (version==6) return 107U;
                 if (version==2 && replacement->contains("wall_profiles") && replacement->at("wall_profiles").is_array() &&
                     std::any_of(replacement->at("wall_profiles").begin(),replacement->at("wall_profiles").end(),[](const auto& profile) {
@@ -2267,6 +2279,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 120 &&
          sqlite3_column_int(user_version.get(), 0) != 119 &&
          sqlite3_column_int(user_version.get(), 0) != 118 &&
          sqlite3_column_int(user_version.get(), 0) != 117 &&
@@ -2841,6 +2854,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=120)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 120 for complete proposed wall presentation references");
         if (required_format>=119)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 119 for coordinated wall, roof and horizontal design replacement");
         if (required_format>=118)

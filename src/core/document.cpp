@@ -2736,6 +2736,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool wall_stack_asset_reservation=false;
     bool hosted_slab_asset_reservation=false;
     bool roof_mixed_asset_reservation=false;
+    bool wall_presentation_asset_reservation=false;
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
@@ -2810,6 +2811,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
         if (intent.wall_replacement.is_null()) continue;
         const auto replacement=decode_phase_wall_replacement_authoring(intent.wall_replacement);
+        if (replacement.complete_presentations) {
+            complete_envelope_reservation=true;
+            wall_presentation_asset_reservation=true;
+        }
         if (!replacement.wall_stacks.empty()) {
             complete_envelope_reservation=true;
             wall_stack_asset_reservation=true;
@@ -2872,7 +2877,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                 throw std::invalid_argument("Proposed identity aliases an entity envelope field: "+std::string(key));
     for (std::size_t index=0;index<preceding_records;++index) {
         const auto& record=history.at(index);
-        if (wall_stack_asset_reservation || hosted_slab_asset_reservation || roof_mixed_asset_reservation)
+        if (wall_stack_asset_reservation || hosted_slab_asset_reservation || roof_mixed_asset_reservation ||
+            wall_presentation_asset_reservation)
             for (const auto& [id,asset]:record.assets) {
                 (void)asset;
                 if (fresh.contains(id))

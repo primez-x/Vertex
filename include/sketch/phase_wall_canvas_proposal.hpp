@@ -30,6 +30,8 @@ struct PhaseWallCanvasProposal {
 // strict replacement replay checks them against the complete actual source.
 // Retained-history reservations remain the final Document admission's duty.
 // This helper retains no allocations and mutates no document or history.
+// Opting into complete_presentations also allocates affected view-overlay
+// children and retains additive copies of known saved presentation bindings.
 //
 // The returned complete entity map is a PHYSICAL PREVIEW, not a completed edit.
 // When physical.needs_room_review is true, the command obtained from
@@ -40,7 +42,8 @@ struct PhaseWallCanvasProposal {
 [[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_wall_canvas_proposal(
     const DocumentSnapshot& source,
     const ConstraintAuthoringIntent& semantic,
-    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
+    bool complete_presentations = false);
 
 // Discover the actual saved-active shared-baseline hosts before ordinary
 // opening authoring or Document preview. Every profile must retain an existing
@@ -54,7 +57,8 @@ struct PhaseWallCanvasProposal {
 [[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_canvas_proposal(
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningProfileEditIntent>& profiles,
-    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
+    bool complete_presentations = false);
 
 // Discover both actual original and target hosts before ordinary rehosting or
 // preview. Either host can qualify the saved-active baseline replacement.
@@ -65,7 +69,8 @@ struct PhaseWallCanvasProposal {
 [[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_rehost_proposal(
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningRehostIntent>& rehosts,
-    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
+    bool complete_presentations = false);
 
 // Same-host family conversion discovers actual saved-active baseline owners
 // before ordinary physical replay or Document preview. A complete equivalent
@@ -75,6 +80,7 @@ struct PhaseWallCanvasProposal {
 [[nodiscard]] std::optional<PhaseWallCanvasProposal> prepare_phase_hosted_opening_family_proposal(
     const DocumentSnapshot& source,
     const std::vector<HostedOpeningFamilyEditIntent>& families,
-    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity);
+    const std::function<std::string(std::string_view original_id)>& allocate_fresh_identity,
+    bool complete_presentations = false);
 
 } // namespace sketch

@@ -1,13 +1,16 @@
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_wall_replacement_authoring.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/physical_wall_room.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -31,6 +34,14 @@ std::string identity(const Json& value) {
     })) invalid("invalid identity");
     return result;
 }
+std::string presentation_source_identity(const std::string& value) {
+    if (value.empty() || value.size()>128 || std::all_of(value.begin(),value.end(),[](unsigned char c) {
+        return std::isspace(c);
+    })) invalid("presentation source identity must be nonblank and at most 128 bytes");
+    return value;
+}
+PhaseWallReplacementAuthoring decode_flat_phase_wall_replacement_authoring(
+    const Json& value, bool allow_presentation_source_ids);
 bool exact(const Entity& a,const Entity& b) {
     return a==b && a.properties.dump()==b.properties.dump() && a.extensions.dump()==b.extensions.dump();
 }
@@ -113,7 +124,8 @@ Stage physical_stage(const Entities& source,const PhaseConstraintAuthoringIntent
             invalid("opening family replacement roots do not match the actual original hosts and saved choice");
     }
     Stage stage;
-    stage.plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,edit.alternative_id);
+    stage.plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
+        edit.alternative_id,edit.complete_presentations);
     stage.replacement=replay_phase_wall_replacement(source,stage.plan,edit.identities);
     auto mapped=remap_phase_wall_replacement_authoring_intent(intent.intent,stage.replacement.original_to_proposed);
     std::erase_if(mapped.relation_mutations,[&](const auto& mutation) {
@@ -373,6 +385,60 @@ void complete_room_constraints(Stage& stage,const PhaseWallReplacementAuthoring&
         stage.entities.insert_or_assign(fresh_id,std::move(replacement));
     }
 }
+void complete_surviving_presentations(Stage& stage,const Entities& source,
+    const PhaseWallReplacementAuthoring& edit) {
+    if (!edit.complete_presentations) return;
+    std::set<std::string,std::less<>> absent;
+    // Entity copies can disappear through semantic removal or an explicit room
+    // disposition. Owned overlay, segment and layer IDs are not entity copies.
+    for (const auto& original_id:stage.plan.required_entity_ids) {
+        const auto& fresh_id=stage.replacement.original_to_proposed.at(original_id);
+        if (!stage.entities.contains(fresh_id)) absent.insert(fresh_id);
+    }
+    if (absent.empty()) return;
+    const auto absent_reference=[&](const Json& row,const char* key) {
+        return row.contains(key) && absent.contains(row.at(key).get<std::string>());
+    };
+    const auto prune=[](Json& rows,const auto& predicate) {
+        return std::erase_if(rows.get_ref<Json::array_t&>(),predicate)!=0;
+    };
+    // Replay reserves fresh IDs against every source string. Thus only newly
+    // appended source-derived rows can match; erase in place to retain all raw
+    // original rows, envelope fields and the order of surviving additions.
+    for (const auto& [id,original]:source) {
+        if (original.type!=kSheetViewEntityType && original.type!=kAnnotationEntityType) continue;
+        auto& candidate=stage.entities.at(id);
+        if (candidate.properties==original.properties) continue;
+        bool changed=false;
+        if (original.type==kSheetViewEntityType) {
+            for (auto& view:candidate.properties.at("model").at("views")) {
+                if (view.contains("object_ids"))
+                    changed=prune(view.at("object_ids"),[&](const Json& row) {
+                        return absent.contains(row.get<std::string>());
+                    }) || changed;
+                auto& presentation=view.at("presentation");
+                if (presentation.contains("appearance") && !presentation.at("appearance").is_null())
+                    changed=prune(presentation.at("appearance").at("objects"),[&](const Json& row) {
+                        return absent_reference(row,"object_id");
+                    }) || changed;
+                if (view.contains("overlays"))
+                    changed=prune(view.at("overlays"),[&](const Json& row) {
+                        return absent_reference(row,"object_id") ||
+                            (row.contains("dimension_binding") && !row.at("dimension_binding").is_null() &&
+                             absent_reference(row.at("dimension_binding"),"object_id"));
+                    }) || changed;
+            }
+            if (changed) validate_sheet_view_entity(candidate);
+        } else {
+            changed=prune(candidate.properties.at("state").at("overrides"),[&](const Json& row) {
+                return absent_reference(row,"target_id");
+            });
+            if (changed) validate_annotation_entity(candidate);
+        }
+    }
+    // Keep absent copies and all child IDs declared in the identity mapping and
+    // fresh-ID inventory: omitting a row does not release its reservation.
+}
 } // namespace
 
 std::optional<PhaseWallReplacementRequest> phase_wall_layer_stack_replacement_request(
@@ -471,11 +537,35 @@ Json encode_phase_wall_replacement_authoring(const PhaseWallReplacementAuthoring
     }
     // The decoder below is the single strict semantic admission path. Encoding
     // never supplies geometry, inferred room mappings or arbitrary clone data.
+    if (value.complete_presentations)
+        result = Json{{"version",7},{"complete_presentations",true},{"authoring",std::move(result)}};
     if (result.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
     return result;
 }
 PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json& value) {
     if (value.dump().size()>1024*1024) invalid("replacement decisions exceed one MiB");
+    if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+        value.at("version") == 7) {
+        keys(value,{"version","complete_presentations","authoring"});
+        if (!value.at("complete_presentations").is_boolean() || value.at("complete_presentations") != true)
+            invalid("presentation completion wrapper requires an explicit true flag");
+        const auto& body = value.at("authoring");
+        // One closed wrapper only. Its flat body admits the existing overlay
+        // source vocabulary solely in old mapping keys, never destinations.
+        if (!body.is_object() || !body.contains("version") || !body.at("version").is_number_integer() ||
+            body.at("version") < 1 || body.at("version") > 6)
+            invalid("presentation completion requires a flat existing authoring dialect");
+        auto result = decode_flat_phase_wall_replacement_authoring(body, true);
+        result.complete_presentations = true;
+        if (encode_phase_wall_replacement_authoring(result).dump() != value.dump())
+            invalid("presentation completion wrapper is not canonical");
+        return result;
+    }
+    return decode_flat_phase_wall_replacement_authoring(value, false);
+}
+namespace {
+PhaseWallReplacementAuthoring decode_flat_phase_wall_replacement_authoring(
+    const Json& value, bool allow_presentation_source_ids) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
         (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 &&
          value.at("version")!=5 && value.at("version")!=6)) invalid("unsupported replacement version");
@@ -563,7 +653,8 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
     if (!identities.is_object() || identities.empty() || identities.size()>4096) invalid("invalid replacement identity inventory");
     std::set<std::string,std::less<>> destinations;
     for (const auto& [old_id,new_id]:identities.items()) {
-        const auto original=identity(Json(old_id));const auto fresh=identity(new_id);
+        const auto original=allow_presentation_source_ids ? presentation_source_identity(old_id) : identity(Json(old_id));
+        const auto fresh=identity(new_id);
         if (original==fresh || !destinations.insert(fresh).second) invalid("replacement identities must be fresh and injective");
         result.identities.emplace(original,fresh);
     }
@@ -604,6 +695,7 @@ PhaseWallReplacementAuthoring decode_phase_wall_replacement_authoring(const Json
     if (encode_phase_wall_replacement_authoring(result).dump()!=value.dump()) invalid("replacement decisions are not canonical");
     return result;
 }
+} // namespace
 PhaseWallReplacementAuthoringPreview inspect_phase_wall_replacement_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent) {
     if (!source.is_editable() || intent.expected_revision!=source.revision() ||
@@ -629,6 +721,7 @@ Entities replay_phase_wall_replacement_authoring(const Entities& source,const Ph
         stage.entities=replay.entities;
     }
     complete_room_constraints(stage,edit);
+    complete_surviving_presentations(stage,source,edit);
     if (!edit.opening_families.empty() || !edit.wall_stacks.empty() || std::any_of(edit.wall_profiles.begin(),edit.wall_profiles.end(),
             strict_profile_admission)) {
         std::set<std::string,std::less<>> copied_walls;
@@ -645,7 +738,8 @@ Entities replay_phase_wall_replacement_authoring(const Entities& source,const Ph
 void validate_phase_wall_replacement_originals(const Entities& source,const Entities& candidate,
     const PhaseConstraintAuthoringIntent& intent) {
     const auto edit=decode_phase_wall_replacement_authoring(intent.wall_replacement);
-    const auto plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,edit.alternative_id);
+    const auto plan=inspect_phase_wall_replacement_plan(source,edit.seed_wall_ids,edit.registry_id,
+        edit.alternative_id,edit.complete_presentations);
     preserve_baseline(source,candidate,plan);
 }
 ApplyBoundaryConstraintChanges phase_wall_replacement_authoring_command(const PhaseConstraintAuthoringIntent& intent) {

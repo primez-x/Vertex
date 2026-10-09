@@ -1,5 +1,6 @@
 #include "sketch/phase_wall_replacement.hpp"
 
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -11,10 +12,12 @@
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -38,6 +41,11 @@ void identity(const std::string& id) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
             (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':';
     })) reject("identity must contain 1..128 supported ASCII characters");
+}
+void presentation_source_identity(const std::string& id) {
+    if (id.empty() || id.size() > 128 || std::all_of(id.begin(), id.end(), [](unsigned char c) {
+        return std::isspace(c);
+    })) reject("presentation source identity must be nonblank and at most 128 bytes");
 }
 // Read-only conservative identity inspection, never a string-rewrite codec.
 // All retained strings reserve fresh IDs, including unknown future children.
@@ -262,7 +270,7 @@ template<class Reference> void visit_boundary_copy_evidence(Entity& entity, cons
 }
 // Remove only precisely understood identity fields from a temporary inspection
 // copy. A reference elsewhere in a copied payload needs its own typed codec.
-Entity opaque_remainder(const Entity& entity) {
+Entity opaque_remainder(const Entity& entity, bool complete_presentations = false) {
     auto remainder = entity;
     if (entity.type == "wall" && remainder.extensions.contains("wall_layer_stack_retirement")) {
         auto& archive = remainder.extensions.at("wall_layer_stack_retirement");
@@ -297,7 +305,76 @@ Entity opaque_remainder(const Entity& entity) {
         auto& target = p.at("target");
         for (const auto* key : {"entity_id", "segment_id", "segment_ids", "second_segment_id", "vertex_id"}) target.erase(key);
     }
+    if (complete_presentations && entity.type == kSheetViewEntityType) {
+        (void)decode_sheet_view_entity(entity);
+        for (auto& view : p.at("model").at("views")) {
+            view.erase("object_ids");
+            auto& presentation = view.at("presentation");
+            if (presentation.contains("appearance") && !presentation.at("appearance").is_null())
+                for (auto& row : presentation.at("appearance").at("objects")) row.erase("object_id");
+            if (view.contains("overlays")) for (auto& overlay : view.at("overlays")) {
+                overlay.erase("id"); overlay.erase("object_id");
+                if (overlay.contains("dimension_binding") && !overlay.at("dimension_binding").is_null())
+                    overlay.at("dimension_binding").erase("object_id");
+            }
+        }
+    } else if (complete_presentations && entity.type == kAnnotationEntityType) {
+        validate_annotation_entity(entity);
+        for (auto& row : p.at("state").at("overrides")) row.erase("target_id");
+    }
     return remainder;
+}
+bool affected_overlay(const Json& overlay, const Ids& owners) {
+    return (overlay.contains("object_id") && owners.contains(overlay.at("object_id").get<std::string>())) ||
+        (overlay.contains("dimension_binding") && !overlay.at("dimension_binding").is_null() &&
+         owners.contains(overlay.at("dimension_binding").at("object_id").get<std::string>()));
+}
+// Append source-derived typed rows on the retained wire. Every original row,
+// scope, role and drawing context remains exact; owners are never copied.
+void complete_presentation(PhaseWallReplacementEntities& candidate,
+    const PhaseWallReplacementEntities& source, const Ids& owners,
+    const PhaseWallReplacementIdentityMap& identities) {
+    for (const auto& [id, original] : source) {
+        if (!touches(original.properties, owners) && !touches(original.extensions, owners)) continue;
+        if (original.type == kSheetViewEntityType) {
+            (void)decode_sheet_view_entity(original);
+            auto& changed = candidate.at(id);
+            for (auto& view : changed.properties.at("model").at("views")) {
+                if (view.contains("object_ids")) {
+                    auto& rows = view.at("object_ids"); const auto retained = rows;
+                    for (const auto& row : retained) if (owners.contains(row.get<std::string>()))
+                        rows.push_back(identities.at(row.get<std::string>()));
+                }
+                auto& presentation = view.at("presentation");
+                if (presentation.contains("appearance") && !presentation.at("appearance").is_null()) {
+                    auto& rows = presentation.at("appearance").at("objects"); const auto retained = rows;
+                    for (auto row : retained) if (owners.contains(row.at("object_id").get<std::string>())) {
+                        remap_field(row, "object_id", identities); rows.push_back(std::move(row));
+                    }
+                }
+                if (view.contains("overlays")) {
+                    auto& rows = view.at("overlays"); const auto retained = rows;
+                    for (auto row : retained) if (affected_overlay(row, owners)) {
+                        row.at("id") = identities.at(row.at("id").get<std::string>());
+                        remap_field(row, "object_id", identities);
+                        if (row.contains("dimension_binding") && !row.at("dimension_binding").is_null())
+                            remap_field(row.at("dimension_binding"), "object_id", identities);
+                        rows.push_back(std::move(row));
+                    }
+                }
+            }
+            validate_sheet_view_entity(changed);
+        } else if (original.type == kAnnotationEntityType) {
+            validate_annotation_entity(original);
+            auto& rows = candidate.at(id).properties.at("state").at("overrides");
+            const auto retained = rows;
+            for (auto row : retained) if (row.at("target_kind") != "output_view" &&
+                    owners.contains(row.at("target_id").get<std::string>())) {
+                remap_field(row, "target_id", identities); rows.push_back(std::move(row));
+            }
+            validate_annotation_entity(candidate.at(id));
+        }
+    }
 }
 bool room_touches(const Entity& room, const Ids& walls) {
     // The room descriptor is retained evidence. Unknown descriptors that mention
@@ -313,7 +390,7 @@ bool PhaseWallReplacementPlan::ready() const noexcept {
 
 PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
     const PhaseWallReplacementEntities& source, const std::vector<std::string>& seed_wall_ids,
-    const std::string& registry_id, const std::string& alternative_id) {
+    const std::string& registry_id, const std::string& alternative_id, bool complete_presentations) {
     try {
         identity(registry_id); identity(alternative_id);
         if (source.size() > maximum_entities) reject("source entity budget exceeded");
@@ -338,6 +415,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         const Ids baseline(model.baseline_ids().begin(), model.baseline_ids().end());
         PhaseWallReplacementPlan plan;
         plan.registry_id = registry_id; plan.alternative_id = alternative_id; plan.seed_wall_ids = seed_wall_ids;
+        plan.complete_presentations = complete_presentations;
         if (seed_wall_ids.empty() || seed_wall_ids.size() > maximum_replacements) reject("requires a bounded nonempty explicit wall seed");
         std::sort(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end());
         if (std::adjacent_find(plan.seed_wall_ids.begin(), plan.seed_wall_ids.end()) != plan.seed_wall_ids.end()) reject("wall seeds must be unique");
@@ -622,11 +700,16 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
         if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
         // Distinct source owners cannot silently share a remapped child ID.
         // Inspect typed owned identities globally, including inactive designs.
-        std::map<std::string, std::string, std::less<>> child_owners;
+        enum class ChildOwnerKind { physical_entity, sheet_view };
+        using ChildOwner = std::pair<ChildOwnerKind, std::pair<std::string, std::string>>;
+        std::map<std::string, ChildOwner, std::less<>> child_owners;
+        Ids ambiguous_children;
         const auto reserve_child = [&](const std::string& child, const std::string& owner) {
             if (source.contains(child)) reject("owned child collides with actual entity identity: " + child);
-            const auto [found, inserted] = child_owners.emplace(child, owner);
-            if (!inserted && found->second != owner && children.contains(child))
+            const ChildOwner owner_key{ChildOwnerKind::physical_entity, {owner, {}}};
+            const auto [found, inserted] = child_owners.emplace(child, owner_key);
+            if (!inserted && found->second != owner_key) ambiguous_children.insert(child);
+            if (!inserted && found->second != owner_key && children.contains(child))
                 reject("replacement child identity is owned by multiple source entities: " + child);
         };
         for (const auto& [id, entity] : source) {
@@ -654,6 +737,31 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 if (owners.contains(id)) diagnostic(plan, id, "affected owned identities require a supported source proof");
             }
             for (const auto& child : proof_children) reserve_child(child, id);
+            if (complete_presentations && entity.type == kSheetViewEntityType) {
+                try {
+                    const auto views = decode_sheet_view_entity(entity);
+                    for (const auto& view : views.views()) for (const auto& overlay : view.overlays) {
+                        if (owners.contains(overlay.object_id) ||
+                            (overlay.dimension_binding && owners.contains(overlay.dimension_binding->object_id)))
+                            children.insert(overlay.id);
+                        // Scan the complete roster even when an unrelated
+                        // retained overlay already aliases an entity. A later
+                        // row may own one of this replacement's required IDs.
+                        const ChildOwner owner_key{ChildOwnerKind::sheet_view, {id, view.id}};
+                        const auto [found, inserted] = child_owners.emplace(overlay.id, owner_key);
+                        if (source.contains(overlay.id) || (!inserted && found->second != owner_key))
+                            ambiguous_children.insert(overlay.id);
+                    }
+                } catch (const std::exception& error) {
+                    if (touches(entity.properties, owners) || touches(entity.extensions, owners))
+                        diagnostic(plan, id, "affected sheet/view record is unsupported: " + std::string(error.what()));
+                }
+            }
+        }
+        if (complete_presentations) {
+            for (const auto& child : children) if (ambiguous_children.contains(child))
+                diagnostic(plan, child, "replacement child identity is owned by multiple actual source owners");
+            if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
         }
         Ids affected = owners; affected.insert(children.begin(), children.end());
         for (const auto& id : owners) {
@@ -664,7 +772,7 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
             if (member != memberships.end() && (member->second != registry_id || !baseline.contains(id)))
                 diagnostic(plan, id, "copy would supersede a registered owner outside the target shared baseline");
             try {
-                const auto remainder = opaque_remainder(source.at(id));
+                const auto remainder = opaque_remainder(source.at(id), complete_presentations);
                 if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                     diagnostic(plan, id, "copied payload contains an affected reference outside supported typed fields");
             } catch (const std::exception& error) { diagnostic(plan, id, "copied payload has unsupported typed evidence: " + std::string(error.what())); }
@@ -691,6 +799,17 @@ PhaseWallReplacementPlan inspect_phase_wall_replacement_plan(
                 const auto decoded = decode_boundary_dimension_entity(entity);
                 if (decoded.dimension && scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) continue;
             }
+            if (complete_presentations && (entity.type == kSheetViewEntityType || entity.type == kAnnotationEntityType)) {
+                try {
+                    const auto remainder = opaque_remainder(entity, true);
+                    if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
+                        diagnostic(plan, id, "presentation has an affected reference outside supported typed fields");
+                } catch (const std::exception& error) {
+                    if (touches(entity.properties, affected) || touches(entity.extensions, affected))
+                        diagnostic(plan, id, "affected presentation record is unsupported: " + std::string(error.what()));
+                }
+                continue;
+            }
             if (touches(entity.properties, affected) || touches(entity.extensions, affected))
                 diagnostic(plan, id, "affected dependent has no safe typed replacement codec; original remains preserved");
         }
@@ -708,7 +827,8 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
     const PhaseWallReplacementEntities& source, const PhaseWallReplacementPlan& plan,
     const PhaseWallReplacementIdentityMap& identities) {
     try {
-        const auto derived = inspect_phase_wall_replacement_plan(source, plan.seed_wall_ids, plan.registry_id, plan.alternative_id);
+        const auto derived = inspect_phase_wall_replacement_plan(source, plan.seed_wall_ids, plan.registry_id,
+            plan.alternative_id, plan.complete_presentations);
         if (derived != plan) reject("supplied plan differs from actual source discovery");
         if (!derived.ready()) reject("replacement has unresolved affected dependencies");
         Ids expected(derived.required_entity_ids.begin(), derived.required_entity_ids.end());
@@ -716,10 +836,30 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
         if (identities.size() != expected.size()) reject("requires the complete exact entity/child mapping");
         Strings occupied;
         for (const auto& [id, entity] : source) { occupied.values.insert(id); occupied.read(entity.properties); occupied.read(entity.extensions); }
+        Ids presentation_source_ids;
+        if (derived.complete_presentations) {
+            for (const auto* key : {"id", "type", "properties", "required", "extensions"}) occupied.values.insert(key);
+            for (const auto& [id, entity] : source) { (void)id; occupied.values.insert(entity.type); }
+            const Ids owners(derived.required_entity_ids.begin(), derived.required_entity_ids.end());
+            // Extend only names of actual affected overlays admitted by the
+            // source plan. Physical children and all destinations stay strict.
+            for (const auto& [id, entity] : source) {
+                (void)id;
+                if (entity.type != kSheetViewEntityType ||
+                    (!touches(entity.properties, owners) && !touches(entity.extensions, owners))) continue;
+                const auto views = decode_sheet_view_entity(entity);
+                for (const auto& view : views.views()) for (const auto& overlay : view.overlays)
+                    if (owners.contains(overlay.object_id) ||
+                        (overlay.dimension_binding && owners.contains(overlay.dimension_binding->object_id)))
+                        presentation_source_ids.insert(overlay.id);
+            }
+        }
         Ids fresh;
         for (const auto& [old_id, new_id] : identities) {
-            identity(old_id); identity(new_id);
             if (!expected.contains(old_id)) reject("mapping contains an unrequested source identity: " + old_id);
+            if (presentation_source_ids.contains(old_id)) presentation_source_identity(old_id);
+            else identity(old_id);
+            identity(new_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh identity collision: " + new_id);
         }
         PhaseWallReplacementResult result{source, identities, {}, derived.affected_original_room_ids,
@@ -803,6 +943,9 @@ PhaseWallReplacementResult replay_phase_wall_replacement(
         }
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json()) reject("registry reconstruction differs from canonical update");
         result.entities.at(plan.registry_id).properties["model"] = std::move(raw);
+        if (derived.complete_presentations)
+            complete_presentation(result.entities, source,
+                Ids(derived.required_entity_ids.begin(), derived.required_entity_ids.end()), identities);
         const auto result_scope = constraint_phase_scope(result.entities);
         Ids result_visible;
         for (const auto& [id, entity] : result.entities) if (!result_scope.inactive_owner_ids.contains(id)) result_visible.insert(id);

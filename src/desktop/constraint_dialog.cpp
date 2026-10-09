@@ -767,7 +767,7 @@ public:
 
     bool previewReplacement(const ConstraintAuthoringIntent& command, const PhaseWallReplacementRequest& request) {
         const auto plan = inspect_phase_wall_replacement_plan(snapshot.entities(), request.seed_wall_ids,
-            request.registry_id, request.alternative_id);
+            request.registry_id, request.alternative_id, true);
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic : plan.diagnostics)
@@ -779,13 +779,59 @@ public:
         // The command receives exactly the independently discovered inventory,
         // including typed child IDs, even if another preview needs fewer copies.
         PhaseWallReplacementAuthoring edit;
+        edit.complete_presentations = true;
         edit.registry_id = request.registry_id;
         edit.alternative_id = request.alternative_id;
         edit.seed_wall_ids = request.seed_wall_ids;
+        std::set<std::string, std::less<>> reserved;
+        std::size_t reserved_nodes{}, reserved_bytes{};
+        const auto reserve_text = [&](const std::string& value) {
+            if (value.size() > 64 * 1024 * 1024 - reserved_bytes)
+                throw std::invalid_argument("Wall replacement identity reservation exceeds its string budget.");
+            reserved_bytes += value.size();
+            reserved.insert(value);
+        };
+        const auto reserve = [&](const json& root) {
+            std::vector<const json*> pending{&root};
+            while (!pending.empty()) {
+                const auto& value = *pending.back();
+                pending.pop_back();
+                if (++reserved_nodes > 4 * 1024 * 1024)
+                    throw std::invalid_argument("Wall replacement identity reservation exceeds its JSON budget.");
+                if (value.is_string()) reserve_text(value.get_ref<const std::string&>());
+                else if (value.is_object()) for (const auto& [key, child] : value.items()) {
+                    reserve_text(key);
+                    pending.push_back(&child);
+                } else if (value.is_array()) for (const auto& child : value) pending.push_back(&child);
+            }
+        };
+        const auto reserve_entities = [&](const auto& entities) {
+            for (const auto& [id, entity] : entities) {
+                reserve_text(id);
+                reserve_text(entity.type);
+                reserve(entity.properties);
+                reserve(entity.extensions);
+            }
+        };
+        reserve_entities(snapshot.entities());
+        for (const auto& revision : snapshot.history()) {
+            reserve_entities(revision.entities);
+            for (const auto& [id, asset] : revision.assets) { (void)asset; reserve_text(id); }
+            if (revision.boundary_constraint_changes)
+                reserve(command_to_json(Command{*revision.boundary_constraint_changes}));
+        }
+        for (const auto& [id, asset] : snapshot.assets()) { (void)asset; reserve_text(id); }
+        for (const auto& [original, proposed] : replacement_identities) {
+            (void)original;
+            reserved.insert(proposed);
+        }
         const auto allocate = [&](const std::string& original) {
             auto found = replacement_identities.find(original);
-            if (found == replacement_identities.end())
-                found = replacement_identities.emplace(original, make_stable_id()).first;
+            if (found == replacement_identities.end()) {
+                auto fresh = make_stable_id();
+                while (!reserved.insert(fresh).second) fresh = make_stable_id();
+                found = replacement_identities.emplace(original, std::move(fresh)).first;
+            }
             edit.identities.emplace(original, found->second);
         };
         for (const auto& id : plan.required_entity_ids) allocate(id);

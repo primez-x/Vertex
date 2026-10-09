@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 proposed wall presentation source integration
+
+Wall geometry, profile and layer edits and hosted opening edits/rehosting/type
+changes now opt into complete known presentation references. Actual source view
+object IDs, appearances, overlays and model-owner annotation overrides retain
+their raw original rows and append qualified proposed copies. Overlay child
+ownership distinguishes exact entity/view pairs structurally; output-view
+overrides remain in their separate domain.
+
+After room relationship omission or semantic relation removal, final closure
+removes only new presentation rows targeting absent declared entity copies.
+Original rows and all fresh identity reservations remain retained. Leaf seven
+retains the existing flat fields and admits the actual saved-view overlay source
+ID vocabulary only in old mapping keys. Fresh destinations and other identity
+fields remain strict; older flat leaf admission remains unchanged. Native
+120/extraction 118 preserves direct, wrapped and historical proofs.
+Coordinated replay forwards the same opt-in and full source/history/asset names
+remain reserved. Unsupported opaque/future references and overlapping catalog
+consequences remain separate implementation gaps.
+
+Independent integrated source review approved after correcting structural
+ownership, surviving references, constraint-dialog opt-in and overlay source-key
+admission. No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, interaction, output and storage round trips
+remain unverified; the installed candidate is unchanged.
+
 ### October 8 coordinated wall, roof and floor source integration
 
 Mixed wall/roof/horizontal plan edits now prepare source-bound wall geometry
