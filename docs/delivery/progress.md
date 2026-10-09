@@ -14,6 +14,53 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 current-room, recovery and navigator source implementation
+
+Repeated creation now reuses a current physical room when only captured phase
+bookkeeping differs. Its complete physical inventory, context and exact clear
+outer/holes must still match; retained owner identity, facts, classification and
+descriptor are preserved. The controller uses the validated inventory predicate
+and filters by the actual organized drawing context before checking owners.
+Independent review identified that missing filter: an unrelated current room on
+another floor/layer could throw before the intended owner was reached. The
+context filter is now present.
+
+An explicit current-snapshot dimension API permits the same narrowly admitted
+phase-bookkeeping difference without changing the strict retained-map/default
+APIs used by historical room/phase review replay. Current creation, properties,
+callout movement, Site placement, chain preview and scene/geometry previews now
+use this API with their actual captured source or candidate snapshot. Stable
+room IDs and net clear area including holes remain authoritative; changed
+geometry, inventory, effective plane or inactive owners still refuse values.
+The redraw reference review also formats an area dimension as an area rather
+than displaying its unused length field.
+
+Recovery discovery now retains the supported archive document's actual dirty
+state. An ordinary edit autosaved through a detached workspace with zero
+generation counters therefore remains eligible for startup recovery. Existing
+provenance, loadability and duplicate-archive guards remain; this adds no
+persistent field or format meaning. Recovery resource preflight also includes
+retained boundary geometry edits and grouped transforms in the existing
+cumulative encoded-byte, value and string budgets, matching ProjectStore.
+
+Active-layer rows and the component-library status now follow the owning
+window's theme. Theme changes refresh the navigator through its existing
+palette-aware cache; hidden active rows keep readable selected text, and
+nonactive issue colors remain legible in dark/high-contrast modes. Initial
+construction still guards an absent navigator.
+
+Root integrated source review and diff whitespace inspection are complete.
+Independent review of recovery accounting/discovery and theme wiring found no
+other actionable issue. Separate integrated source review approved the explicit
+current-dimension API and its consumer wiring with no actionable findings.
+It noted a pre-existing mixed-Site-move path that still reaches an entity-only
+physical-room dimension check; that workflow is not repaired by this batch.
+No builds, tests, probes, scripts, native jobs, launches,
+packages or installations ran. Compilation and runtime remain unverified; the
+installed candidate is unchanged. Split/merge eligibility after phase-only
+metadata changes is being resolved separately without broadening historical
+command acceptance.
+
 ### October 9 toolbar-vector source implementation
 
 The compact toolbar now uses a shared SVG icon engine instead of fixed-color

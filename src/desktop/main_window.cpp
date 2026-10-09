@@ -2259,9 +2259,9 @@ QString format_boundary_area(double square_metres, bool metric, bool ansi) {
 }
 
 DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
-    const Entity& boundary, const std::map<std::string,Entity,std::less<>>& entities,
+    const Entity& boundary, const DocumentSnapshot& snapshot,
     bool metric, bool selected, bool ansi = false) {
-    const auto resolved=dimension.resolve(entities);
+    const auto resolved=resolve_current_boundary_dimension(dimension, snapshot);
     QString text;
     std::optional<Boundary> overlay;
     if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length) {
@@ -11103,6 +11103,7 @@ public:
             QMenu::item:selected { background: $selection; color: $selectedText; }
             QLabel#panelHeading, QLabel#componentLibraryHeading { color: $muted; font-size: 10px; font-weight: 700;
                 letter-spacing: 1px; }
+            QLabel#annotationEditorStatus { color: $muted; font-size: 11px; }
             QLabel#inspectorHeading { color: $foreground; font-size: 18px; font-weight: 700; }
             QWidget#navigatorPanel, QWidget#inspectorBody { background: $surface; }
             QWidget#appraisalDetailsContent, QWidget#appraisalDetailsViewport,
@@ -11167,6 +11168,7 @@ public:
         const QColor canvas_background(contrast ? "#000000" : dark ? "#141b27" : "#f8fafc");
         if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(canvas_background);
         if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(canvas_background);
+        if (m_navigator) refreshNavigator();
     }
 
     QString workspaceProfilesPath() const {
@@ -12981,7 +12983,7 @@ public:
                     if (found!=source.entities().end() && can_recognize_boundary_dimension_entity_type(found->second.type)) {
                         const auto decoded=decode_boundary_dimension_entity(found->second);
                         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-                        (void)decoded.dimension->resolve(source);
+                        (void)resolve_current_boundary_dimension(*decoded.dimension, source);
                         if (!selection.contains(id_from(decoded.dimension->boundary_id)) || !visible.contains(found->first))
                             throw std::invalid_argument("Select the dimension's visible measured owner to transform them together, or drag the dimension on the canvas to adjust its placement.");
                         // Owner replay retains the measurement and automatic/
@@ -13871,7 +13873,7 @@ public:
                         const auto decoded=decode_boundary_dimension_entity(entity);
                         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                         auto projection=project_boundary_dimension(*decoded.dimension,
-                            snapshot.entities().at(decoded.dimension->boundary_id),snapshot.entities(),m_metric_units,selected,
+                            snapshot.entities().at(decoded.dimension->boundary_id),snapshot,m_metric_units,selected,
                             ansi_boundary_dimensions(snapshot, snapshot.entities().at(decoded.dimension->boundary_id)));
                         if (projection.line) {
                             if (!selected) projection.line->type=QStringLiteral("source");
@@ -21125,10 +21127,14 @@ public:
                     applyDocumentCommand(command); m_selected_id = id; clearError(); refresh(); return id;
                 }
                 const auto checks = physical_wall_room_checks(source);
+                const auto organization = projectOrganization(source);
                 for (const auto& [id, check] : checks) {
                     if (!check.current) continue;
-                    const auto descriptor = decode_physical_wall_room_descriptor(source.entities().at(id));
-                    if (descriptor.source_lineage == detection.spaces[adjacent.front()].source_lineage) {
+                    const auto room_context = organization->drawing_context(id);
+                    if (!room_context || *room_context != detection.context) continue;
+                    if (physical_wall_room_lineage_matches_current_inventory(
+                            source.entities().at(id), detection.context,
+                            detection.spaces[adjacent.front()])) {
                         (void)selectEntity(id_from(id));
                         clearError();
                         return id_from(id);
@@ -24325,7 +24331,7 @@ public:
                 auto dimension=*decoded.dimension;
                 const auto boundary=source.entities().find(dimension.boundary_id);
                 if (boundary==source.entities().end()) throw std::invalid_argument("The source boundary is missing.");
-                (void)dimension.resolve(source);
+                (void)resolve_current_boundary_dimension(dimension, source);
                 const Vec2 position{dimension.text_position.x+model_delta.x,
                                     dimension.text_position.y+model_delta.y};
                 if (position.x != dimension.text_position.x || position.y != dimension.text_position.y) {
@@ -25659,7 +25665,7 @@ public:
                         dimension_owner==source.entities().at(dimension.boundary_id)) continue;
                     try {
                         const auto projection=project_boundary_dimension(dimension,
-                            dimension_owner,candidate,metric_units,item.selected,
+                            dimension_owner,candidate_snapshot,metric_units,item.selected,
                             ansi_boundary_dimensions(source, dimension_owner));
                         if (!projection.line) continue;
                         proposed.segments=projection.line->segments;
@@ -26216,7 +26222,7 @@ public:
                     CanvasLabel projected=label;
                     try {
                         projected=project_boundary_dimension(dimension,
-                            dimension_owner,candidate,metric_units,label.selected,
+                            dimension_owner,candidate_snapshot,metric_units,label.selected,
                             ansi_boundary_dimensions(source, dimension_owner)).label;
                     } catch (const std::invalid_argument&) {
                         if (!physical_room_dimension) throw;
@@ -31285,7 +31291,7 @@ public:
             dimension.id = new_id("dimension");
             // Resolve before committing so an invalid edge pair, shared vertex,
             // or open area boundary cannot create a dangling presentation row.
-            if (is_physical_wall_room(target)) (void)dimension.resolve(source);
+            if (is_physical_wall_room(target)) (void)resolve_current_boundary_dimension(dimension, source);
             else (void)dimension.resolve(target);
             auto encoded = encode_boundary_dimension_entity(dimension);
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) {
@@ -31383,7 +31389,7 @@ public:
             auto dimension = *decoded.dimension;
             const auto boundary = source.entities().find(dimension.boundary_id);
             if (boundary == source.entities().end()) throw std::invalid_argument("The source boundary is missing.");
-            (void)dimension.resolve(source);
+            (void)resolve_current_boundary_dimension(dimension, source);
             const auto coordinate = [&](const QString& expression, double original) {
                 // Displaying a double in feet must not round-trip an untouched
                 // coordinate through a rational parser or change automatic origin.
@@ -34046,10 +34052,14 @@ public:
                         text = QStringLiteral("Relationship satisfied");
                         if (found->second.type == "dimension") {
                             const auto dimension = *decode_boundary_dimension_entity(found->second).dimension;
-                            const auto resolved = dimension.resolve(snapshot);
-                            text = dimension.kind == BoundaryDimensionKind::angle
-                                ? QStringLiteral("%1°").arg(resolved.angle()*180/std::numbers::pi, 0, 'f', 1)
-                                : format_length(resolved.segment_length(), context.metric_units);
+                            const auto resolved = resolve_current_boundary_dimension(dimension, snapshot);
+                            const auto& owner = snapshot.entities().at(dimension.boundary_id);
+                            const bool ansi = ansi_boundary_dimensions(snapshot, owner);
+                            text = resolved.kind == BoundaryDimensionKind::angle
+                                ? format_dimension_angle(resolved.angle())
+                                : resolved.kind == BoundaryDimensionKind::area
+                                ? format_boundary_area(resolved.area(), context.metric_units, ansi)
+                                : format_boundary_length(resolved.segment_length(), context.metric_units, ansi);
                         }
                     }
                     choices->item(static_cast<int>(i), 2)->setText(text);
@@ -41015,7 +41025,7 @@ public:
                 result.segment_chain_ids.push_back(edge.segment_id);
                 previous = &edge;
                 if (edge.segment_id == last_id) {
-                    (void)result.resolve(expected_source);
+                    (void)resolve_current_boundary_dimension(result, expected_source);
                     return result;
                 }
             }
@@ -41027,7 +41037,7 @@ public:
                 require_creator_source();
                 const auto dimension = selected_chain();
                 const auto geometry = resolve_dimension_geometry_owner(expected_source.entities().at(dimension.boundary_id));
-                const auto total = dimension.resolve(expected_source).segment_length_metres;
+                const auto total = resolve_current_boundary_dimension(dimension, expected_source).segment_length_metres;
                 // The dimension owner resolver also admits open measured
                 // strokes. boundary_geometry validates a closed boundary
                 // entity, so use the already replayed segments for this view.
@@ -48320,7 +48330,6 @@ private:
         m_symbol_library_status = new QLabel(navigator_panel);
         m_symbol_library_status->setObjectName(QStringLiteral("annotationEditorStatus"));
         m_symbol_library_status->setWordWrap(true);
-        m_symbol_library_status->setStyleSheet(QStringLiteral("color:#52657d; font-size:11px;"));
         m_symbol_library_status->setText(QStringLiteral(
             "Drag a component onto the plan, or double-click to place by cursor."));
         symbols_layout->addWidget(m_symbol_library_status);
@@ -51215,7 +51224,7 @@ private:
                     const auto source = snapshot.entities().find(dimension.boundary_id);
                     if (source == snapshot.entities().end())
                         throw std::invalid_argument("source boundary is missing");
-                    auto projection=project_boundary_dimension(dimension,source->second,snapshot.entities(),
+                    auto projection=project_boundary_dimension(dimension,source->second,snapshot,
                         options.metric_units,id_from(id)==options.selected_id, ansi_boundary_dimensions(snapshot, source->second));
                     if (dimension.presentation && !dimension.presentation->visible) continue;
                     if (projection.line) all_geometry.push_back(std::move(*projection.line));
@@ -52220,7 +52229,7 @@ private:
         if (!can_recognize_boundary_dimension_entity_type(found->second.type)) return id;
         const auto decoded=decode_boundary_dimension_entity(found->second);
         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-        (void)decoded.dimension->resolve(source);
+        (void)resolve_current_boundary_dimension(*decoded.dimension, source);
         // Saved dimension witnesses and text coordinates are authored in the
         // analytical owner's model basis. Their organizational layer controls
         // visibility, but cannot give the same callout a second spatial basis.
@@ -53378,7 +53387,7 @@ private:
             const auto decoded=decode_boundary_dimension_entity(original);
             if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
             auto dimension=*decoded.dimension;
-            (void)dimension.resolve(source);
+            (void)resolve_current_boundary_dimension(dimension, source);
             const auto operation=selected_operation(id);
             const auto expected=transform_point(dimension.text_position,operation);
             const auto implicit=std::find_if(physical.entity_changes.begin(),physical.entity_changes.end(),[&](const auto& change) {
@@ -55399,16 +55408,19 @@ private:
                 auto active_font = item->font(0);
                 active_font.setBold(true);
                 item->setFont(0, active_font);
-                item->setForeground(0, QColor(37, 99, 235));
-                item->setBackground(0, QColor(231, 240, 255));
+                item->setForeground(0, owner->palette().color(QPalette::HighlightedText));
+                item->setBackground(0, owner->palette().color(QPalette::Highlight));
                 item->setText(1, QStringLiteral("●"));
                 item->setTextAlignment(1, Qt::AlignCenter);
-                item->setForeground(1, QColor(37, 99, 235));
+                item->setForeground(1, owner->palette().color(QPalette::Link));
                 item->setToolTip(1, QStringLiteral("Active drawing layer"));
             }
-            if (visibility_container && !effective_visible)
+            if (visibility_container && !effective_visible && !active_layer)
                 item->setForeground(0, owner->palette().color(QPalette::Disabled, QPalette::Text));
-            if (!node.issues.empty()) item->setForeground(0, QColor(170, 35, 35));
+            if (!node.issues.empty() && !active_layer)
+                item->setForeground(0, m_theme == WorkspaceTheme::high_contrast
+                    ? owner->palette().color(QPalette::Text)
+                    : m_theme == WorkspaceTheme::dark ? QColor("#ff9f9f") : QColor("#aa2323"));
         }
         QTreeWidgetItem* unassigned = m_navigator_unassigned;
         for (const auto& [id, node] : organization.nodes) {
@@ -61400,9 +61412,10 @@ public:
                         return format_boundary_area(resolved.area_square_metres, context.metric_units, ansi);
                     };
                     const auto add_dimension = [&](const BoundaryDimension& dimension,
-                                                   const Entity& boundary_entity, QString suffix,
+                                                   const DocumentSnapshot& dimension_snapshot, QString suffix,
                                                    QColor color, QString text) {
-                        const auto resolved = dimension.resolve(boundary_entity);
+                        const auto resolved = resolve_current_boundary_dimension(dimension, dimension_snapshot);
+                        const auto& boundary_entity = dimension_snapshot.entities().at(dimension.boundary_id);
                         std::optional<Boundary> overlay;
                         if (resolved.kind == BoundaryDimensionKind::segment_length || resolved.kind == BoundaryDimensionKind::wall_axis_length)
                             overlay = dimension_overlay(resolved.segment, dimension.text_position);
@@ -61438,8 +61451,8 @@ public:
                         const auto decoded_after = decode_boundary_dimension_entity(proposed.entities().at(id));
                         if (!decoded_after.supported()) throw std::invalid_argument("Dependent dimension cannot be previewed.");
                         const auto& dimension = *decoded_after.dimension;
-                        const auto before_text = dimension_text(before.resolve(source));
-                        const auto after_text = dimension_text(dimension.resolve(proposed));
+                        const auto before_text = dimension_text(resolve_current_boundary_dimension(before, source));
+                        const auto after_text = dimension_text(resolve_current_boundary_dimension(dimension, proposed));
                         const auto target_edge = std::find_if(boundary.segments.begin(), boundary.segments.end(),
                             [&](const auto& item) { return item.segment_id == dimension.segment_id; });
                         const auto dimension_name = dimension.kind == BoundaryDimensionKind::area ? QStringLiteral("Area measurement") :
@@ -61451,9 +61464,9 @@ public:
                         if (dimension.presentation && !dimension.presentation->visible) continue;
                         const bool same_position = before.text_position.x == dimension.text_position.x &&
                             before.text_position.y == dimension.text_position.y;
-                        add_dimension(before, *selected, QStringLiteral("-original"), original_color,
+                        add_dimension(before, source, QStringLiteral("-original"), original_color,
                             same_position ? QString{} : before_text);
-                        add_dimension(dimension, proposed_entity, QStringLiteral("-proposed"), proposed_color,
+                        add_dimension(dimension, proposed, QStringLiteral("-proposed"), proposed_color,
                             same_position && before_text != after_text
                                 ? before_text + QStringLiteral(" → ") + after_text : after_text);
                     }

@@ -1,4 +1,5 @@
 #include "sketch/physical_room_dimension_source.hpp"
+#include "sketch/physical_wall_room.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/model_phases.hpp"
@@ -30,10 +31,18 @@ double elevation(const Entity& entity) {
     if (!std::isfinite(result)) reject("effective source plane is not finite");
     return result;
 }
+bool same_physical_inventory(const nlohmann::json& retained, const nlohmann::json& fresh) {
+    if (!retained.is_object() || !fresh.is_object()) return false;
+    auto retained_inventory = retained;
+    auto fresh_inventory = fresh;
+    retained_inventory.erase("semantic_phases");
+    fresh_inventory.erase("semantic_phases");
+    return retained_inventory == fresh_inventory;
 }
 
-PhysicalRoomDimensionSource resolve_physical_room_dimension_source(
-    const Entity& room, const std::map<std::string, Entity, std::less<>>& entities) {
+PhysicalRoomDimensionSource resolve_source(
+    const Entity& room, const std::map<std::string, Entity, std::less<>>& entities,
+    bool allow_current_phase_bookkeeping) {
     try {
         if (!is_physical_wall_room(room)) reject("owner is not a source-bound physical room");
         const auto owner = entities.find(room.id);
@@ -62,6 +71,17 @@ PhysicalRoomDimensionSource resolve_physical_room_dimension_source(
             if (current) reject("source lineage matches multiple physical clear components");
             current = &space;
         }
+        if (!current && allow_current_phase_bookkeeping) {
+            for (const auto& space : detection.spaces) {
+                // This comparison only bounds candidate work. The shared
+                // current-room predicate independently admits both complete
+                // captured lineages and their analytical clear regions.
+                if (!same_physical_inventory(descriptor.source_lineage, space.source_lineage) ||
+                    !physical_wall_room_lineage_matches_current_inventory(room, *context, space)) continue;
+                if (current) reject("source inventory matches multiple physical clear components");
+                current = &space;
+            }
+        }
         if (!current) reject("physical wall source evidence or effective plane changed; repair the room explicitly");
         auto identified = decode_identified_boundary_entity(room);
         if (!same_boundary(boundary_geometry(identified), current->boundary))
@@ -86,5 +106,16 @@ PhysicalRoomDimensionSource resolve_physical_room_dimension_source(
     } catch (const nlohmann::json::exception& error) {
         reject(std::string("malformed source evidence: ") + error.what());
     }
+}
+}
+
+PhysicalRoomDimensionSource resolve_physical_room_dimension_source(
+    const Entity& room, const std::map<std::string, Entity, std::less<>>& entities) {
+    return resolve_source(room, entities, false);
+}
+
+PhysicalRoomDimensionSource resolve_current_physical_room_dimension_source(
+    const Entity& room, const DocumentSnapshot& snapshot) {
+    return resolve_source(room, snapshot.entities(), true);
 }
 } // namespace sketch

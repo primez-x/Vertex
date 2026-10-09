@@ -22,6 +22,9 @@ struct RecoveryCandidate {
     bool duplicate_archive_id{};
     std::string reason;
     RecoverySourceMatch source_match = RecoverySourceMatch::not_requested;
+    // Actual loaded snapshot state; detached recovery workspaces can start
+    // with zero generation counters while their document has unsaved edits.
+    bool document_dirty{};
 };
 
 struct RecoveryDiscoveryResult {
@@ -33,10 +36,10 @@ struct RecoveryDiscoveryResult {
     std::string directory_diagnostic;
 };
 
-// Returns true only for a validated candidate whose persisted workspace has
-// moved beyond its explicit-save generation. The checkpoint comparison also
-// retains pointer-only authoring state, which can advance independently of
-// semantic edits.
+// Returns true only for a validated candidate with a dirty document or a
+// persisted workspace beyond its explicit-save generation. The checkpoint
+// comparison also retains pointer-only authoring state, which can advance
+// independently of semantic edits.
 [[nodiscard]] bool recovery_candidate_has_unsaved_work(
     const RecoveryCandidate& candidate) noexcept;
 

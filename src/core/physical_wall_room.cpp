@@ -278,7 +278,10 @@ ApplyEntityChanges prepare_physical_wall_rooms(const DocumentSnapshot& source,st
         for (const auto& [id,check]:existing) {
             if (!check.current || !same_boundary(check.boundary,space.boundary) || !same_holes(check.holes,space.holes)) continue;
             const auto descriptor=decode_physical_wall_room_descriptor(source.entities().at(id));
-            if (descriptor.source_lineage==space.source_lineage) { reused=true; break; }
+            // The current check already admits the retained evidence and its
+            // exact clear geometry. Phase bookkeeping alone must not allocate
+            // another owner for that unchanged physical source inventory.
+            if (same_physical_inventory_lineage(descriptor.source_lineage,space.source_lineage)) { reused=true; break; }
         }
         if (reused) continue;
         const auto descriptor=encode_physical_wall_room_descriptor({std::string(selected_wall_id),space.source_lineage,space.holes});

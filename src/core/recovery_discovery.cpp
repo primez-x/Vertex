@@ -78,7 +78,8 @@ RecoverySourceMatch match(const RecoveryCopyRecord& record, const fs::path& sour
 bool recovery_candidate_has_unsaved_work(const RecoveryCandidate& candidate) noexcept {
     if (!candidate.loadable || candidate.duplicate_archive_id || !candidate.metadata) return false;
     const auto& metadata = *candidate.metadata;
-    return metadata.edited_generation > metadata.saved_edited_generation ||
+    return candidate.document_dirty ||
+           metadata.edited_generation > metadata.saved_edited_generation ||
            metadata.checkpoint_generation > metadata.saved_edited_generation;
 }
 
@@ -126,6 +127,7 @@ RecoveryDiscoveryResult discover_recovery_copies(const std::optional<fs::path>& 
             else if (!loaded.recovery.decoded->recovery_copy) candidate.reason = "missing recovery copy provenance";
             else {
                 candidate.metadata = *loaded.recovery.decoded->recovery_copy;
+                candidate.document_dirty = loaded.archive->document().dirty();
                 candidate.loadable = true;
                 if (source) candidate.source_match = match(*candidate.metadata, *source, *result.source_sha256);
             }

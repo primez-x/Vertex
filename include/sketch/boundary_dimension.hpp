@@ -141,4 +141,11 @@ void validate_boundary_dimension_target(
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
     const BoundaryDimension& dimension, const DocumentSnapshot& snapshot);
 
+// Current authoring/display calculation from an actual captured snapshot.
+// A physical room may retain its original phase bookkeeping only when its
+// admitted physical inventory, context/plane and exact clear geometry remain
+// unchanged. Historical command replay retains the strict overloads above.
+[[nodiscard]] BoundaryDimensionResolution resolve_current_boundary_dimension(
+    const BoundaryDimension& dimension, const DocumentSnapshot& snapshot);
+
 }  // namespace sketch

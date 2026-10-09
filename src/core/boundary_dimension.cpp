@@ -763,6 +763,23 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
     return resolve_boundary_dimension(dimension, snapshot.entities());
 }
 
+BoundaryDimensionResolution resolve_current_boundary_dimension(const BoundaryDimension& dimension,
+                                                                const DocumentSnapshot& snapshot) {
+    validate_model(dimension);
+    const auto& entities = snapshot.entities();
+    const auto owner = entities.find(dimension.boundary_id);
+    if (owner == entities.end()) invalid("dimension source owner is missing from the authoritative map");
+    if (owner->second.id != dimension.boundary_id)
+        invalid("dimension source owner identity differs from its authoritative map key");
+    if (!is_physical_wall_room(owner->second)) return resolve_boundary_dimension(dimension, owner->second);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    const auto current = resolve_current_physical_room_dimension_source(owner->second, snapshot);
+    return resolve_identified_dimension(dimension, current.boundary, current.area_square_metres);
+#else
+    invalid("Physical room dimension resolution is unavailable in this runtime");
+#endif
+}
+
 BoundaryDimensionResolution BoundaryDimension::resolve(const Entity& boundary_entity) const {
     return resolve_boundary_dimension(*this, boundary_entity);
 }
