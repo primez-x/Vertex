@@ -14,6 +14,28 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed opening removal source integration
+
+Doors, windows and doorways now have a complete-source removal producer for
+selection with roofs, horizontal assemblies, stairs, railings, columns, beams
+and qualified catalog components. Both leaves read the same immutable source;
+qualified rows already retired with an opening are covered once. Catalog
+survivors, aliases, inactive ownership and room lineage remain exact.
+
+Canvas Delete/Cut routing retains coordinated baseline demolition first, then
+uses the new ordinary/proposed path. Opening-only clipboard closure leaves
+qualified component selection in its actual typed namespace. Full source,
+selection and Site fences remain through one apply; Cut publishes afterward.
+The producer uses existing supported raw state and adds no project dialect.
+
+Independent source review approved; root integrated source review is complete.
+No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation and runtime
+remain unverified; the installed candidate is unchanged. Mixed wall selections
+with opening-hosted rows, independent opening/wall combinations, drawing and
+annotation cohorts, remaining phase authoring and full qualification are still
+unfinished.
+
 ### October 9 opening-hosted wall removal source integration
 
 The wall producer now includes actual qualified component rows hosted on the

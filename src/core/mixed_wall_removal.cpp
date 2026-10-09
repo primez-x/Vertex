@@ -183,7 +183,7 @@ void source_bound(const Entities& actual, Budget& budget) {
 // joins, all embedded rows and independent roots. No native building codec,
 // shortened source, manufactured admission map or per-lane budget reset occurs.
 // Counting unselected geometry trades capacity for an auditable pre-factory bound.
-void analytical_work(const Entities& actual, Budget& budget) {
+void analytical_work(const Entities& actual, Budget& budget,bool include_manufactured_opening_hosts=false) {
     std::map<std::string, std::size_t, std::less<>> opening_counts, costs;
     for (const auto& [id, entity] : actual) {
         (void)id;
@@ -244,6 +244,19 @@ void analytical_work(const Entities& actual, Budget& budget) {
             }
         }
         budget.product(native_passes, cost); costs.emplace(id, cost);
+    }
+    if (include_manufactured_opening_hosts) for (const auto& [id, entity] : actual) {
+        if (entity.type!="opening") continue;
+        const auto host=entity.properties.find("wall_id");
+        if (host==entity.properties.end() || !host->is_string()) reject("opening lacks an actual wall identity");
+        const auto wall=costs.find(host->get<std::string>());
+        if (wall==costs.end() || actual.at(host->get<std::string>()).type!="wall")
+            reject("opening lacks an actual supported wall host");
+        // A legacy opening copy may manufacture its frame/operation and
+        // repeatedly reconstruct the complete layered host. Reserve this body
+        // only in the new opening-selection lane; historical v37 stays exact.
+        const auto cost=33*(1+wall->second);
+        costs.emplace(id,cost);
     }
     AssemblyExpansionBudget expansion_budget;
     expansion_budget.max_nodes = 4096 / native_passes;
@@ -312,9 +325,9 @@ Json envelope(const MixedWallRemovalIntent& intent, const ApplyEntityChanges& co
 }
 } // namespace
 
-void validate_mixed_wall_removal_source_admission(const Entities& actual) {
+void validate_mixed_wall_removal_source_admission(const Entities& actual,bool include_manufactured_opening_hosts) {
     try {
-        Budget budget; source_bound(actual, budget); analytical_work(actual, budget);
+        Budget budget; source_bound(actual, budget); analytical_work(actual, budget,include_manufactured_opening_hosts);
     } catch (const Json::exception& error) {
         reject(std::string("malformed actual source admission: ") + error.what());
     }

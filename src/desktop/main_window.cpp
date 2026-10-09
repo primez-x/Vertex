@@ -49,6 +49,7 @@
 #include "sketch/opening_host_geometry.hpp"
 #include "sketch/wall_join_removal.hpp"
 #include "sketch/mixed_wall_removal.hpp"
+#include "sketch/opening_architectural_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
@@ -31474,6 +31475,86 @@ public:
         return wall && other;
     }
 
+    bool hasMixedHostedOpeningSelection(const DocumentSnapshot& source) const {
+        bool opening=false,other=false;
+        for (const auto& selected:m_selected_ids) {
+            if (annotationActionTarget(source,selected,false)) return false;
+            const auto actual=source.entities().find(selected.toStdString());
+            if (actual==source.entities().end()) {
+                if (!geometric_assembly_for_child(source,selected.toStdString())) return false;
+                other=true;
+            } else if (actual->second.type=="opening") opening=true;
+            else if (actual->second.type=="roof" || actual->second.type=="slab" || actual->second.type=="stair" ||
+                actual->second.type=="railing" || structuralObject(actual->second)) other=true;
+            else return false;
+        }
+        return opening && other;
+    }
+
+    bool removeSelectedMixedHostedOpenings(const DocumentSnapshot& source,bool cut) {
+        const auto authority=captureSourceEditAuthority(source);
+        if (authority.selection.isEmpty() || authority.selection.size()>1000 ||
+            !authority.selection.contains(authority.context.selected_id))
+            throw std::invalid_argument("The mixed selection changed. Select the objects again.");
+        OpeningArchitecturalRemovalIntent intent;
+        std::vector<std::string> other_ids;
+        std::vector<std::pair<std::string,std::string>> components;
+        for (const auto& selected:authority.selection) {
+            if (annotationActionTarget(source,selected,false))
+                throw std::invalid_argument("Drawing annotations require their own removal review in this mixed selection.");
+            const auto id=selected.toStdString();
+            const auto actual=source.entities().find(id);
+            if (actual==source.entities().end()) {
+                const auto component=geometric_assembly_for_child(source,id);
+                if (!component) throw std::invalid_argument("The selected component no longer has an unambiguous source owner.");
+                components.emplace_back(component->assembly_catalog_id,component->instance.id);
+            } else if (actual->second.type=="opening") intent.opening_ids.push_back(id);
+            else if (actual->second.type=="roof" || actual->second.type=="slab" || actual->second.type=="stair" ||
+                actual->second.type=="railing" || structuralObject(actual->second)) other_ids.push_back(id);
+            else throw std::invalid_argument("This mixed selection requires a different removal review: "+id);
+        }
+        std::sort(intent.opening_ids.begin(),intent.opening_ids.end());
+        const bool site=siteCanvas(m_architecturalCanvas);
+        const auto generation=m_site_publication_generation;
+        const auto require_current=[&] {
+            if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
+                m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The opening removal, project, selection or workspace changed. Select the objects again.");
+            if (site) {
+                requireSitePublicationCurrent();
+                if (generation!=m_site_publication_generation || !m_site_publication_source ||
+                    fullSnapshotDigest(*m_site_publication_source)!=authority.source_digest)
+                    throw std::invalid_argument("The displayed Site Plan changed during mixed removal.");
+            }
+        };
+        require_current();
+        validate_mixed_wall_removal_source_admission(source.entities(),true);
+        QStringList opening_selection;
+        for (const auto& id:intent.opening_ids) opening_selection.push_back(QString::fromStdString(id));
+        const auto graph=clipboardSelectionGraph(source,true,&opening_selection);
+        for (const auto& id:intent.opening_ids)
+            if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity) {
+                return entity.id==id && entity.type=="opening";
+            })) throw std::invalid_argument("The mixed selection no longer contains its actual opening roots.");
+        intent.other=captureArchitecturalSelectionRemoval(source,std::move(other_ids),std::move(components));
+        validate_physical_wall_join_removal_identity_lifetime(source,intent.other.roof_additional_identities);
+        QString clipboard_text;
+        QClipboard* clipboard=nullptr;
+        if (cut) {
+            const auto encoded=clipboardSelectionPayload(source);
+            clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
+            clipboard=QGuiApplication::clipboard();
+            if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+        }
+        require_current();
+        const auto command=prepare_opening_architectural_removal(source,intent,
+            cut ? "Cut openings and selected architectural objects" : "Delete openings and selected architectural objects");
+        require_current();
+        if (!applyAuthoredCommand(Command{command})) return false;
+        if (cut) clipboard->setText(clipboard_text,QClipboard::Clipboard);
+        m_selected_id.clear();m_selected_ids.clear();clearError();refresh();return true;
+    }
+
     bool removeSelectedMixedPhysicalWalls(const DocumentSnapshot& source,bool cut) {
         const auto authority=captureSourceEditAuthority(source);
         if (authority.selection.isEmpty() || authority.selection.size()>1000 ||
@@ -31728,6 +31809,7 @@ public:
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
             auto demolition = coordinatedDemolitionCommand(source, selected_ids, "Cut selected architectural objects");
+            if (!demolition && hasMixedHostedOpeningSelection(source)) return removeSelectedMixedHostedOpenings(source,true);
             if (!demolition) demolition = structuralDemolitionCommand(source, selected_ids, "Cut selected structural objects");
             if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Cut selected stairs and railings");
             if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Cut selected horizontal assemblies");
@@ -32262,6 +32344,7 @@ public:
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
             auto demolition=coordinatedDemolitionCommand(source,selected_ids,"Demolish selected architectural objects");
+            if (!demolition && hasMixedHostedOpeningSelection(source)) return removeSelectedMixedHostedOpenings(source,false);
             if (!demolition) demolition=structuralDemolitionCommand(source,selected_ids,"Demolish selected structural objects");
             if (!demolition) demolition = stairDemolitionCommand(source, selected_ids, "Demolish selected stairs and railings");
             if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Delete selected horizontal assemblies");
