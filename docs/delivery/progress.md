@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed baseline and ordinary removal source integration
+
+Delete/Cut now partition one actual selection into retained baseline demolition
+and ordinary/proposed removal. Stairs/rails, columns/beams, horizontal assemblies
+and qualified component rows share the complete ordinary producer while one or
+more baseline families replay their existing typed demolition. Actual dependent
+retirements are covered once; shared catalogs preserve definitions, surviving
+rows and identities. Foreign/inactive/shared ownership remains protected.
+Native 135/extraction 133 retains the new closed inner-two proof throughout
+current, retained and wrapped commands. Physical wall removal now also honours
+failed command publication before changing the clipboard or clearing selection.
+
+Independent source review approved after correcting the desktop accessor's
+direct include; root integrated source review is complete. No builds, tests,
+probes, scripts,
+native jobs, launches, packages or installations ran. Compilation and runtime
+remain unverified; the installed candidate is unchanged. Ordinary roof/wall/room
+cohorts and retained stair topology replacement remain additional source scope.
+
 ### October 9 ordinary architectural and component removal source integration
 
 Delete and Cut now derive a complete ordinary removal candidate for stairs,

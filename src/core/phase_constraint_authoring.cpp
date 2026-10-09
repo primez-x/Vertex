@@ -1441,10 +1441,11 @@ Entities compose_architectural_family_candidates(const Entities& source,const st
     return result;
 }
 
-Entities compose_phase_demolition_candidates(const Entities& source,const std::vector<Entities>& candidates) {
+Entities compose_phase_demolition_candidates(const Entities& source,const std::vector<Entities>& candidates,
+    bool include_ordinary_removal) {
     coordinated_map_budget(source);
-    if (candidates.size()<2 || candidates.size()>5)
-        invalid("Coordinated demolition requires two to five complete family candidates");
+    if (candidates.size()<2 || candidates.size()>(include_ordinary_removal ? 6u : 5u))
+        invalid("Coordinated demolition exceeds its complete family candidate bounds");
     for (const auto& candidate:candidates) coordinated_map_budget(candidate);
     std::set<std::string,std::less<>> baseline;
     for (const auto& [key,entity]:source) if (entity.type=="model_phases") {
@@ -1461,13 +1462,16 @@ Entities compose_phase_demolition_candidates(const Entities& source,const std::v
             if (found==candidate.end()) ++erased;
             else if (!exact(entity,found->second)) changed.push_back(&found->second);
         }
-        if (baseline.contains(key) && (erased || !changed.empty()))
+        if (baseline.contains(key) && (erased || (!changed.empty() &&
+            (!include_ordinary_removal || entity.type!="assembly_model"))))
             invalid("Coordinated demolition cannot change retained baseline physical owners");
         if (erased) {
             if (erased!=1 || !changed.empty())
                 invalid("Coordinated demolition has overlapping retirement consequences");
             result.erase(key);
-        } else if (changed.size()==1) result.at(key)=*changed.front();
+        } else if (include_ordinary_removal && entity.type=="assembly_model" && !changed.empty())
+            result.at(key)=merge_demolition_catalog(entity,changed);
+        else if (changed.size()==1) result.at(key)=*changed.front();
         else if (changed.size()>1) result.at(key)=entity.type=="assembly_model"
             ? merge_demolition_catalog(entity,changed) : merge_demolition_row_container(entity,changed);
     }

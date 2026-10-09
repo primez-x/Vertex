@@ -2594,6 +2594,8 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
             return true;
         const auto coordinated=intent.find("coordinated_demolition");
         if (coordinated==intent.end() || !coordinated->is_object()) return false;
+        if (coordinated->value("version",0)==2 && coordinated->contains("ordinary_removal") &&
+            coordinated->at("ordinary_removal").is_object()) return true;
         const auto stair=coordinated->find("stair_authoring");
         return stair!=coordinated->end() && stair->is_object() &&
             stair->contains("stair_demolition_retirement") && !stair->at("stair_demolition_retirement").is_null();

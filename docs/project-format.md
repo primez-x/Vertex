@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v134
+# Vertex project formats v1 through v135
+
+## Mixed baseline and ordinary removal (v135)
+
+Native reader 135 and JSON/assets extraction 133 retain active-design authoring
+fifteen with coordinated demolition inner two. It retains the five historical
+family fields and adds exactly `ordinary_removal`. At least one historical
+family and a nonempty ordinary selection are required. The ordinary child has
+exactly `version` (one), `object_ids` and `components`; each component has exactly
+`catalog_id` and `instance_id`. Object IDs and qualified pairs are ascending,
+unique supported ASCII identities, with at most 1,000 aggregate selections.
+No entity, geometry or arbitrary deletion payload is accepted.
+
+Every lane independently replays the same actual source. Actual ordinary or
+proposed stairs, railings, horizontal assemblies, columns/beams and qualified
+component rows use their complete removal producer. Registered removed owners,
+component carriers and hosts must belong to the historical saved registry and
+alternative; unregistered ordinary owners remain eligible. Shared baseline
+physical owners remain exact. A shared catalog can change only through exact
+raw row retirement, retaining its envelope, definitions, surviving rows and
+order. Surviving component aliases remain unchanged. Other alternatives and
+inactive annotations retain their raw ownership and row order.
+
+Delete/Cut partition the captured selection automatically. A baseline leaf's
+actual dependent retirement or host demolition covers a separately selected
+dependent once. The complete command retains source/history/assets authority;
+Cut publishes clipboard content only after success. Inner one keeps its
+historical reader 134 meaning. Current, retained and wrapped proofs retain
+their respective floors. Independent and integrated source review approved;
+compilation and runtime remain unverified.
 
 ## Ordinary architectural and component removal
 

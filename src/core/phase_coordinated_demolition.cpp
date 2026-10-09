@@ -1,11 +1,15 @@
 #include "sketch/phase_coordinated_demolition.hpp"
 
+#include "sketch/architectural_object_removal.hpp"
+#include "sketch/assembly_model.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_stair_demolition.hpp"
 #include "sketch/phase_stair_demolition_retirement.hpp"
 #include "sketch/phase_structural_replacement.hpp"
+#include "sketch/stair_semantics.hpp"
 
 #include <Standard_Failure.hxx>
 
@@ -154,13 +158,53 @@ DemolitionChoice choice(const PhaseConstraintAuthoringIntent& child, std::size_t
     invalid("family slot contains a foreign historical authoring dialect");
 }
 
-std::vector<PhaseConstraintAuthoringIntent> components(const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
+PhaseCoordinatedOrdinaryRemoval ordinary_removal(const Json& value) {
+    if (!value.is_object() || value.size() != 3 || !value.contains("version") ||
+        !value.at("version").is_number_integer() || value.at("version") != 1 ||
+        !value.contains("object_ids") || !value.at("object_ids").is_array() ||
+        !value.contains("components") || !value.at("components").is_array())
+        invalid("ordinary removal requires exactly version one, object_ids and components");
+    const auto& objects = value.at("object_ids");
+    const auto& rows = value.at("components");
+    if (objects.size() > 1000 || rows.size() > 1000 - objects.size() || (objects.empty() && rows.empty()))
+        invalid("ordinary removal requires 1..1000 aggregate actual roots/components");
+    PhaseCoordinatedOrdinaryRemoval result;
+    for (const auto& row : objects) {
+        if (!row.is_string()) invalid("ordinary object identity must be a string");
+        auto id = row.get<std::string>(); identity(id);
+        if (!result.object_ids.empty() && !(result.object_ids.back() < id))
+            invalid("ordinary object identities must be ascending and unique");
+        result.object_ids.push_back(std::move(id));
+    }
+    for (const auto& row : rows) {
+        if (!row.is_object() || row.size() != 2 || !row.contains("catalog_id") ||
+            !row.at("catalog_id").is_string() || !row.contains("instance_id") || !row.at("instance_id").is_string())
+            invalid("ordinary component requires exactly catalog_id and instance_id");
+        auto key = std::pair{row.at("catalog_id").get<std::string>(), row.at("instance_id").get<std::string>()};
+        identity(key.first); identity(key.second);
+        if (!result.components.empty() && !(result.components.back() < key))
+            invalid("ordinary qualified component keys must be ascending and unique");
+        result.components.push_back(std::move(key));
+    }
+    return result;
+}
+
+struct Decoded {
+    std::vector<PhaseConstraintAuthoringIntent> leaves;
+    std::optional<PhaseCoordinatedOrdinaryRemoval> ordinary;
+    std::pair<std::string, std::string> saved_choice;
+};
+
+Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
     JsonBudget budget{proof_limit, true};
     budget.read(value);
     if (value.dump().size() > proof_limit) invalid("proof byte budget exceeded");
-    if (!value.is_object() || value.size() != 6 || !value.contains("version") ||
-        !value.at("version").is_number_integer() || value.at("version") != 1)
-        invalid("inner version one requires exactly version and five family fields");
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer())
+        invalid("inner demolition requires a known integer version");
+    const bool mixed = value.at("version") == 2;
+    if ((!mixed && (value.at("version") != 1 || value.size() != 6)) ||
+        (mixed && (value.size() != 7 || !value.contains("ordinary_removal"))))
+        invalid("inner demolition requires exactly version, five family fields and v2 ordinary_removal");
     for (const auto* key : families) if (!value.contains(key)) invalid("required family field is missing");
     message_only(enclosing.intent);
     // Root enforces outer exclusivity too; this public codec cannot validate a
@@ -176,7 +220,8 @@ std::vector<PhaseConstraintAuthoringIntent> components(const Json& value, const 
     selections_budget.read(enclosing.phase_selections);
     if (enclosing.phase_selections.dump().size() > proof_limit) invalid("saved choice byte budget exceeded");
 
-    std::vector<PhaseConstraintAuthoringIntent> result;
+    Decoded result;
+    if (mixed) result.ordinary = ordinary_removal(value.at("ordinary_removal"));
     std::optional<std::pair<std::string, std::string>> saved_choice;
     std::set<std::string, std::less<>> targets;
     for (std::size_t family = 0; family < families.size(); ++family) {
@@ -207,10 +252,71 @@ std::vector<PhaseConstraintAuthoringIntent> components(const Json& value, const 
             if (!targets.insert(root).second) invalid("demolition roots must be unique across all families");
             if (targets.size() > 4096) invalid("aggregate demolition root budget exceeded");
         }
-        result.push_back(std::move(child));
+        result.leaves.push_back(std::move(child));
     }
-    if (result.size() < 2) invalid("coordinated demolition requires at least two distinct families");
+    if (result.leaves.size() < (mixed ? 1u : 2u))
+        invalid(mixed ? "mixed demolition requires at least one historical family" :
+            "coordinated demolition requires at least two distinct families");
+    if (result.ordinary) for (const auto& id : result.ordinary->object_ids)
+        if (targets.contains(id)) invalid("ordinary and historical demolition roots must be disjoint");
+    result.saved_choice = *saved_choice;
     return result;
+}
+
+// Inspect only actual producer consequences. Physical removals include attached
+// rails; catalog row retirement includes derived hosted components. Their actual
+// carriers and hosts must belong to the historical choice when registered.
+// Unregistered owners remain ordinary. Render aliases never establish authority.
+void ordinary_phase_authority(const Entities& source, const Entities& candidate,
+    const std::pair<std::string, std::string>& saved_choice) {
+    const auto scope = constraint_phase_scope(source);
+    std::map<std::string, const PhysicalWallPhaseState*, std::less<>> owners;
+    const PhysicalWallPhaseState* selected = nullptr;
+    for (const auto& registry : scope.registries) {
+        if (registry.registry_id == saved_choice.first) selected = &registry;
+        for (const auto& id : registry.registered_entity_ids)
+            if (!owners.emplace(id, &registry).second) invalid("overlapping actual phase ownership: " + id);
+    }
+    if (!selected || selected->alternative_id != std::optional<std::string>{saved_choice.second})
+        invalid("ordinary removal requires the historical actual saved registry/alternative");
+    const auto compatible = [&](const std::string& id) {
+        if (!source.contains(id)) invalid("ordinary authority owner is absent from actual source: " + id);
+        if (scope.inactive_owner_ids.contains(id)) invalid("ordinary authority owner is inactive: " + id);
+        const auto member = owners.find(id);
+        if (member == owners.end()) return;
+        const auto* registry = member->second;
+        if (registry != selected) invalid("ordinary authority owner belongs to foreign registry: " + id);
+        const auto state = registry->states.find(id);
+        if (state == registry->states.end() || state->second == ModelPhase::demolished)
+            invalid("ordinary authority owner is absent or demolished in actual saved choice: " + id);
+    };
+    for (const auto& [id, entity] : source) {
+        if (!candidate.contains(id) && (entity.type == "stair" || entity.type == "railing" ||
+            entity.type == "slab" || entity.type == "column" || entity.type == "beam")) {
+            compatible(id);
+            if (entity.type == "railing") {
+                const auto rail = decode_railing_properties(id, entity.properties);
+                if (rail.host) compatible(rail.host->stair_id);
+                if (rail.landing_host) compatible(rail.landing_host->stair_id);
+            }
+        }
+        if (entity.type != "assembly_model") continue;
+        const auto retained = candidate.find(id);
+        if (retained == candidate.end()) invalid("ordinary removal cannot erase its actual catalog carrier");
+        // Equal raw catalogs carry no consequence and require no additional
+        // authority. Decode affected catalogs through their actual typed codec.
+        const auto& before = entity.properties.at("model");
+        const auto& after = retained->second.properties.at("model");
+        if (before == after) continue;
+        const auto original = AssemblyModel::from_json(before);
+        const auto changed = AssemblyModel::from_json(after);
+        std::set<std::string, std::less<>> remaining;
+        for (const auto& row : changed.instances()) remaining.insert(row.id);
+        for (const auto& row : original.instances()) if (!remaining.contains(row.id)) {
+            compatible(id);
+            if (row.placement) compatible(row.placement->host_entity_id);
+        }
+    }
 }
 } // namespace
 
@@ -226,7 +332,16 @@ Json encode_phase_coordinated_demolition(const Json& value, const PhaseConstrain
 std::vector<PhaseConstraintAuthoringIntent> phase_coordinated_demolition_components(
     const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
     try {
-        return components(value, enclosing);
+        return components(value, enclosing).leaves;
+    } catch (const Json::exception& error) {
+        invalid(std::string("malformed proof: ") + error.what());
+    }
+}
+
+std::optional<PhaseCoordinatedOrdinaryRemoval> phase_coordinated_demolition_ordinary_removal(
+    const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
+    try {
+        return components(value, enclosing).ordinary;
     } catch (const Json::exception& error) {
         invalid(std::string("malformed proof: ") + error.what());
     }
@@ -235,15 +350,22 @@ std::vector<PhaseConstraintAuthoringIntent> phase_coordinated_demolition_compone
 Entities replay_phase_coordinated_demolition(const Entities& source, const PhaseConstraintAuthoringIntent& enclosing) {
     try {
         source_budget(source);
-        const auto leaves = components(enclosing.coordinated_demolition, enclosing);
+        const auto decoded = components(enclosing.coordinated_demolition, enclosing);
         std::vector<Entities> candidates;
-        candidates.reserve(leaves.size());
-        for (const auto& leaf : leaves) {
+        candidates.reserve(decoded.leaves.size() + (decoded.ordinary ? 1 : 0));
+        for (const auto& leaf : decoded.leaves) {
             auto candidate = replay_phase_constraint_authoring(source, encode_phase_constraint_authoring_intent(leaf));
             source_budget(candidate);
             candidates.push_back(std::move(candidate));
         }
-        auto result = compose_phase_demolition_candidates(source, candidates);
+        if (decoded.ordinary) {
+            auto candidate = replay_architectural_object_removal(source,
+                decoded.ordinary->object_ids, decoded.ordinary->components);
+            source_budget(candidate);
+            ordinary_phase_authority(source, candidate, decoded.saved_choice);
+            candidates.push_back(std::move(candidate));
+        }
+        auto result = compose_phase_demolition_candidates(source, candidates,decoded.ordinary.has_value());
         source_budget(result);
         return result;
     } catch (const Json::exception& error) {

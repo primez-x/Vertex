@@ -33,7 +33,9 @@
 #include "sketch/architectural_schedule.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/constraint_phase_scope.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
+#include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/phase_wall_replacement_request.hpp"
 #include "sketch/phase_wall_canvas_proposal.hpp"
@@ -31456,10 +31458,10 @@ public:
                 primary_wall_id, authority, owner, require_current);
             if (!reviewed) { clearError(); refreshInspector(); return false; }
             require_current();
-            applyAuthoredCommand(*reviewed);
+            if (!applyAuthoredCommand(*reviewed)) return false;
         } else {
             require_current();
-            applyAuthoredCommand(command);
+            if (!applyAuthoredCommand(command)) return false;
         }
         if (cut) clipboard->setText(clipboard_text, QClipboard::Clipboard);
         m_selected_id.clear();
@@ -42981,25 +42983,59 @@ private:
         if (ids.size()>maximum_architectural_group_targets)
             throw std::invalid_argument("The architectural demolition selection is too large.");
         std::map<std::string,std::vector<std::string>,std::less<>> families;
+        std::vector<std::string> ordinary_roots;
+        std::vector<std::pair<std::string,std::string>> ordinary_components;
+        std::map<std::pair<std::string,std::string>,std::string> component_hosts;
+        const auto scope=constraint_phase_scope(source.entities());
+        std::map<std::string,const PhysicalWallPhaseState*,std::less<>> owners;
+        for (const auto& registry:scope.registries) for (const auto& id:registry.registered_entity_ids)
+            if (!owners.emplace(id,&registry).second)
+                throw std::invalid_argument("The architectural selection has overlapping saved design ownership.");
         std::set<std::string,std::less<>> unique;
         for (const auto& id:ids) {
             if (!unique.insert(id).second)
                 throw std::invalid_argument("The architectural demolition selection contains duplicate objects.");
             const auto found=source.entities().find(id);
-            if (found==source.entities().end()) return std::nullopt;
+            if (found==source.entities().end()) {
+                const auto component=geometric_assembly_for_child(source,id);
+                if (!component) return std::nullopt;
+                const auto key=std::pair{component->assembly_catalog_id,component->instance.id};
+                if (scope.inactive_owner_ids.contains(key.first))
+                    throw std::invalid_argument("The selected component catalog is inactive in the saved design.");
+                if (component->instance.placement) {
+                    const auto& host=component->instance.placement->host_entity_id;
+                    if (scope.inactive_owner_ids.contains(host))
+                        throw std::invalid_argument("The selected component's host is inactive in the saved design.");
+                    component_hosts.emplace(key,host);
+                }
+                ordinary_components.push_back(key);
+                continue;
+            }
             const auto& object=found->second;
             const char* slot=object.type=="opening" ? "opening_authoring" : object.type=="roof" ? "roof_authoring" :
                 object.type=="slab" ? "slab_authoring" : structuralObject(object) ? "structural_authoring" :
                 object.type=="stair" || object.type=="railing" ? "stair_authoring" : nullptr;
             if (!slot) return std::nullopt;
-            families[slot].push_back(id);
+            if (scope.inactive_owner_ids.contains(id))
+                throw std::invalid_argument("The selected object is inactive in the saved design: "+id);
+            const auto owner=owners.find(id);
+            const bool baseline=owner!=owners.end() && owner->second->alternative_id &&
+                owner->second->states.at(id)==ModelPhase::existing;
+            if (baseline) families[slot].push_back(id);
+            else if (object.type=="stair" || object.type=="railing" || object.type=="slab" || structuralObject(object))
+                ordinary_roots.push_back(id);
+            else return std::nullopt;
         }
-        if (families.size()<2) return std::nullopt;
+        if (families.empty() || (families.size()<2 && ordinary_roots.empty() && ordinary_components.empty()))
+            return std::nullopt;
         ConstraintAuthoringIntent semantic;
         semantic.message=message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
         auto children=nlohmann::json{{"version",1},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
             {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr}};
+        std::optional<Command> only_child;
+        std::set<std::string,std::less<>> covered_roots;
+        std::set<std::pair<std::string,std::string>> covered_components;
         for (auto& [family,roots]:families) {
             std::sort(roots.begin(),roots.end());
             std::optional<Command> child;
@@ -43009,15 +43045,40 @@ private:
             else if (family=="slab_authoring") child=slabRemovalCommand(source,roots,message);
             else if (family=="structural_authoring") child=structuralDemolitionCommand(source,roots,message);
             else child=stairDemolitionCommand(source,roots,message);
-            // Ordinary selections retain the existing complete removal path.
-            // Never publish only the subset which happened to be baseline.
-            if (!child) return std::nullopt;
+            if (!child)
+                throw std::invalid_argument("The selected baseline family has no complete demolition command.");
             const auto* captured=std::get_if<ApplyBoundaryConstraintChanges>(&*child);
             if (!captured || !captured->phase_constraint_authoring_completion ||
                 captured->phase_constraint_authoring_intent.is_null())
                 throw std::invalid_argument("The architectural demolition child has no captured source authority.");
             children[family]=captured->phase_constraint_authoring_intent;
+            // A baseline stair leaf may already retire its actual proposed
+            // rails/components. Cover those explicit selections once rather
+            // than granting a second ordinary lane overlapping erase authority.
+            const auto leaf_candidate=Document::preview_command(source,*child);
+            for (const auto& id:ordinary_roots)
+                if (!leaf_candidate.entities().contains(id)) covered_roots.insert(id);
+            const auto aliases=embedded_assembly_presentation_ids(leaf_candidate.entities());
+            const auto leaf_scope=constraint_phase_scope(leaf_candidate.entities());
+            for (const auto& key:ordinary_components) {
+                const auto host=component_hosts.find(key);
+                if (!aliases.contains(key) || (host!=component_hosts.end() &&
+                    (!leaf_candidate.entities().contains(host->second) || leaf_scope.inactive_owner_ids.contains(host->second))))
+                    covered_components.insert(key);
+            }
+            only_child=std::move(child);
         }
+        std::erase_if(ordinary_roots,[&](const auto& id) { return covered_roots.contains(id); });
+        std::erase_if(ordinary_components,[&](const auto& key) { return covered_components.contains(key); });
+        if (!ordinary_roots.empty() || !ordinary_components.empty()) {
+            std::sort(ordinary_roots.begin(),ordinary_roots.end());
+            std::sort(ordinary_components.begin(),ordinary_components.end());
+            auto rows=nlohmann::json::array();
+            for (const auto& [catalog,instance]:ordinary_components)
+                rows.push_back({{"catalog_id",catalog},{"instance_id",instance}});
+            children["version"]=2;
+            children["ordinary_removal"]={{"version",1},{"object_ids",ordinary_roots},{"components",std::move(rows)}};
+        } else if (families.size()==1) return only_child;
         intent.coordinated_demolition=std::move(children);
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision();
@@ -51627,6 +51688,21 @@ private:
                             targets.insert(leaf.retired_proposed_rail_ids.begin(),leaf.retired_proposed_rail_ids.end());
                         }
                     }
+                    if (!intent.coordinated_demolition.is_null())
+                        if (const auto ordinary=phase_coordinated_demolition_ordinary_removal(intent.coordinated_demolition,intent)) {
+                            targets.insert(ordinary->object_ids.begin(),ordinary->object_ids.end());
+                            const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                            for (const auto& key:ordinary->components) {
+                                targets.insert(key.first);
+                                targets.insert(aliases.at(key));
+                                const auto catalog=AssemblyModel::from_json(source.entities().at(key.first).properties.at("model"));
+                                const auto row=std::find_if(catalog.instances().begin(),catalog.instances().end(),
+                                    [&](const auto& instance) { return instance.id==key.second; });
+                                if (row==catalog.instances().end())
+                                    throw std::invalid_argument("The ordinary removal component is absent from its actual catalog.");
+                                if (row->placement) targets.insert(row->placement->host_entity_id);
+                            }
+                        }
                     if (!intent.coordinated_replacements.is_null())
                         for (const auto& [original, fresh] : alternativePhysicalReplacementIdentities(intent)) {
                             (void)fresh; targets.insert(original);
