@@ -2309,6 +2309,9 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         ~CommitSourceReset() { if (owner) owner->m_impl->commit_snapshot.reset(); }
     } reset_source{owner_guard};
     const auto point = m_impl->input_point(event->position());
+    // Sub-threshold release movement must not replace the press-owned hit.
+    // Dragging still uses the release point for its final camera/edit endpoint.
+    const auto selection_point = m_impl->input_point(m_impl->left_press);
     if ((event->position() - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
         m_impl->left_moved = true;
     if (m_impl->gesture==Impl::Gesture::overlap_select || m_impl->gesture==Impl::Gesture::overlap_pan) {
@@ -2323,7 +2326,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
                 resetCompletedPointerInteraction(false);
                 if (!owner_guard) { event->accept(); return; }
                 m_impl->commit_snapshot=capture->source;
-                (void)m_impl->select_at(point,*capture,false,false,true);
+                (void)m_impl->select_at(selection_point,*capture,false,false,true);
                 if (owner_guard) {
                     try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
                 }
@@ -2351,7 +2354,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
             if (!admitSceneInput(true)) return;
             m_impl->commit_snapshot=capture->source;
             m_impl->detach_manipulator();
-            const auto target = m_impl->select_at(point,*capture);
+            const auto target = m_impl->select_at(selection_point,*capture);
             if (owner_guard) {
                 try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
             }
@@ -2413,7 +2416,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         if (was_additive) {
             m_impl->detach_manipulator();
             if (selection_drag) m_impl->select_rectangle(selection_start,event->position(),*capture);
-            else (void)m_impl->select_at(point,*capture,false,true);
+            else (void)m_impl->select_at(selection_point,*capture,false,true);
             if (owner_guard) {
                 try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
             }
@@ -2422,7 +2425,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
         }
         if (was_edit && isReady()) {
             m_impl->detach_manipulator();
-            (void)m_impl->select_at(point,*capture,true);
+            (void)m_impl->select_at(selection_point,*capture,true);
             if (!owner_guard) { event->accept(); return; }
             try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
             event->accept();
@@ -2478,7 +2481,7 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
             }
         }
         if (was_click) {
-            (void)m_impl->select_at(point,*capture);
+            (void)m_impl->select_at(selection_point,*capture);
         }
         event->accept();
         return;

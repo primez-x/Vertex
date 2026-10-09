@@ -605,7 +605,9 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 diagnostic(result.diagnostics, entity.id, entity.type, "dimension_owner_missing");
                 return;
             }
-            const auto resolved = decoded.dimension->resolve(owner->second);
+            // Export uses the actual current document inventory. Entity-only
+            // resolution cannot admit physical-room targets or their holes.
+            const auto resolved = resolve_current_boundary_dimension(*decoded.dimension, document);
             const auto text = entity.properties.value("display_text", std::string{});
             result.drawing.dimensions.push_back({{resolved.segment.start.x, resolved.segment.start.y},
                 {resolved.segment.end.x, resolved.segment.end.y},

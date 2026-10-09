@@ -14,6 +14,25 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 native click and current-room DXF source corrections
+
+Stationary 3D clicks now retain the press position for plain selection,
+Ctrl-toggle, overlap cycling, double-click editing and context targeting.
+Sub-threshold release movement cannot retarget these actions. Marquees,
+camera drags and object manipulation retain their actual release endpoint;
+the captured source, selection and camera admission checks remain intact.
+
+DXF export now resolves a boundary dimension against the actual current
+document inventory. This admits otherwise-current physical-room dimensions
+instead of rejecting them through the entity-only resolver. Hidden, inactive,
+missing-owner and stale dimensions remain withheld. Curved segment dimensions
+still need an analytical arc-length exchange record; the existing linear
+record must not substitute a chord for the measured arc.
+
+Root integrated source review is complete. No builds, tests, probes, scripts,
+native jobs, launches, packages or installations ran. Compilation and observed
+behavior remain unverified; the installed candidate is unchanged.
+
 ### October 9 canvas navigation source corrections
 
 Canvas input now uses the painted rotated selection frame for move/pan,
