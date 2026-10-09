@@ -33,13 +33,18 @@ intent, independently binds the retained door and complete source host, and
 preserves all other fields. Ordinary hints and equal-value legacy no-ops keep
 their original contracts. Native 155 / extraction 153 preserve explicit passage
 version four and both additive version-two edit meanings through retained and
-undone history. Integrated root source review is complete; independent source
-review of this combined batch is pending.
+undone history. Integrated root source review is complete. Independent source
+review approved the immutable combined batch at 879595e1 with no actionable
+findings, including ordinary/saved-alternative conversion, strict IFC framing
+and retained format floors. This establishes source review only.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or installations
 ran in this batch. Compilation, output and runtime remain unverified. The
 installed candidate is unchanged; source implementation continues without a
-goal loop or turn-boundary build directories.
+goal loop or turn-boundary build directories. A separate bounded current-source
+scan confirmed that joint intent four already supplies partial hard-connected
+rotation; the older full-rigid-only restriction does not justify rebuilding
+that feature. Do not restart the completed canvas, copy or connected-solve work.
 
 ### October 9 door-library and overhead-operation source implementation
 
