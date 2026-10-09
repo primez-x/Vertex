@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 154 requires native reader 156 for phase-aware physical-room
+wall split/merge completion. Closed split intent three and merge intent two
+retain explicit current-source admission; continuation receipt two preserves
+the original descriptor chain and separately captured phase-only refresh.
+Current, wrapped, retained and undone history keep this floor. Older intent and
+receipt meanings remain exact. The source format contract is documented in
+[project-format.md](project-format.md); runtime qualification remains pending.
+
 Exchange version 144 requires native reader 146 for independent drawing
 removal around direct active-design authoring. Closed outer forty-two encloses
 exactly one canonical authoring thirty-four with identical revision/message and

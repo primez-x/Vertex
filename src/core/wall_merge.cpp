@@ -325,13 +325,28 @@ void remap_constraints(const Entities& source,Entities& result,const WallMergeIn
 }
 
 Json encode_wall_merge(const WallMergeIntent& intent) {
-    validate(intent);return {{"version",1},{"first_wall_id",intent.first_wall_id},{"second_wall_id",intent.second_wall_id}};
+    validate(intent);
+    Json result={{"version",1},{"first_wall_id",intent.first_wall_id},{"second_wall_id",intent.second_wall_id}};
+    if (intent.physical_room_phase_completion) {
+        result["version"]=2;result["physical_room_phase_completion"]=true;
+    }
+    return result;
 }
 WallMergeIntent decode_wall_merge(const Json& value) {
-    exact(value,{"version","first_wall_id","second_wall_id"});
-    if(!value.at("version").is_number_integer() || value.at("version")!=1 ||
-        !value.at("first_wall_id").is_string() || !value.at("second_wall_id").is_string())reject("Wall merge proof has invalid version or identities");
+    if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+        (value.at("version")!=1 && value.at("version")!=2)) reject("Wall merge proof has unsupported version");
+    const bool phase_completion=value.at("version")==2;
+    if (phase_completion) exact(value,{"version","first_wall_id","second_wall_id","physical_room_phase_completion"});
+    else exact(value,{"version","first_wall_id","second_wall_id"});
+    if(!value.at("first_wall_id").is_string() ||
+        !value.at("second_wall_id").is_string())reject("Wall merge proof has invalid version or identities");
     WallMergeIntent intent{value.at("first_wall_id").get<std::string>(),value.at("second_wall_id").get<std::string>()};
+    if (phase_completion) {
+        if (!value.at("physical_room_phase_completion").is_boolean() ||
+            !value.at("physical_room_phase_completion").get<bool>())
+            reject("Wall merge phase completion requires its explicit current-source dialect");
+        intent.physical_room_phase_completion=true;
+    }
     validate(intent);return intent;
 }
 void validate_wall_merge_archive(const Entity& wall) {
@@ -543,7 +558,10 @@ Entities replayed_wall_merge_entities(const Entities& source,const WallMergeInte
     validate_constraint_wall_host(first.id,result);
     result=complete_wall_merge_measurement_sources(source,result,intent);
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
-    result=complete_wall_merge_physical_room_sources(source,result,intent);
+    result=complete_wall_merge_physical_room_sources(source,result,intent,intent.physical_room_phase_completion);
+#else
+    if (intent.physical_room_phase_completion)
+        reject("Current physical room wall merging requires the architectural geometry engine");
 #endif
     if(const auto diagnostic=validate_boundary_integrity(result))reject(*diagnostic);
     if(const auto diagnostic=validate_constraint_integrity(result))reject(*diagnostic);
@@ -561,8 +579,12 @@ Entities wall_merge_validation_source(const Entities& source,const Entities& rec
     return normalized;
 }
 Command make_wall_merge_command(const DocumentSnapshot& source,const WallMergeIntent& intent) {
-    (void)replayed_wall_merge_entities(source.entities(),intent);
-    ApplyBoundaryConstraintChanges command;command.expected_revision=source.revision();command.message="Merge walls";command.wall_merge=intent;
+    auto captured=intent;
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    captured.physical_room_phase_completion=true;
+#endif
+    (void)replayed_wall_merge_entities(source.entities(),captured);
+    ApplyBoundaryConstraintChanges command;command.expected_revision=source.revision();command.message="Merge walls";command.wall_merge=std::move(captured);
     const Command result{command};(void)Document::preview_command(source,result);return result;
 }
 }

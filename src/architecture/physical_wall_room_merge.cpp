@@ -39,6 +39,30 @@ bool exact(const std::vector<Boundary>& a,const std::vector<Boundary>& b) {
     return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),
         [](const Boundary& x,const Boundary& y){return exact(x,y);});
 }
+bool same_nonphase_lineage(Json retained,Json current) {
+    if(!retained.is_object() || !current.is_object())return false;
+    retained.erase("semantic_phases");current.erase("semantic_phases");
+    return retained==current;
+}
+PhysicalWallRoomDescriptor admitted_phase_refresh(const Entity& source_owner,const DrawingContext& context,
+    const Json& marker) {
+    // The refreshed descriptor is a second admitted source, never a rewrite of
+    // the descriptor that chains this operation to preceding retained history.
+    auto current_owner=source_owner;current_owner.extensions["physical_wall_room"]=marker;
+    const auto source=decode_physical_wall_room_descriptor(source_owner);
+    const auto current=decode_physical_wall_room_descriptor(current_owner);
+    (void)validate_retained_physical_wall_room_lineage(current_owner,context);
+    if(source.selected_wall_id!=current.selected_wall_id || !exact(source.holes,current.holes) ||
+        source.source_lineage==current.source_lineage || !same_nonphase_lineage(source.source_lineage,current.source_lineage))
+        reject("current-source descriptor changes more than captured semantic phase evidence");
+    PhysicalWallSpace fresh;fresh.source_lineage=current.source_lineage;
+    fresh.boundary=boundary_geometry(decode_identified_boundary_entity(current_owner));fresh.holes=current.holes;
+    fresh.area_square_metres=std::abs(signed_area(fresh.boundary));
+    for(const auto& hole:fresh.holes)fresh.area_square_metres-=std::abs(signed_area(hole));
+    if(!physical_wall_room_lineage_matches_current_inventory(source_owner,context,fresh))
+        reject("current-source descriptor does not preserve the admitted physical inventory and clear region");
+    return current;
+}
 Vec2 center(const Segment& s) {
     const auto dx=s.end.x-s.start.x,dy=s.end.y-s.start.y,k=0.5/std::tan(s.sweep_radians/2);
     return {s.start.x+dx/2-dy*k,s.start.y+dy/2+dx*k};
@@ -341,7 +365,7 @@ void dimensions(Entities& result,const std::string& room,const std::vector<Seam>
 } // namespace
 
 Entities complete_wall_merge_physical_room_sources(const Entities& original,const Entities& physical,
-    const WallMergeIntent& intent) {
+    const WallMergeIntent& intent,bool allow_phase_metadata_refresh) {
     try {
         auto result=physical;
         const auto organization=organize_project(original);
@@ -381,8 +405,10 @@ Entities complete_wall_merge_physical_room_sources(const Entities& original,cons
                 descriptor=decode_physical_wall_room_descriptor(owner);identified=decode_identified_boundary_entity(owner);
             } catch(const std::invalid_argument&){continue;}
             const PhysicalWallSpace* current=nullptr;
-            for(const auto& space:before.spaces)if(space.source_lineage==descriptor->source_lineage &&
-                exact(space.boundary,boundary_geometry(*identified)) && exact(space.holes,descriptor->holes)) {
+            for(const auto& space:before.spaces)if(exact(space.boundary,boundary_geometry(*identified)) &&
+                exact(space.holes,descriptor->holes) && (space.source_lineage==descriptor->source_lineage ||
+                (allow_phase_metadata_refresh && same_nonphase_lineage(descriptor->source_lineage,space.source_lineage) &&
+                    physical_wall_room_lineage_matches_current_inventory(owner,before.context,space)))) {
                 if(current)reject("current room source component is ambiguous: "+id);current=&space;
             }
             if(!current)continue; // Stale/future owners remain diagnostic and opaque.
@@ -421,11 +447,18 @@ Entities complete_wall_merge_physical_room_sources(const Entities& original,cons
                     {"source_boundary",{{"boundary_model_version",1},{"segments",owner.properties.at("segments")}}},{"operations",Json::array()}};
             }
             Json vertices=Json::array();for(const auto& seam:seams)vertices.push_back(seam.vertex);
-            metadata.extensions["boundary_geometry_derivation"]["operations"].push_back({{"kind","physical_room_wall_merge"},
-                {"value",{{"version",1},{"first_wall_id",intent.first_wall_id},{"second_wall_id",intent.second_wall_id},
+            Json proof={{"version",1},{"first_wall_id",intent.first_wall_id},{"second_wall_id",intent.second_wall_id},
                     {"source_descriptor",owner.extensions.at("physical_wall_room")},
                     {"descriptor",metadata.extensions.at("physical_wall_room")},{"seam_vertex_ids",vertices},
-                    {"segments",encode_identified_boundary_entity(boundary).properties.at("segments")}}}});
+                    {"segments",encode_identified_boundary_entity(boundary).properties.at("segments")}};
+            if(current->source_lineage!=descriptor->source_lineage) {
+                const auto current_descriptor=encode_physical_wall_room_descriptor(
+                    {descriptor->selected_wall_id,current->source_lineage,current->holes});
+                (void)admitted_phase_refresh(owner,before.context,current_descriptor);
+                proof["version"]=2;proof["current_source_descriptor"]=current_descriptor;
+            }
+            metadata.extensions["boundary_geometry_derivation"]["operations"].push_back(
+                {{"kind","physical_room_wall_merge"},{"value",std::move(proof)}});
             auto encoded=encode_identified_boundary_entity(boundary,&metadata);
             if(encoded.properties.contains("boundary")) {
                 Json geometry=Json::array();for(const auto& edge:boundary.segments)geometry.push_back({
@@ -444,13 +477,17 @@ Entities complete_wall_merge_physical_room_sources(const Entities& original,cons
 IdentifiedBoundary replay_physical_room_wall_merge(const Entity& owner,const IdentifiedBoundary& preceding,
     const Json& value) {
     try {
+        if(!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+            (value.at("version")!=1 && value.at("version")!=2))reject("retained operation has unsupported version");
+        const bool refreshed=value.at("version")==2;
+        if(refreshed && value.dump().size()>16*1024*1024)reject("retained refreshed proof exceeds 16 MiB");
         static const std::set<std::string,std::less<>> fields={"version","first_wall_id","second_wall_id",
             "source_descriptor","descriptor","seam_vertex_ids","segments"};
-        if(!value.is_object() || value.size()!=fields.size())reject("retained operation has unexpected fields");
-        for(const auto* field:{"version","first_wall_id","second_wall_id","source_descriptor","descriptor","seam_vertex_ids","segments"})
+        if(value.size()!=fields.size()+(refreshed?1:0) || (refreshed && !value.contains("current_source_descriptor")))
+            reject("retained operation has unexpected fields");
+        for(const auto& field:fields)
             if(!value.contains(field))reject("retained operation is missing "+std::string(field));
-        if(!value.at("version").is_number_integer() || value.at("version")!=1 ||
-            !value.at("first_wall_id").is_string() || !value.at("second_wall_id").is_string() ||
+        if(!value.at("first_wall_id").is_string() || !value.at("second_wall_id").is_string() ||
             !value.at("seam_vertex_ids").is_array() || value.at("seam_vertex_ids").size()>2 ||
             !value.at("segments").is_array())reject("retained operation has unsupported version or types");
         const WallMergeIntent intent{value.at("first_wall_id").get<std::string>(),value.at("second_wall_id").get<std::string>()};
@@ -472,6 +509,7 @@ IdentifiedBoundary replay_physical_room_wall_merge(const Entity& owner,const Ide
             context_json.at("floor_id").get<std::string>(),context_json.at("layer_id").get<std::string>(),context_json.at("level_id").get<std::string>()};
         if(!context.complete())reject("retained operation context is unresolved");
         (void)validate_retained_physical_wall_room_lineage(source_owner,context);
+        const auto current=refreshed?admitted_phase_refresh(source_owner,context,value.at("current_source_descriptor")):source;
         auto destination_owner=Entity{owner.id,owner.type,{{"boundary_model_version",1},{"segments",value.at("segments")}},false,
             {{"physical_wall_room",value.at("descriptor")}}};
         const auto destination=decode_physical_wall_room_descriptor(destination_owner);
@@ -479,8 +517,8 @@ IdentifiedBoundary replay_physical_room_wall_merge(const Entity& owner,const Ide
         (void)validate_retained_physical_wall_room_lineage(destination_owner,context);
         const auto expected_selection=source.selected_wall_id==intent.second_wall_id?intent.first_wall_id:source.selected_wall_id;
         if(destination.selected_wall_id!=expected_selection)reject("retained operation changed unrelated selected source identity");
-        const auto fraction=prove_inventory_delta(source.source_lineage,destination.source_lineage,intent);
-        if(!continues(source.source_lineage,destination.source_lineage,intent,fraction))
+        const auto fraction=prove_inventory_delta(current.source_lineage,destination.source_lineage,intent);
+        if(!continues(current.source_lineage,destination.source_lineage,intent,fraction))
             reject("retained operation does not preserve directed boundary-source intervals");
         if(!same_region(boundary_geometry(preceding),source.holes,boundary_geometry(final_boundary),destination.holes))
             reject("retained operation changes the analytical clear region or holes");

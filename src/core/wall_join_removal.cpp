@@ -292,6 +292,7 @@ void reserve_join_envelope_names(LifetimeReservations& reservations) {
         "authored_edit", "authored_length", "vertex_edits", "measured_source_completion", "wall_split",
         "second_wall_id", "fraction", "seam_constraint_id", "measured_owners", "physical_room_owners",
         "segment_id", "automatic_dimension_id", "new_segment_ids", "new_vertex_ids", "physical_room_completion",
+        "physical_room_phase_completion",
         "exterior_segment_resize", "exact_length", "fixed_endpoint", "move_boundary_chain", "exterior_segment_arc",
         "arc_construction", "dimension_id", "dimension_placement_moves", "dimension_placement_completion",
         "rigid_group_transform", "rigid_group_completion", "joint_translation", "joint_translation_completion",

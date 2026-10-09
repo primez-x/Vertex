@@ -119,8 +119,12 @@ struct Budget {
     void read(const WallSplitPhysicalRoomIds& value) {text(value.boundary_id);sequence(value.new_segment_ids);sequence(value.new_vertex_ids);}
     void read(const WallSplitIntent& value) {
         text(value.wall_id);text(value.second_wall_id);text(value.seam_constraint_id);sequence(value.measured_owners);sequence(value.physical_room_owners);
+        if (value.physical_room_phase_completion) reserve(64);
     }
-    void read(const WallMergeIntent& value) {text(value.first_wall_id);text(value.second_wall_id);}
+    void read(const WallMergeIntent& value) {
+        text(value.first_wall_id);text(value.second_wall_id);
+        if (value.physical_room_phase_completion) reserve(64);
+    }
     void read(const JointAnnotationTranslationIntent& value) {text(value.owner_id);text(value.child_id);}
     void read(const JointReferenceTranslationIntent& value) {text(value.reference_id);}
     void read(const JointOwnerTranslationIntent& value) {text(value.owner_id);}

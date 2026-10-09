@@ -215,7 +215,9 @@ public:
     // and undone entities; older readers must not reinterpret its pose.
     // Explicit passage frames and atomic implicit-door overhead conversion
     // require v155, including retained/undone typed edit history.
-    static constexpr std::uint32_t format_version = 155;
+    // Phase-aware physical-room wall split/merge intents and continuation
+    // receipt v2 require v156, including wrapped, retained and undone history.
+    static constexpr std::uint32_t format_version = 156;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

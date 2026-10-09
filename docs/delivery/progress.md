@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 phase-aware room wall split/merge source implementation
+
+Current wall split and merge producers now continue an unchanged clear room
+after phase bookkeeping changes, while historical/default replay keeps exact
+lineage matching. Additive closed split intent three and merge intent two opt
+into this current-source rule. Current room/child inventories remain captured;
+changed, inactive or ambiguous rooms do not acquire automatic continuation.
+
+A phase-only continuation keeps the original source descriptor for history
+chaining and adds a separately admitted current descriptor in receipt version
+two. Complete physical inventory, selected source, context/plane, exact clear
+geometry and holes remain required. The existing strict physical partition or
+union, source-interval and child correspondence proof then runs from that
+current descriptor to the destination. No-op refreshes or other changes reject.
+Copy/lifetime visitors retain and remap both source descriptors and the
+destination; nested resource readers account for the new intent flag.
+
+Native 156 / extraction 154 preserve the new intent and receipt meanings across
+direct, wrapped, retained, deleted and undone history. Earlier dialects remain
+unchanged; a runtime without the architectural geometry engine refuses the new
+meaning. Root integrated source review and independent review are complete;
+the independent reviewer found no actionable finding in this 17-path batch.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation and runtime remain unverified; the installed candidate is
+unchanged. Mixed Site moves of physical-room callouts remain the next confirmed
+source gap rather than an accepted behavior.
+
 ### October 9 current-room, recovery and navigator source implementation
 
 Repeated creation now reuses a current physical room when only captured phase

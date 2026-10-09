@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v155
+# Vertex project formats v1 through v156
+
+## Phase-aware physical-room wall edits (v156)
+
+Native reader 156 and JSON/assets extraction 154 retain current-room wall
+split/merge completion after phase bookkeeping changes, including wrapped,
+retained, deleted and undone history. Earlier split v1/v2 and merge v1 intents
+retain exact source-lineage replay.
+
+Split intent version three has exactly the seven version-two fields plus
+`physical_room_phase_completion:true`; its captured room/child allocation stays
+mandatory. Merge intent version two has exactly the three version-one fields
+plus the same true flag. New current command producers opt into these meanings;
+the underlying historical completion APIs default to exact matching.
+
+Each physical-room split/merge continuation receipt remains version one unless
+the captured source differs only in `semantic_phases`. Version two then adds
+exactly `current_source_descriptor` to that operation's existing fields.
+`source_descriptor` remains the original descriptor for sequential history
+chaining. Both descriptors are independently admitted against the preceding
+clear geometry; selected source, context, physical inventory and holes must
+remain unchanged. An unchanged descriptor, unknown fields, geometry/plane
+change or any other lineage difference rejects this refresh meaning.
+The strict physical partition/union and child correspondence then start from
+the admitted current source and produce the destination descriptor in the same
+command. Copying remaps identities in all three descriptors consistently.
+
+Current, retained and wrapped command intents and version-two continuation
+receipts set the reader floor. Extraction derives its floor from complete native
+history; Undo cannot lower it. These are source contracts, with compilation and
+runtime qualification pending under the current build/test pause.
 
 ## Framed passages and atomic overhead conversion (v155)
 

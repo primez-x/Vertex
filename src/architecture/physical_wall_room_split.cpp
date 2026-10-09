@@ -66,6 +66,30 @@ bool exact(const std::vector<Boundary>& a,const std::vector<Boundary>& b) {
     return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),
         [](const Boundary& x,const Boundary& y){return exact(x,y);});
 }
+bool same_nonphase_lineage(Json retained,Json current) {
+    if(!retained.is_object() || !current.is_object())return false;
+    retained.erase("semantic_phases");current.erase("semantic_phases");
+    return retained==current;
+}
+PhysicalWallRoomDescriptor admitted_phase_refresh(const Entity& source_owner,const DrawingContext& context,
+    const Json& marker) {
+    // The refreshed descriptor is a second admitted source, never a rewrite of
+    // the descriptor that chains this operation to preceding retained history.
+    auto current_owner=source_owner;current_owner.extensions["physical_wall_room"]=marker;
+    const auto source=decode_physical_wall_room_descriptor(source_owner);
+    const auto current=decode_physical_wall_room_descriptor(current_owner);
+    (void)validate_retained_physical_wall_room_lineage(current_owner,context);
+    if(source.selected_wall_id!=current.selected_wall_id || !exact(source.holes,current.holes) ||
+        source.source_lineage==current.source_lineage || !same_nonphase_lineage(source.source_lineage,current.source_lineage))
+        reject("current-source descriptor changes more than captured semantic phase evidence");
+    PhysicalWallSpace fresh;fresh.source_lineage=current.source_lineage;
+    fresh.boundary=boundary_geometry(decode_identified_boundary_entity(current_owner));fresh.holes=current.holes;
+    fresh.area_square_metres=std::abs(signed_area(fresh.boundary));
+    for(const auto& hole:fresh.holes)fresh.area_square_metres-=std::abs(signed_area(hole));
+    if(!physical_wall_room_lineage_matches_current_inventory(source_owner,context,fresh))
+        reject("current-source descriptor does not preserve the admitted physical inventory and clear region");
+    return current;
+}
 Vec2 center(const Segment& s) {
     const auto dx=s.end.x-s.start.x,dy=s.end.y-s.start.y,k=0.5/std::tan(s.sweep_radians/2);
     return {s.start.x+dx/2-dy*k,s.start.y+dy/2+dx*k};
@@ -264,8 +288,10 @@ struct Plan {
     IdentifiedBoundary source;
     Partitions parts;
     std::size_t insertions{};
+    Json current_source_descriptor;
 };
-std::vector<Plan> correspondence(const Entities& original,const Entities& physical,const WallSplitIntent& intent) {
+std::vector<Plan> correspondence(const Entities& original,const Entities& physical,const WallSplitIntent& intent,
+    bool allow_phase_metadata_refresh) {
     std::vector<Plan> result;const auto organization=organize_project(original);
     const auto context=organization.drawing_context(intent.wall_id);
     if(!context || !context->complete())return result;
@@ -297,8 +323,10 @@ std::vector<Plan> correspondence(const Entities& original,const Entities& physic
         const PhysicalWallSpace* current=nullptr;
         for(const auto& space:before.spaces) {
             budget.step();
-            if(space.source_lineage!=descriptor.source_lineage || !exact(space.boundary,boundary_geometry(*identified)) ||
-                !exact(space.holes,descriptor.holes))continue;
+            if(!exact(space.boundary,boundary_geometry(*identified)) || !exact(space.holes,descriptor.holes))continue;
+            if(space.source_lineage!=descriptor.source_lineage && (!allow_phase_metadata_refresh ||
+                !same_nonphase_lineage(descriptor.source_lineage,space.source_lineage) ||
+                !physical_wall_room_lineage_matches_current_inventory(*owner,before.context,space)))continue;
             if(current)reject("current source component is ambiguous: "+owner->id);current=&space;
         }
         if(!current)continue;
@@ -325,7 +353,14 @@ std::vector<Plan> correspondence(const Entities& original,const Entities& physic
         budget.charge(destination.source_lineage.dump().size());
         auto parts=match_children(*identified,destination.boundary,budget);
         const auto count=destination.boundary.size()-identified->segments.size();
-        result.push_back({owner->id,descriptor,destination,*identified,std::move(parts),count});
+        Json current_descriptor;
+        if(current->source_lineage!=descriptor.source_lineage) {
+            current_descriptor=encode_physical_wall_room_descriptor(
+                {descriptor.selected_wall_id,current->source_lineage,current->holes});
+            (void)admitted_phase_refresh(*owner,before.context,current_descriptor);
+            budget.charge(current_descriptor.dump().size());
+        }
+        result.push_back({owner->id,descriptor,destination,*identified,std::move(parts),count,std::move(current_descriptor)});
     }
     return result;
 }
@@ -610,10 +645,14 @@ Entity completed_owner(const Entity& owner,const Plan& plan,const Children& chil
         } else metadata.extensions["boundary_geometry_derivation"]={{"version",2},
             {"source_boundary",{{"boundary_model_version",1},{"segments",owner.properties.at("segments")}}},{"operations",Json::array()}};
     }
-    metadata.extensions["boundary_geometry_derivation"]["operations"].push_back({{"kind","physical_room_wall_split"},
-        {"value",{{"version",1},{"wall_id",intent.wall_id},{"second_wall_id",intent.second_wall_id},{"fraction",intent.fraction},
+    Json proof={{"version",1},{"wall_id",intent.wall_id},{"second_wall_id",intent.second_wall_id},{"fraction",intent.fraction},
             {"source_descriptor",owner.extensions.at("physical_wall_room")},{"descriptor",metadata.extensions.at("physical_wall_room")},
-            {"insertions",children.insertions},{"segments",encode_identified_boundary_entity(children.boundary).properties.at("segments")}}}});
+            {"insertions",children.insertions},{"segments",encode_identified_boundary_entity(children.boundary).properties.at("segments")}};
+    if(!plan.current_source_descriptor.is_null()) {
+        proof["version"]=2;proof["current_source_descriptor"]=plan.current_source_descriptor;
+    }
+    metadata.extensions["boundary_geometry_derivation"]["operations"].push_back(
+        {{"kind","physical_room_wall_split"},{"value",std::move(proof)}});
     auto result=encode_identified_boundary_entity(children.boundary,&metadata);
     if(result.properties.contains("boundary")) {
         Json geometry=Json::array();for(const auto& edge:children.boundary.segments)geometry.push_back({
@@ -625,9 +664,9 @@ Entity completed_owner(const Entity& owner,const Plan& plan,const Children& chil
 } // namespace
 
 std::vector<WallSplitPhysicalRoomIds> prepare_wall_split_physical_room_ids(
-    const Entities& original,const Entities& physical,const WallSplitIntent& intent) {
+    const Entities& original,const Entities& physical,const WallSplitIntent& intent,bool allow_phase_metadata_refresh) {
     try {
-        const auto plans=correspondence(original,physical,intent);std::vector<WallSplitPhysicalRoomIds> result;
+        const auto plans=correspondence(original,physical,intent,allow_phase_metadata_refresh);std::vector<WallSplitPhysicalRoomIds> result;
         for(const auto& plan:plans) {
             WallSplitPhysicalRoomIds ids;ids.boundary_id=plan.id;
             for(std::size_t i=0;i<plan.insertions;++i){ids.new_segment_ids.push_back(make_stable_id());ids.new_vertex_ids.push_back(make_stable_id());}
@@ -638,9 +677,10 @@ std::vector<WallSplitPhysicalRoomIds> prepare_wall_split_physical_room_ids(
     catch(const Standard_Failure& error){reject(std::string("analytical comparison failed: ")+error.what());}
 }
 
-Entities complete_wall_split_physical_room_sources(const Entities& original,const Entities& physical,const WallSplitIntent& intent) {
+Entities complete_wall_split_physical_room_sources(const Entities& original,const Entities& physical,const WallSplitIntent& intent,
+    bool allow_phase_metadata_refresh) {
     try {
-        const auto plans=correspondence(original,physical,intent);
+        const auto plans=correspondence(original,physical,intent,allow_phase_metadata_refresh);
         if(plans.size()!=intent.physical_room_owners.size())reject("frozen owner list does not match initially current room inventory");
         auto result=physical;Budget budget;std::set<std::string,std::less<>> fresh;
         for(const auto& ids:intent.physical_room_owners)for(const auto* list:{&ids.new_segment_ids,&ids.new_vertex_ids})for(const auto& id:*list)
@@ -664,8 +704,13 @@ Entities complete_wall_split_physical_room_sources(const Entities& original,cons
 IdentifiedBoundary replay_physical_room_wall_split(const Entity& owner,const IdentifiedBoundary& preceding,const Json& value) {
     try {
         Budget budget;budget.charge(value.dump().size());
-        fields(value,{"version","wall_id","second_wall_id","fraction","source_descriptor","descriptor","insertions","segments"});
-        if(!value.at("version").is_number_integer() || value.at("version")!=1 || !value.at("wall_id").is_string() ||
+        if(!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+            (value.at("version")!=1 && value.at("version")!=2))reject("retained operation has unsupported version");
+        const bool refreshed=value.at("version")==2;
+        if(refreshed)fields(value,{"version","wall_id","second_wall_id","fraction","source_descriptor",
+            "current_source_descriptor","descriptor","insertions","segments"});
+        else fields(value,{"version","wall_id","second_wall_id","fraction","source_descriptor","descriptor","insertions","segments"});
+        if(!value.at("wall_id").is_string() ||
             !value.at("second_wall_id").is_string() || !value.at("fraction").is_number() || !value.at("insertions").is_array() ||
             !value.at("segments").is_array())reject("retained operation has unsupported version or types");
         WallSplitIntent intent;intent.wall_id=value.at("wall_id").get<std::string>();
@@ -680,14 +725,15 @@ IdentifiedBoundary replay_physical_room_wall_split(const Entity& owner,const Ide
             c.at("floor_id").get<std::string>(),c.at("layer_id").get<std::string>(),c.at("level_id").get<std::string>()};
         if(!context.complete())reject("retained operation context is unresolved");
         (void)validate_retained_physical_wall_room_lineage(source_owner,context);
+        const auto current=refreshed?admitted_phase_refresh(source_owner,context,value.at("current_source_descriptor")):source;
         const Entity destination_owner{owner.id,owner.type,{{"boundary_model_version",1},{"segments",value.at("segments")}},false,
             {{"physical_wall_room",value.at("descriptor")}}};
         const auto destination=decode_physical_wall_room_descriptor(destination_owner);
         const auto final_boundary=decode_identified_boundary_entity(destination_owner);
         (void)validate_retained_physical_wall_room_lineage(destination_owner,context);
         if(source.selected_wall_id!=destination.selected_wall_id)reject("retained operation changed the selected source identity");
-        prove_inventory_delta(source.source_lineage,destination.source_lineage,intent,budget);
-        if(!continues(source.source_lineage,destination.source_lineage,intent,budget))reject("retained operation changes directed source intervals");
+        prove_inventory_delta(current.source_lineage,destination.source_lineage,intent,budget);
+        if(!continues(current.source_lineage,destination.source_lineage,intent,budget))reject("retained operation changes directed source intervals");
         if(!same_region(boundary_geometry(preceding),source.holes,boundary_geometry(final_boundary),destination.holes))
             reject("retained operation changes the analytical clear region or holes");
         auto parts=match_children(preceding,boundary_geometry(final_boundary),budget);
@@ -700,7 +746,8 @@ IdentifiedBoundary replay_physical_room_wall_split(const Entity& owner,const Ide
             ids.new_vertex_ids.push_back(insertion.at("new_vertex_id").get<std::string>());
         }
         PhysicalWallSpace space;space.boundary=boundary_geometry(final_boundary);
-        const Plan plan{owner.id,source,std::move(space),preceding,std::move(parts),final_boundary.segments.size()-preceding.segments.size()};
+        const Plan plan{owner.id,source,std::move(space),preceding,std::move(parts),
+            final_boundary.segments.size()-preceding.segments.size(),Json{}};
         const auto expected=materialize(plan,ids,budget);
         if(expected.insertions!=value.at("insertions") || expected.boundary!=final_boundary)
             reject("retained operation changed sequential insertion proof or stable child correspondence");

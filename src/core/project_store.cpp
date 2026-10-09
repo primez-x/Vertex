@@ -368,13 +368,20 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     const auto typed_edit=[&](const BoundaryGeometryEdit& edit) {
         return (edit.arc_construction && edit.arc_construction->chord_input) || typed_authoring(edit.replacement_authoring);
     };
-    const auto opening_edit_reader_floor=[](const nlohmann::json& root) {
+    const auto typed_edit_reader_floor=[](const nlohmann::json& root) {
         std::uint64_t nodes{};
+        std::uint32_t floor{};
         std::vector<const nlohmann::json*> pending{&root};
         while (!pending.empty()) {
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
-                storage_error(StorageErrorCode::resource_limit,"Opening edit reader-floor scan exceeds its JSON budget");
+                storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("physical_room_phase_completion",nlohmann::json())==true &&
+                ((value.size()==8 && value.value("version",nlohmann::json())==3 &&
+                    value.contains("wall_id") && value.contains("second_wall_id") && value.contains("fraction") &&
+                    value.contains("seam_constraint_id") && value.contains("measured_owners") && value.contains("physical_room_owners")) ||
+                 (value.size()==4 && value.value("version",nlohmann::json())==2 &&
+                    value.contains("first_wall_id") && value.contains("second_wall_id")))) return 156U;
             if (value.is_object() && value.value("version",nlohmann::json())==2 &&
                 value.contains("opening_id") && value.at("opening_id").is_string() &&
                 value.contains("wall_id") && value.at("wall_id").is_string() &&
@@ -383,12 +390,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                      value.contains("offset") && value.contains("width") && value.contains("sill") &&
                      value.contains("height") && value.contains("clear_door_operation")) ||
                     (value.size()==7 && value.value("framed_passage_transition",nlohmann::json())==true &&
-                     value.value("target_family",nlohmann::json())=="opening")) return 155U;
+                     value.value("target_family",nlohmann::json())=="opening")) floor=155U;
             }
             if (value.is_array() || value.is_object())
                 for (const auto& child:value) pending.push_back(&child);
         }
-        return 0U;
+        return floor;
     };
     const auto typed_receipt=[](const nlohmann::json& value) { return value.is_object() && value.contains("version") &&
         value.at("version").is_number_integer() && value.at("version")==2 && value.contains("chord_input"); };
@@ -420,10 +427,10 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         return false;
     };
     for (const auto& revision : snapshot.history()) {
-        if (required<155 && revision.boundary_geometry_edit)
-            required=std::max(required,opening_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<155 && revision.boundary_constraint_changes)
-            required=std::max(required,opening_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
+        if (required<156 && revision.boundary_geometry_edit)
+            required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
+        if (required<156 && revision.boundary_constraint_changes)
+            required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
         if (required<122 && revision.boundary_constraint_changes)
@@ -784,6 +791,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             if(command.wall_split) required=std::max(required,
                 command.wall_split->physical_room_completion || !command.wall_split->physical_room_owners.empty() ? 65U : 37U);
             if(command.wall_merge) required=std::max(required,64U);
+            if ((command.wall_split && command.wall_split->physical_room_phase_completion) ||
+                (command.wall_merge && command.wall_merge->physical_room_phase_completion))
+                required=std::max(required,156U);
             if(command.exterior_segment_resize) required=std::max(required,39U);
             if(command.exterior_segment_arc) required=std::max(required,40U);
             if(command.measured_source_completion || !command.measured_stroke_edits.empty())required=std::max(required,35U);
@@ -950,6 +960,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                             required=std::max(required,64U);
                         if (operation.is_object() && operation.value("kind",nlohmann::json())=="physical_room_wall_split")
                             required=std::max(required,65U);
+                        if (operation.is_object() && (operation.value("kind",nlohmann::json())=="physical_room_wall_merge" ||
+                            operation.value("kind",nlohmann::json())=="physical_room_wall_split")) {
+                            const auto value=operation.find("value");
+                            if (value!=operation.end() && value->is_object() &&
+                                value->value("version",nlohmann::json())==2)
+                                required=std::max(required,156U);
+                        }
                     }
             }
             if (entity.type=="constraint" && entity.properties.contains("relation") &&
@@ -2535,6 +2552,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 153 &&
          sqlite3_column_int(user_version.get(), 0) != 154 &&
          sqlite3_column_int(user_version.get(), 0) != 155 &&
+         sqlite3_column_int(user_version.get(), 0) != 156 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3133,6 +3151,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=156)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 156 for phase-aware physical-room wall split and merge history");
         if (required_format>=155)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 155 for explicit passage framing and atomic overhead conversion history");
         if (required_format>=154)

@@ -3881,18 +3881,28 @@ public:
                 identities(value.at("wall_source_ids"));
                 segments(value.at("segments"));
             } else if (kind == "physical_room_wall_merge") {
-                if (!fields(value, {"version", "first_wall_id", "second_wall_id", "source_descriptor", "descriptor", "seam_vertex_ids", "segments"})) return;
+                const bool current_phase=value.is_object() && value.contains("version") &&
+                    value.at("version").is_number_integer() && value.at("version")==2;
+                if (current_phase) {
+                    if (!fields(value, {"version", "first_wall_id", "second_wall_id", "source_descriptor", "current_source_descriptor", "descriptor", "seam_vertex_ids", "segments"})) return;
+                } else if (!fields(value, {"version", "first_wall_id", "second_wall_id", "source_descriptor", "descriptor", "seam_vertex_ids", "segments"})) return;
                 identity(value.at("first_wall_id"));
                 identity(value.at("second_wall_id"));
                 identities(value.at("seam_vertex_ids"));
                 room_descriptor(value.at("source_descriptor"));
+                if (current_phase) room_descriptor(value.at("current_source_descriptor"));
                 room_descriptor(value.at("descriptor"));
                 segments(value.at("segments"));
             } else if (kind == "physical_room_wall_split") {
-                if (!fields(value, {"version", "wall_id", "second_wall_id", "fraction", "source_descriptor", "descriptor", "insertions", "segments"})) return;
+                const bool current_phase=value.is_object() && value.contains("version") &&
+                    value.at("version").is_number_integer() && value.at("version")==2;
+                if (current_phase) {
+                    if (!fields(value, {"version", "wall_id", "second_wall_id", "fraction", "source_descriptor", "current_source_descriptor", "descriptor", "insertions", "segments"})) return;
+                } else if (!fields(value, {"version", "wall_id", "second_wall_id", "fraction", "source_descriptor", "descriptor", "insertions", "segments"})) return;
                 identity(value.at("wall_id"));
                 identity(value.at("second_wall_id"));
                 room_descriptor(value.at("source_descriptor"));
+                if (current_phase) room_descriptor(value.at("current_source_descriptor"));
                 room_descriptor(value.at("descriptor"));
                 const auto& insertions = value.at("insertions");
                 rows(insertions.size());

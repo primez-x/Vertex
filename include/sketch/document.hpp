@@ -226,6 +226,9 @@ struct WallSplitIntent {
     // The same rooms survive; only frozen analytical child IDs may be new.
     bool physical_room_completion{};
     std::vector<WallSplitPhysicalRoomIds> physical_room_owners;
+    // Nested version three admits phase-bookkeeping-only drift against the
+    // actual current physical inventory. Earlier replay remains exact.
+    bool physical_room_phase_completion{};
 };
 
 // One source-reconstructed directed physical union. The first wall survives;
@@ -233,6 +236,9 @@ struct WallSplitIntent {
 struct WallMergeIntent {
     std::string first_wall_id;
     std::string second_wall_id;
+    // Nested version two preserves current rooms after phase bookkeeping
+    // changes, with separately admitted current-source continuation evidence.
+    bool physical_room_phase_completion{};
 };
 
 struct JointAnnotationTranslationIntent {

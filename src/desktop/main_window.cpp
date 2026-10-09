@@ -618,20 +618,29 @@ void visit_merge_copy_operation(std::string_view kind, json& value, const Identi
         identity(value.at("removed_wall_id"),"retired-wall");
         for (auto& id : value.at("wall_source_ids")) identity(id,"wall-source");
     } else if (kind=="physical_room_wall_merge") {
-        require_merge_copy_fields(value,{"version","first_wall_id","second_wall_id","source_descriptor","descriptor","seam_vertex_ids","segments"});
-        if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
-            !value.at("seam_vertex_ids").is_array() || value.at("seam_vertex_ids").size()>2)
+        if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+            (value.at("version")!=1 && value.at("version")!=2))
+            throw std::invalid_argument("Physical room wall merge copy operation is unsupported.");
+        const bool refreshed=value.at("version")==2;
+        if (refreshed) require_merge_copy_fields(value,{"version","first_wall_id","second_wall_id","source_descriptor","current_source_descriptor","descriptor","seam_vertex_ids","segments"});
+        else require_merge_copy_fields(value,{"version","first_wall_id","second_wall_id","source_descriptor","descriptor","seam_vertex_ids","segments"});
+        if (!value.at("seam_vertex_ids").is_array() || value.at("seam_vertex_ids").size()>2)
             throw std::invalid_argument("Physical room wall merge copy operation is unsupported.");
         (void)encode_wall_merge({value.at("first_wall_id").get<std::string>(),value.at("second_wall_id").get<std::string>()});
         identity(value.at("first_wall_id"),"wall-source");
         identity(value.at("second_wall_id"),"retired-wall");
         for (auto& id : value.at("seam_vertex_ids")) identity(id,"vertex");
         visit_merge_copy_room_descriptor(value.at("source_descriptor"),identity);
+        if (refreshed) visit_merge_copy_room_descriptor(value.at("current_source_descriptor"),identity);
         visit_merge_copy_room_descriptor(value.at("descriptor"),identity);
     } else if (kind=="physical_room_wall_split") {
-        require_merge_copy_fields(value,{"version","wall_id","second_wall_id","fraction","source_descriptor","descriptor","insertions","segments"});
-        if (!value.at("version").is_number_integer() || value.at("version")!=1 ||
-            !value.at("fraction").is_number() || !value.at("insertions").is_array())
+        if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
+            (value.at("version")!=1 && value.at("version")!=2))
+            throw std::invalid_argument("Physical room wall split copy operation is unsupported.");
+        const bool refreshed=value.at("version")==2;
+        if (refreshed) require_merge_copy_fields(value,{"version","wall_id","second_wall_id","fraction","source_descriptor","current_source_descriptor","descriptor","insertions","segments"});
+        else require_merge_copy_fields(value,{"version","wall_id","second_wall_id","fraction","source_descriptor","descriptor","insertions","segments"});
+        if (!value.at("fraction").is_number() || !value.at("insertions").is_array())
             throw std::invalid_argument("Physical room wall split copy operation is unsupported.");
         identity(value.at("wall_id"),"wall-source");
         // The second wall can disappear in a later merge while its retained
@@ -646,6 +655,7 @@ void visit_merge_copy_operation(std::string_view kind, json& value, const Identi
             identity(insertion.at("new_segment_id"),"segment");
         }
         visit_merge_copy_room_descriptor(value.at("source_descriptor"),identity);
+        if (refreshed) visit_merge_copy_room_descriptor(value.at("current_source_descriptor"),identity);
         visit_merge_copy_room_descriptor(value.at("descriptor"),identity);
     } else throw std::invalid_argument("Boundary merge copy operation kind is unsupported.");
     visit_merge_copy_segments(value.at("segments"),identity);
