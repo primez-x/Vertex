@@ -41842,7 +41842,7 @@ private:
             if (found != source.entities().end() && found->second.type == "roof") roof_ids.push_back(id);
         }
         if (roof_ids.empty()) return std::nullopt;
-        const auto request = roof_demolition_request(source.entities(), roof_ids, true);
+        const auto request = roof_demolition_request(source.entities(), roof_ids, true, true);
         if (!request) return std::nullopt;
         if (roof_ids.size() != selected_ids.size())
             throw std::invalid_argument("Delete shared baseline roofs separately from other selected objects.");
@@ -41860,6 +41860,7 @@ private:
         replacement.seed_roof_ids = request->seed_roof_ids;
         replacement.demolition = true;
         replacement.phase_qualified_joins = true;
+        replacement.preserve_singleton_material = true;
         auto occupied = retainedSlabIdentityNames(source);
         const auto allocate = [&] {
             auto proposed = new_id("proposed");
@@ -41891,7 +41892,7 @@ private:
                 const auto found = source.entities().find(id);
                 return found != source.entities().end() && found->second.type == "roof";
             })) return alternativeRoofDemolitionCommand(source, selected_ids, message);
-        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true);
+        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true, true);
         // Retained members must enter the phase-preserving removal producer
         // before the older complete-baseline demolition path sees them.
         if (!plan.phase_retention_required)
@@ -41912,7 +41913,7 @@ private:
                 copies.push_back(std::move(proposed));
             }
         }
-        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true);
+        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true, true);
         ApplyEntityChanges command{source.revision(), {}, {}, message};
         for (const auto& [id, entity] : source.entities()) {
             const auto after = replay.entities.find(id);
@@ -45606,7 +45607,11 @@ private:
                 const auto encoded = m_material_combo->currentData().toString();
                 if (candidate->type == "roof_join") {
                     auto join = parse_roof_join(candidate->properties, candidate->id);
-                    if (encoded.isEmpty()) join.material_assignment.reset();
+                    if (encoded.isEmpty()) {
+                        if (join.singleton_material_scope)
+                            throw std::invalid_argument("Choose a material for this retained roof material relationship.");
+                        join.material_assignment.reset();
+                    }
                     else {
                         const auto assignment = json::parse(encoded.toStdString());
                         join.material_assignment = RoofJoinMaterialAssignment{
@@ -53361,7 +53366,8 @@ private:
             m_material_context = captureModalContext();
             QSignalBlocker blocker(m_material_combo);
             m_material_combo->clear();
-            m_material_combo->addItem("None", QString{});
+            if (!joined_roof || !parse_roof_join(entity->properties, entity->id).singleton_material_scope)
+                m_material_combo->addItem("None", QString{});
             const auto assignment = entity->properties.value("material_assignment", json{});
             for (const auto& [catalog_id, catalog] : inspector_snapshot.entities()) {
                 if (catalog.type != "assembly_model") continue;

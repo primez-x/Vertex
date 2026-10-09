@@ -87,6 +87,8 @@ struct PhaseRoofReplacementAuthoring {
     // also admits pure baseline combined edits with an empty ordinary edit list.
     // Version seven uses this opt-in for demolition without body edit authority.
     bool phase_qualified_joins{};
+    // Version eight preserves singleton material relationships during demolition.
+    bool preserve_singleton_material{};
 };
 
 // Version 1 retains exactly its six profile fields. Version 2 adds only
@@ -100,6 +102,7 @@ struct PhaseRoofReplacementAuthoring {
 // Version 6 has the nine version-five fields plus phase_qualified_joins:true.
 // Its ordinary list may be empty; its baseline combined list remains nonempty.
 // Version 7 has version four's seven fields plus phase_qualified_joins:true.
+// Version 8 adds only preserve_singleton_material:true to version 7.
 [[nodiscard]] nlohmann::json encode_phase_roof_replacement_authoring(
     const PhaseRoofReplacementAuthoring& authoring);
 [[nodiscard]] PhaseRoofReplacementAuthoring decode_phase_roof_replacement_authoring(

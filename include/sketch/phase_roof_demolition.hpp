@@ -20,11 +20,13 @@ struct RoofDemolitionIntent {
     std::string alternative_id;
     std::vector<std::string> seed_roof_ids;
     RoofDemolitionIdentityMap identities;
-    // Only additional actual >=2 join copies and their bound overlays. Slot
+    // Only additional actual join copies and their bound overlays. Slot
     // order follows component order after the first actual copied component.
     std::map<std::string, std::vector<std::string>, std::less<>> additional_identities;
     // Version two retains actual ordinary/proposed join members with their IDs.
     bool phase_qualified_joins{};
+    // Version three keeps singleton material bindings on explicit joins.
+    bool preserve_singleton_material{};
     bool operator==(const RoofDemolitionIntent&) const = default;
 };
 
@@ -46,6 +48,7 @@ struct RoofDemolitionRequest {
     std::string alternative_id;
     std::vector<std::string> seed_roof_ids;
     bool phase_qualified_joins{};
+    bool preserve_singleton_material{};
     bool operator==(const RoofDemolitionRequest&) const = default;
 };
 
@@ -54,17 +57,20 @@ struct RoofDemolitionRequest {
 // inactive, dangling, duplicate or cross-registry targets refuse before allocation.
 [[nodiscard]] std::optional<RoofDemolitionRequest> roof_demolition_request(
     const RoofDemolitionEntities& source, const std::vector<std::string>& selected_roof_ids,
-    bool phase_qualified_joins = false);
+    bool phase_qualified_joins = false, bool preserve_singleton_material = false);
 
 // Actual additional >=2 join components and their bound overlays require fresh
 // slots beyond the complete primary mapping. Keys are actual join/overlay IDs;
-// only nonzero counts are returned. Replay independently rederives all counts.
+// only nonzero counts are returned. The singleton-preservation opt-in also
+// counts material-bearing singleton components. Replay rederives all counts.
 [[nodiscard]] std::map<std::string, std::size_t, std::less<>> roof_demolition_additional_identity_counts(
     const RoofDemolitionEntities& source, const RoofDemolitionRequest& request);
 
 // Strict version 1: exactly version, registry_id, alternative_id, seed_roof_ids,
 // identities, additional_identities. No entity payload establishes authority.
 // Version two adds only phase_qualified_joins:true; version one stays closed.
+// Version three adds only preserve_singleton_material:true to version two,
+// requiring phase-qualified joins. Every historical dialect remains closed.
 [[nodiscard]] nlohmann::json encode_roof_demolition_intent(const RoofDemolitionIntent& intent);
 [[nodiscard]] RoofDemolitionIntent decode_roof_demolition_intent(const nlohmann::json& value);
 
@@ -75,6 +81,8 @@ struct RoofDemolitionRequest {
 // roofs remain exact. Qualified presentation extends only actual copies.
 // Opt-in ordinary/proposed survivors retain exact owners and roles. A singleton
 // whose source join material cannot be represented on its exact roof refuses.
+// The singleton-preservation opt-in derives a fresh version-three join instead,
+// retaining the exact survivor body and its actual copied/retained identity.
 [[nodiscard]] RoofDemolitionResult replay_roof_demolition(
     const RoofDemolitionEntities& source, const RoofDemolitionIntent& intent);
 

@@ -22,7 +22,7 @@ struct RoofRemovalDiagnostic {
 struct RoofRemovalPlan {
     std::vector<std::string> selected_roof_ids;
     // Physically removed selected roofs and old joins with no surviving
-    // component of two or more; excludes phase-retained selected roofs.
+    // supported surviving component; excludes phase-retained selected roofs.
     std::vector<std::string> removed_owner_ids;
     // Includes supported associative dimensions actually targeting removed owners.
     std::vector<std::string> removed_entity_ids;
@@ -30,7 +30,7 @@ struct RoofRemovalPlan {
     // component and the component sequence retain the old join's authored order.
     std::map<std::string, std::vector<std::vector<std::string>>, std::less<>> surviving_join_components;
     // Keys are actual old join / bound-overlay IDs; only nonzero counts occur.
-    // First surviving >=2 component keeps the old join ID; slots follow it.
+    // First supported component keeps the old join ID; slots follow it.
     std::map<std::string, std::size_t, std::less<>> additional_identity_counts;
     std::vector<RoofRemovalDiagnostic> diagnostics;
     // Opt-in removal may retain an actual selected roof for inactive qualified
@@ -56,9 +56,11 @@ struct RoofRemovalResult {
 // references block this operation.
 // The opt-in path derives retention from actual inactive qualified join references;
 // retained roofs and their owned geometry/presentation remain physically exact.
+// Singleton material preservation keeps an actual material-bearing join as a
+// version-three relationship instead of transferring its binding onto a roof.
 [[nodiscard]] RoofRemovalPlan inspect_roof_removal_plan(
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
-    bool preserve_phase_references = false);
+    bool preserve_phase_references = false, bool preserve_singleton_material = false);
 
 // Rederives the entire operation from source and explicit selection. Supplied
 // identities must exactly fill actual additional join/overlay slots and must
@@ -66,6 +68,6 @@ struct RoofRemovalResult {
 [[nodiscard]] RoofRemovalResult replay_roof_removal(
     const RoofRemovalEntities& source, const std::vector<std::string>& selected_roof_ids,
     const RoofRemovalAdditionalIdentities& additional_identities,
-    bool preserve_phase_references = false);
+    bool preserve_phase_references = false, bool preserve_singleton_material = false);
 
 } // namespace sketch

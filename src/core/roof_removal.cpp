@@ -196,7 +196,7 @@ struct Derivation {
     std::map<std::string, Json, std::less<>> singleton_assignments;
 };
 Derivation derive(const RoofRemovalEntities& source, const std::vector<std::string>& selected,
-    bool preserve_phase_references) {
+    bool preserve_phase_references, bool preserve_singleton_material) {
     Derivation result;
     auto& plan = result.plan;
     plan.selected_roof_ids = selected;
@@ -314,7 +314,9 @@ Derivation derive(const RoofRemovalEntities& source, const std::vector<std::stri
             for (const auto& indices : roof_shape_connected_components(members)) {
                 auto& component = components.emplace_back();
                 for (const auto index : indices) component.push_back(survivors.at(index));
-                if (component.size() >= 2) ++retained_count;
+                if (component.size() >= 2 ||
+                    (join.material_assignment && (preserve_singleton_material || join.singleton_material_scope)))
+                    ++retained_count;
                 else if (join.material_assignment) {
                     const auto& roof = component.front(); mutable_owner(roof);
                     auto assignment = Json::object();
@@ -595,15 +597,15 @@ bool RoofRemovalPlan::ready() const noexcept {
 }
 
 RoofRemovalPlan inspect_roof_removal_plan(const RoofRemovalEntities& source,
-    const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references) {
-    return derive(source, selected_roof_ids, preserve_phase_references).plan;
+    const std::vector<std::string>& selected_roof_ids, bool preserve_phase_references, bool preserve_singleton_material) {
+    return derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material).plan;
 }
 
 RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
     const std::vector<std::string>& selected_roof_ids, const RoofRemovalAdditionalIdentities& additional_identities,
-    bool preserve_phase_references) {
+    bool preserve_phase_references, bool preserve_singleton_material) {
     try {
-        const auto derived = derive(source, selected_roof_ids, preserve_phase_references);
+        const auto derived = derive(source, selected_roof_ids, preserve_phase_references, preserve_singleton_material);
         if (!derived.plan.ready()) {
             for (const auto& item : derived.plan.diagnostics) if (item.blocking) reject(item.entity_id + ": " + item.reason);
         }
@@ -627,10 +629,13 @@ RoofRemovalResult replay_roof_removal(const RoofRemovalEntities& source,
         for (const auto& id : removed) result.entities.erase(id);
         RoofRemovalAdditionalIdentities copies;
         for (const auto& [id, components] : derived.plan.surviving_join_components) {
+            const auto source_join = parse_roof_join(source.at(id).properties, id);
             std::size_t index = 0;
-            for (const auto& component : components) if (component.size() >= 2) {
+            for (const auto& component : components) if (component.size() >= 2 ||
+                (source_join.material_assignment && (preserve_singleton_material || source_join.singleton_material_scope))) {
                 auto copy = source.at(id);
                 copy.properties.at("roof_ids") = component;
+                if (component.size() == 1) copy.properties.at("version") = 3;
                 if (index == 0) result.entities.at(id) = std::move(copy);
                 else {
                     copy.id = additional_identities.at(id).at(index - 1);

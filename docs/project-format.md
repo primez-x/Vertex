@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v117
+# Vertex project formats v1 through v118
+
+## Singleton roof material relationships (v118)
+
+Native format 118 and JSON/assets extraction version 116 retain roof join
+properties version three and roof demolition replacement authoring version eight,
+including when present only in retained history. Join three has exactly
+`version`, `style`, `roof_ids` and `material_assignment`: fused style, one actual
+roof, and the established closed version-one material assignment. It represents
+the effective material of that roof without rewriting its physical owner.
+Earlier join dialects retain their two-to-sixteen member rule and closed fields.
+
+Standalone demolition version three adds `preserve_singleton_material: true` to
+the phase-qualified version-two envelope. Replacement demolition version eight
+adds the same field to version seven. Both require actual phase-qualified join
+semantics. When deletion leaves one material-bearing survivor, the producer
+retains or creates a material relationship using actual source material and
+survivor identity. Proposed relationships reference independent baseline copies
+or retained ordinary/proposed roofs as appropriate; original baseline owners
+and joins remain exact. Fresh relationship identities retain the same full
+history and asset reservations. Older intent dialects retain their meanings.
+
+Current Cut/Delete uses this source-derived path. The changes have not been
+compiled or qualified through interaction, storage or output.
 
 ## Coordinated roof and horizontal design replacement (v117)
 

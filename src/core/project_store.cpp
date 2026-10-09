@@ -417,6 +417,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 }
                 if (intent.is_object() && intent.value("version",0)==4) {
                     const auto replacement=intent.find("roof_replacement");
+                    if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==8) return 118U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==7) return 116U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==6) return 114U;
                     if (replacement!=intent.end() && replacement->is_object() && replacement->value("version",0)==5) return 113U;
@@ -591,6 +592,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             if (has_phase_qualified_roof_join_ownership(entity)) required = std::max(required, 114U);
+            if (entity.type == "roof_join" && entity.properties.is_object() &&
+                entity.properties.value("version", nlohmann::json()) == 3)
+                required = std::max(required, 118U);
             (void)id;
             if (entity.type == "assembly_model" && entity.properties.is_object()) {
                 const auto model = entity.properties.find("model");
@@ -2262,6 +2266,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 118 &&
          sqlite3_column_int(user_version.get(), 0) != 117 &&
          sqlite3_column_int(user_version.get(), 0) != 116 &&
          sqlite3_column_int(user_version.get(), 0) != 115 &&
@@ -2834,6 +2839,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=118)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 118 for singleton roof material relationships");
         if (required_format>=117)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 117 for coordinated roof and horizontal design replacement");
         if (required_format>=116)

@@ -14,6 +14,24 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 singleton roof material relationship source integration
+
+Roof Cut/Delete now preserves the effective material when only one member of a
+joined group survives. A typed one-roof material relationship retains the actual
+assignment without rewriting a preserved physical roof. Phase demolition creates
+the needed proposed relationship from actual survivor roles; ordinary removal
+retains or splits the actual mutable relationship. Baseline owners and joins,
+unrelated material data and source presentation remain exact.
+
+Join properties three/demolition three/replacement eight/native 118/extraction
+116 retain this meaning through saved history. Older join and authoring dialects
+remain closed. Independent source review approved after admitting validated
+singleton relationships in physical IFC export and keeping the required
+material choice in the inspector. No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation,
+interaction, output and storage round trips are unverified; the installed
+candidate is unchanged.
+
 ### October 8 coordinated roof and floor group source integration
 
 Mixed roof and horizontal selections now derive each family's transform from

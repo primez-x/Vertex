@@ -101,8 +101,9 @@ std::vector<IfcNativeMesh> tessellate(const TopoDS_Shape& shape,
 } // namespace
 
 namespace {
-void join_preflight(std::size_t members, std::size_t vertices, std::size_t triangles) {
-    if (members < 2 || members > project_import_boundary_segment_limit ||
+void join_preflight(std::size_t members, std::size_t vertices, std::size_t triangles,
+    std::size_t minimum_members = 2) {
+    if (members < minimum_members || members > project_import_boundary_segment_limit ||
         members * (members - 1) / 2 > project_import_geometry_pair_limit ||
         members > std::min(vertices, triangles) / 64)
         throw std::invalid_argument("ifc_mesh_budget_exceeded");
@@ -248,7 +249,7 @@ IfcNativeJoinMesh ifc_native_roof_join_mesh(const RoofJoin& join,
     const std::vector<Entity>& roofs, std::size_t vertices, std::size_t triangles) {
     validate_roof_join_semantics(join);
     if (roofs.size() != join.roof_ids.size()) throw std::invalid_argument("ifc_native_join_source_count_invalid");
-    join_preflight(roofs.size(), vertices, triangles);
+    join_preflight(roofs.size(), vertices, triangles, join.singleton_material_scope ? 1 : 2);
     std::vector<TopoDS_Shape> shapes;
     std::size_t cuts = 0;
     for (const auto& id : join.roof_ids) {

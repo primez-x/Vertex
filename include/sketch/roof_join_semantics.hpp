@@ -13,7 +13,8 @@ namespace sketch {
 // fused style keeps each source roof's semantic identity and openings while
 // allowing coordinated views to present one derived union. V1 retains the
 // original closed three-field record. V2 optionally binds one material override
-// using the established closed version-1 assignment record.
+// using the established closed version-1 assignment record. V3 requires that
+// same assignment and exactly one roof, preserving an explicit material scope.
 enum class RoofJoinStyle { fused };
 
 struct RoofJoinMaterialAssignment {
@@ -29,6 +30,8 @@ struct RoofJoin {
     // Authored roof_ids order determines overlap ownership: earlier roofs own
     // shared volume. V2 assignment intentionally overrides all region bindings.
     std::optional<RoofJoinMaterialAssignment> material_assignment;
+    // V3 is an explicit material relationship to exactly one source roof.
+    bool singleton_material_scope{};
 
     bool operator==(const RoofJoin&) const = default;
 };

@@ -132,12 +132,14 @@ struct DemolitionDerivation {
     // All components retain the original join's authored roof order.
     std::map<std::string, std::vector<std::vector<std::string>>, std::less<>> components;
     std::map<std::string, std::size_t, std::less<>> additional_counts;
-    // A singleton no longer has a join to carry its effective material binding.
+    // Historical modes omit a singleton join and transfer its material binding.
     // Only admitted known binding fields change; original roof extras survive.
     std::map<std::string, Json, std::less<>> singleton_material_assignments;
 };
 DemolitionDerivation derive_demolition(const RoofDemolitionEntities& source,
     const RoofDemolitionRequest& request) {
+    if (request.preserve_singleton_material && !request.phase_qualified_joins)
+        reject("singleton material preservation requires phase-qualified joins");
     DemolitionDerivation result;
     result.plan = inspect_phase_roof_replacement_plan(source, request.seed_roof_ids,
         request.registry_id, request.alternative_id, request.phase_qualified_joins);
@@ -174,7 +176,9 @@ DemolitionDerivation derive_demolition(const RoofDemolitionEntities& source,
         for (const auto& indices : roof_shape_connected_components(members)) {
             auto& component = components.emplace_back();
             for (const auto index : indices) component.push_back(survivors.at(index));
-            if (component.size() >= 2) ++copied_joins;
+            if (component.size() >= 2 ||
+                (join.material_assignment && (request.preserve_singleton_material || join.singleton_material_scope)))
+                ++copied_joins;
             else if (join.material_assignment) {
                 const auto& roof = source.at(component.front());
                 const auto& effective = entity.properties.at("material_assignment");
@@ -297,8 +301,10 @@ void complete_presentation(RoofDemolitionEntities& candidate,
 
 std::optional<RoofDemolitionRequest> roof_demolition_request(
     const RoofDemolitionEntities& source, const std::vector<std::string>& selected_roof_ids,
-    bool phase_qualified_joins) {
+    bool phase_qualified_joins, bool preserve_singleton_material) {
     try {
+        if (preserve_singleton_material && !phase_qualified_joins)
+            reject("singleton material preservation requires phase-qualified joins");
         if (selected_roof_ids.empty() || selected_roof_ids.size() > maximum_identities)
             reject("requires bounded nonempty explicit roof selection");
         (void)occupied_strings(source);
@@ -321,7 +327,7 @@ std::optional<RoofDemolitionRequest> roof_demolition_request(
             const bool baseline = std::find(model.baseline_ids().begin(), model.baseline_ids().end(), id) != model.baseline_ids().end();
             if (!baseline || !model.active_alternative()) { ++ordinary; continue; }
             if (request && request->registry_id != membership->second) reject("selection spans shared-baseline registries");
-            if (!request) request = RoofDemolitionRequest{membership->second, *model.active_alternative(), {}, phase_qualified_joins};
+            if (!request) request = RoofDemolitionRequest{membership->second, *model.active_alternative(), {}, phase_qualified_joins, preserve_singleton_material};
             request->seed_roof_ids.push_back(id);
         }
         if (request && ordinary) reject("selection mixes shared-baseline and ordinary/proposed roof owners");
@@ -331,6 +337,8 @@ std::optional<RoofDemolitionRequest> roof_demolition_request(
 }
 
 Json encode_roof_demolition_intent(const RoofDemolitionIntent& intent) {
+    if (intent.preserve_singleton_material && !intent.phase_qualified_joins)
+        reject("singleton material preservation requires phase-qualified joins");
     identity(intent.registry_id); identity(intent.alternative_id);
     if (intent.seed_roof_ids.empty() || intent.seed_roof_ids.size() > maximum_identities ||
         intent.identities.empty() || intent.identities.size() > maximum_identities)
@@ -355,32 +363,38 @@ Json encode_roof_demolition_intent(const RoofDemolitionIntent& intent) {
         }
     }
     for (const auto& id : seeds) if (!intent.identities.contains(id)) reject("seed has no declared destination identity");
-    Json result{{"version", intent.phase_qualified_joins ? 2 : 1}, {"registry_id", intent.registry_id}, {"alternative_id", intent.alternative_id},
+    Json result{{"version", intent.preserve_singleton_material ? 3 : intent.phase_qualified_joins ? 2 : 1}, {"registry_id", intent.registry_id}, {"alternative_id", intent.alternative_id},
         {"seed_roof_ids", intent.seed_roof_ids}, {"identities", intent.identities},
         {"additional_identities", intent.additional_identities}};
     if (intent.phase_qualified_joins) result["phase_qualified_joins"] = true;
+    if (intent.preserve_singleton_material) result["preserve_singleton_material"] = true;
     if (result.dump().size() > maximum_intent_bytes) reject("intent byte budget exceeded");
     return result;
 }
 
 RoofDemolitionIntent decode_roof_demolition_intent(const Json& value) {
     try {
-        const bool qualified = value.is_object() && value.contains("version") &&
-            value.at("version").is_number_integer() && value.at("version") == 2;
-        if (!value.is_object() || value.size() != (qualified ? 7 : 6) || !value.contains("version") ||
+        const bool singleton = value.is_object() && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version") == 3;
+        const bool qualified = singleton || (value.is_object() && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version") == 2);
+        if (!value.is_object() || value.size() != (singleton ? 8 : qualified ? 7 : 6) || !value.contains("version") ||
             !value.at("version").is_number_integer() || (!qualified && value.at("version") != 1) ||
             (qualified && (!value.contains("phase_qualified_joins") || !value.at("phase_qualified_joins").is_boolean() ||
                 !value.at("phase_qualified_joins").get<bool>())) ||
+            (singleton && (!value.contains("preserve_singleton_material") || !value.at("preserve_singleton_material").is_boolean() ||
+                !value.at("preserve_singleton_material").get<bool>())) ||
             !value.contains("registry_id") || !value.contains("alternative_id") ||
             !value.contains("seed_roof_ids") || !value.at("seed_roof_ids").is_array() ||
             !value.contains("identities") || !value.at("identities").is_object() ||
             !value.contains("additional_identities") || !value.at("additional_identities").is_object())
-            reject("intent must contain its exact version-one/two fields");
+            reject("intent must contain its exact version-one/two/three fields");
         if (value.at("seed_roof_ids").size() > maximum_identities ||
             value.at("identities").size() > maximum_identities || value.dump().size() > maximum_intent_bytes)
             reject("intent budget exceeded");
         RoofDemolitionIntent result;
         result.phase_qualified_joins = qualified;
+        result.preserve_singleton_material = singleton;
         result.registry_id = value.at("registry_id").get<std::string>();
         result.alternative_id = value.at("alternative_id").get<std::string>();
         result.seed_roof_ids = value.at("seed_roof_ids").get<std::vector<std::string>>();
@@ -402,7 +416,7 @@ RoofDemolitionResult replay_roof_demolition(const RoofDemolitionEntities& source
     try {
         (void)encode_roof_demolition_intent(intent);
         const auto derived = derive_demolition(source, {intent.registry_id, intent.alternative_id,
-            intent.seed_roof_ids, intent.phase_qualified_joins});
+            intent.seed_roof_ids, intent.phase_qualified_joins, intent.preserve_singleton_material});
         const auto& plan = derived.plan;
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
@@ -447,8 +461,10 @@ RoofDemolitionResult replay_roof_demolition(const RoofDemolitionEntities& source
                 }
                 copied_roofs.insert(intent.identities.at(id));
             } else if (copy.type == "roof_join") {
+                const auto source_join = parse_roof_join(copy.properties, id);
                 std::size_t index = 0;
-                for (const auto& component : derived.components.at(id)) if (component.size() >= 2) {
+                for (const auto& component : derived.components.at(id)) if (component.size() >= 2 ||
+                    (source_join.material_assignment && (intent.preserve_singleton_material || source_join.singleton_material_scope))) {
                     auto join_copy = copy;
                     auto members = Json::array();
                     for (const auto& roof : component) {
@@ -457,6 +473,7 @@ RoofDemolitionResult replay_roof_demolition(const RoofDemolitionEntities& source
                         else reject("survivor is neither a mapped baseline nor an actual retained roof: " + roof);
                     }
                     join_copy.properties.at("roof_ids") = std::move(members);
+                    if (component.size() == 1) join_copy.properties.at("version") = 3;
                     if (intent.phase_qualified_joins)
                         join_copy.extensions[std::string(roof_join_phase_ownership_extension_key)] =
                             Json{{"version", 1}, {"registry_id", plan.registry_id}};

@@ -31,7 +31,11 @@ void validate_roof_join_semantics(const RoofJoin& join) {
     if (join.style != RoofJoinStyle::fused) {
         reject("Roof join style is unsupported");
     }
-    if (join.roof_ids.size() < 2 || join.roof_ids.size() > 16) {
+    if (join.singleton_material_scope &&
+        (join.roof_ids.size() != 1 || !join.material_assignment)) {
+        reject("Singleton material scopes require exactly one roof and a material assignment");
+    }
+    if (!join.singleton_material_scope && (join.roof_ids.size() < 2 || join.roof_ids.size() > 16)) {
         reject("Roof joins require between two and sixteen roofs");
     }
     std::set<std::string, std::less<>> ids;
@@ -68,11 +72,13 @@ RoofJoin parse_roof_join(const nlohmann::json& value, std::string_view id) {
     }
     const auto& version = value.at("version");
     if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
-        (version != 1 && version != 2)) {
-        reject("Roof join version must be 1 or 2");
+        (version != 1 && version != 2 && version != 3)) {
+        reject("Roof join version must be 1, 2 or 3");
     }
+    result.singleton_material_scope = version == 3;
     const bool assigned = value.contains("material_assignment");
-    if (value.size() != (assigned ? 4u : 3u) || (version == 1 && assigned))
+    if (value.size() != (assigned ? 4u : 3u) || (version == 1 && assigned) ||
+        (result.singleton_material_scope && !assigned))
         reject("Roof join properties contain unsupported fields for their version");
     if (assigned) {
         const auto& assignment = value.at("material_assignment");
@@ -94,8 +100,8 @@ RoofJoin parse_roof_join(const nlohmann::json& value, std::string_view id) {
     result.style = *parsed_style;
     const auto& roof_ids = value.at("roof_ids");
     if (!roof_ids.is_array()) reject("Roof join roof_ids must be an array");
-    if (roof_ids.size() < 2 || roof_ids.size() > 16)
-        reject("Roof joins require between two and sixteen roofs");
+    if (result.singleton_material_scope ? roof_ids.size() != 1 : (roof_ids.size() < 2 || roof_ids.size() > 16))
+        reject("Roof join member count is unsupported for its version");
     result.roof_ids.reserve(roof_ids.size());
     for (const auto& roof_id : roof_ids) {
         if (!roof_id.is_string()) reject("Roof join roof_ids must contain strings");
@@ -107,7 +113,7 @@ RoofJoin parse_roof_join(const nlohmann::json& value, std::string_view id) {
 
 nlohmann::json roof_join_json(const RoofJoin& join) {
     validate_roof_join_semantics(join);
-    nlohmann::json value{{"version", join.material_assignment ? 2 : 1},
+    nlohmann::json value{{"version", join.singleton_material_scope ? 3 : join.material_assignment ? 2 : 1},
         {"style", roof_join_style_name(join.style)}, {"roof_ids", join.roof_ids}};
     if (join.material_assignment) value["material_assignment"] = {
         {"version", 1},
