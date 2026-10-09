@@ -10,6 +10,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/structural_object_edit.hpp"
+#include "sketch/stair_transform.hpp"
 #include "sketch/wall_semantics.hpp"
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
 #include "sketch/slab_hosted_geometry_edit.hpp"
@@ -259,6 +260,75 @@ NormalizedGroupTransform normalize_group_transform(const ArchitecturalGroupTrans
     const bool identity=transform.scale==1.0 && transform.offset.x==0.0 && transform.offset.y==0.0 &&
         transform.offset.z==0.0 && angle==0.0 && !reflected;
     return {affine,horizontal,vertical,identity};
+}
+
+bool equivalent_group_transform(const NormalizedGroupTransform& a, const NormalizedGroupTransform& b) {
+    if ((a.flip_horizontal!=a.flip_vertical)!=(b.flip_horizontal!=b.flip_vertical)) return false;
+    const auto coefficients=[](const NormalizedGroupTransform& intent) {
+        const auto& t=intent.affine;
+        const auto [c,s]=planar_rotation(t.rotation_z_radians);
+        const auto hx=intent.flip_horizontal?-1.0:1.0;
+        const auto hy=intent.flip_vertical?-1.0:1.0;
+        return std::array<double,8>{t.scale*hx*c,-t.scale*hx*s,
+            t.scale*hy*s,t.scale*hy*c,t.scale,t.x,t.y,t.z};
+    };
+    const auto left=coefficients(a), right=coefficients(b);
+    for (std::size_t i=0; i<left.size(); ++i) {
+        const auto tolerance=64.0*std::numeric_limits<double>::epsilon()*
+            std::max({1.0,std::abs(left[i]),std::abs(right[i])});
+        if (std::abs(left[i]-right[i])>tolerance) return false;
+    }
+    return true;
+}
+
+// Actual-source producers may share a hosted catalog while touching disjoint
+// instance rows. Compose only those raw row changes; definitions, overrides,
+// opaque data, order and every envelope field remain actual-source authority.
+Entity merge_group_hosted_catalog(const Entity& source, const Entity& accumulated, const Entity& incoming) {
+    const auto exact_json=[](const nlohmann::json& a,const nlohmann::json& b) {
+        return a==b && a.dump()==b.dump();
+    };
+    const auto envelope=[&](const Entity& entity) {
+        auto value=entity;
+        value.properties.erase("model");
+        return value;
+    };
+    const auto actual=envelope(source), left=envelope(accumulated), right=envelope(incoming);
+    if (source.type!="assembly_model" || actual!=left || actual!=right ||
+        !exact_json(actual.properties,left.properties) || !exact_json(actual.properties,right.properties) ||
+        !exact_json(actual.extensions,left.extensions) || !exact_json(actual.extensions,right.extensions))
+        throw std::invalid_argument("Architectural hosted producers disagree on the actual catalog envelope");
+    const auto& original=source.properties.at("model");
+    const auto& existing=accumulated.properties.at("model");
+    const auto& added=incoming.properties.at("model");
+    const auto remainder=[](nlohmann::json model) {
+        model.erase("schema"); model.erase("instances"); return model;
+    };
+    if (!exact_json(remainder(original),remainder(existing)) ||
+        !exact_json(remainder(original),remainder(added)))
+        throw std::invalid_argument("Architectural hosted producers changed actual catalog definitions");
+    for (const auto* model : {&existing,&added})
+        if (model->at("schema")!=original.at("schema") && model->at("schema")!="sketch.assemblies.v7")
+            throw std::invalid_argument("Architectural hosted composition requires row-local catalog semantics");
+    const auto& rows=original.at("instances");
+    if (!rows.is_array() || existing.at("instances").size()!=rows.size() || added.at("instances").size()!=rows.size())
+        throw std::invalid_argument("Architectural hosted producers changed the actual row inventory");
+    auto result=accumulated;
+    auto& model=result.properties.at("model");
+    if (added.at("schema")=="sketch.assemblies.v7") model["schema"]="sketch.assemblies.v7";
+    for (std::size_t i=0;i<rows.size();++i) {
+        const auto& before=rows.at(i);
+        const auto& old=existing.at("instances").at(i);
+        const auto& next=added.at("instances").at(i);
+        if (old.at("id")!=before.at("id") || next.at("id")!=before.at("id"))
+            throw std::invalid_argument("Architectural hosted producers changed actual row identities or order");
+        if (exact_json(before,next)) continue;
+        if (!exact_json(before,old))
+            throw std::invalid_argument("Architectural hosted producers overlap one actual instance row");
+        model.at("instances").at(i)=next;
+    }
+    (void)AssemblyModel::from_json(model);
+    return result;
 }
 
 Vec3 transform_point(const Vec3& point, const ArchitecturalTransform& transform,
@@ -1794,29 +1864,10 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     if (requested_targets.empty() || requested_targets.size()>maximum_architectural_group_targets)
         throw std::invalid_argument("An architectural group requires between 1 and 1000 objects.");
     using Intent = NormalizedGroupTransform;
-    const auto equivalent=[](const Intent& a, const Intent& b) {
-        if ((a.flip_horizontal!=a.flip_vertical)!=(b.flip_horizontal!=b.flip_vertical)) return false;
-        const auto coefficients=[](const Intent& intent) {
-            const auto& t=intent.affine;
-            const auto [c,s]=planar_rotation(t.rotation_z_radians);
-            const auto hx=intent.flip_horizontal?-1.0:1.0;
-            const auto hy=intent.flip_vertical?-1.0:1.0;
-            return std::array<double,8>{t.scale*hx*c,-t.scale*hx*s,
-                t.scale*hy*s,t.scale*hy*c,t.scale,t.x,t.y,t.z};
-        };
-        const auto left=coefficients(a), right=coefficients(b);
-        for (std::size_t i=0; i<left.size(); ++i) {
-            // Frame conversion can round an otherwise identical operator. Use
-            // only arithmetic roundoff, never geometric/edit snap tolerance.
-            const auto tolerance=64.0*std::numeric_limits<double>::epsilon()*
-                std::max({1.0,std::abs(left[i]),std::abs(right[i])});
-            if (std::abs(left[i]-right[i])>tolerance) return false;
-        }
-        return true;
-    };
     std::set<std::string,std::less<>> selected;
     std::map<std::string,Intent,std::less<>> intents;
     std::vector<std::string> targets;
+    std::vector<StairTransformIntent> stair_intents;
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
     std::vector<SlabGeometryEditIntent> slab_intents;
     slab_intents.reserve(requested_targets.size());
@@ -1840,6 +1891,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         targets.push_back(id);
         intents.emplace(id,intent);
         identity=identity && intent.identity;
+        if (found->second.type=="stair" || found->second.type=="railing")
+            stair_intents.push_back({id,target.transform});
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
         if (found->second.type == "roof") {
             RoofEditIntent edit;
@@ -1880,16 +1933,14 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         if (!entity.properties.is_object())
             throw std::invalid_argument("An architectural group requires physical object properties.");
         if (canonical_hosted_railing(entity)) {
-            const auto railing=decode_railing_properties(id,entity.properties);
-            const auto& host_id=railing.host?railing.host->stair_id:railing.landing_host->stair_id;
-            if (!selected.contains(host_id) || !canonical_stair(source.entities().at(host_id)))
-                throw std::invalid_argument("Hosted railing placement follows its stair; select its persisted host stair too.");
-            if (!equivalent(intents.at(id),intents.at(host_id)))
-                throw std::invalid_argument("Hosted railing placement follows its stair; select the host with affine-equivalent intent.");
-            (void)make_building_shape(BuildingObject{railing},source.entities());
+            // Complete replay bounds the actual cohort before codec/layout
+            // work and requires the selected actual host/equivalent operation.
             hosted_targets.insert(id);
             continue;
         }
+        // The complete actual-source stair producer owns family/level/native
+        // admission and raw datum compensation, including exact identity.
+        if (entity.type=="stair" || entity.type=="railing") continue;
         const auto effective=resolve_vertical_placement(source,entity);
         if (entity.type=="slab") {
             Slab slab;
@@ -1985,6 +2036,30 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         }
     }
 #endif
+    if (!stair_intents.empty()) {
+        const auto stairs=replay_stair_transform_entities(source.entities(),stair_intents);
+        if (stairs.size()!=source.entities().size())
+            throw std::invalid_argument("Architectural stair replay changed the actual entity inventory");
+        for (const auto& [id,after] : stairs) {
+            const auto& before=source.entities().at(id);
+            if (after==before && after.properties.dump()==before.properties.dump() &&
+                after.extensions.dump()==before.extensions.dump()) continue;
+            if (after.id!=id || after.type!=before.type)
+                throw std::invalid_argument("Architectural stair replay changed an actual owner identity");
+            if (after.type=="assembly_model") {
+                const auto& accumulated=candidate.at(id);
+                if (accumulated==before && accumulated.properties.dump()==before.properties.dump() &&
+                    accumulated.extensions.dump()==before.extensions.dump()) candidate.at(id)=after;
+                else candidate.at(id)=merge_group_hosted_catalog(before,accumulated,after);
+                if (std::find(transaction_targets.begin(),transaction_targets.end(),id)==transaction_targets.end())
+                    transaction_targets.push_back(id);
+                continue;
+            }
+            if (after.type!="stair" && after.type!="railing")
+                throw std::invalid_argument("Architectural stair replay changed an unrelated actual owner");
+            candidate.at(id)=after;
+        }
+    }
     const auto transaction=ArchitecturalTransaction::create(transaction_id,std::to_string(source.revision()),
         std::move(transaction_targets),std::move(operations),"Transform architectural group");
     // Creating the validated transaction also checks transaction/target lexical
@@ -2002,6 +2077,8 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         const auto& before = source.entities().at(id);
         const auto& movement = *operation.transform;
         auto& after = candidate.at(id);
+        if (before.type=="stair" || before.type=="railing")
+            continue; // Complete source-derived physical/catalog replay already admitted this cohort.
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
         if (before.type == "roof")
             continue; // Actual source pivot, datum, openings and receipts are already complete.
@@ -2035,17 +2112,76 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
             (void)decode_document_assembly_instance(after);
         } else {
             after = transform_building_entity(source.entities(), before, movement, horizontal, vertical);
-            if (canonical_stair(before)) {
-                if (reflected)
-                    reflect_stair_railings(candidate, source.entities(), before, after, movement, horizontal, vertical);
-                else if (movement.scale!=1.0)
-                    for (const auto& rail_id : hosted_railing_ids(source.entities(),id))
-                        for (const auto* field : {"height_m","thickness_m","post_spacing_m"})
-                            scale_property(candidate.at(rail_id).properties,field,nullptr,movement.scale);
-            }
         }
     }
     return make_candidate_command(source, candidate, expected_revision, transaction.undo_label(), targets);
+}
+
+AssemblyTransform architectural_group_assembly_transform(const ArchitecturalGroupTransform& transform) {
+    const auto normalized=normalize_group_transform(transform);
+    const auto& affine=normalized.affine;
+    const bool reflected=normalized.flip_horizontal!=normalized.flip_vertical;
+    AssemblyTransform result{{affine.x,affine.y,affine.z},
+        std::remainder((reflected?-affine.rotation_z_radians:affine.rotation_z_radians)+
+            (normalized.flip_horizontal?std::numbers::pi:0.0),2.0*std::numbers::pi),
+        affine.scale,reflected};
+    (void)transform_assembly_point({},result);
+    return result;
+}
+
+EntityState stair_transform_detail::stage_geometry(const EntityState& actual_entities,
+    std::span<const ArchitecturalGroupTransformTarget> targets) {
+    if (targets.empty() || targets.size()>maximum_architectural_group_targets)
+        throw std::invalid_argument("Stair transforms require between 1 and 1000 actual targets");
+    source_bounds(actual_entities);
+    std::map<std::string,NormalizedGroupTransform,std::less<>> intents;
+    for (const auto& target : targets) {
+        const auto found=actual_entities.find(target.entity_id);
+        if (found==actual_entities.end() || found->first!=found->second.id ||
+            (!canonical_stair(found->second) && !canonical_hosted_railing(found->second) &&
+                !canonical_form(found->second,"railing",1,"straight_railing")))
+            throw std::invalid_argument("Stair transform requires an actual canonical stair or railing");
+        if (!intents.emplace(target.entity_id,normalize_group_transform(target.transform)).second)
+            throw std::invalid_argument("Stair transform has duplicate targets");
+        (void)decode_building_entity(found->second);
+    }
+    for (const auto& [id,intent] : intents) {
+        const auto& entity=actual_entities.at(id);
+        if (!canonical_hosted_railing(entity)) continue;
+        const auto rail=decode_railing_properties(id,entity.properties);
+        const auto& host=rail.host?rail.host->stair_id:rail.landing_host->stair_id;
+        const auto selected=intents.find(host);
+        if (selected==intents.end() || !canonical_stair(actual_entities.at(host)) ||
+            !equivalent_group_transform(intent,selected->second))
+            throw std::invalid_argument("Hosted rail requires its actual selected stair with affine-equivalent intent");
+    }
+    auto result=actual_entities;
+    for (const auto& [id,intent] : intents) {
+        const auto& before=actual_entities.at(id);
+        if (canonical_hosted_railing(before) || intent.identity) continue;
+        auto movement=intent.affine;
+        const auto effective=resolve_vertical_placement(actual_entities,before);
+        const auto placement=before.properties.find("vertical_placement");
+        if (placement!=before.properties.end() && placement->at("mode")=="level") {
+            const auto datum=effective.properties.at("base_position_m").at(2).get<double>()-
+                before.properties.at("base_position_m").at(2).get<double>();
+            movement.z+=(movement.scale-1.0)*datum;
+            if (!std::isfinite(movement.z))
+                throw std::invalid_argument("Stair transform level datum exceeds supported range");
+        }
+        auto& after=result.at(id);
+        after=transform_building_entity(actual_entities,before,movement,intent.flip_horizontal,intent.flip_vertical);
+        // The typed transform lane grants no legacy transport-marker authority.
+        if (before.properties.contains("transform")) after.properties["transform"]=before.properties.at("transform");
+        if (!canonical_stair(before)) continue;
+        if (intent.flip_horizontal!=intent.flip_vertical)
+            reflect_stair_railings(result,actual_entities,before,after,movement,intent.flip_horizontal,intent.flip_vertical);
+        else if (movement.scale!=1.0)
+            for (const auto& rail_id : hosted_railing_ids(actual_entities,id))
+                for (const auto* key : {"height_m","thickness_m","post_spacing_m"})
+                    scale_property(result.at(rail_id).properties,key,nullptr,movement.scale);
+    }
+    return result;
 }
 
 Entity stage_structural_group_transform_entity(const EntityState& actual_entities,

@@ -53,6 +53,7 @@
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_stair_demolition.hpp"
+#include "sketch/phase_stair_demolition_retirement.hpp"
 #include "sketch/phase_stair_replacement.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
@@ -2581,7 +2582,14 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
             (intent.contains("coordinated_replacements") && !intent.at("coordinated_replacements").is_null()) ||
             (intent.contains("structural_replacement") && !intent.at("structural_replacement").is_null()) ||
             (intent.contains("stair_demolition") && !intent.at("stair_demolition").is_null()) ||
-            (intent.contains("stair_replacement") && !intent.at("stair_replacement").is_null());
+            (intent.contains("stair_replacement") && !intent.at("stair_replacement").is_null()) ||
+            (intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null());
+    });
+}
+static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryConstraintChanges& command) {
+    const auto proofs=phase_constraint_authoring_proofs(command);
+    return std::any_of(proofs.begin(), proofs.end(), [](const auto& intent) {
+        return intent.contains("stair_demolition_retirement") && !intent.at("stair_demolition_retirement").is_null();
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2638,12 +2646,19 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
             if (entity_map_digest(replay)!=entity_map_digest(candidate))
                 throw std::invalid_argument("Stair replacement differs from its actual source profile replay");
         }
+        if (!intent.stair_demolition_retirement.is_null()) {
+            const auto replay=replay_phase_stair_demolition_retirement_entities(source,
+                decode_stair_demolition_retirement_intent(intent.stair_demolition_retirement));
+            if (entity_map_digest(replay)!=entity_map_digest(candidate))
+                throw std::invalid_argument("Stair dependent retirement differs from its actual source replay");
+        }
     }
 #endif
 }
 
 static void validate_active_design_preserved_dependents(const std::map<std::string,Entity,std::less<>>& source,
-    const std::map<std::string,Entity,std::less<>>& candidate,bool freeze_registries=true) {
+    const std::map<std::string,Entity,std::less<>>& candidate,bool freeze_registries=true,
+    bool retires_proposals=false) {
     const auto scope=constraint_phase_scope(source);
     std::set<std::string,std::less<>> inactive_targets=scope.inactive_owner_ids;
     for (const auto& id : scope.inactive_owner_ids) {
@@ -2678,6 +2693,24 @@ static void validate_active_design_preserved_dependents(const std::map<std::stri
         } else if (original.type==kAnnotationEntityType) {
             validate_annotation_entity(original);
             const auto& rows=original.properties.at("state").at("overrides");
+            if (retires_proposals) {
+                // Only exact actual-source typed retirement may remove active
+                // rows. Protected inactive rows keep their raw values, order
+                // and multiplicity even when earlier active rows disappear.
+                const auto after=candidate.find(id);
+                if (after==candidate.end() || after->second.type!=original.type)
+                    throw std::invalid_argument("Active design retirement removed preserved annotations");
+                validate_annotation_entity(after->second);
+                const auto protected_rows=[&](const nlohmann::json& records) {
+                    auto retained=nlohmann::json::array();
+                    for (const auto& row:records)
+                        if (inactive_targets.contains(row.at("target_id").get<std::string>())) retained.push_back(row);
+                    return retained;
+                };
+                if (protected_rows(rows).dump()!=protected_rows(after->second.properties.at("state").at("overrides")).dump())
+                    throw std::invalid_argument("Active design retirement changed an inactive annotation placement");
+                continue;
+            }
             for (std::size_t index=0;index<rows.size();++index) {
                 const auto& row=rows.at(index);
                 if (!inactive_targets.contains(row.at("target_id").get<std::string>())) continue;
@@ -4835,7 +4868,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
             auto result=replay_phase_constraint_authoring(source,command.phase_constraint_authoring_intent);
             validate_active_design_preserved_dependents(source,result,
-                phase_constraint_authoring_preserves_registries(command));
+                phase_constraint_authoring_preserves_registries(command),
+                phase_constraint_authoring_retires_proposals(command));
             validate_phase_constraint_composed_originals(source,result,command);
             validate_boundary_identity_transition(history,source,result);
             (void)validate_state(result,source_assets,true);
@@ -4901,7 +4935,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             }
             (void)validate_state(result, geometry_assets,active_policy);
             if (!phase_constraint_authoring_proofs(geometry).empty()) {
-                validate_active_design_preserved_dependents(source,result,phase_constraint_authoring_preserves_registries(geometry));
+                validate_active_design_preserved_dependents(source,result,phase_constraint_authoring_preserves_registries(geometry),
+                    phase_constraint_authoring_retires_proposals(geometry));
                 validate_phase_constraint_composed_originals(source,result,geometry);
             }
             validate_physical_room_source_transition(source, result, nullptr, &geometry,active_policy,true);
@@ -4919,7 +4954,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             attach_disto_measurement(source, result, *command.disto_measurement,
                 disto_completed_owner_id(without_disto_measurement(command),*command.disto_measurement));
             if (!phase_constraint_authoring_proofs(command).empty()) {
-                validate_active_design_preserved_dependents(source,result,phase_constraint_authoring_preserves_registries(command));
+                validate_active_design_preserved_dependents(source,result,phase_constraint_authoring_preserves_registries(command),
+                    phase_constraint_authoring_retires_proposals(command));
                 validate_phase_constraint_composed_originals(source,result,command);
             }
             return result;

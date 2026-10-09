@@ -132,6 +132,17 @@ struct ArchitecturalGroupTransformTarget {
 };
 inline constexpr std::size_t maximum_architectural_group_targets = 1000;
 
+// Complete actual-map stair/railing transform, including attached rails and
+// affected hosted catalog rows. No phase identities or memberships are changed.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> stage_stair_group_transform_entities(
+    const std::map<std::string, Entity, std::less<>>& actual_entities,
+    std::span<const ArchitecturalGroupTransformTarget> targets);
+
+// The captured group operator in AssemblyTransform convention, before raw
+// level compensation or Site presentation. Uses the ordinary group math.
+[[nodiscard]] AssemblyTransform architectural_group_assembly_transform(
+    const ArchitecturalGroupTransform& transform);
+
 // Detached actual-map producer for canonical v1 columns and straight beams.
 // Retains the caller's original group operation, resolves its real level datum,
 // and uses the ordinary geometry and changed-receipt invalidation semantics.

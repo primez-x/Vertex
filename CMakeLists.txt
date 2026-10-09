@@ -214,6 +214,8 @@ target_link_libraries(sketch_architectural_workflow_contract PUBLIC sketch_json)
 add_library(sketch_architectural_document_adapter
   src/core/architectural_document_adapter.cpp
   src/core/structural_object_edit.cpp
+  src/core/stair_object_edit.cpp
+  src/core/stair_transform.cpp
   src/core/architectural_footprint_edit.cpp)
 target_include_directories(sketch_architectural_document_adapter PUBLIC include)
 target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_architectural_workflow_contract sketch_document sketch_building_entities sketch_architecture)
@@ -840,8 +842,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/model_copy_composition.cpp
     src/core/phase_slab_profile_edit.cpp src/core/phase_slab_replacement.cpp src/core/phase_slab_demolition.cpp
     src/core/phase_stair_demolition.cpp
+    src/core/phase_stair_demolition_retirement.cpp
     src/core/phase_stair_replacement.cpp
-    src/core/stair_object_edit.cpp
     src/core/slab_layer_stack_edit.cpp src/core/slab_geometry_edit.cpp src/core/slab_clone.cpp
     src/core/slab_hosted_geometry_edit.cpp
     src/core/wall_layer_stack_edit.cpp)

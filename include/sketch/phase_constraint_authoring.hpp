@@ -62,6 +62,9 @@ struct PhaseConstraintAuthoringIntent {
     // saved alternative. Baseline owners stay exact; attached baseline rails
     // and hosted parts receive copies, while proposed rails retain identity.
     nlohmann::json stair_replacement=nullptr;
+    // Dialect thirteen: retire actual active proposed rail dependents before
+    // demolishing their retained baseline stair. No arbitrary erase authority.
+    nlohmann::json stair_demolition_retirement=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

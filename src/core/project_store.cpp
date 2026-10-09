@@ -490,7 +490,19 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
-                if (intent.is_object() && intent.value("version",0)==12) return 128U;
+                if (intent.is_object() && intent.value("version",0)==13) return 130U;
+                if (intent.is_object() && intent.value("version",0)==12) {
+                    const auto stair=intent.find("stair_replacement");
+                    if (stair!=intent.end() && stair->is_object() && stair->value("version",0)==2) {
+                        const auto transforms=stair->find("transforms");
+                        if (transforms!=stair->end() && transforms->is_array() &&
+                            std::any_of(transforms->begin(),transforms->end(),[](const auto& transform) {
+                                return transform.is_object() && transform.value("version",0)==2;
+                            })) return 131U;
+                        return 129U;
+                    }
+                    return 128U;
+                }
                 if (intent.is_object() && intent.value("version",0)==11) return 127U;
                 if (coordinated_slab_intent(coordinated_slab_intent, intent, 0)) return 126U;
                 if (intent.is_object() && intent.value("version",0)==10) return 125U;
@@ -2409,6 +2421,9 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 131 &&
+         sqlite3_column_int(user_version.get(), 0) != 130 &&
+         sqlite3_column_int(user_version.get(), 0) != 129 &&
          sqlite3_column_int(user_version.get(), 0) != 128 &&
          sqlite3_column_int(user_version.get(), 0) != 127 &&
          sqlite3_column_int(user_version.get(), 0) != 126 &&
@@ -2992,6 +3007,12 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=131)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 131 for entered stair and railing transform quantities");
+        if (required_format>=130)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 130 for stair demolition with proposed railing retirement");
+        if (required_format>=129)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 129 for stair and railing alternative transforms");
         if (required_format>=128)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 128 for stair and railing alternative profile replacement");
         if (required_format>=127)

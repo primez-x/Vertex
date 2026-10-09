@@ -107,6 +107,14 @@ struct CoordinatedView {
     bool restrict_to_objects{false};
     bool operator==(const CoordinatedView&) const = default;
 };
+struct CoordinatedViewOrigins {
+    std::array<double, 3> reference_m;
+    std::array<double, 3> projection_m;
+};
+// Render and authoring share the same section plane. Reference depth retains
+// the built-in legacy interpretation; detached overlays use the projection
+// origin after the section cut displacement. The saved view stays unchanged.
+[[nodiscard]] CoordinatedViewOrigins coordinated_view_origins(const CoordinatedView& view);
 struct SheetRect {
     double x_mm{};
     double y_mm{};

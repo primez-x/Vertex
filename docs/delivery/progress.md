@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 stair movement and alternative transforms source implementation
+
+Stair and railing canvas translation, rotation, mirroring, uniform scaling,
+physical transform controls and Site movement now retain the captured typed
+operator. Ordinary complete-map replay moves actual active attached rails and
+hosted components once. Shared catalogs compose disjoint source-qualified row
+changes with horizontal assemblies instead of overwriting one family.
+Typed stair authoring lives with the architectural adapter independently of the
+optional connected constraint solver.
+
+Alternative transform child two preserves baseline physical/catalog records,
+copies actual transformed hosted rows, rehosts active proposed rails, and moves
+saved presentations through their actual view/Site frames. Native 129/extraction
+127 fences current and retained/wrapped proofs. Pure position/orientation edits
+in the object editor use this same captured placement command. Transform intent
+two retains the complete validated entered-input map; native 131/extraction 129
+fences its saved alternative proofs. Unchanged raw receipts stay retained and
+new receipts cannot move unchanged coordinates. Saved presentations follow the
+actual source/world convention and the shared effective section plane.
+Combined profile
+and placement changes remain separate commands; unrepresentable saved bound
+axes and baseline catalog schema conflicts refuse explicitly.
+Independent integrated source review approved after correcting receipt handling
+and saved presentation frames. Root source review is complete. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations ran. Compilation and runtime remain
+unverified; the installed candidate is unchanged.
+
+### October 8 stair proposed-dependent retirement source implementation
+
+Delete and Cut now derive retirement of actual active proposed railings attached
+to a selected baseline stair before demolition. Their exact registry/proposal
+membership, hosted catalog rows and known saved presentation references retire
+atomically. Empty catalogs and definitions, baseline physical owners, other
+alternatives and organization/level records remain retained. Opaque affected
+references and unstable surviving aliases refuse with concrete diagnostics.
+
+Source-bound authoring thirteen and native 130/extraction 128 retain this meaning
+in current/history and wrapped proofs. The retirement-only inactive annotation
+guard preserves raw protected rows across removal of earlier active rows;
+ordinary historical guard meanings stay unchanged. Window selection may also
+include the exact derived proposed rail closure, with baseline-only canonical
+roots. Blocking diagnostics are capped at 128. Independent integrated source
+review approved; root source review is complete. No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged. Broader mixed-family retirement remains additional scope.
+
 ### October 8 stair and railing alternative profiles source implementation
 
 The object editor now stages actual-source proposed stair/railing profiles in

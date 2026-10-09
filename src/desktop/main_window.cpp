@@ -46,7 +46,9 @@
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_stair_demolition.hpp"
+#include "sketch/phase_stair_demolition_retirement.hpp"
 #include "sketch/phase_stair_replacement.hpp"
+#include "sketch/stair_transform.hpp"
 #include "sketch/stair_object_edit.hpp"
 #include "sketch/phase_structural_replacement.hpp"
 #include "sketch/structural_hosted_components.hpp"
@@ -4672,37 +4674,16 @@ BuildingViewKind architectural_view_kind(CoordinatedViewKind kind) {
 }
 
 ArchitecturalViewContext architectural_view_context(const CoordinatedView& view) {
+    const auto origins = coordinated_view_origins(view);
     BuildingViewFrame base{
-        {view.origin_m[0], view.origin_m[1], view.origin_m[2]},
+        {origins.reference_m[0], origins.reference_m[1], origins.reference_m[2]},
         {view.direction[0], view.direction[1], view.direction[2]},
         {view.up[0], view.up[1], view.up[2]}};
-    // Documents created before the default-frame correction stored the built-in
-    // section origin directly on its intended 1.2 m cut plane. Interpret only
-    // that exact built-in signature through the corrected reference frame;
-    // custom and named sections retain their authored origins unchanged.
-    constexpr double legacy_tolerance = 1e-12;
-    const auto close = [=](double left, double right) {
-        return std::abs(left - right) <= legacy_tolerance;
-    };
-    if (view.kind == CoordinatedViewKind::section && view.id == "view-section" &&
-        view.name == "Section" && close(base.origin.x, 0.0) && close(base.origin.y, 0.0) &&
-        close(base.origin.z, 1.2) && close(base.direction.x, 0.0) &&
-        close(base.direction.y, 0.0) && close(base.direction.z, -1.0) &&
-        close(view.presentation.cut_depth_m, 1.2)) {
-        base.origin.z = 2.4;
-    }
     ArchitecturalViewContext result{base,
         BuildingViewDepth{base.origin, base.direction, view.presentation.far_depth_m},
         view.presentation, view.object_ids, view.id, view.overlays};
     result.restrict_to_objects = view.restrict_to_objects;
-    if (view.kind == CoordinatedViewKind::section) {
-        // Cut and far depth are both measured from the authored view-frame
-        // origin along its viewing direction. This preserves translated and
-        // oblique named sections instead of relocating them to a global plane.
-        result.frame.origin.x += base.direction.x * view.presentation.cut_depth_m;
-        result.frame.origin.y += base.direction.y * view.presentation.cut_depth_m;
-        result.frame.origin.z += base.direction.z * view.presentation.cut_depth_m;
-    }
+    result.frame.origin = {origins.projection_m[0], origins.projection_m[1], origins.projection_m[2]};
     if (view.presentation.crop) {
         const auto& crop = *view.presentation.crop;
         result.crop = BuildingViewCrop{result.frame,
@@ -7833,6 +7814,9 @@ public:
             if (structuralObject(original))
                 return {sourceDerivedStructuralTransformCommand(source,{{original.id,transform}},
                     "Transform structural object"),original.id};
+            if (original.type=="stair" || original.type=="railing")
+                return {sourceDerivedStairTransformCommand(source, {{original.id, transform}},
+                    "Transform stair or railing"), original.id};
             const std::vector<std::string> targets{original.id};
             return {augmentAuthoredCommand(architectural_group_transform_command(source,targets,transform,
                 new_id("architectural-mirror"),source.revision()),source),original.id};
@@ -8738,6 +8722,17 @@ public:
         std::span<const JointAnnotationTranslationIntent> annotation_moves = {},
         std::span<const JointReferenceTranslationIntent> reference_moves = {}) {
         model_ids=translationModelRoots(source,std::move(model_ids));
+        if (changes.empty() && annotation_moves.empty() && reference_moves.empty() && !model_ids.isEmpty() &&
+            std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
+                const auto found=source.entities().find(id.toStdString());
+                return found!=source.entities().end() &&
+                    (found->second.type=="stair" || found->second.type=="railing");
+            })) {
+            std::vector<StairTransformIntent> transforms;
+            for (const auto& id:model_ids)
+                transforms.push_back({id.toStdString(), {{}, {offset.x, offset.y, 0.0}, 0.0, 1.0, false, false}});
+            return sourceDerivedStairTransformCommand(source, transforms, "Move stairs and railings");
+        }
         if (changes.empty() && annotation_moves.empty() && reference_moves.empty() && !model_ids.isEmpty() &&
             std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id) {
                 const auto found=source.entities().find(id.toStdString());
@@ -13353,6 +13348,17 @@ public:
                             }))
                             return {sourceDerivedPhysicalGroupTransformCommand(source, physical_targets,
                                 "Transform architectural objects"), primary_render_id.toStdString()};
+                        if (geometry_selection.isEmpty() && selected_presentations && selected_presentations->entity_changes.empty() &&
+                            embedded_targets.empty() && !physical_targets.empty() &&
+                            std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
+                                const auto& type=source.entities().at(target.entity_id).type;
+                                return type=="stair" || type=="railing";
+                            })) {
+                            std::vector<StairTransformIntent> transforms;
+                            for (const auto& target:physical_targets) transforms.push_back({target.entity_id, target.transform});
+                            return {sourceDerivedStairTransformCommand(source, transforms, "Transform stairs and railings"),
+                                primary_render_id.toStdString()};
+                        }
                         auto architectural=physical_targets.empty() ?
                             ApplyEntityChanges{source.revision(),{}, {},"Transform architectural selection"} :
                             architectural_group_transform_command(source,physical_targets,
@@ -23386,6 +23392,19 @@ public:
             if (edited_stair_profile)
                 if (const auto edit=capture_stair_object_edit(snapshot.entities().at(candidate.id), candidate))
                     stair_edits.push_back(*edit);
+            if (edited_stair_profile && changes.empty() && !stair_edits.empty()) {
+                if (const auto placement=captureStairPlacementTransform(
+                        snapshot, snapshot.entities().at(candidate.id), candidate)) {
+                    const auto command=sourceDerivedStairTransformCommand(snapshot, {*placement}, "Edit stair or railing placement");
+                    const auto proposed_id=alternativeReplacementTargetID(command, candidate.id);
+                    if (!sourceEditAuthorityUnchanged(source_authority) || !applyAuthoredCommand(command)) return {};
+                    m_selected_id=id_from(proposed_id);
+                    m_selected_ids={m_selected_id};
+                    clearError();
+                    refresh();
+                    return m_selected_id;
+                }
+            }
             if (edited_stair_profile && !stair_edits.empty()) {
                 if (const auto replacement=sourceDerivedStairProfileEditCommand(
                         snapshot, stair_edits, "Edit stair or railing in alternative")) {
@@ -24392,6 +24411,14 @@ public:
     static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
         const Entity& original, const ArchitecturalTransaction& transaction) {
         const auto& operations=transaction.operations();
+        if ((original.type=="stair" || original.type=="railing") && operations.size()==1 &&
+            operations.front().action==ArchitecturalAction::transform &&
+            operations.front().object_id==original.id && operations.front().transform) {
+            const auto& movement=*operations.front().transform;
+            return sourceDerivedStairTransformCommand(source, {{original.id,
+                {{}, {movement.x, movement.y, movement.z}, movement.rotation_z_radians, movement.scale, false, false}}},
+                transaction.undo_label());
+        }
         if (structuralObject(original) && operations.size() == 2 &&
             operations[0].action == ArchitecturalAction::duplicate && operations[0].object_id == original.id &&
             operations[1].action == ArchitecturalAction::transform &&
@@ -24513,6 +24540,10 @@ public:
             return sourceDerivedStructuralTransformCommand(source,{{entity.id,
                 {{transform.pivot.x,transform.pivot.y,0.0},{},transform.rotation_radians,1.0,false,false}}},
                 "Rotate structural object in plan");
+        if (entity.type=="stair" || entity.type=="railing")
+            return sourceDerivedStairTransformCommand(source, {{entity.id,
+                {{transform.pivot.x, transform.pivot.y, 0.0}, {}, transform.rotation_radians, 1.0, false, false}}},
+                "Rotate stair or railing in plan");
         const auto c=std::cos(transform.rotation_radians),s=std::sin(transform.rotation_radians);
         const auto& pivot=transform.pivot;
         ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};
@@ -42729,12 +42760,15 @@ private:
             const auto found=source.entities().find(id);
             return found!=source.entities().end() && (found->second.type=="stair" || found->second.type=="railing");
         })) return std::nullopt;
-        const auto request=phase_stair_demolition_request(source.entities(), ids);
-        if (!request) return std::nullopt;
+        const auto retirement=phase_stair_demolition_retirement_request(source.entities(), ids);
+        const auto request=retirement ? std::optional<StairDemolitionIntent>{} :
+            phase_stair_demolition_request(source.entities(), ids);
+        if (!retirement && !request) return std::nullopt;
         ConstraintAuthoringIntent semantic;
         semantic.message=message;
         auto intent=make_phase_constraint_authoring_intent(source, semantic);
-        intent.stair_demolition=encode_stair_demolition_intent(*request);
+        if (retirement) intent.stair_demolition_retirement=encode_stair_demolition_retirement_intent(*retirement);
+        else intent.stair_demolition=encode_stair_demolition_intent(*request);
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision();
         command.message=message;
@@ -42750,6 +42784,79 @@ private:
         if (!request) return std::nullopt;
         const auto plan=inspect_phase_stair_replacement_plan(source.entities(), edits,
             request->registry_id, request->alternative_id);
+        PhaseStairReplacementAuthoring replacement;
+        replacement.registry_id=request->registry_id;
+        replacement.alternative_id=request->alternative_id;
+        replacement.edits=edits;
+        return sourceDerivedStairReplacementCommand(source, plan, std::move(replacement), message);
+    }
+
+    static std::optional<StairTransformIntent> captureStairPlacementTransform(const DocumentSnapshot& source,
+        const Entity& before, const Entity& after) {
+        if ((before.type!="stair" && before.type!="railing") || hosted_stair_railing(before)) return std::nullopt;
+        // Validate the complete edit before separating placement. Neutralize
+        // only coordinate receipts for classification; every other profile and
+        // opaque input remains subject to the ordinary typed capture.
+        const auto captured=capture_stair_object_edit(before, after);
+        if (!captured) return std::nullopt;
+        auto profile=after;
+        profile.properties.at("base_position_m")=before.properties.at("base_position_m");
+        profile.properties.at("orientation_rad")=before.properties.at("orientation_rad");
+        auto quantities=profile.properties.value("quantity_entries",json::object());
+        const auto old_quantities=before.properties.find("quantity_entries");
+        for (std::size_t axis=0;axis<3;++axis) {
+            const auto pointer="/base_position_m/"+std::to_string(axis);
+            if (old_quantities!=before.properties.end() && old_quantities->contains(pointer))
+                quantities[pointer]=old_quantities->at(pointer);
+            else quantities.erase(pointer);
+        }
+        if (quantities.empty() && old_quantities==before.properties.end()) profile.properties.erase("quantity_entries");
+        else profile.properties["quantity_entries"]=std::move(quantities);
+        if (capture_stair_object_edit(before, profile)) return std::nullopt;
+        const auto& old_position=before.properties.at("base_position_m");
+        const auto& new_position=after.properties.at("base_position_m");
+        const auto resolved=resolve_vertical_placement(source.entities(), before);
+        const auto& pivot=resolved.properties.at("base_position_m");
+        StairTransformIntent intent;
+        intent.object_id=before.id;
+        intent.transform.pivot={pivot.at(0).get<double>(), pivot.at(1).get<double>(), pivot.at(2).get<double>()};
+        intent.transform.offset={new_position.at(0).get<double>()-old_position.at(0).get<double>(),
+            new_position.at(1).get<double>()-old_position.at(1).get<double>(),
+            new_position.at(2).get<double>()-old_position.at(2).get<double>()};
+        intent.transform.rotation_z_radians=after.properties.at("orientation_rad").get<double>()-
+            before.properties.at("orientation_rad").get<double>();
+        intent.quantity_entries=captured->quantity_entries;
+        (void)encode_stair_transform_intent(intent);
+        return intent;
+    }
+
+    static Command sourceDerivedStairTransformCommand(const DocumentSnapshot& source,
+        const std::vector<StairTransformIntent>& transforms, const std::string& message) {
+        if (transforms.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
+        const auto request=phase_stair_replacement_request(source.entities(), transforms);
+        if (!request) {
+            const auto candidate=replay_stair_transform_entities(source.entities(), transforms);
+            ApplyEntityChanges ordinary{source.revision(), {}, {}, message};
+            for (const auto& [id, after]:candidate) {
+                const auto& before=source.entities().at(id);
+                if (before!=after || before.properties.dump()!=after.properties.dump() ||
+                    before.extensions.dump()!=after.extensions.dump())
+                    ordinary.entity_changes.push_back(EntityChange::upsert(after));
+            }
+            return augmentAuthoredCommand(ordinary, source);
+        }
+        const auto plan=inspect_phase_stair_replacement_plan(source.entities(), transforms,
+            request->registry_id, request->alternative_id);
+        PhaseStairReplacementAuthoring replacement;
+        replacement.registry_id=request->registry_id;
+        replacement.alternative_id=request->alternative_id;
+        replacement.transforms=transforms;
+        return sourceDerivedStairReplacementCommand(source, plan, std::move(replacement), message);
+    }
+
+    static Command sourceDerivedStairReplacementCommand(const DocumentSnapshot& source,
+        const PhaseStairReplacementPlan& plan, PhaseStairReplacementAuthoring replacement,
+        const std::string& message) {
         if (!plan.ready()) {
             std::string reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
@@ -42758,10 +42865,6 @@ private:
             }
             throw std::invalid_argument(reasons.empty() ? "The stair replacement has an unresolved dependency." : reasons);
         }
-        PhaseStairReplacementAuthoring replacement;
-        replacement.registry_id=request->registry_id;
-        replacement.alternative_id=request->alternative_id;
-        replacement.edits=edits;
         auto occupied=retainedSlabIdentityNames(source, true);
         // The edited topology can introduce child names that were absent from
         // the snapshot. They are source names in this proof, not destinations.
@@ -43834,6 +43937,7 @@ private:
             throw std::invalid_argument("Proposed stair and railing edits require a bounded edit of the unchanged source.");
         const auto authority=captureSourceEditAuthority(source);
         std::vector<StairObjectEditIntent> edits;
+        std::vector<StairTransformIntent> transforms;
         std::vector<std::string> removed;
         std::set<std::string, std::less<>> targets;
         for (const auto& change:raw->entity_changes) {
@@ -43848,14 +43952,19 @@ private:
                 !targets.insert(id).second)
                 throw std::invalid_argument("This alternative profile edit requires existing stairs and railings.");
             if (change.kind==EntityChangeKind::erase) removed.push_back(id);
+            else if (const auto placement=captureStairPlacementTransform(source, before->second, change.entity))
+                transforms.push_back(*placement);
             else if (const auto edit=capture_stair_object_edit(before->second, change.entity)) edits.push_back(*edit);
         }
         Command command;
         if (!removed.empty()) {
-            if (!edits.empty()) throw std::invalid_argument("Demolish stairs and railings separately from profile edits.");
+            if (!edits.empty() || !transforms.empty()) throw std::invalid_argument("Demolish stairs and railings separately from profile edits.");
             const auto demolition=stairDemolitionCommand(source, removed, raw->message);
             if (!demolition) throw std::invalid_argument("The stair or railing's saved alternative changed before demolition.");
             command=*demolition;
+        } else if (!transforms.empty()) {
+            if (!edits.empty()) throw std::invalid_argument("Apply stair profile and placement edits as separate commands.");
+            command=sourceDerivedStairTransformCommand(source, transforms, raw->message);
         } else if (!edits.empty()) {
             const auto replacement=sourceDerivedStairProfileEditCommand(source, edits, raw->message);
             if (replacement) command=*replacement;
@@ -51427,6 +51536,16 @@ private:
             std::vector<ArchitecturalGroupTransformTarget> roofs;
             for (const auto& target : physical_targets) roofs.push_back({target.entity_id, target.transform});
             return sourceDerivedRoofTransformCommand(source, roofs, "Move roofs on Site");
+        }
+        if (geometry_ids.isEmpty() && dimension_ids.isEmpty() && annotation_targets.empty() &&
+            reference_targets.empty() && embedded_targets.empty() && !physical_targets.empty() &&
+            std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
+                const auto& type=source.entities().at(target.entity_id).type;
+                return type=="stair" || type=="railing";
+            })) {
+            std::vector<StairTransformIntent> transforms;
+            for (const auto& target:physical_targets) transforms.push_back({target.entity_id, target.transform});
+            return sourceDerivedStairTransformCommand(source, transforms, "Move stairs and railings on Site");
         }
         if (geometry_ids.isEmpty() && dimension_ids.isEmpty() && annotation_targets.empty() &&
             reference_targets.empty() && embedded_targets.empty() && !physical_targets.empty() &&

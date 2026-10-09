@@ -1,4 +1,70 @@
-# Vertex project formats v1 through v128
+# Vertex project formats v1 through v131
+
+## Entered stair and railing transform quantities (v131)
+
+Native reader 131 and JSON/assets extraction 129 retain transform intent two
+inside stair replacement child two. Its exact keys are `version`, `object_id`,
+`transform` and `quantity_entries`. The complete entered-input map is validated
+against actual-source transformed profiles. Transform intent one keeps its
+original three keys and source-derived receipt retention semantics.
+
+Numeric placement edits validate the complete original edit before separating
+pose from profile. Classification resets only coordinate receipts alongside
+the original position; other quantity and opaque metadata stays protected. The
+captured transform retains the validated complete entered map. Unchanged raw
+inherited coordinate receipts remain exact, including opaque source evidence.
+New input for an unchanged coordinate must match its metres exactly. A changed
+coordinate may restore only floating roundoff within `1e-12 * max(1, abs(value))`
+to its exact entered metres; other geometry cannot be supplied through receipts.
+Typed profile admission still validates the full receipt map and metadata.
+Ordinary entity commands do not persist this transform proof and acquire no
+new floor. Current/history and wrapped alternative proofs retain reader 131.
+Independent integrated source review approved; compilation and runtime
+qualification remain pending.
+
+## Stair demolition with proposed railing retirement (v130)
+
+Native reader 130 and JSON/assets extraction 128 retain active-design authoring
+thirteen. Its exclusive `stair_demolition_retirement` child one has exactly
+`version`, `registry_id`, `alternative_id`, `selected_object_ids` and
+`retired_proposed_rail_ids`. Replay independently discovers the complete active
+proposed railing closure; supplied identities cannot authorize other deletion.
+
+Retirement removes those rail owners from both registry membership and the
+active alternative's proposal list. It removes only their actual hosted catalog
+rows and codec-known object/view/annotation references, retaining empty catalog
+owners, definitions, other alternatives and organization/level records. Existing
+baseline demolition then applies to the retained selected stair and baseline
+rail closure. Unsupported affected references or changed surviving component
+aliases refuse. Protected inactive annotation rows retain raw order and values
+even when earlier active rows are removed. Historical ordinary annotation guard
+semantics remain unchanged. Window selection may include the exact derived
+proposed rail closure; the canonical selected roots remain baseline-only.
+Blocking diagnostics are capped at 128 to bound refusal work on large sources.
+Independent integrated source review approved. Runtime qualification is pending.
+
+## Stair and railing alternative transforms (v129)
+
+Native reader 129 and JSON/assets extraction 127 retain stair replacement child
+two under active-design authoring twelve. Its exact keys match child one except
+that `transforms` replaces `edits`. Each captured typed transform names an actual
+owner and its complete pivot, XYZ offset, rotation, uniform scale and reflection
+operator. Profile and transform authorities are exclusive; child one retains
+its earlier meaning.
+
+Actual-source transform replay coordinates active attached rails and hosted
+parts before proposing baseline replacements. Baseline physical/catalog owners
+and inactive dependents stay exact. Type-owned hosted profiles use the actual
+Site world frame; legacy host-derived profiles use the source frame. Private
+catalogs copy the actual transformed selected rows. Physical and legacy hosted
+saved-view presentations use source coordinates; type-owned profiles use their
+actual world coordinates. Saved unbound overlays use the shared effective view
+origin, including section cut displacement and retained built-in interpretation,
+and axes, while bound dimension placement derives from the
+actual source and proposed geometry. Unrepresentable bound axes/depth coupling
+and conflicting baseline catalog schema upgrades refuse explicitly.
+Current/history and wrapped proofs retain the reader floor. Independent integrated
+source review approved. Compilation and runtime qualification remain pending.
 
 ## Stair and railing alternative profile replacement (v128)
 
@@ -39,7 +105,8 @@ no additional reader floor. Existing stair/railing entity dialects remain
 authoritative. Actual attachment, levels and native geometry are admitted before
 staging; retained-history child reservation remains the enclosing Document's
 responsibility. Baseline profile replacement uses the separate source-bound
-authoring twelve described above; broader transforms remain additional scope.
+authoring twelve described above. Captured transform child two is documented
+separately; wider mixed-family stair editing remains additional scope.
 
 ## Stair and railing alternative demolition (v127)
 

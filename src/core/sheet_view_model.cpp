@@ -180,6 +180,24 @@ void shape(const nlohmann::json& input, const nlohmann::json& output) {
 }
 } // namespace
 
+CoordinatedViewOrigins coordinated_view_origins(const CoordinatedView& view) {
+    auto reference = view.origin_m;
+    constexpr double legacy_tolerance = 1e-12;
+    const auto close = [=](double left, double right) {
+        return std::abs(left - right) <= legacy_tolerance;
+    };
+    if (view.kind == CoordinatedViewKind::section && view.id == "view-section" &&
+        view.name == "Section" && close(reference[0], 0.0) && close(reference[1], 0.0) &&
+        close(reference[2], 1.2) && close(view.direction[0], 0.0) &&
+        close(view.direction[1], 0.0) && close(view.direction[2], -1.0) &&
+        close(view.presentation.cut_depth_m, 1.2)) reference[2] = 2.4;
+    auto projection = reference;
+    if (view.kind == CoordinatedViewKind::section)
+        for (std::size_t i = 0; i < projection.size(); ++i)
+            projection[i] += view.direction[i] * view.presentation.cut_depth_m;
+    return {reference, projection};
+}
+
 void to_json(nlohmann::json& value, const CoordinatedViewKind& kind) {
     switch (kind) {
     case CoordinatedViewKind::plan: value = "plan"; return;
