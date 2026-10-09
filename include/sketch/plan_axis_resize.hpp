@@ -17,6 +17,15 @@ namespace sketch {
 // landings and railing end posts; does not include unrelated display symbols.
 [[nodiscard]] Bounds2 plan_axis_resize_bounds(const Entity& entity);
 
+// Stage a canonical v1 rectangular/circular column or straight beam directly
+// from its actual source, without Document/transaction admission. Retains raw
+// metadata, Z, height, section frame, material, context and binding; invalidates
+// only quantity receipts whose physical values changed. Native geometry and
+// footprint extents are admitted; exact unit factors return validated source.
+[[nodiscard]] Entity stage_structural_plan_axis_resize_entity(
+    const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
+    double frame_rotation_radians = 0.0);
+
 // Stage an actual sloped-panel, gable or hip roof's native plan footprint
 // resize without Document/transaction admission. Retains source receipts and
 // opaque metadata for the caller's mathematical derivation archive; creates

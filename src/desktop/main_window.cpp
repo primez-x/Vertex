@@ -45,6 +45,7 @@
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
+#include "sketch/phase_structural_replacement.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
@@ -5189,7 +5190,16 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
     json result = json::object();
     for (const auto& [pointer, receipt] : entries->items()) {
         if (quantity_entry_matches(receipt, canonical_properties, pointer)) {
-            result[pointer] = receipt;
+            if (original && (original->type=="column" || original->type=="beam") &&
+                old_entries && old_entries->is_object() && old_entries->contains(pointer) &&
+                old_entries->at(pointer).is_object() && receipt.is_object() &&
+                old_entries->at(pointer).value("version",json{})==1 && receipt.value("version",json{})==1) {
+                auto retained=old_entries->at(pointer);
+                for (const auto* key:{"version","original_expression","entered_unit"}) retained[key]=receipt.at(key);
+                for (const auto* key:{"numerator","denominator"})
+                    retained["exact_metres"][key]=receipt.at("exact_metres").at(key);
+                result[pointer]=std::move(retained);
+            } else result[pointer] = receipt;
             continue;
         }
         auto original_pointer = pointer;
@@ -5233,6 +5243,15 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
             result[pointer] = receipt;
         }
     }
+    if (original && (original->type=="column" || original->type=="beam") && old_entries && old_entries->is_object())
+        for (const auto& [pointer,receipt]:old_entries->items()) if (!result.contains(pointer)) {
+            if (!is_building_quantity_path(pointer)) { result[pointer]=receipt; continue; }
+            try {
+                const json::json_pointer path(pointer);
+                if (original->properties.contains(path) && canonical_properties.contains(path) &&
+                    original->properties.at(path)==canonical_properties.at(path)) result[pointer]=receipt;
+            } catch (const json::exception&) { result[pointer]=receipt; }
+        }
     return result;
 }
 
@@ -5265,6 +5284,18 @@ json merge_canonical_metadata(const json& retained, const json& edited, const js
         return result;
     }
     return canonical;
+}
+
+json retain_unchanged_structural_numbers(const json& original, const json& candidate) {
+    if (original.is_number() && candidate.is_number() && original==candidate) return original;
+    auto result=candidate;
+    if (original.is_array() && candidate.is_array() && original.size()==candidate.size())
+        for (std::size_t index=0;index<candidate.size();++index)
+            result[index]=retain_unchanged_structural_numbers(original.at(index),candidate.at(index));
+    else if (original.is_object() && candidate.is_object())
+        for (const auto& [key,value]:candidate.items()) if (original.contains(key))
+            result[key]=retain_unchanged_structural_numbers(original.at(key),value);
+    return result;
 }
 
 Entity effective_building_geometry_entity(const DocumentSnapshot& snapshot, const Entity& entity) {
@@ -7777,6 +7808,9 @@ public:
                 return {sourceDerivedSlabGeometryEditCommand(source, {intent}, "Transform horizontal assembly"),
                     original.id};
             }
+            if (structuralObject(original))
+                return {sourceDerivedStructuralTransformCommand(source,{{original.id,transform}},
+                    "Transform structural object"),original.id};
             const std::vector<std::string> targets{original.id};
             return {augmentAuthoredCommand(architectural_group_transform_command(source,targets,transform,
                 new_id("architectural-mirror"),source.revision()),source),original.id};
@@ -7946,11 +7980,15 @@ public:
             if (found == source.entities().end()) {
                 throw std::invalid_argument("Select an editable architectural object first.");
             }
-            const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
-                source, found->second, rotation_degrees, offset_x, offset_y, offset_z,
-                uniform_scale, clone);
-            const auto command = augmentAuthoredCommand(
-                architecturalObjectTransformCommand(source,found->second,transaction), source);
+            const auto [command,root]=[&]() -> std::pair<Command,std::string> {
+                if (clone && structuralObject(found->second))
+                    return architecturalObjectMirrorCommand(source,found->second,
+                        parseArchitecturalTransform(rotation_degrees,offset_x,offset_y,offset_z,uniform_scale),
+                        true,false,false);
+                const auto [transaction,target]=makeArchitecturalObjectTransformTransaction(
+                    source,found->second,rotation_degrees,offset_x,offset_y,offset_z,uniform_scale,clone);
+                return {augmentAuthoredCommand(architecturalObjectTransformCommand(source,found->second,transaction),source),target};
+            }();
             if (const auto* changes=std::get_if<ApplyEntityChanges>(&command);
                 changes && changes->entity_changes.empty()) { clearError(); return true; }
             const auto candidate = Document::preview_command(source,command);
@@ -8678,6 +8716,16 @@ public:
         std::span<const JointAnnotationTranslationIntent> annotation_moves = {},
         std::span<const JointReferenceTranslationIntent> reference_moves = {}) {
         model_ids=translationModelRoots(source,std::move(model_ids));
+        if (changes.empty() && annotation_moves.empty() && reference_moves.empty() && !model_ids.isEmpty() &&
+            std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+                const auto found=source.entities().find(id.toStdString());
+                return found!=source.entities().end() && structuralObject(found->second);
+            })) {
+            std::vector<ArchitecturalGroupTransformTarget> targets;
+            for (const auto& id:model_ids)
+                targets.push_back({id.toStdString(),{{},{offset.x,offset.y,0.0},0.0,1.0,false,false}});
+            return sourceDerivedStructuralTransformCommand(source,targets,"Move structural objects");
+        }
         if (changes.empty() && annotation_moves.empty() && reference_moves.empty() &&
             !model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
                 const auto found = source.entities().find(id.toStdString());
@@ -9456,12 +9504,15 @@ public:
             std::vector<ArchitecturalGroupTransformTarget> targets;
             for (const auto& id : physical_roots) {
                 const auto operation=operation_for(id);
-                targets.push_back({id,{{operation.pivot.x,operation.pivot.y,0.0},
+                ArchitecturalGroupTransform movement{{operation.pivot.x,operation.pivot.y,0.0},
                     {operation.offset.x,operation.offset.y,0.0},operation.rotation_radians,1.0,
-                    operation.flip_horizontal,operation.flip_vertical}});
+                    operation.flip_horizontal,operation.flip_vertical};
+                if (structuralObject(source.entities().at(id)))
+                    physical_values.emplace(id,stage_structural_group_transform_entity(source.entities(),id,movement));
+                else targets.push_back({id,movement});
             }
-            const auto physical=architectural_group_transform_command(source,targets,
-                new_id("architectural-group-copy"),source.revision());
+            const auto physical=targets.empty() ? ApplyEntityChanges{source.revision(),{}, {},"Copy structural objects"} :
+                architectural_group_transform_command(source,targets,new_id("architectural-group-copy"),source.revision());
             if (physical.expected_revision!=source.revision() || !physical.asset_changes.empty())
                 throw std::invalid_argument("An architectural copy must retain its captured revision and shared assets.");
             for (const auto& change : physical.entity_changes) {
@@ -12291,7 +12342,8 @@ public:
                     candidate_snapshot = Document::preview_command(source, candidate_command->first);
                 } else {
                     auto [command, root] = [&]() -> std::pair<Command,std::string> {
-                        if (flip_horizontal->isChecked() || flip_vertical->isChecked())
+                        if (flip_horizontal->isChecked() || flip_vertical->isChecked() ||
+                            (clone->isChecked() && structuralObject(*original)))
                             return architecturalObjectMirrorCommand(source,*original,
                                 parseArchitecturalTransform(rotation->text(),offset_x->text(),offset_y->text(),offset_z->text(),scale->text()),
                                 clone->isChecked(),flip_horizontal->isChecked(),flip_vertical->isChecked());
@@ -13189,6 +13241,13 @@ public:
                             return {sourceDerivedSlabGeometryEditCommand(source, slabs, "Transform horizontal assemblies"),
                                 primary_render_id.toStdString()};
                         }
+                        if (geometry_selection.isEmpty() && selected_presentations && selected_presentations->entity_changes.empty() &&
+                            embedded_targets.empty() && !physical_targets.empty() &&
+                            std::all_of(physical_targets.begin(),physical_targets.end(),[&](const auto& target) {
+                                return structuralObject(source.entities().at(target.entity_id));
+                            }))
+                            return {sourceDerivedStructuralTransformCommand(source,physical_targets,
+                                "Transform structural objects"),primary_render_id.toStdString()};
                         if (geometry_selection.isEmpty() && selected_presentations && selected_presentations->entity_changes.empty() &&
                             embedded_targets.empty() && !physical_targets.empty() &&
                             std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
@@ -23124,6 +23183,11 @@ public:
                             original->properties.contains(key) ? original->properties.at(key) : json{},
                             edited.properties.contains(key) ? edited.properties.at(key) : json{}, value);
                     }
+                    if (candidate.type=="column") {
+                        if (canonical.properties.at("form")=="circular_column") {
+                            candidate.properties.erase("width_m"); candidate.properties.erase("depth_m");
+                        } else candidate.properties.erase("radius_m");
+                    }
                     if (candidate.type == "stair") {
                         for (const auto* key : {"top_landing", "level_connection", "flights", "landings"})
                             if (!canonical.properties.contains(key)) candidate.properties.erase(key);
@@ -23156,10 +23220,22 @@ public:
                             candidate.extensions["roof_opening_input"] = canonical.extensions.at("roof_opening_input");
                     }
                     if (entries) candidate.properties["quantity_entries"] = *entries;
+                    if (structuralObject(candidate)) {
+                        for (const auto* key:{"base_center_m","start_m","end_m","up_dir","width_m",
+                            "depth_m","radius_m","height_m","rotation_rad","vertical_placement"})
+                            if (original->properties.contains(key) && candidate.properties.contains(key))
+                                candidate.properties[key]=retain_unchanged_structural_numbers(
+                                    original->properties.at(key),candidate.properties.at(key));
+                        if (original->properties.value("form",std::string{})=="circular_column" &&
+                            candidate.properties.value("form",std::string{})=="circular_column" &&
+                            !original->properties.contains("rotation_rad") &&
+                            candidate.properties.value("rotation_rad",json{})==0)
+                            candidate.properties.erase("rotation_rad");
+                    }
                 }
-                if (candidate.type=="roof" && candidate==*original &&
+                if ((candidate.type=="roof" || structuralObject(candidate)) && candidate==*original &&
                     candidate.properties.dump()==original->properties.dump() && candidate.extensions.dump()==original->extensions.dump()) {
-                    if (!changes.empty()) throw std::invalid_argument("Edit related objects separately from an unchanged roof.");
+                    if (!changes.empty()) throw std::invalid_argument("Edit related objects separately from an unchanged object.");
                     clearError();
                     refresh();
                     return id_from(original->id);
@@ -24132,9 +24208,10 @@ public:
         if (wall.type == "beam") {
             if (endpoint != QStringLiteral("beam:start") && endpoint != QStringLiteral("beam:end"))
                 throw std::invalid_argument("Choose a beam endpoint handle.");
-            return beam_endpoint_update_command(source, wall.id,
-                {endpoint == QStringLiteral("beam:start") ? BeamEndpoint::start : BeamEndpoint::end, position},
-                source.revision());
+            return sourceDerivedStructuralCandidateCommand(source,wall,
+                stage_structural_beam_endpoint_entity(source.entities(),wall.id,
+                    {endpoint==QStringLiteral("beam:start") ? BeamEndpoint::start : BeamEndpoint::end,position}),
+                "Move beam endpoint");
         }
         if (wall.type == "railing") {
             if (endpoint != QStringLiteral("railing:start") && endpoint != QStringLiteral("railing:end"))
@@ -24225,6 +24302,14 @@ public:
                     "Transform wall and connected corners");
             }
         }
+        if (structuralObject(original) && operations.size()==1 &&
+            operations.front().action==ArchitecturalAction::transform &&
+            operations.front().object_id==original.id && operations.front().transform) {
+            const auto& movement=*operations.front().transform;
+            return sourceDerivedStructuralTransformCommand(source,{{original.id,
+                {{},{movement.x,movement.y,movement.z},movement.rotation_z_radians,movement.scale,false,false}}},
+                transaction.undo_label());
+        }
         return architectural_transaction_command(source,transaction,source.revision());
     }
 
@@ -24267,6 +24352,10 @@ public:
             return sourceDerivedRoofTransformCommand(source, {{entity.id,
                 {{transform.pivot.x, transform.pivot.y, 0.0}, {}, transform.rotation_radians, 1.0, false, false}}},
                 "Rotate roof in plan");
+        if (structuralObject(entity))
+            return sourceDerivedStructuralTransformCommand(source,{{entity.id,
+                {{transform.pivot.x,transform.pivot.y,0.0},{},transform.rotation_radians,1.0,false,false}}},
+                "Rotate structural object in plan");
         const auto c=std::cos(transform.rotation_radians),s=std::sin(transform.rotation_radians);
         const auto& pivot=transform.pivot;
         ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};
@@ -31465,7 +31554,8 @@ public:
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
-            auto demolition = slabRemovalCommand(source, selected_ids, "Delete selected horizontal assemblies");
+            auto demolition=structuralDemolitionCommand(source,selected_ids,"Demolish selected structural objects");
+            if (!demolition) demolition = slabRemovalCommand(source, selected_ids, "Delete selected horizontal assemblies");
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs");
             if (demolition) {
                 if (!sourceEditAuthorityUnchanged(authority))
@@ -42366,6 +42456,105 @@ private:
         return sourceDerivedRoofMathEditCommand(source, physical, std::move(edits), message);
     }
 
+    static bool structuralObject(const Entity& entity) {
+        return entity.type=="column" || entity.type=="beam";
+    }
+
+    static Command sourceDerivedStructuralEditCommand(const DocumentSnapshot& source,
+        const std::vector<StructuralObjectEditIntent>& edits,const std::string& message) {
+        const auto staged=replay_structural_object_edit_entities(source.entities(),edits);
+        const auto request=phase_structural_edit_replacement_request(source.entities(),edits);
+        if (!request) {
+            ApplyEntityChanges command{source.revision(),{}, {},message};
+            for (const auto& [id,after]:staged) {
+                const auto& before=source.entities().at(id);
+                if (before!=after || before.properties.dump()!=after.properties.dump() ||
+                    before.extensions.dump()!=after.extensions.dump())
+                    command.entity_changes.push_back(EntityChange::upsert(after));
+            }
+            return augmentAuthoredCommand(command,source);
+        }
+        const auto plan=inspect_phase_structural_replacement_plan(source.entities(),request->seed_object_ids,
+            request->registry_id,request->alternative_id);
+        if (!plan.ready()) {
+            std::string reasons;
+            for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
+                if (!reasons.empty()) reasons+='\n';
+                reasons+=diagnostic.entity_id+": "+diagnostic.reason;
+            }
+            throw std::invalid_argument(reasons);
+        }
+        PhaseStructuralReplacementAuthoring replacement;
+        replacement.registry_id=request->registry_id;
+        replacement.alternative_id=request->alternative_id;
+        replacement.seed_object_ids=request->seed_object_ids;
+        replacement.edits=edits;
+        auto occupied=retainedSlabIdentityNames(source);
+        for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
+            for (const auto& original:*ids) {
+                auto proposed=new_id("proposed");
+                while (!occupied.insert(proposed).second) proposed=new_id("proposed");
+                if (!replacement.identities.emplace(original,std::move(proposed)).second)
+                    throw std::invalid_argument("A structural replacement identity has multiple owners.");
+            }
+        ConstraintAuthoringIntent semantic;
+        semantic.message=message;
+        auto intent=make_phase_constraint_authoring_intent(source,semantic);
+        intent.structural_replacement=encode_phase_structural_replacement_authoring(replacement);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();
+        command.message=message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source,Command{command});
+        return Command{std::move(command)};
+    }
+
+    static Command sourceDerivedStructuralTransformCommand(const DocumentSnapshot& source,
+        const std::vector<ArchitecturalGroupTransformTarget>& targets,const std::string& message) {
+        std::vector<StructuralObjectEditIntent> edits;
+        for (const auto& target:targets) {
+            StructuralObjectEditIntent edit;
+            edit.object_id=target.entity_id;
+            edit.transform=target.transform;
+            edits.push_back(std::move(edit));
+        }
+        return sourceDerivedStructuralEditCommand(source,edits,message);
+    }
+
+    static Command sourceDerivedStructuralCandidateCommand(const DocumentSnapshot& source,
+        const Entity& before,const Entity& after,const std::string& message) {
+        const auto edit=capture_structural_object_edit(before,after);
+        return sourceDerivedStructuralEditCommand(source,edit ? std::vector{*edit} :
+            std::vector<StructuralObjectEditIntent>{},message);
+    }
+
+    static std::optional<Command> structuralDemolitionCommand(const DocumentSnapshot& source,
+        const std::vector<std::string>& ids,const std::string& message) {
+        if (ids.empty() || !std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
+            const auto found=source.entities().find(id);
+            return found!=source.entities().end() && structuralObject(found->second);
+        })) return std::nullopt;
+        const auto request=phase_structural_demolition_request(source.entities(),ids);
+        if (!request) return std::nullopt;
+        PhaseStructuralReplacementAuthoring replacement;
+        replacement.registry_id=request->registry_id;
+        replacement.alternative_id=request->alternative_id;
+        replacement.seed_object_ids=request->seed_object_ids;
+        replacement.demolition=true;
+        ConstraintAuthoringIntent semantic;
+        semantic.message=message;
+        auto intent=make_phase_constraint_authoring_intent(source,semantic);
+        intent.structural_replacement=encode_phase_structural_replacement_authoring(replacement);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();
+        command.message=message;
+        command.phase_constraint_authoring_completion=true;
+        command.phase_constraint_authoring_intent=encode_phase_constraint_authoring_intent(intent);
+        (void)Document::preview_command(source,Command{command});
+        return Command{std::move(command)};
+    }
+
     static Command physicalPlanAxisResizeCommand(const DocumentSnapshot& source, const std::string& id,
         double scale_x, double scale_y, Vec2 anchor, double frame_rotation_radians) {
         if (source.entities().at(id).type == "roof")
@@ -42378,6 +42567,10 @@ private:
             intent.resize = SlabPlanAxisResize{scale_x, scale_y, anchor, frame_rotation_radians};
             return sourceDerivedSlabGeometryEditCommand(source, {intent}, "Resize horizontal assembly in plan");
         }
+        if (const auto& before=source.entities().at(id); structuralObject(before))
+            return sourceDerivedStructuralCandidateCommand(source,before,
+                stage_structural_plan_axis_resize_entity(before,scale_x,scale_y,anchor,frame_rotation_radians),
+                "Resize structural object in plan");
         return augmentAuthoredCommand(plan_axis_resize_command(source, id, scale_x, scale_y,
             anchor, frame_rotation_radians), source);
     }
@@ -42395,6 +42588,8 @@ private:
                 const auto replacement = decode_phase_roof_replacement_authoring(component.roof_replacement);
                 if (!replacement.demolition) identities = replacement.identities;
             }
+            else if (!component.structural_replacement.is_null())
+                identities = decode_phase_structural_replacement_authoring(component.structural_replacement).identities;
             for (const auto& [old_id, new_id] : identities) {
                 const auto [found, inserted] = result.emplace(old_id, new_id);
                 if (!inserted && found->second != new_id)
@@ -42444,7 +42639,8 @@ private:
             if (original == source.entities().end() ||
                 (original->second.type != "roof" && original->second.type != "roof_join" &&
                  original->second.type != "slab" && original->second.type != "wall" &&
-                 original->second.type != "opening")) continue;
+                 original->second.type != "opening" && original->second.type != "column" &&
+                 original->second.type != "beam")) continue;
             const auto proposed = candidate.entities().find(proposed_id);
             if (proposed == candidate.entities().end() || proposed->second.type != original->second.type)
                 throw std::invalid_argument("The admitted alternative edit lost its proposed selection owner.");
@@ -42927,6 +43123,61 @@ private:
         command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
         const auto candidate = Document::preview_command(source, Command{command});
         validate_architectural_geometry_changes(source, candidate);
+        return command;
+    }
+
+    std::optional<Command> reviewAlternativeStructuralEdit(const Command& requested) {
+        const auto* raw=std::get_if<ApplyEntityChanges>(&requested);
+        if (!raw) return requested;
+        const auto source=authoringSnapshot();
+        const auto changed=[&](const EntityChange& change) {
+            const auto& id=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+            const auto before=source.entities().find(id);
+            return before!=source.entities().end() && (change.kind!=EntityChangeKind::upsert ||
+                before->second!=change.entity || before->second.properties.dump()!=change.entity.properties.dump() ||
+                before->second.extensions.dump()!=change.entity.extensions.dump());
+        };
+        bool shared=false;
+        for (const auto& [id,registry]:source.entities()) {
+            (void)id;
+            if (registry.type!="model_phases") continue;
+            const auto model=ModelPhases::from_json(registry.properties.at("model"));
+            if (!model.active_alternative()) continue;
+            for (const auto& change:raw->entity_changes) {
+                const auto& target=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+                const auto before=source.entities().find(target);
+                if (before!=source.entities().end() && structuralObject(before->second) && changed(change) &&
+                    std::find(model.baseline_ids().begin(),model.baseline_ids().end(),target)!=model.baseline_ids().end()) shared=true;
+            }
+        }
+        if (!shared) return requested;
+        const auto authority=captureSourceEditAuthority(source);
+        if (raw->expected_revision!=source.revision() || !raw->asset_changes.empty() || raw->entity_changes.size()>2048)
+            throw std::invalid_argument("Proposed structural edits require the unchanged source and a bounded column/beam edit.");
+        std::vector<StructuralObjectEditIntent> edits;
+        std::vector<std::string> removed;
+        std::set<std::string,std::less<>> targets;
+        for (const auto& change:raw->entity_changes) {
+            if (!changed(change)) {
+                if (change.kind!=EntityChangeKind::upsert || !source.entities().contains(change.entity.id))
+                    throw std::invalid_argument("Edit proposed columns and beams separately from unrelated new objects.");
+                continue;
+            }
+            const auto& id=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+            const auto before=source.entities().find(id);
+            if (before==source.entities().end() || !structuralObject(before->second) || !targets.insert(id).second)
+                throw std::invalid_argument("This alternative edit requires existing columns and beams.");
+            if (change.kind==EntityChangeKind::erase) removed.push_back(id);
+            else if (const auto edit=capture_structural_object_edit(before->second,change.entity)) edits.push_back(*edit);
+        }
+        Command command;
+        if (!removed.empty()) {
+            if (!edits.empty()) throw std::invalid_argument("Demolish structural objects separately from dimension edits.");
+            const auto demolition=structuralDemolitionCommand(source,removed,raw->message);
+            if (!demolition) throw std::invalid_argument("The structural baseline's saved alternative changed before demolition.");
+            command=*demolition;
+        } else command=sourceDerivedStructuralEditCommand(source,edits,raw->message);
+        if (!sourceEditAuthorityUnchanged(authority)) return std::nullopt;
         return command;
     }
 
@@ -43684,9 +43935,12 @@ private:
 
     bool applyAuthoredCommand(const Command& requested, bool opening_lifecycle_already_captured = false) {
         requireSiteCommandAdmission(requested);
-        const auto slab_profiled=reviewAlternativeSlabEdit(requested);
+        const auto structural_profiled=reviewAlternativeStructuralEdit(requested);
+        if (!structural_profiled) return false;
+        if (convertedEntityEditNoOp(requested,*structural_profiled)) return true;
+        const auto slab_profiled=reviewAlternativeSlabEdit(*structural_profiled);
         if (!slab_profiled) return false;
-        if (convertedEntityEditNoOp(requested,*slab_profiled)) return true;
+        if (convertedEntityEditNoOp(*structural_profiled,*slab_profiled)) return true;
         const auto roof_profiled=reviewAlternativeRoofEdit(*slab_profiled);
         if (!roof_profiled) return false;
         if (convertedEntityEditNoOp(*slab_profiled,*roof_profiled)) return true;
@@ -43729,9 +43983,12 @@ private:
     }
 
     bool applyDocumentCommand(const Command& command) {
-        const auto slab_profiled=reviewAlternativeSlabEdit(command);
+        const auto structural_profiled=reviewAlternativeStructuralEdit(command);
+        if (!structural_profiled) return false;
+        if (convertedEntityEditNoOp(command,*structural_profiled)) return true;
+        const auto slab_profiled=reviewAlternativeSlabEdit(*structural_profiled);
         if (!slab_profiled) return false;
-        if (convertedEntityEditNoOp(command,*slab_profiled)) return true;
+        if (convertedEntityEditNoOp(*structural_profiled,*slab_profiled)) return true;
         const auto roof_profiled=reviewAlternativeRoofEdit(*slab_profiled);
         if (!roof_profiled) return false;
         if (convertedEntityEditNoOp(*slab_profiled,*roof_profiled)) return true;
@@ -50477,6 +50734,12 @@ private:
                 return type == "roof" || type == "slab";
             }))
             return sourceDerivedRoofSlabTransformCommand(source, physical_targets, "Move roofs and horizontal assemblies on Site");
+        if (geometry_ids.isEmpty() && dimension_ids.isEmpty() && annotation_targets.empty() &&
+            reference_targets.empty() && embedded_targets.empty() && !physical_targets.empty() &&
+            std::all_of(physical_targets.begin(),physical_targets.end(),[&](const auto& target) {
+                return structuralObject(source.entities().at(target.entity_id));
+            }))
+            return sourceDerivedStructuralTransformCommand(source,physical_targets,"Move structural objects on Site");
         const auto geometry_operation=geometry_ids.isEmpty() ? PlanarTransform{} : selected_operation(geometry_ids.front());
         bool per_owner_geometry=!geometry_ids.isEmpty() && std::any_of(geometry_ids.begin(),geometry_ids.end(),[&](const auto& id) {
             return !equivalentPlanOperators(geometry_operation,selected_operation(id));

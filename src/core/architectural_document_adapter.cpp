@@ -9,6 +9,7 @@
 #include "sketch/phase_roof_transform.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/slab_semantics.hpp"
+#include "sketch/structural_object_edit.hpp"
 #include "sketch/wall_semantics.hpp"
 #ifdef VERTEX_HAS_HORIZONTAL_AUTHORING
 #include "sketch/slab_hosted_geometry_edit.hpp"
@@ -217,6 +218,47 @@ std::array<double, 2> planar_rotation(double angle) {
     // multiplied by distant source coordinates or a shared model pivot.
     if (std::abs(angle) == std::numbers::pi) return {-1.0, 0.0};
     return {std::cos(angle), std::sin(angle)};
+}
+
+struct NormalizedGroupTransform {
+    ArchitecturalTransform affine;
+    bool flip_horizontal{};
+    bool flip_vertical{};
+    bool identity{};
+};
+
+NormalizedGroupTransform normalize_group_transform(const ArchitecturalGroupTransform& transform) {
+    const auto finite_point=[](Vec3 point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    };
+    if (!finite_point(transform.pivot) || !finite_point(transform.offset) ||
+        !std::isfinite(transform.rotation_z_radians) ||
+        !std::isfinite(transform.scale) || !(transform.scale>0.0))
+        throw std::invalid_argument("Architectural group transforms must be finite with a positive scale.");
+    // Whole turns and double flips retain exact identity/half-turn operators.
+    const bool reflected=transform.flip_horizontal!=transform.flip_vertical;
+    const auto angle=std::remainder(std::remainder(transform.rotation_z_radians,
+        2.0*std::numbers::pi) + (transform.flip_horizontal && transform.flip_vertical
+            ? std::numbers::pi : 0.0), 2.0*std::numbers::pi);
+    const auto [c,s]=planar_rotation(angle);
+    const bool horizontal=reflected && transform.flip_horizontal;
+    const bool vertical=reflected && transform.flip_vertical;
+    const auto hx=horizontal?-1.0:1.0;
+    const auto hy=vertical?-1.0:1.0;
+    ArchitecturalTransform affine;
+    // Difference form retains small offsets during pure translation.
+    affine.x=transform.offset.x+(1.0-transform.scale*hx)*transform.pivot.x+
+        transform.scale*hx*((1.0-c)*transform.pivot.x+s*transform.pivot.y);
+    affine.y=transform.offset.y+(1.0-transform.scale*hy)*transform.pivot.y+
+        transform.scale*hy*((1.0-c)*transform.pivot.y-s*transform.pivot.x);
+    affine.z=transform.offset.z+(1.0-transform.scale)*transform.pivot.z;
+    affine.rotation_z_radians=angle;
+    affine.scale=transform.scale;
+    if (!std::isfinite(affine.x) || !std::isfinite(affine.y) || !std::isfinite(affine.z))
+        throw std::invalid_argument("The architectural group pivot exceeds the supported transform range.");
+    const bool identity=transform.scale==1.0 && transform.offset.x==0.0 && transform.offset.y==0.0 &&
+        transform.offset.z==0.0 && angle==0.0 && !reflected;
+    return {affine,horizontal,vertical,identity};
 }
 
 Vec3 transform_point(const Vec3& point, const ArchitecturalTransform& transform,
@@ -1552,26 +1594,44 @@ ApplyEntityChanges room_dimension_update_command(const DocumentSnapshot& source,
     return command;
 }
 
-ApplyEntityChanges beam_endpoint_update_command(const DocumentSnapshot& source,
-    const std::string& entity_id, const BeamEndpointEdit& edit, Revision expected_revision) {
-    if (!source.is_editable())
-        throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
-    auto entity = semantic_entity(source, entity_id, "beam", expected_revision);
+Entity stage_structural_beam_endpoint_entity(const EntityState& actual_entities,
+    const std::string& entity_id, const BeamEndpointEdit& edit) {
+    const auto found = actual_entities.find(entity_id);
+    if (found == actual_entities.end() || found->second.id != entity_id)
+        throw std::invalid_argument("Beam endpoint source is missing or has inconsistent identity");
+    const auto& original = found->second;
+    auto entity = original;
     if (edit.endpoint != BeamEndpoint::start && edit.endpoint != BeamEndpoint::end)
         throw std::invalid_argument("Beam endpoint role is invalid");
     if (!std::isfinite(edit.proposed_position.x) || !std::isfinite(edit.proposed_position.y))
         throw std::invalid_argument("Beam endpoint target must be finite");
     if (!canonical_form(entity, "beam", 1, "straight_beam"))
         throw std::invalid_argument("Beam endpoint editing requires a canonical straight beam");
+    validate_structural_object_source_entity(entity);
+    (void)decode_building_entity(resolve_vertical_placement(actual_entities, entity));
     const auto beam = std::get<Beam>(decode_building_entity(entity));
     const auto& endpoint = edit.endpoint == BeamEndpoint::start ? beam.start : beam.end;
     if (endpoint.x == edit.proposed_position.x && endpoint.y == edit.proposed_position.y)
-        throw std::invalid_argument("Beam endpoint target makes no document change");
+        return original;
     // Preserve the original three-coordinate array and its exact Z field;
     // re-encoding the whole beam would replace opaque source properties.
     auto& coordinates = entity.properties.at(edit.endpoint == BeamEndpoint::start ? "start_m" : "end_m");
     coordinates.at(0) = edit.proposed_position.x;
     coordinates.at(1) = edit.proposed_position.y;
+    invalidate_changed_receipts(original, entity);
+    validate_structural_object_source_entity(entity);
+    (void)decode_building_entity(resolve_vertical_placement(actual_entities, entity));
+    return entity;
+}
+
+ApplyEntityChanges beam_endpoint_update_command(const DocumentSnapshot& source,
+    const std::string& entity_id, const BeamEndpointEdit& edit, Revision expected_revision) {
+    if (!source.is_editable())
+        throw DocumentError(DocumentErrorCode::read_only, source.read_only_reason());
+    const auto original = semantic_entity(source, entity_id, "beam", expected_revision);
+    auto entity = stage_structural_beam_endpoint_entity(source.entities(), entity_id, edit);
+    if (entity == original)
+        throw std::invalid_argument("Beam endpoint target makes no document change");
     ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Move beam endpoint"};
     const auto candidate = Document::preview_command(source, Command{command});
     validate_architectural_geometry_changes(source, candidate, {entity_id});
@@ -1733,46 +1793,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         throw DocumentError(DocumentErrorCode::read_only,"The architectural group source is read-only.");
     if (requested_targets.empty() || requested_targets.size()>maximum_architectural_group_targets)
         throw std::invalid_argument("An architectural group requires between 1 and 1000 objects.");
-    struct Intent {
-        ArchitecturalTransform affine;
-        bool flip_horizontal{};
-        bool flip_vertical{};
-        bool identity{};
-    };
-    const auto finite_point=[](Vec3 point) {
-        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
-    };
-    const auto normalize=[&](const ArchitecturalGroupTransform& transform) {
-        if (!finite_point(transform.pivot) || !finite_point(transform.offset) ||
-            !std::isfinite(transform.rotation_z_radians) ||
-            !std::isfinite(transform.scale) || !(transform.scale>0.0))
-            throw std::invalid_argument("Architectural group transforms must be finite with a positive scale.");
-        // Whole turns and double flips retain the exact proper identity/half-turn
-        // operator, avoiding tiny sine terms multiplied by distant pivots.
-        const bool reflected=transform.flip_horizontal!=transform.flip_vertical;
-        const auto angle=std::remainder(std::remainder(transform.rotation_z_radians,
-            2.0*std::numbers::pi) + (transform.flip_horizontal && transform.flip_vertical
-                ? std::numbers::pi : 0.0), 2.0*std::numbers::pi);
-        const auto [c,s]=planar_rotation(angle);
-        const bool horizontal=reflected && transform.flip_horizontal;
-        const bool vertical=reflected && transform.flip_vertical;
-        const auto hx=horizontal?-1.0:1.0;
-        const auto hy=vertical?-1.0:1.0;
-        ArchitecturalTransform affine;
-        // Difference form retains small offsets during pure translation.
-        affine.x=transform.offset.x+(1.0-transform.scale*hx)*transform.pivot.x+
-            transform.scale*hx*((1.0-c)*transform.pivot.x+s*transform.pivot.y);
-        affine.y=transform.offset.y+(1.0-transform.scale*hy)*transform.pivot.y+
-            transform.scale*hy*((1.0-c)*transform.pivot.y-s*transform.pivot.x);
-        affine.z=transform.offset.z+(1.0-transform.scale)*transform.pivot.z;
-        affine.rotation_z_radians=angle;
-        affine.scale=transform.scale;
-        if (!std::isfinite(affine.x) || !std::isfinite(affine.y) || !std::isfinite(affine.z))
-            throw std::invalid_argument("The architectural group pivot exceeds the supported transform range.");
-        const bool identity=transform.scale==1.0 && transform.offset.x==0.0 && transform.offset.y==0.0 &&
-            transform.offset.z==0.0 && angle==0.0 && !reflected;
-        return Intent{affine,horizontal,vertical,identity};
-    };
+    using Intent = NormalizedGroupTransform;
     const auto equivalent=[](const Intent& a, const Intent& b) {
         if ((a.flip_horizontal!=a.flip_vertical)!=(b.flip_horizontal!=b.flip_vertical)) return false;
         const auto coefficients=[](const Intent& intent) {
@@ -1806,7 +1827,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
     bool identity=true;
     for (const auto& target : requested_targets) {
         const auto& id=target.entity_id;
-        const auto intent=normalize(target.transform);
+        const auto intent=normalize_group_transform(target.transform);
         const auto found=source.entities().find(id);
         if (!selected.insert(id).second)
             throw std::invalid_argument("An architectural group contains a duplicate target.");
@@ -2024,6 +2045,37 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
         }
     }
     return make_candidate_command(source, candidate, expected_revision, transaction.undo_label(), targets);
+}
+
+Entity stage_structural_group_transform_entity(const EntityState& actual_entities,
+    const std::string& object_id, const ArchitecturalGroupTransform& transform) {
+    const auto intent = normalize_group_transform(transform);
+    const auto found = actual_entities.find(object_id);
+    if (found == actual_entities.end() || found->first != found->second.id)
+        throw std::invalid_argument("Structural transform source is missing or has inconsistent identity");
+    const auto& source = found->second;
+    validate_structural_object_source_entity(source);
+    const auto effective = resolve_vertical_placement(actual_entities, source);
+    (void)decode_building_entity(effective);
+    if (intent.identity) return source;
+    auto movement = intent.affine;
+    const auto placement = source.properties.find("vertical_placement");
+    if (placement != source.properties.end() && placement->at("mode") == "level") {
+        const char* coordinate = source.type == "column" ? "base_center_m" : "start_m";
+        const auto datum = effective.properties.at(coordinate).at(2).get<double>() -
+            source.properties.at(coordinate).at(2).get<double>();
+        // Apply G in world coordinates while retaining the real source binding:
+        // s*(raw+datum)+tz-datum = s*raw+tz+(s-1)*datum.
+        movement.z += (movement.scale - 1.0) * datum;
+        if (!std::isfinite(movement.z))
+            throw std::invalid_argument("Structural transform level datum exceeds the supported range");
+    }
+    auto result = transform_building_entity(actual_entities, source, movement,
+        intent.flip_horizontal, intent.flip_vertical);
+    invalidate_changed_receipts(source, result);
+    validate_structural_object_source_entity(result);
+    (void)decode_building_entity(resolve_vertical_placement(actual_entities, result));
+    return result;
 }
 
 DocumentSnapshot preview_architectural_transaction(const DocumentSnapshot& source,

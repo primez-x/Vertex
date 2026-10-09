@@ -50,6 +50,7 @@
 #include "sketch/phase_roof_uniform_transform.hpp"
 #include "sketch/phase_roof_resize.hpp"
 #include "sketch/phase_slab_replacement.hpp"
+#include "sketch/phase_structural_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
@@ -2575,7 +2576,8 @@ static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryC
             (intent.contains("roof_replacement") && !intent.at("roof_replacement").is_null()) ||
             (intent.contains("slab_replacement") && !intent.at("slab_replacement").is_null()) ||
             (intent.contains("slab_demolition") && !intent.at("slab_demolition").is_null()) ||
-            (intent.contains("coordinated_replacements") && !intent.at("coordinated_replacements").is_null());
+            (intent.contains("coordinated_replacements") && !intent.at("coordinated_replacements").is_null()) ||
+            (intent.contains("structural_replacement") && !intent.at("structural_replacement").is_null());
     });
 }
 static void validate_phase_constraint_composed_originals(const std::map<std::string,Entity,std::less<>>& source,
@@ -2613,6 +2615,12 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
                 decode_slab_demolition_intent(intent.slab_demolition));
             if (entity_map_digest(replay) != entity_map_digest(candidate))
                 throw std::invalid_argument("Slab demolition cannot change retained owners or borrow other edit authority");
+        }
+        if (!intent.structural_replacement.is_null()) {
+            const auto replay=replay_phase_structural_replacement_authoring(source,
+                decode_phase_structural_replacement_authoring(intent.structural_replacement));
+            if (entity_map_digest(replay)!=entity_map_digest(candidate))
+                throw std::invalid_argument("Structural replacement cannot change retained owners or borrow other edit authority");
         }
     }
 #endif
@@ -2742,6 +2750,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool hosted_slab_asset_reservation=false;
     bool roof_mixed_asset_reservation=false;
     bool wall_presentation_asset_reservation=false;
+    bool structural_asset_reservation=false;
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
@@ -2763,6 +2772,14 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
     }
     for (const auto& intent : phase_constraint_authoring_components(command)) {
+        if (!intent.structural_replacement.is_null()) {
+            const auto replacement=decode_phase_structural_replacement_authoring(intent.structural_replacement);
+            complete_envelope_reservation=true;
+            structural_asset_reservation=true;
+            for (const auto& [original,id]:replacement.identities) {
+                (void)original;fresh.insert(id);nested_fresh.insert(id);
+            }
+        }
         if (!intent.roof_replacement.is_null()) {
             const auto replacement=decode_phase_roof_replacement_authoring(intent.roof_replacement);
             roof_mixed_asset_reservation=roof_mixed_asset_reservation ||
@@ -2883,7 +2900,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     for (std::size_t index=0;index<preceding_records;++index) {
         const auto& record=history.at(index);
         if (wall_stack_asset_reservation || hosted_slab_asset_reservation || roof_mixed_asset_reservation ||
-            wall_presentation_asset_reservation)
+            wall_presentation_asset_reservation || structural_asset_reservation)
             for (const auto& [id,asset]:record.assets) {
                 (void)asset;
                 if (fresh.contains(id))
@@ -2930,10 +2947,12 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                             if (fresh.contains(upsert.opening_id))
                                 throw std::invalid_argument("Roof opening identity was already reserved by retained intent: "+upsert.opening_id);
                 }
+                if (!intent.structural_replacement.is_null())
+                    require_unused(decode_phase_structural_replacement_authoring(intent.structural_replacement).identities);
             }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
-            if ((hosted_slab_asset_reservation || roof_mixed_asset_reservation) &&
+            if ((hosted_slab_asset_reservation || roof_mixed_asset_reservation || structural_asset_reservation) &&
                 entity.type=="assembly_model" && entity.properties.is_object()) {
                 const auto model=entity.properties.find("model");
                 if (model!=entity.properties.end() && model->is_object()) {
@@ -2993,10 +3012,10 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
 }
 #endif
 
-// Current authoring cannot silently rewrite a baseline roof while an
+// Current authoring cannot silently rewrite a baseline roof or structural object while an
 // alternative is active. Historical ordinary records retain their original
 // meaning: this guard is deliberately outside restore/replay validation.
-static void validate_current_baseline_roof_preservation(
+static void validate_current_baseline_physical_preservation(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate) {
     for (const auto& [registry_id,registry]:source) {
@@ -3006,11 +3025,12 @@ static void validate_current_baseline_roof_preservation(
         if (!model.active_alternative()) continue;
         for (const auto& id:model.baseline_ids()) {
             const auto original=source.find(id);
-            if (original==source.end() || (original->second.type!="roof" && original->second.type!="roof_join")) continue;
+            if (original==source.end() || (original->second.type!="roof" && original->second.type!="roof_join" &&
+                original->second.type!="column" && original->second.type!="beam")) continue;
             const auto after=candidate.find(id);
             if (after==candidate.end() || !exact_entity_payload(original->second,after->second))
                 document_error(DocumentErrorCode::invalid_entity,
-                    "Editing a baseline roof in an alternative requires a proposed replacement: "+id);
+                    "Editing a baseline "+original->second.type+" in an alternative requires a proposed replacement: "+id);
         }
     }
 }
@@ -8070,7 +8090,7 @@ Revision Document::apply(const Command& command) {
                 next.name = typed_command.name;
             }
 
-            validate_current_baseline_roof_preservation(current.entities,next.entities);
+            validate_current_baseline_physical_preservation(current.entities,next.entities);
             // Source-bound rooms cannot borrow an ordinary metadata edit to
             // detach their holes or their physical-wall evidence. Deletion is
             // explicit; supported source refresh will need typed authority.

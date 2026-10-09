@@ -56,6 +56,13 @@ struct BeamEndpointEdit {
     Vec2 proposed_position{};
 };
 
+// Detached actual-map staging of the same persisted plan XY operation. Retains
+// raw Z, admits the actual resolved placement and invalidates affected receipts.
+// An unchanged endpoint returns the exact source without publication/history.
+[[nodiscard]] Entity stage_structural_beam_endpoint_entity(
+    const std::map<std::string, Entity, std::less<>>& actual_entities,
+    const std::string& entity_id, const BeamEndpointEdit& edit);
+
 // Requires an editable revision-fenced source and a real canonical beam.
 // Native geometry and complete Document relationships admit the detached
 // candidate before one command is returned. Publication must retain the
@@ -124,6 +131,15 @@ struct ArchitecturalGroupTransformTarget {
     ArchitecturalGroupTransform transform;
 };
 inline constexpr std::size_t maximum_architectural_group_targets = 1000;
+
+// Detached actual-map producer for canonical v1 columns and straight beams.
+// Retains the caller's original group operation, resolves its real level datum,
+// and uses the ordinary geometry and changed-receipt invalidation semantics.
+// Identity operations return the exact source without allocating an identity.
+// This stages geometry only; the caller owns phase/relationship publication.
+[[nodiscard]] Entity stage_structural_group_transform_entity(
+    const std::map<std::string, Entity, std::less<>>& actual_entities,
+    const std::string& object_id, const ArchitecturalGroupTransform& transform);
 
 // Complete persisted physical-object group through the existing transaction
 // and native admission boundary. Planar walls use the qualified connected-wall

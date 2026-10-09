@@ -373,6 +373,24 @@ Entity resize_building(const Entity& original, const Resize& resize) {
         }
         return result;
     }
+    if (original.type == "column" || original.type == "beam") {
+        // Preserve the actual source envelope, including unchanged scalar
+        // representations, Z coordinates and opaque authoring metadata.
+        for (const auto* key : {"width_m","depth_m","radius_m"})
+            if (canonical.properties.contains(key) &&
+                result.properties.at(key) != canonical.properties.at(key))
+                result.properties.at(key) = canonical.properties.at(key);
+        for (const auto* key : {"base_center_m","start_m","end_m"}) {
+            if (!canonical.properties.contains(key)) continue;
+            for (std::size_t coordinate=0; coordinate<2; ++coordinate)
+                if (result.properties.at(key).at(coordinate) !=
+                    canonical.properties.at(key).at(coordinate))
+                    result.properties.at(key).at(coordinate) =
+                        canonical.properties.at(key).at(coordinate);
+        }
+        result.properties.erase("transform");
+        return result;
+    }
     for (const auto& [key,value] : canonical.properties.items()) {
         if (key=="flights") {
             // Patch only owned dimensions. Stable child identities, counts,
@@ -561,6 +579,48 @@ Bounds2 plan_axis_resize_bounds(const Entity& entity) {
     return {{xmin,ymin},{xmax,ymax}};
 }
 
+Entity stage_structural_plan_axis_resize_entity(
+    const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
+    double frame_rotation_radians) {
+    if (!std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x <= 0 || scale_y <= 0 ||
+        !std::isfinite(anchor.x) || !std::isfinite(anchor.y) || !std::isfinite(frame_rotation_radians))
+        throw std::invalid_argument("Plan resize factors must be positive and all frame coordinates finite");
+    const auto& properties = actual_source.properties;
+    if (!properties.is_object() || !properties.contains("version") ||
+        !properties.at("version").is_number_integer() || properties.at("version") != 1 ||
+        !properties.contains("form") || !properties.at("form").is_string() ||
+        !((actual_source.type == "column" &&
+           (properties.at("form") == "rectangular_column" || properties.at("form") == "circular_column")) ||
+          (actual_source.type == "beam" && properties.at("form") == "straight_beam")))
+        throw std::invalid_argument("Plan structural resize requires a canonical v1 column or straight beam");
+    (void)entity_shape(actual_source);
+    if (scale_x == 1 && scale_y == 1) return actual_source;
+    if (properties.at("form") == "circular_column" && scale_x != scale_y)
+        throw std::invalid_argument("Circular columns require equal plan factors; elliptical columns are unsupported");
+    const Resize resize{scale_x,scale_y,anchor,frame_rotation_radians,true};
+    auto result = resize_building(actual_source,resize);
+    compensate_physical_footprint_anchor(actual_source,result,resize);
+    (void)entity_shape(result);
+    const auto before = plan_axis_resize_bounds(actual_source);
+    const auto after = plan_axis_resize_bounds(result);
+    const auto [along,across] = resize.local_factors(plan_axis_resize_frame(actual_source));
+    const auto check_extent = [](double old_min, double old_max, double new_min,
+                                 double new_max, double factor) {
+        const double expected = (old_max-old_min)*factor;
+        const double actual = new_max-new_min;
+        const double roundoff = 64*std::numeric_limits<double>::epsilon()*
+            std::max({1.0,std::abs(old_min),std::abs(old_max),std::abs(new_min),
+                      std::abs(new_max),std::abs(expected)});
+        if (!std::isfinite(expected) || !std::isfinite(actual) || actual <= 0 ||
+            std::abs(actual-expected) > default_geometry_tolerance_metres+roundoff)
+            throw std::invalid_argument("Generated structural footprint does not meet the requested plan resize within native tolerance");
+    };
+    check_extent(before.minimum.x,before.maximum.x,after.minimum.x,after.maximum.x,along);
+    check_extent(before.minimum.y,before.maximum.y,after.minimum.y,after.maximum.y,across);
+    invalidate_changed_quantity_entries(actual_source,result);
+    return result;
+}
+
 Entity stage_roof_plan_axis_resize_entity(
     const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
     double frame_rotation_radians) {
@@ -680,8 +740,10 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
     } else if (original.type == "roof") {
         result = replay_roof_plan_resize_entity(original,
             {entity_id, scale_x, scale_y, anchor, frame_rotation_radians});
+    } else if (original.type == "column" || original.type == "beam") {
+        result = stage_structural_plan_axis_resize_entity(original,scale_x,scale_y,anchor,frame_rotation_radians);
     } else result = resize_building(original,resize);
-    if (original.type != "roof") {
+    if (original.type != "roof" && original.type != "column" && original.type != "beam") {
         compensate_physical_footprint_anchor(original,result,resize);
         result.properties.erase("transform");
         invalidate_changed_quantity_entries(original,result);

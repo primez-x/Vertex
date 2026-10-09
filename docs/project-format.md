@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v122
+# Vertex project formats v1 through v123
+
+## Source-derived structural alternative edits (v123)
+
+Native format 123 and JSON/assets extraction version 121 retain active-design
+authoring nine. It has exactly the eight common source-binding fields and
+`structural_replacement`. The structural leaf cannot borrow wall, roof, floor,
+relationship or ordinary geometry authority. Older outer dialects are unchanged.
+
+Replacement leaf one has exactly `version`, `registry_id`, `alternative_id`,
+`seed_object_ids`, `identities` and `edits`. Each closed structural edit has
+`version`, `object_id`, `profile_fields`, `quantity_entries` and `transform`.
+Canonical rectangular/circular columns and straight beams admit either a
+complete physical profile or the original uniform group operation. Profile
+inputs preserve explicit entered receipts and their opaque siblings; computed
+transforms create no input measurements. Actual captured levels supply world
+placement, and all selected edits derive from the same map.
+
+Only actually changed, active shared baseline owners receive proposed identities.
+Ordinary members of the structural cohort retain their IDs. The baseline stays
+exact; the actual registry appends proposed/demolished membership. Known saved
+view memberships, appearances, bound overlays and model annotation overrides
+append mapped proposed rows, retaining original rows, order and envelopes.
+Source overlay keys use their actual saved-view vocabulary; fresh destinations
+stay strict and reserve current/history/asset/opaque names.
+
+Demolition leaf two has exactly `version`, `registry_id`, `alternative_id`,
+`seed_object_ids` and `demolition:true`. It admits only actual active baseline
+columns/beams in one saved registry and changes only that alternative's
+demolition membership. Every physical and presentation record remains exact.
+Supported hosted catalogs retain their records and follow actual host visibility.
+
+Current authoring refuses a same-ID active-baseline column/beam mutation or
+removal. Historical ordinary records retain their original meanings. Unsupported
+affected opaque references and hosted component replacement remain separate
+gaps. Integrated source review is pending; no build, test, runtime or storage
+round trip was performed.
 
 ## Architectural imperial input spelling (v122)
 

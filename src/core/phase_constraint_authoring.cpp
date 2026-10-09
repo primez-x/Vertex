@@ -11,6 +11,7 @@
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
+#include "sketch/phase_structural_replacement.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/roof_join_phase_ownership.hpp"
@@ -754,11 +755,12 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
     const auto exclusive_operations = static_cast<int>(!value.wall_replacement.is_null()) +
         static_cast<int>(!value.opening_demolition.is_null()) + static_cast<int>(!value.roof_replacement.is_null()) +
         static_cast<int>(!value.slab_replacement.is_null()) + static_cast<int>(!value.slab_demolition.is_null()) +
-        static_cast<int>(!value.coordinated_replacements.is_null());
+        static_cast<int>(!value.coordinated_replacements.is_null()) +
+        static_cast<int>(!value.structural_replacement.is_null());
     if (exclusive_operations > 1)
         invalid("Active design operations cannot borrow another replacement or demolition authority");
     const auto coordinated_version=value.coordinated_replacements.is_null()?0:coordinated(value.coordinated_replacements,value).version;
-    Json result={{"version",coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
+    Json result={{"version",!value.structural_replacement.is_null()?9:coordinated_version==2?8:coordinated_version==1?7:!value.slab_demolition.is_null()?6:!value.slab_replacement.is_null()?5:!value.roof_replacement.is_null()?4:!value.opening_demolition.is_null()?3:value.wall_replacement.is_null()?1:2},{"expected_revision",value.expected_revision},
         {"source_snapshot_digest",value.source_snapshot_digest},{"source_authoring_digest",value.source_authoring_digest},
         {"source_entities_digest",value.source_entities_digest},
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
@@ -816,6 +818,16 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
             invalid("Coordinated replacements cannot borrow other geometry or relationship authority");
         result["coordinated_replacements"]=value.coordinated_replacements;
     }
+    if (!value.structural_replacement.is_null()) {
+        const auto replacement=decode_phase_structural_replacement_authoring(value.structural_replacement);
+        if (encode_phase_structural_replacement_authoring(replacement).dump()!=value.structural_replacement.dump())
+            invalid("Structural replacement decisions are not canonical");
+        ConstraintAuthoringIntent empty;
+        empty.message=value.intent.message;
+        if (encode_intent(value.intent)!=encode_intent(empty))
+            invalid("Structural replacement cannot borrow geometry or relationship authority");
+        result["structural_replacement"]=value.structural_replacement;
+    }
     // dump validates UTF-8 as well as the complete byte resource bound.
     resource_shape(result);
     if (result.dump().size()>proof_budget) invalid("Phase constraint proof exceeds its byte budget");
@@ -832,6 +844,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
         (value.at("version")==7 || value.at("version")==8);
+    const bool structural=value.is_object() && value.contains("version") && value.at("version")==9;
     if (replacement) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","wall_replacement"});
     else if (demolition) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
@@ -844,9 +857,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","slab_demolition"});
     else if (coordinated_replacements) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent","coordinated_replacements"});
+    else if (structural) keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        "source_entities_digest","source_saved_revision","phase_selections","intent","structural_replacement"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8) ||
+    if (!value.at("version").is_number_integer() || (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9) ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -886,6 +901,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         const auto inner=coordinated(result.coordinated_replacements,result);
         if ((value.at("version")==7 && inner.version!=1) || (value.at("version")==8 && inner.version!=2))
             invalid("Coordinated outer and inner authoring versions do not match");
+    }
+    if (structural) {
+        result.structural_replacement=value.at("structural_replacement");
+        if (result.structural_replacement.is_null()) invalid("Version nine requires structural replacement decisions");
+        (void)decode_phase_structural_replacement_authoring(result.structural_replacement);
     }
     if (encode_phase_constraint_authoring_intent(result)!=value) invalid("Phase constraint proof is not canonical");
     return result;
@@ -938,6 +958,9 @@ Entities replay_phase_constraint_authoring(const Entities& source,const Json& pr
     if (!decoded.slab_demolition.is_null())
         return replay_phase_slab_demolition_entities(source,
             decode_slab_demolition_intent(decoded.slab_demolition));
+    if (!decoded.structural_replacement.is_null())
+        return replay_phase_structural_replacement_authoring(source,
+            decode_phase_structural_replacement_authoring(decoded.structural_replacement));
     return decoded.wall_replacement.is_null() ? reconstruct_active_phase_constraint_authoring(source,decoded.intent)
         : replay_phase_wall_replacement_authoring(source,decoded);
 }

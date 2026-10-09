@@ -471,6 +471,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==9) return 123U;
                 if (intent.is_object() && intent.value("version", 0) == 4) {
                     const auto roof = intent.find("roof_replacement");
                     if (roof != intent.end() && has_uniform_roof_edits(*roof)) return 121U;
@@ -2376,6 +2377,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 123 &&
          sqlite3_column_int(user_version.get(), 0) != 122 &&
          sqlite3_column_int(user_version.get(), 0) != 121 &&
          sqlite3_column_int(user_version.get(), 0) != 120 &&
@@ -2953,6 +2955,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=123)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 123 for source-derived structural alternative edits");
         if (required_format>=122)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 122 for architectural feet-and-inches input");
         if (required_format>=121)

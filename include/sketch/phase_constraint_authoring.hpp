@@ -42,6 +42,10 @@ struct PhaseConstraintAuthoringIntent {
     // joins optional roof/horizontal lanes, with at least two families present
     // and at least one actual replacement. Every child binds the same source.
     nlohmann::json coordinated_replacements=nullptr;
+    // Dialect nine: source-derived column/beam edits in one saved alternative.
+    // Shared baseline owners remain exact; explicit structural intent alone
+    // creates proposed replacements and their known presentation references.
+    nlohmann::json structural_replacement=nullptr;
 };
 
 [[nodiscard]] PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(

@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 structural alternative lifecycle source integration
+
+Column and beam dimension/placement edits now derive proposed replacements
+from the actual saved active alternative rather than rewriting the shared
+baseline. Numeric transforms, plan/Site movement, rotation, side/corner sizing
+and beam endpoint edits use the same typed source path. Identity-copy staging
+also avoids provisional baseline publication. Column shape conversions remove
+stale owned dimensions; manual input retains source quantity metadata.
+
+Known saved-view memberships, appearance, overlays and model annotation
+overrides append proposed rows with qualified fresh identities. Current and
+historical entity/child/asset names remain reserved. Structural demolition
+retains physical and presentation records and changes only the saved
+alternative's demolition membership. Native 123/extraction 121 fences the new
+closed authoring meaning, including retained history; historical ordinary
+records remain admitted under their original meanings.
+
+Independent integrated source review approved after correcting unchanged
+numeric representation/no-op preservation, optional circular rotation, opaque
+legacy quantity retention and historical component alias reservation. Both
+numeric copy entry points now apply the actual world transform after identity
+copy staging, preserving the same floor datum as ordinary editing. Root source
+review and the scoped whitespace check passed. Hosted component replacement,
+unsupported affected reference families and mixed structural/other-family
+authoring remain active source gaps. No builds, tests, probes, scripts, native jobs, launches,
+packages or installations ran. Compilation, interactions, output and storage
+remain unverified; the installed candidate is unchanged.
+
 ### October 8 shared architectural measurement input source integration
 
 The shared quantity parser now accepts explicit architectural feet/inches
