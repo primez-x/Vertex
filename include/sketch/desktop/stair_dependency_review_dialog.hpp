@@ -23,6 +23,10 @@ public:
     [[nodiscard]] const std::optional<std::vector<PhaseStairReplacementDependencyDisposition>>&
         acceptedDispositions() const;
     [[nodiscard]] QString lastError() const;
+    // A caller-owned analytical check keeps invalid combined choices in the
+    // dialog. It grants no publication or geometry authority.
+    void setDispositionValidator(std::function<void(
+        const std::vector<PhaseStairReplacementDependencyDisposition>&)> validator);
     void accept() override;
     void reject() override;
 

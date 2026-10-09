@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 joint ordinary stair retirement source implementation
+
+Ordinary stair attachment review keeps individually available removal choices
+and additionally offers group retirement when the complete affected, non-editor
+railing cohort passes actual-source analytical admission. Each affected owner
+still requires an explicit decision; the exact chosen subset is validated
+together, and unchosen railings cannot be silently removed. An edited railing
+must choose an admitted resulting attachment instead of also being retired.
+
+The dialog shows conditional group requirements for eligible removal rows. Its
+captured-source analytical validator keeps invalid combinations in the dialog
+with an explanation, so the user can change choices before continuing. The
+producer uses the same resolution and complete actual-source preflight before
+native work, retaining existing raw commands, history reservations, aliases,
+room lineage, assets, metadata and exact Document preview.
+
+Independent source review approved; root integrated source review is complete.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations ran. Compilation and runtime remain
+unverified; the installed candidate is unchanged. Conditional cohort fallback
+is conservative: an unrelated affected owner can still prevent a valid subgroup
+offer. The matching baseline-stair replacement path and shared-baseline wall
+cohorts are the next source work; production qualification remains unfinished.
+
 ### October 9 mixed drawing and annotation source implementation
 
 The canvas Delete/Cut routes now capture independently selected area boundaries,

@@ -162,6 +162,48 @@ struct Inspection {
     Ownership phase;
     Work work;
 };
+bool editor_contains(const std::vector<Entity>& edited, const std::string& id) {
+    return std::any_of(edited.begin(), edited.end(), [&](const auto& entity) { return entity.id == id; });
+}
+std::string retirement_cohort_names(const PhaseStairReplacementDependencyPlan& plan,
+    const std::vector<std::string>& cohort) {
+    std::string names;
+    for (std::size_t i = 0; i < plan.dependencies.size(); ++i) {
+        const auto& row = plan.dependencies[i];
+        if (!std::binary_search(cohort.begin(), cohort.end(), row.rail_id)) continue;
+        if (!names.empty()) names += ", ";
+        const auto ordinal = "Railing " + std::to_string(i + 1);
+        // Requirements may be copied into every conditional row. Bound their
+        // display text independently of the source's aggregate string budget.
+        names += row.rail_name.empty() || row.rail_name.size() > 256 ? ordinal : row.rail_name + " (" + ordinal + ")";
+    }
+    return names;
+}
+void admit_joint_retirement(const Entities& actual, const std::vector<Entity>& edited,
+    PhaseStairReplacementDependencyPlan& plan) {
+    // This is an offer, never a closure supplied to the producer. Use only the
+    // actual affected railings that can receive an explicit retirement choice;
+    // no unaffected physical owner or concurrently edited rail joins the set.
+    std::vector<std::string> cohort;
+    bool needs_joint_offer{};
+    for (const auto& row : plan.dependencies) if (!editor_contains(edited, row.rail_id)) {
+        cohort.push_back(row.rail_id);
+        needs_joint_offer = needs_joint_offer || !row.retirement_eligible;
+    }
+    if (!needs_joint_offer || cohort.size() < 2) return;
+    // Reserve one more complete-source analytical pass beyond the individual
+    // preflights. If it cannot fit, keep every individually admitted offer.
+    if (actual.size() > 2000000 / (plan.dependencies.size() + 1)) return;
+    try { preflight_architectural_object_removal(actual, cohort, {}); }
+    catch (const std::exception&) { return; }
+    const auto requirement = "Group retirement is available. Choose Remove for all of these affected railings together: " +
+        retirement_cohort_names(plan, cohort) + ". The exact chosen removal group will be checked before applying the edit.";
+    for (auto& row : plan.dependencies) if (!row.retirement_eligible &&
+        std::binary_search(cohort.begin(), cohort.end(), row.rail_id)) {
+        row.retirement_eligible = true;
+        row.retirement_reason = requirement;
+    }
+}
 Inspection inspect(const Entities& actual, const std::vector<Entity>& edited) {
     if (actual.size() > 65536 || edited.empty() || edited.size() > maximum_architectural_group_targets)
         reject("requires a bounded nonempty actual editor cohort");
@@ -254,12 +296,65 @@ Inspection inspect(const Entities& actual, const std::vector<Entity>& edited) {
             admit(changed, {"top", "top", {}, changed.landing_host->incoming_flight_id, {}, Json::object()});
         }
         std::sort(row.valid_targets.begin(), row.valid_targets.end(), [](const auto& a, const auto& b) { return a.target_key < b.target_key; });
-        try {
-            preflight_architectural_object_removal(actual, {id}, {});
-            row.retirement_eligible = true;
-        } catch (const std::exception& error) { row.retirement_reason = error.what(); }
+        if (editor_contains(edited, id))
+            row.retirement_reason = "This railing is also being edited. Choose a resulting attachment; it cannot also be removed.";
+        else {
+            try {
+                preflight_architectural_object_removal(actual, {id}, {});
+                row.retirement_eligible = true;
+            } catch (const std::exception& error) { row.retirement_reason = error.what(); }
+        }
         result.plan.dependencies.push_back(std::move(row));
     }
+    admit_joint_retirement(actual, edited, result.plan);
+    return result;
+}
+struct Dispositions {
+    std::vector<Entity> edited;
+    std::vector<std::string> retired;
+};
+Dispositions resolve_dispositions(const Entities& actual, const std::vector<Entity>& edited,
+    Inspection& inspection, const std::vector<PhaseStairReplacementDependencyDisposition>& choices) {
+    const auto& dependencies = inspection.plan.dependencies;
+    if (choices.size() != dependencies.size()) reject("requires exactly one decision per affected rail");
+    Dispositions result{edited, {}};
+    for (std::size_t i = 0; i < choices.size(); ++i) {
+        const auto& row = dependencies[i]; const auto& choice = choices[i];
+        if (choice.rail_id.size() > 128 || choice.target_key.size() > 256) reject("decision string budget exceeded");
+        if (choice.rail_id != row.rail_id) reject("decisions must exactly follow ascending actual affected rails");
+        if (choice.action == PhaseStairReplacementDependencyAction::retire) {
+            if (!row.retirement_eligible || !choice.target_key.empty()) reject("rail is ineligible for explicit retirement: " + row.rail_id);
+            if (editor_contains(edited, row.rail_id)) reject("an edited rail cannot also be retired");
+            result.retired.push_back(row.rail_id); inspection.descriptors.erase(row.rail_id); continue;
+        }
+        if (choice.action != PhaseStairReplacementDependencyAction::rehost) reject("unsupported dependency action");
+        const auto target = std::find_if(row.valid_targets.begin(), row.valid_targets.end(),
+            [&](const auto& value) { return value.target_key == choice.target_key; });
+        if (target == row.valid_targets.end()) reject("rehost target is not an admitted resulting same-owner binding");
+        auto supplied = std::find_if(result.edited.begin(), result.edited.end(), [&](const auto& value) { return value.id == row.rail_id; });
+        if (supplied == result.edited.end()) {
+            auto changed = actual.at(row.rail_id);
+            for (const auto& [key, value] : target->host.items()) changed.properties.at("host")[key] = value;
+            result.edited.push_back(std::move(changed)); supplied = std::prev(result.edited.end());
+        }
+        const auto captured = capture_stair_object_edit(actual.at(row.rail_id), *supplied);
+        if (!captured || captured->profile_fields.at("host") != target->host)
+            reject("editor rail binding conflicts with its explicit rehost choice");
+        inspection.descriptors.at(row.rail_id) = *supplied;
+    }
+    // The row offer may have been admitted for a larger affected cohort. It
+    // grants no authority to add members: validate precisely the explicit
+    // decisions against the immutable original source before native work.
+    if (!result.retired.empty()) try { preflight_architectural_object_removal(actual, result.retired, {}); }
+    catch (const std::exception& error) {
+        reject("the chosen railing removal group cannot be retired together (" +
+            retirement_cohort_names(inspection.plan, result.retired) + "). Choose Remove for the complete required group, "
+            "or choose valid resulting attachments. " + error.what());
+    }
+    if (result.edited.size() > maximum_architectural_group_targets) reject("aggregate editor/rehost target budget exceeded");
+    JsonBudget complete_budget;
+    for (const auto& [id, entity] : actual) { (void)id; complete_budget.entity(entity); }
+    for (const auto& entity : result.edited) complete_budget.entity(entity);
     return result;
 }
 void preserve_rooms(const Entities& actual, const Entities& candidate) {
@@ -339,6 +434,14 @@ PhaseStairReplacementDependencyPlan inspect_ordinary_stair_edit_dependencies(
     }
 }
 
+void validate_ordinary_stair_dependency_dispositions(const Entities& actual,
+    const std::vector<Entity>& edited, const std::vector<PhaseStairReplacementDependencyDisposition>& choices) try {
+    auto inspection = inspect(actual, edited);
+    (void)resolve_dispositions(actual, edited, inspection, choices);
+} catch (const Json::exception& error) {
+    reject(std::string("malformed captured source/editor: ") + error.what());
+}
+
 ApplyEntityChanges prepare_ordinary_stair_dependency_edit(const DocumentSnapshot& source,
     const std::vector<Entity>& edited, const std::vector<PhaseStairReplacementDependencyDisposition>& choices,
     const std::string& message) try {
@@ -346,41 +449,11 @@ ApplyEntityChanges prepare_ordinary_stair_dependency_edit(const DocumentSnapshot
     if (message.empty() || message.size() > 4096) reject("message requires 1..4096 bytes");
     const auto& actual = source.entities();
     auto inspection = inspect(actual, edited);
-    const auto& dependencies = inspection.plan.dependencies;
-    if (choices.size() != dependencies.size()) reject("requires exactly one decision per affected rail");
-    auto complete_edited = edited;
-    std::vector<std::string> retired;
-    for (std::size_t i = 0; i < choices.size(); ++i) {
-        const auto& row = dependencies[i]; const auto& choice = choices[i];
-        if (choice.rail_id.size() > 128 || choice.target_key.size() > 256) reject("decision string budget exceeded");
-        if (choice.rail_id != row.rail_id) reject("decisions must exactly follow ascending actual affected rails");
-        if (choice.action == PhaseStairReplacementDependencyAction::retire) {
-            if (!row.retirement_eligible || !choice.target_key.empty()) reject("rail is ineligible for explicit retirement: " + row.rail_id);
-            if (std::any_of(edited.begin(), edited.end(), [&](const auto& entity) { return entity.id == row.rail_id; }))
-                reject("an edited rail cannot also be retired");
-            retired.push_back(row.rail_id); inspection.descriptors.erase(row.rail_id); continue;
-        }
-        if (choice.action != PhaseStairReplacementDependencyAction::rehost) reject("unsupported dependency action");
-        const auto target = std::find_if(row.valid_targets.begin(), row.valid_targets.end(),
-            [&](const auto& value) { return value.target_key == choice.target_key; });
-        if (target == row.valid_targets.end()) reject("rehost target is not an admitted resulting same-owner binding");
-        auto supplied = std::find_if(complete_edited.begin(), complete_edited.end(), [&](const auto& value) { return value.id == row.rail_id; });
-        if (supplied == complete_edited.end()) {
-            auto changed = actual.at(row.rail_id);
-            for (const auto& [key, value] : target->host.items()) changed.properties.at("host")[key] = value;
-            complete_edited.push_back(std::move(changed)); supplied = std::prev(complete_edited.end());
-        }
-        const auto captured = capture_stair_object_edit(actual.at(row.rail_id), *supplied);
-        if (!captured || captured->profile_fields.at("host") != target->host)
-            reject("editor rail binding conflicts with its explicit rehost choice");
-        inspection.descriptors.at(row.rail_id) = *supplied;
-    }
-    if (complete_edited.size() > maximum_architectural_group_targets) reject("aggregate editor/rehost target budget exceeded");
-    JsonBudget complete_budget;
-    for (const auto& [id, entity] : actual) { (void)id; complete_budget.entity(entity); }
+    auto dispositions = resolve_dispositions(actual, edited, inspection, choices);
+    const auto& complete_edited = dispositions.edited;
+    const auto& retired = dispositions.retired;
     std::size_t compound_bytes{};
     for (const auto& entity : complete_edited) {
-        complete_budget.entity(entity);
         if (const auto profile = capture_stair_object_edit(actual.at(entity.id), entity)) {
             const auto size = encode_stair_object_edit_intent(*profile).dump().size();
             // Compound capture retains the quantity envelope in both lanes;
@@ -400,6 +473,8 @@ ApplyEntityChanges prepare_ordinary_stair_dependency_edit(const DocumentSnapshot
     if (source_constraints) reject(*source_constraints);
     const auto expected_aliases = surviving_aliases(actual, retired);
     const auto stage = retired.empty() ? actual : replay_architectural_object_removal(actual, retired, {}, true, reservation);
+    for (const auto& [id, entity] : actual) if (entity.type == "railing" && !stage.contains(id) &&
+        !std::binary_search(retired.begin(), retired.end(), id)) reject("retirement removed a railing without an explicit choice: " + id);
     for (const auto& entity : complete_edited) if (!stage.contains(entity.id)) reject("edited owner overlaps retired closure");
     const auto stage_aliases = embedded_assembly_presentation_ids(stage);
     if (stage_aliases != expected_aliases) reject("retirement changed aliases outside actual qualified retired rows");

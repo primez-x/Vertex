@@ -45000,6 +45000,9 @@ private:
                 throw std::invalid_argument("The project or drawing context changed. Reopen the stair edit.");
             return authoringSnapshot();
         },owner);
+        if (!shared) dialog.setDispositionValidator([source,edited](const auto& choices) {
+            validate_ordinary_stair_dependency_dispositions(source.entities(),edited,choices);
+        });
         styleDialog(dialog);
         if (dialog.exec()!=QDialog::Accepted || !dialog.acceptedDispositions() ||
             !sourceEditAuthorityUnchanged(authority)) return std::nullopt;

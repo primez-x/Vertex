@@ -6,6 +6,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QStringList>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -59,6 +60,7 @@ public:
     DocumentSnapshot source;
     PhaseStairReplacementDependencyPlan plan;
     std::function<DocumentSnapshot()> current_source;
+    std::function<void(const std::vector<PhaseStairReplacementDependencyDisposition>&)> disposition_validator;
     std::string source_digest;
     std::vector<QComboBox*> choices;
     QLabel *error_label{}, *consequences{};
@@ -113,7 +115,10 @@ public:
             if (dependency.retirement_eligible) {
                 choice->addItem(QStringLiteral("Remove railing and attached components"),
                     static_cast<int>(PhaseStairReplacementDependencyAction::retire));
-            } else if (!dependency.retirement_reason.empty()) choice->setToolTip(text(dependency.retirement_reason));
+                if (!dependency.retirement_reason.empty())
+                    choice->setItemData(choice->count()-1,text(dependency.retirement_reason),Qt::ToolTipRole);
+            }
+            if (!dependency.retirement_reason.empty()) choice->setToolTip(text(dependency.retirement_reason));
             choices.push_back(choice);
             table->setCellWidget(row, 2, choice);
             QObject::connect(choice, qOverload<int>(&QComboBox::currentIndexChanged), dialog,
@@ -142,17 +147,24 @@ public:
     void update() {
         if (!apply) return;
         std::size_t removed{};
+        QStringList requirements;
         bool complete = !invalidated;
-        for (const auto* choice : choices) {
+        for (std::size_t index=0;index<choices.size();++index) {
+            const auto* choice=choices[index];
             complete = complete && choice->currentIndex() > 0;
             if (choice->currentIndex() > 0 && choice->currentData().toInt() ==
-                static_cast<int>(PhaseStairReplacementDependencyAction::retire)) ++removed;
+                static_cast<int>(PhaseStairReplacementDependencyAction::retire)) {
+                ++removed;
+                const auto reason=text(plan.dependencies[index].retirement_reason);
+                if (!reason.isEmpty() && !requirements.contains(reason)) requirements.push_back(reason);
+            }
         }
         apply->setEnabled(complete);
         consequences->setVisible(removed > 0);
         consequences->setText(QStringLiteral(
             "%1 railing(s) and their attached components will be removed with this stair edit. Undo restores the whole edit.")
-            .arg(static_cast<qulonglong>(removed)));
+            .arg(static_cast<qulonglong>(removed))+
+            (requirements.isEmpty() ? QString{} : QStringLiteral("\n")+requirements.join(QStringLiteral("\n"))));
     }
 
     bool collect() {
@@ -181,6 +193,11 @@ public:
             std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
                 return left.rail_id < right.rail_id;
             });
+            if (disposition_validator) disposition_validator(result);
+            if (document_snapshot_digest(current_source())!=source_digest) {
+                invalidated=true;
+                throw std::invalid_argument("The project changed. Cancel and reopen the stair edit.");
+            }
             accepted = std::move(result);
             return true;
         } catch (const std::exception& failure) {
@@ -199,6 +216,10 @@ StairDependencyReviewDialog::~StairDependencyReviewDialog() = default;
 const std::optional<std::vector<PhaseStairReplacementDependencyDisposition>>&
 StairDependencyReviewDialog::acceptedDispositions() const { return m_impl->accepted; }
 QString StairDependencyReviewDialog::lastError() const { return m_impl->error; }
+void StairDependencyReviewDialog::setDispositionValidator(std::function<void(
+    const std::vector<PhaseStairReplacementDependencyDisposition>&)> validator) {
+    m_impl->disposition_validator=std::move(validator);
+}
 void StairDependencyReviewDialog::accept() { if (m_impl->collect()) QDialog::accept(); }
 void StairDependencyReviewDialog::reject() { m_impl->accepted.reset(); QDialog::reject(); }
 
