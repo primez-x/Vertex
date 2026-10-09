@@ -3498,9 +3498,12 @@ static void retain_joint_callout_placement(const std::map<std::string, Entity, s
         const auto decoded = decode_boundary_dimension_entity(entity);
         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
         const bool rigid_owner = rigid.contains(decoded.dimension->boundary_id);
-        if (!rigid_owner && !(per_owner && offsets.dimension_offsets.contains(id))) continue;
+        if (!rigid_owner && !((per_owner || intent.physical_room_dimension_completion) &&
+            offsets.dimension_offsets.contains(id))) continue;
         const auto found = candidate.find(id);
         if (found == candidate.end()) throw std::invalid_argument("Joint translation retired a rigid-owner callout");
+        if (intent.physical_room_dimension_completion && is_physical_wall_room(source.at(decoded.dimension->boundary_id)))
+            (void)resolve_current_boundary_dimension(*decoded.dimension, candidate);
         auto placed = *decoded.dimension;
         if (rigid_owner && rigid_transform)
             placed.text_position = transform_point(placed.text_position, offsets.owner_transforms.at(placed.boundary_id));
@@ -5905,10 +5908,34 @@ nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
     }
     if (rigid && encoded.dump().size() > 1024 * 1024)
         throw std::invalid_argument("Rigid joint intent exceeds its proof budget");
+    if (intent.physical_room_dimension_completion) {
+        if (intent.dimension_ids.empty())
+            throw std::invalid_argument("Current physical-room callout completion requires selected dimensions");
+        encoded["version"] = encoded.at("version").get<int>() + 4;
+        encoded["physical_room_dimension_completion"] = true;
+        if (encoded.dump().size() > 1024 * 1024)
+            throw std::invalid_argument("Current physical-room joint intent exceeds its proof budget");
+    }
     return encoded;
 }
 
 JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) {
+    if (value.is_object() && value.contains("version") && value.at("version").is_number_integer() &&
+        value.at("version") >= 5 && value.at("version") <= 8) {
+        const auto marker = value.find("physical_room_dimension_completion");
+        if (marker == value.end() || !marker->is_boolean() || !marker->get<bool>() ||
+            value.dump().size() > 1024 * 1024)
+            throw std::invalid_argument("Current physical-room joint intent requires its explicit bounded marker");
+        auto base = value;
+        base.erase("physical_room_dimension_completion");
+        base["version"] = value.at("version").get<int>() - 4;
+        // Decode the exact older field shape without changing that dialect's
+        // meaning. The new source admission is restored explicitly afterward.
+        auto result = joint_translation_from_json(base);
+        result.physical_room_dimension_completion = true;
+        (void)joint_translation_to_json(result);
+        return result;
+    }
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
         (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4))
         throw std::invalid_argument("Unsupported joint translation intent version");
@@ -6290,13 +6317,18 @@ JointTranslationOffsets resolve_joint_translation_offsets(
         if (rigid && !semantic_available.contains(id)) throw std::invalid_argument("Rigid joint wall is unavailable in its semantic phase");
         if (!per_owner) result.owner_offsets.emplace(id, intent.offset);
     }
+    bool current_room_callout = false;
     for (const auto& id : intent.dimension_ids) {
         const auto& entity = require(id);
         if (!can_recognize_boundary_dimension_entity_type(entity.type))
             throw std::invalid_argument("Joint translation dimension source has the wrong owner type");
         const auto decoded = decode_boundary_dimension_entity(entity);
         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-        (void)decoded.dimension->resolve(require(decoded.dimension->boundary_id));
+        const auto& owner_entity = require(decoded.dimension->boundary_id);
+        if (intent.physical_room_dimension_completion) {
+            (void)resolve_current_boundary_dimension(*decoded.dimension, source);
+            current_room_callout = current_room_callout || is_physical_wall_room(owner_entity);
+        } else (void)decoded.dimension->resolve(owner_entity);
         if (!per_owner) result.dimension_offsets.emplace(id, intent.offset);
         if (per_owner) {
             const auto owner = result.owner_offsets.find(decoded.dimension->boundary_id);
@@ -6314,6 +6346,8 @@ JointTranslationOffsets resolve_joint_translation_offsets(
                 throw std::invalid_argument("Joint selected callout contradicts its selected rigid owner's translation");
         }
     }
+    if (intent.physical_room_dimension_completion && !current_room_callout)
+        throw std::invalid_argument("Current physical-room joint intent must select an actual current room callout");
     return result;
 }
 

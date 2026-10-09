@@ -294,6 +294,11 @@ struct JointTranslationIntent {
     // The marker survives missing vectors so damaged proofs cannot downgrade.
     std::vector<RigidOwnerTransformation> owner_transformations;
     bool per_owner_rigid_completion{};
+    // Nested versions five through eight retain versions one through four's
+    // respective operators and add explicit current physical-room callout
+    // admission from the captured authoritative inventory. Historical/default
+    // intents retain entity-only dimension semantics.
+    bool physical_room_dimension_completion{};
 };
 
 // One observation of an existing owner's supported field. This carries no

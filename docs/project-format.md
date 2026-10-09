@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v156
+# Vertex project formats v1 through v157
+
+## Current physical-room callouts in connected moves (v157)
+
+Native reader 157 and JSON/assets extraction 155 retain explicit current-room
+callout admission in joint moves. Nested joint versions five through eight use
+the exact respective version-one through version-four operator field shapes,
+plus `physical_room_dimension_completion:true`. The existing selection, offset,
+operator-coverage and presentation-proof rules remain unchanged. The new flag
+requires a nonempty selected dimension roster containing an actual current
+physical-room callout; a missing/false marker, unknown field or over-budget
+proof rejects. The new nested intent budget is one MiB.
+
+The actual captured authoritative source map qualifies selected dimensions.
+For a physical room, owner identity, active state, complete physical inventory,
+context/plane, exact clear outer/holes and stable analytical target must match.
+Only the already admitted phase-bookkeeping difference is permitted. The
+candidate inventory is checked again before placement is retained. A callout
+cannot grant independent geometry authority to its physical room or make stale
+geometry current. Net-area callouts continue using clear area including holes.
+
+Current independent room callouts bypass the historical entity-only ordinary
+placement proof and are retained once by the source-qualified joint wrapper.
+Position changes preserve target, style, metadata and manual-placement rules.
+Older joint dialects and default dimension resolvers keep their original
+semantics. Direct and recursively wrapped retained/undone intents preserve the
+reader floor; extraction derives its floor from complete native history.
+Compilation and runtime qualification remain pending under the build/test pause.
 
 ## Phase-aware physical-room wall edits (v156)
 

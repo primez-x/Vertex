@@ -141,10 +141,17 @@ void validate_boundary_dimension_target(
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
     const BoundaryDimension& dimension, const DocumentSnapshot& snapshot);
 
-// Current authoring/display calculation from an actual captured snapshot.
+// Current authoring/display calculation from an actual captured authoritative
+// map. Command callers must supply their actual captured source map, never a
+// reconstructed or fabricated snapshot.
 // A physical room may retain its original phase bookkeeping only when its
 // admitted physical inventory, context/plane and exact clear geometry remain
 // unchanged. Historical command replay retains the strict overloads above.
+[[nodiscard]] BoundaryDimensionResolution resolve_current_boundary_dimension(
+    const BoundaryDimension& dimension,
+    const std::map<std::string, Entity, std::less<>>& entities);
+// Snapshot callers supply their actual captured snapshot under the same
+// current-value qualification and caller obligations as the overload above.
 [[nodiscard]] BoundaryDimensionResolution resolve_current_boundary_dimension(
     const BoundaryDimension& dimension, const DocumentSnapshot& snapshot);
 

@@ -130,6 +130,7 @@ struct Budget {
         sequence(v.rigid_boundary_ids); sequence(v.rigid_stroke_ids); sequence(v.partial_wall_ids); sequence(v.dimension_ids);
         sequence(v.annotation_translations); sequence(v.reference_translations); sequence(v.owner_translations);
         sequence(v.dimension_translations); sequence(v.owner_transformations);
+        if (v.physical_room_dimension_completion) reserve(64);
     }
     void read(const DistoMeasurementAttachment& v) {
         text(v.owner_id); const auto& r = v.record;

@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed-room-callout move source implementation
+
+The mixed Site path now captures current room callouts in a typed joint lane,
+including selections whose displayed offsets share one frame. Current common-
+frame connected producers also opt into full-inventory admission when an
+independent room callout is selected. A single wall with such a callout uses
+the existing per-owner solve rather than the entity-only placement path.
+
+Explicit current authoritative-map APIs qualify actual captured command maps;
+current snapshot wrappers delegate without reconstructing snapshots. Strict
+Entity/map/snapshot defaults remain unchanged. Joint nested dialects five
+through eight add exactly one true flag to the respective prior operator
+shapes. They preserve geometry/offset coverage and presentation authority,
+require an actual selected current-room callout and retain a one-MiB budget.
+Source and candidate inventories must admit the physical room; stale or changed
+room geometry still requires explicit reviewed repair. Independent placement
+is retained once after geometry proof replay, preserving stable targets,
+styling, metadata and manual placement. Net-area values continue including holes.
+
+Native 157 / extraction 155 preserve the new meaning through direct and wrapped
+retained/undone history. Root source review and independent integrated review
+are complete; the independent reviewer found no actionable finding in the
+16-path source batch. Root separately read the extraction floor mapping and
+typed replacement identity remapping. No builds, tests, probes, scripts, native jobs, launches, packages
+or installations ran. Compilation and runtime remain unverified; the installed
+candidate is unchanged.
+
 ### October 9 phase-aware room wall split/merge source implementation
 
 Current wall split and merge producers now continue an unchanged clear room

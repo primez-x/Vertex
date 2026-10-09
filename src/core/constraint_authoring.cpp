@@ -12,6 +12,7 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/joint_translation_replay.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/physical_wall_room_data.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 
@@ -1168,7 +1169,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                 const auto decoded=decode_boundary_dimension_entity(found->second);
                 if (!decoded.supported()) invalid(decoded.unsupported_reason);
                 admit_owner(decoded.dimension->boundary_id);
-                (void)decoded.dimension->resolve(snapshot.entities().at(decoded.dimension->boundary_id));
+                if (move.physical_room_dimension_completion)
+                    (void)resolve_current_boundary_dimension(*decoded.dimension, snapshot.entities());
+                else (void)decoded.dimension->resolve(snapshot.entities().at(decoded.dimension->boundary_id));
             }
         }
         if (result.normalized_intent_.boundary_resize) {
@@ -2207,6 +2210,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     if (scope.inactive_owner_ids.contains(decoded.dimension->boundary_id)) continue;
                     const bool rigid_owner=rigid.contains(decoded.dimension->boundary_id);
                     if (!rigid_owner && !std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)) continue;
+                    if (move.physical_room_dimension_completion &&
+                        is_physical_wall_room(snapshot.entities().at(decoded.dimension->boundary_id)))
+                        (void)resolve_current_boundary_dimension(*decoded.dimension, result.candidate_entities_);
                     auto placed=*decoded.dimension;
                     placed.text_position=transform_point(placed.text_position,rigid_owner && move.per_owner_rigid_completion ?
                         joint_owner_transform(move,placed.boundary_id) : PlanarTransform{{},0,false,false,
@@ -2657,6 +2663,13 @@ Command ConstraintAuthoringBuilder::command_for(const Entities& current,Revision
                 if (entity.type!="dimension") continue;
                 const auto decoded=decode_boundary_dimension_entity(entity);
                 if (!decoded.supported()) invalid(decoded.unsupported_reason);
+                // Current room callouts need the complete source inventory.
+                // Their wrapper retains placement after geometry proof replay;
+                // the historical entity-only placement lane cannot admit them.
+                if (move.physical_room_dimension_completion &&
+                    (rigid.contains(decoded.dimension->boundary_id) ||
+                        std::binary_search(move.dimension_ids.begin(),move.dimension_ids.end(),id)) &&
+                    is_physical_wall_room(current.at(decoded.dimension->boundary_id))) continue;
                 // A geometry-only v3 proof without changed walls has no
                 // historical wall placement lane. The joint wrapper retains
                 // its source-qualified callouts directly after proof replay.

@@ -115,7 +115,12 @@ PhysicalRoomDimensionSource resolve_physical_room_dimension_source(
 }
 
 PhysicalRoomDimensionSource resolve_current_physical_room_dimension_source(
+    const Entity& room, const std::map<std::string, Entity, std::less<>>& entities) {
+    return resolve_source(room, entities, true);
+}
+
+PhysicalRoomDimensionSource resolve_current_physical_room_dimension_source(
     const Entity& room, const DocumentSnapshot& snapshot) {
-    return resolve_source(room, snapshot.entities(), true);
+    return resolve_current_physical_room_dimension_source(room, snapshot.entities());
 }
 } // namespace sketch

@@ -1,5 +1,13 @@
 # Portable project extraction
 
+Exchange version 155 requires native reader 157 for current physical-room
+callouts in connected moves. Closed nested joint dialects five through eight
+retain the prior respective operator shapes with explicit inventory-qualified
+callout admission. Current, wrapped, retained and undone history preserve the
+floor. Older nested dialects retain their historical dimension semantics.
+The source contract is documented in [project-format.md](project-format.md);
+compilation and runtime qualification remain pending.
+
 Exchange version 154 requires native reader 156 for phase-aware physical-room
 wall split/merge completion. Closed split intent three and merge intent two
 retain explicit current-source admission; continuation receipt two preserves

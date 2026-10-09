@@ -18,12 +18,18 @@ struct PhysicalRoomDimensionSource {
 [[nodiscard]] PhysicalRoomDimensionSource resolve_physical_room_dimension_source(
     const Entity& room, const std::map<std::string, Entity, std::less<>>& entities);
 
-// Current-value qualification against an actual captured snapshot. Phase
-// bookkeeping alone may differ after both captured lineages are admitted and
+// Current-value qualification against the actual captured authoritative entity
+// map. New versioned current-command authoring/replay callers must supply their
+// actual captured command source map, never a fabricated or restored snapshot.
+// Historical/default command and review replay retain the strict API above.
+// Phase bookkeeping alone may differ after both captured lineages are admitted and
 // the complete physical inventory, context/plane and exact clear geometry
 // still match. The retained owner supplies its stable IDs and is not rewritten.
-// This is not historical command/review replay authority; those callers retain
-// the strict retained-map API above and its exact source-lineage requirement.
+[[nodiscard]] PhysicalRoomDimensionSource resolve_current_physical_room_dimension_source(
+    const Entity& room, const std::map<std::string, Entity, std::less<>>& entities);
+
+// Snapshot callers supply their actual captured snapshot under the same
+// current-value qualification and caller obligations as the overload above.
 [[nodiscard]] PhysicalRoomDimensionSource resolve_current_physical_room_dimension_source(
     const Entity& room, const DocumentSnapshot& snapshot);
 } // namespace sketch

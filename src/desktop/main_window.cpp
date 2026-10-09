@@ -8767,6 +8767,16 @@ public:
         });
     }
 
+    static void completeCurrentRoomJointCallouts(const DocumentSnapshot& source, JointTranslationIntent& joint) {
+        for (const auto& id : joint.dimension_ids) {
+            const auto decoded = decode_boundary_dimension_entity(source.entities().at(id));
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            if (!is_physical_wall_room(source.entities().at(decoded.dimension->boundary_id))) continue;
+            (void)resolve_current_boundary_dimension(*decoded.dimension, source);
+            joint.physical_room_dimension_completion = true;
+        }
+    }
+
     static Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
         QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {},
         std::optional<Vec2> presentation_delta = std::nullopt,
@@ -8949,6 +8959,7 @@ public:
                 if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type)) continue;
                 joint.dimension_ids.push_back(change.entity.id);
             }
+            completeCurrentRoomJointCallouts(source, joint);
             ConstraintAuthoringIntent intent;
             intent.joint_translation=std::move(joint);
             intent.message="Move connected selection";
@@ -9026,6 +9037,7 @@ public:
                     if(!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                     if(!rigid_geometry.contains(decoded.dimension->boundary_id)) joint.dimension_ids.push_back(change.entity.id);
                 }
+                completeCurrentRoomJointCallouts(source, joint);
                 ConstraintAuthoringIntent intent;
                 intent.joint_translation=std::move(joint);
                 intent.message="Move connected selection";
@@ -9074,7 +9086,13 @@ public:
             std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="wall";}) &&
             std::any_of(changes.begin(),changes.end(),[](const auto& change){return change.kind==EntityChangeKind::upsert &&
                 can_recognize_boundary_dimension_entity_type(change.entity.type);});
-        const bool plain_wall_group=model_ids.size()>1 &&
+        const bool current_room_callouts=std::any_of(changes.begin(),changes.end(),[&](const auto& change) {
+            if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type))return false;
+            const auto decoded=decode_boundary_dimension_entity(source.entities().at(change.entity.id));
+            if(!decoded.supported())throw std::invalid_argument(decoded.unsupported_reason);
+            return is_physical_wall_room(source.entities().at(decoded.dimension->boundary_id));
+        });
+        const bool plain_wall_group=(model_ids.size()>1 || current_room_callouts) &&
             std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id) {
                 return source.entities().at(id.toStdString()).type=="wall";
             }) && (partial_wall_callouts || std::none_of(graph.begin(),graph.end(),[](const auto& item) {
@@ -9107,6 +9125,7 @@ public:
                 joint.dimension_ids.push_back(change.entity.id);
                 joint.dimension_translations.push_back({change.entity.id,offset});
             }
+            completeCurrentRoomJointCallouts(source, joint);
             ConstraintAuthoringIntent intent;
             intent.joint_translation=std::move(joint);
             intent.message="Move walls and connected corners";
@@ -53413,6 +53432,10 @@ private:
                 !equivalentPlanOperators(operation,selected_operation(id_from(dimension.boundary_id))))
                 throw std::invalid_argument("The selected dimension and its measured owner require different Site moves.");
             joint_dimension_moves.push_back({original.id,operation.offset});
+            // Room callouts retain a typed inventory-qualified lane even when
+            // every displayed Site displacement happens to share one frame.
+            if (!geometry_ids.isEmpty() && is_physical_wall_room(source.entities().at(dimension.boundary_id)))
+                per_owner_geometry=true;
             if (!geometry_ids.isEmpty() && !equivalentPlanOperators(operation,geometry_operation)) per_owner_geometry=true;
             if (expected.x==dimension.text_position.x && expected.y==dimension.text_position.y) continue;
             dimension.text_position=expected;
@@ -53474,6 +53497,7 @@ private:
                 else throw std::invalid_argument("This Site selection has no typed geometry translation.");
                 joint.owner_translations.push_back({id,offset});
             }
+            completeCurrentRoomJointCallouts(source, joint);
             ConstraintAuthoringIntent intent;
             intent.joint_translation=std::move(joint);
             intent.message="Move Site selection through each source frame";
