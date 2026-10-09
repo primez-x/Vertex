@@ -21,8 +21,15 @@ namespace sketch {
 // Closed inner v4 adds complete_hosted_catalog_consequences:true to the seven
 // v2/v3 fields. Ordinary removal is nullable; when present its exact child v1
 // or v2 codec remains closed. At least two historical families are required
-// without ordinary removal, otherwise one. Only v4 admits complete independently
+// without ordinary removal, otherwise one. V4 admits complete independently
 // replayed hosted catalog consequences and proven historical selection closure.
+// Closed inner v5 adds exactly ordinary_opening_ids: 1..1000 ascending unique
+// ASCII identities for independent actual ordinary semantic openings. When no
+// historical family is present, replay derives the saved choice from actual
+// opening/wall membership. At least one actual active registry is required;
+// other unregistered owners remain ordinary without fabricated membership.
+// Historical roots, ordinary roots/components and openings total at most 4096;
+// opening identities are disjoint from all historical and ordinary roots.
 [[nodiscard]] nlohmann::json encode_phase_coordinated_demolition(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
@@ -41,14 +48,19 @@ struct PhaseCoordinatedOrdinaryRemoval {
 };
 
 // Validates the complete enclosure, including historical children and source
-// bindings. V1 and v4 with null ordinary_removal return nullopt. V2 selections
+// bindings. V1 and v4/v5 with null ordinary_removal return nullopt. V2 selections
 // are canonical ascending unique ASCII identities with aggregate size <=1000.
-// Inner v3/v4 child v2 destinations are bounded nonempty arrays of fresh IDs; slot
+// Inner v3/v4/v5 child v2 destinations are bounded nonempty arrays of fresh IDs; slot
 // order is authored join/overlay order rather than lexical identity order.
 [[nodiscard]] std::optional<PhaseCoordinatedOrdinaryRemoval> phase_coordinated_demolition_ordinary_removal(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
-// Validates the entire enclosure; true exclusively for closed inner v4.
+// Validates the entire enclosure; empty for closed inner v1..v4. V5 identities
+// grant no wall or room authoring authority and replay the same actual source.
+[[nodiscard]] std::vector<std::string> phase_coordinated_demolition_ordinary_openings(
+    const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
+
+// Validates the entire enclosure; true exclusively for closed inner v4/v5.
 [[nodiscard]] bool phase_coordinated_demolition_complete_hosted_catalog_consequences(
     const nlohmann::json& value, const PhaseConstraintAuthoringIntent& enclosing);
 
@@ -60,6 +72,10 @@ struct PhaseCoordinatedOrdinaryRemoval {
 // transitions to that same actual registry/alternative.
 // V4 retains actual registry ID order and all baseline physical envelopes,
 // protects foreign/inactive hosts, and composes only complete typed consequences.
+// V5 authenticates independent openings and their actual active wall hosts to
+// the same saved choice before native replay. V5 additionally retires admitted
+// proposed-opening rows from baseline carriers without changing their envelope,
+// other rows, baseline openings or unchanged original wall bodies.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> replay_phase_coordinated_demolition(
     const std::map<std::string, Entity, std::less<>>& source,
     const PhaseConstraintAuthoringIntent& enclosing);

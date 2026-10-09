@@ -2658,6 +2658,7 @@ static bool phase_constraint_authoring_retires_proposals(const ApplyBoundaryCons
             return true;
         const auto coordinated=intent.find("coordinated_demolition");
         if (coordinated==intent.end() || !coordinated->is_object()) return false;
+        if (coordinated->value("version",0)==5) return true;
         if ((coordinated->value("version",0)==2 || coordinated->value("version",0)==3 ||
              coordinated->value("version",0)==4) &&
             coordinated->contains("ordinary_removal") &&
@@ -2953,6 +2954,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool complete_wall_demolition=false;
     bool complete_ordinary_wall_demolition=false;
     bool complete_hosted_demolition=false;
+    bool complete_opening_demolition=false;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
@@ -3020,6 +3022,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             if (phase_coordinated_demolition_complete_hosted_catalog_consequences(
                     root_intent.coordinated_demolition,root_intent)) {
                 complete_hosted_demolition=true;
+                complete_opening_demolition=complete_opening_demolition ||
+                    root_intent.coordinated_demolition.value("version",0)==5;
                 structural_asset_reservation=true;
                 structural_hosted_alias_reservation=true;
             }
@@ -3224,6 +3228,8 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             if (fresh.contains(token))
                 throw std::invalid_argument("A fresh architectural demolition destination borrows a semantic proof field: "+std::string(token));
     }
+    if (complete_opening_demolition && fresh.contains("ordinary_opening_ids"))
+        throw std::invalid_argument("A fresh architectural demolition destination borrows the ordinary opening proof field");
     if (phase_drawing_enclosure) {
         // The complete new enclosure reserves every resulting or declared
         // destination against both stage vocabularies, even for older phase

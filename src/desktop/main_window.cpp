@@ -32039,12 +32039,15 @@ public:
             if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
         }
         require_current();
-        std::optional<Command> command;
-        if (const auto demolition=phase_opening_demolition_command(source,opening_ids))
-            command=Command{*demolition};
-        else if (const auto removal=prepare_hosted_opening_removal(source,opening_ids,
-                cut ? "Cut hosted openings and attached objects" : "Delete hosted openings and attached objects"))
-            command=Command{*removal};
+        const std::string message=cut ? "Cut hosted openings and attached objects" :
+            "Delete hosted openings and attached objects";
+        auto command=coordinatedDemolitionCommand(source,opening_ids,message);
+        if (!command) {
+            if (const auto demolition=phase_opening_demolition_command(source,opening_ids))
+                command=Command{*demolition};
+            else if (const auto removal=prepare_hosted_opening_removal(source,opening_ids,message))
+                command=Command{*removal};
+        }
         if (!command) throw std::invalid_argument("The selected openings cannot be removed from this source.");
         require_current();
         if (!applyAuthoredCommand(*command)) return false;
@@ -32161,6 +32164,26 @@ public:
         return true;
     }
 
+    std::function<void()> captureRemovalSourceGuard(const DocumentSnapshot& source) {
+        const auto authority=captureSourceEditAuthority(source);
+        const bool site=siteCanvas(m_architecturalCanvas);
+        const auto generation=m_site_publication_generation;
+        auto require_current=[this,authority,site,generation] {
+            if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("Finish or cancel the active drawing or placement before removing objects.");
+            if (!sourceEditAuthorityUnchanged(authority))
+                throw std::invalid_argument("The removal, project, selection or workspace changed. Select the objects again.");
+            if (site) {
+                requireSitePublicationCurrent();
+                if (generation!=m_site_publication_generation || !m_site_publication_source ||
+                    fullSnapshotDigest(*m_site_publication_source)!=authority.source_digest)
+                    throw std::invalid_argument("The displayed Site Plan changed during removal. Select the objects again.");
+            }
+        };
+        require_current();
+        return require_current;
+    }
+
     std::optional<bool> removeSelectedArchitecturalDrawing(const DocumentSnapshot& source,bool cut) {
         const auto authority=captureSourceEditAuthority(source);
         DrawingSelectionRemovalIntent drawing;
@@ -32219,7 +32242,7 @@ public:
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,true);
             if (hasMixedPhysicalWallSelection(source)) return removeSelectedMixedPhysicalWalls(source,true);
             if (const auto removed=removeSelectedArchitecturalDrawing(source,true)) return *removed;
-            const auto authority = captureSourceEditAuthority(source);
+            const auto require_current=captureRemovalSourceGuard(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
@@ -32235,8 +32258,7 @@ public:
                 const auto clipboard_text = QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size()));
                 auto* clipboard = QGuiApplication::clipboard();
                 if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
-                if (!sourceEditAuthorityUnchanged(authority))
-                    throw std::invalid_argument("The selected objects or active design changed before Cut.");
+                require_current();
                 if (!applyAuthoredCommand(*demolition)) return false;
                 clipboard->setText(clipboard_text, QClipboard::Clipboard);
                 m_selected_id.clear();
@@ -32252,8 +32274,7 @@ public:
                 const auto clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
                 auto* clipboard=QGuiApplication::clipboard();
                 if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
-                if (!sourceEditAuthorityUnchanged(authority))
-                    throw std::invalid_argument("The selection source changed before Cut. The project was not changed.");
+                require_current();
                 if (!deleteSelection()) return false;
                 clipboard->setText(clipboard_text,QClipboard::Clipboard);
                 return true;
@@ -32279,8 +32300,7 @@ public:
             auto* clipboard = QGuiApplication::clipboard();
             if (clipboard == nullptr)
                 throw std::runtime_error("The system clipboard is unavailable.");
-            if (!sourceEditAuthorityUnchanged(authority))
-                throw std::invalid_argument("The selected objects or active design changed before Cut.");
+            require_current();
             if (!applyAuthoredCommand(authored)) return false;
             clipboard->setText(clipboard_text, QClipboard::Clipboard);
             m_selected_id.clear();
@@ -32755,7 +32775,7 @@ public:
             if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,false);
             if (hasMixedPhysicalWallSelection(source)) return removeSelectedMixedPhysicalWalls(source,false);
             if (const auto removed=removeSelectedArchitecturalDrawing(source,false)) return *removed;
-            const auto authority = captureSourceEditAuthority(source);
+            const auto require_current=captureRemovalSourceGuard(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
             for (const auto& id : m_selected_ids) selected_ids.push_back(id.toStdString());
@@ -32767,8 +32787,7 @@ public:
             if (!demolition) demolition = roofRemovalCommand(source, selected_ids, "Delete selected roofs");
             if (!demolition) demolition = mixedRoofRemovalCommand(source, selected_ids, "Delete selected architectural objects");
             if (demolition) {
-                if (!sourceEditAuthorityUnchanged(authority))
-                    throw std::invalid_argument("The selected objects or active design changed before demolition.");
+                require_current();
                 if (!applyAuthoredCommand(*demolition)) return false;
                 m_selected_id.clear();
                 m_selected_ids.clear();
@@ -32777,8 +32796,7 @@ public:
                 return true;
             }
             if (const auto demolition = phase_opening_demolition_command(source, selected_ids)) {
-                if (!sourceEditAuthorityUnchanged(authority))
-                    throw std::invalid_argument("The selected opening or active design changed before demolition.");
+                require_current();
                 if (!applyAuthoredCommand(Command{*demolition})) return false;
                 m_selected_id.clear();
                 m_selected_ids.clear();
@@ -32800,8 +32818,7 @@ public:
                 const auto authored=augmentRemovalCommand(command,source);
                 const auto candidate = Document::preview_command(source, authored); validate_document_assembly_instances(candidate.entities());
                 preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
-                if (!sourceEditAuthorityUnchanged(authority))
-                    throw std::invalid_argument("The selected components or active design changed before Delete.");
+                require_current();
                 if (!applyAuthoredCommand(authored)) return false;
                 m_selected_id.clear(); m_selected_ids.clear(); clearError(); refresh(); return true;
             }
@@ -32816,8 +32833,7 @@ public:
             const auto authored = augmentRemovalCommand(Command{command},source);
             const auto candidate=Document::preview_command(source, authored);
             preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
-            if (!sourceEditAuthorityUnchanged(authority))
-                throw std::invalid_argument("The selected objects or active design changed before Delete.");
+            require_current();
             if (!applyAuthoredCommand(authored)) return false;
             m_selected_id.clear();
             m_selected_ids.clear();
@@ -43775,6 +43791,7 @@ private:
         std::map<std::string,std::vector<std::string>,std::less<>> families;
         std::vector<std::string> baseline_roots;
         std::vector<std::string> ordinary_roots;
+        std::vector<std::string> ordinary_openings;
         std::vector<std::pair<std::string,std::string>> ordinary_components;
         std::optional<PhysicalWallPhaseSelection> destination;
         const auto scope=constraint_phase_scope(source.entities());
@@ -43820,29 +43837,61 @@ private:
                 families[slot].push_back(id);
                 baseline_roots.push_back(id);
             }
+            else if (object.type=="opening") ordinary_openings.push_back(id);
             else if (object.type=="stair" || object.type=="railing" || object.type=="slab" ||
                 object.type=="roof" || structuralObject(object))
                 ordinary_roots.push_back(id);
             else return std::nullopt;
         }
-        if (families.empty() || (!include_single_family && families.size()<2 &&
-                ordinary_roots.empty() && ordinary_components.empty()))
+        if ((families.empty() && ordinary_openings.empty()) || (!include_single_family && families.size()<2 &&
+                ordinary_roots.empty() && ordinary_components.empty() && ordinary_openings.empty()))
             return std::nullopt;
-        std::sort(baseline_roots.begin(),baseline_roots.end());
-        auto captured=baselineArchitecturalDemolitionCommand(source,baseline_roots,message,*destination);
-        if (!captured) throw std::invalid_argument("The selected baseline objects have no complete demolition command.");
-        auto intent=decode_phase_constraint_authoring_intent(captured->phase_constraint_authoring_intent);
-        if (families.size()==1 && ordinary_roots.empty() && ordinary_components.empty()) {
+        ConstraintAuthoringIntent semantic;semantic.message=message;
+        auto intent=make_phase_constraint_authoring_intent(source,semantic);
+        std::optional<ApplyBoundaryConstraintChanges> captured;
+        if (!baseline_roots.empty()) {
+            std::sort(baseline_roots.begin(),baseline_roots.end());
+            captured=baselineArchitecturalDemolitionCommand(source,baseline_roots,message,*destination);
+            if (!captured) throw std::invalid_argument("The selected baseline objects have no complete demolition command.");
+            intent=decode_phase_constraint_authoring_intent(captured->phase_constraint_authoring_intent);
+        } else {
+            // A proposed opening can own the complete typed operation without
+            // manufacturing a historical demolition leaf. Entirely ordinary
+            // projects keep the existing non-phase producer.
+            std::optional<PhysicalWallPhaseSelection> opening_choice;
+            bool legacy_owned_opening=false;
+            for (const auto& id:ordinary_openings) {
+                auto owner=owners.find(id);
+                if (owner==owners.end())
+                    owner=owners.find(source.entities().at(id).properties.at("wall_id").get<std::string>());
+                if (owner==owners.end()) continue;
+                if (!owner->second->alternative_id) { legacy_owned_opening=true;continue; }
+                const PhysicalWallPhaseSelection choice{owner->second->registry_id,owner->second->alternative_id};
+                if (opening_choice && (opening_choice->registry_id!=choice.registry_id ||
+                        opening_choice->alternative_id!=choice.alternative_id))
+                    throw std::invalid_argument("The selected openings belong to different actual saved designs.");
+                opening_choice=choice;
+            }
+            if (!opening_choice) return std::nullopt;
+            if (legacy_owned_opening)
+                throw std::invalid_argument("The selected openings do not share one actual saved design.");
+        }
+        if (families.size()==1 && ordinary_roots.empty() && ordinary_components.empty() && ordinary_openings.empty()) {
             (void)Document::preview_command(source,Command{*captured});
             return Command{std::move(*captured)};
         }
         auto children=json{{"version",4},{"opening_authoring",nullptr},{"roof_authoring",nullptr},
             {"slab_authoring",nullptr},{"structural_authoring",nullptr},{"stair_authoring",nullptr},
             {"ordinary_removal",nullptr},{"complete_hosted_catalog_consequences",true}};
+        if (!ordinary_openings.empty()) {
+            std::sort(ordinary_openings.begin(),ordinary_openings.end());
+            children["version"]=5;
+            children["ordinary_opening_ids"]=ordinary_openings;
+        }
         if (families.size()>1) {
             for (const auto* family:{"opening_authoring","roof_authoring","slab_authoring","structural_authoring","stair_authoring"})
                 children[family]=intent.coordinated_demolition.at(family);
-        } else children[families.begin()->first]=captured->phase_constraint_authoring_intent;
+        } else if (families.size()==1) children[families.begin()->first]=captured->phase_constraint_authoring_intent;
         // Keep every explicit ordinary selection in the semantic proof. The
         // source core admits it before collapsing closure covered by a leaf.
         if (!ordinary_roots.empty() || !ordinary_components.empty()) {
@@ -43876,7 +43925,6 @@ private:
                 children["ordinary_removal"]["roof_additional_identities"]=ordinary.roof_additional_identities;
             }
         }
-        ConstraintAuthoringIntent semantic;semantic.message=message;
         intent=make_phase_constraint_authoring_intent(source,semantic);
         intent.coordinated_demolition=std::move(children);
         ApplyBoundaryConstraintChanges command;
@@ -52581,6 +52629,13 @@ private:
                             const auto leaf=decode_stair_demolition_retirement_intent(component.stair_demolition_retirement);
                             targets.insert(leaf.selected_object_ids.begin(),leaf.selected_object_ids.end());
                             targets.insert(leaf.retired_proposed_rail_ids.begin(),leaf.retired_proposed_rail_ids.end());
+                        }
+                    }
+                    if (!historical_demolition.coordinated_demolition.is_null()) {
+                        for (const auto& id:phase_coordinated_demolition_ordinary_openings(
+                                historical_demolition.coordinated_demolition,historical_demolition)) {
+                            targets.insert(id);
+                            targets.insert(source.entities().at(id).properties.at("wall_id").get<std::string>());
                         }
                     }
                     if (!historical_demolition.coordinated_demolition.is_null())

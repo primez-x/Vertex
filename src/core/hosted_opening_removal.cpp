@@ -305,6 +305,47 @@ bool supported_catalog(const Json& model) {
     for (int v = 1; v <= 7; ++v) if (*schema == "sketch.assemblies.v" + std::to_string(v)) return true;
     return false;
 }
+// A complete typed operation may retire an actual row on its selected proposed
+// opening while retaining the shared catalog. This grants no carrier retirement
+// or authority over baseline openings, unrelated rows, or another saved choice.
+bool retained_baseline_catalog_row(const Entities& source, const Phases& phase,
+    const Entity& catalog, const std::string& opening_id, bool complete_consequences) {
+    if (!complete_consequences) return false;
+    const auto catalog_owner = phase.owners.find(catalog.id);
+    if (catalog_owner == phase.owners.end()) return false;
+    const auto& model = phase.models.at(catalog_owner->second);
+    if (!contains(model.baseline_ids(), catalog.id) || !model.active_alternative()) return false;
+    if (catalog.required || phase.scope.inactive_owner_ids.contains(catalog.id) ||
+        !supported_catalog(catalog.properties.at("model")))
+        reject("complete opening consequence requires an active nonrequired supported catalog: " + catalog.id);
+    const auto& opening = source.at(opening_id);
+    // The selection already passed removable(), including sole active proposal
+    // membership. An unregistered opening can inherit only a proposed wall.
+    std::string wall_id, error;
+    if (!read_document_wall_id(opening, wall_id, error)) reject(error);
+    const auto& wall = source.at(wall_id);
+    if (wall.required || phase.scope.inactive_owner_ids.contains(wall_id))
+        reject("complete opening consequence requires an active nonrequired wall host: " + opening_id);
+    const auto opening_owner = phase.owners.find(opening_id), wall_owner = phase.owners.find(wall_id);
+    const auto authority = opening_owner != phase.owners.end() ? opening_owner : wall_owner;
+    if (authority == phase.owners.end() || authority->second != catalog_owner->second ||
+        (wall_owner != phase.owners.end() && wall_owner->second != catalog_owner->second))
+        reject("complete opening/catalog consequence has foreign or absent saved authority: " + catalog.id + "/" + opening_id);
+    const auto& proposed_id = opening_owner != phase.owners.end() ? opening_id : wall_id;
+    const auto state = model.active_state();
+    if (contains(model.baseline_ids(), proposed_id) || !state.contains(proposed_id) ||
+        state.at(proposed_id) != ModelPhase::proposed)
+        reject("complete opening/catalog consequence requires actual proposed ownership: " + opening_id);
+    for (const auto& alternative : model.alternatives()) {
+        // A retained baseline carrier may not be protected by any demolition
+        // membership; affected hosts may not be shared with a different choice.
+        if (contains(alternative.demolished_ids, catalog.id) ||
+            (alternative.id != *model.active_alternative() &&
+                (contains(alternative.proposed_ids, wall_id) || contains(alternative.demolished_ids, wall_id))))
+            reject("complete opening/catalog consequence touches a protected carrier or wall: " + catalog.id + "/" + opening_id);
+    }
+    return true;
+}
 // Only known catalog-local declarations/references are masked in this scan
 // copy. The authoritative catalog is patched solely by removing actual rows.
 void mask_catalog_locals(Json& model) {
@@ -578,7 +619,8 @@ struct OpeningRemoval {
 // reads the real history only after the preceding source preflight succeeds.
 template<class ConstraintPolicy>
 std::optional<OpeningRemoval> derive(const Entities& actual,
-    const std::vector<std::string>& selection, ConstraintPolicy active_phase_constraints) {
+    const std::vector<std::string>& selection, ConstraintPolicy active_phase_constraints,
+    bool complete_hosted_catalog_consequences = false) {
     if (!has_selected_opening(actual, selection)) return std::nullopt;
     if (selection.size() > selection_limit) reject("opening selection budget exceeded");
     bounds(actual);
@@ -622,7 +664,7 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
     AssemblyExpansionBudget document_budget;
     (void)expand_document_assembly_instances(actual, document_budget);
     const auto aliases = embedded_assembly_presentation_ids(actual);
-    Entities candidate = actual; Keys instances; Ids names = retired, retired_locals;
+    Entities candidate = actual; Keys instances; Ids names = retired, retired_locals, retained_baseline_catalogs;
     std::vector<AssemblyExpansion> removed_expansions;
     struct OpeningComponent {
         Wall wall;
@@ -653,9 +695,13 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
         const auto& model = catalogs.at(id); Ids locals;
         for (const auto& row : model.instances()) if (row.placement && retired.contains(row.placement->host_entity_id)) {
             if (instances.size() >= closure_limit) reject("opening-hosted catalog closure budget exceeded");
-            removable(actual, phase, id); context(actual, organization, entity);
+            const bool retained_carrier = retained_baseline_catalog_row(actual, phase, entity,
+                row.placement->host_entity_id, complete_hosted_catalog_consequences);
+            if (retained_carrier) retained_baseline_catalogs.insert(id);
+            else removable(actual, phase, id);
+            context(actual, organization, entity);
             const auto catalog_owner = phase.owners.find(id), opening_owner = phase.owners.find(row.placement->host_entity_id);
-            if (catalog_owner != phase.owners.end() &&
+            if (!retained_carrier && catalog_owner != phase.owners.end() &&
                 (opening_owner == phase.owners.end() || catalog_owner->second != opening_owner->second))
                 reject("opening-hosted catalog carrier has foreign phase ownership: " + id + "/" + row.id);
             auto expansion = model.expand(row, removed_budget);
@@ -772,6 +818,17 @@ std::optional<OpeningRemoval> derive(const Entities& actual,
     for (const auto& [id, entity] : actual) {
         const auto after = candidate.find(id);
         if (after != candidate.end() && exact(entity, after->second)) continue;
+        if (retained_baseline_catalogs.contains(id)) {
+            if (after == candidate.end()) reject("complete opening consequence erased its retained catalog: " + id);
+            auto expected = entity;
+            filter(expected.properties.at("model").at("instances"), [&](const Json& row) {
+                return !instances.contains({id, row.at("id").get<std::string>()});
+            });
+            if (!exact(expected, after->second))
+                reject("complete opening consequence changed its raw retained catalog beyond admitted rows: " + id);
+            context(actual, organization, entity);
+            continue;
+        }
         removable(actual, phase, id); context(actual, organization, entity);
     }
     // Only after complete analytical preflight do native factories see the
@@ -826,9 +883,11 @@ std::optional<ApplyEntityChanges> derive_snapshot(const DocumentSnapshot& source
 
 std::optional<std::map<std::string, Entity, std::less<>>> replay_hosted_opening_removal(
     const std::map<std::string, Entity, std::less<>>& actual,
-    const std::vector<std::string>& selected_opening_ids, bool active_phase_constraints) {
+    const std::vector<std::string>& selected_opening_ids, bool active_phase_constraints,
+    bool complete_hosted_catalog_consequences) {
     try {
-        auto removal = derive(actual, selected_opening_ids, [active_phase_constraints] { return active_phase_constraints; });
+        auto removal = derive(actual, selected_opening_ids, [active_phase_constraints] { return active_phase_constraints; },
+            complete_hosted_catalog_consequences);
         if (!removal) return std::nullopt;
         return std::move(removal->entities);
     }

@@ -1552,7 +1552,8 @@ Entities compose_removal_candidates(const Entities& source,const std::vector<Ent
     bool include_ordinary_removal, bool complete_roof_removal, bool preserve_all_baselines,
     bool allow_shared_reference_retirement=false,bool complete_hosted_catalog_consequences=false) {
     coordinated_map_budget(source);
-    if (candidates.size()<2 || candidates.size()>(include_ordinary_removal ? 6u : 5u))
+    if (candidates.size()<2 || candidates.size()>(include_ordinary_removal ?
+            (complete_hosted_catalog_consequences ? 7u : 6u) : 5u))
         invalid("Coordinated demolition exceeds its complete family candidate bounds");
     for (const auto& candidate:candidates) coordinated_map_budget(candidate);
     std::set<std::string,std::less<>> baseline;

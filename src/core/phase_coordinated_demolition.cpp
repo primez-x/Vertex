@@ -6,6 +6,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/hosted_opening_removal.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_roof_replacement.hpp"
@@ -221,6 +222,7 @@ PhaseCoordinatedOrdinaryRemoval ordinary_removal(const Json& value, bool roof_se
 struct Decoded {
     std::vector<PhaseConstraintAuthoringIntent> leaves;
     std::optional<PhaseCoordinatedOrdinaryRemoval> ordinary;
+    std::vector<std::string> ordinary_opening_ids;
     std::pair<std::string, std::string> saved_choice;
     bool complete_hosted_catalog_consequences{false};
 };
@@ -232,15 +234,18 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer())
         invalid("inner demolition requires a known integer version");
     const bool roof_selection = value.at("version") == 3;
-    const bool complete = value.at("version") == 4;
+    const bool independent_openings = value.at("version") == 5;
+    const bool complete = value.at("version") == 4 || independent_openings;
     const bool mixed = value.at("version") == 2 || roof_selection;
     if ((!mixed && !complete && (value.at("version") != 1 || value.size() != 6)) ||
         (mixed && (value.size() != 7 || !value.contains("ordinary_removal"))) ||
-        (complete && (value.size() != 8 || !value.contains("ordinary_removal") ||
+        (complete && (value.size() != (independent_openings ? 9u : 8u) || !value.contains("ordinary_removal") ||
             !value.contains("complete_hosted_catalog_consequences") ||
             !value.at("complete_hosted_catalog_consequences").is_boolean() ||
-            value.at("complete_hosted_catalog_consequences") != true)))
-        invalid(complete ? "inner v4 requires exactly version, five family fields, nullable ordinary_removal and complete_hosted_catalog_consequences:true" :
+            value.at("complete_hosted_catalog_consequences") != true ||
+            (independent_openings && !value.contains("ordinary_opening_ids")))))
+        invalid(independent_openings ? "inner v5 requires exactly the eight v4 fields and ordinary_opening_ids" :
+            complete ? "inner v4 requires exactly version, five family fields, nullable ordinary_removal and complete_hosted_catalog_consequences:true" :
             "inner demolition requires exactly version, five family fields and v2/v3 ordinary_removal");
     for (const auto* key : families) if (!value.contains(key)) invalid("required family field is missing");
     message_only(enclosing.intent);
@@ -261,6 +266,18 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
 
     Decoded result;
     result.complete_hosted_catalog_consequences = complete;
+    if (independent_openings) {
+        const auto& ids = value.at("ordinary_opening_ids");
+        if (!ids.is_array() || ids.empty() || ids.size() > 1000)
+            invalid("ordinary openings require 1..1000 actual semantic opening identities");
+        for (const auto& row : ids) {
+            if (!row.is_string()) invalid("ordinary opening identity must be a string");
+            auto id = row.get<std::string>(); identity(id);
+            if (!result.ordinary_opening_ids.empty() && !(result.ordinary_opening_ids.back() < id))
+                invalid("ordinary opening identities must be ascending and unique");
+            result.ordinary_opening_ids.push_back(std::move(id));
+        }
+    }
     if (mixed) result.ordinary = ordinary_removal(value.at("ordinary_removal"), roof_selection);
     if (complete && !value.at("ordinary_removal").is_null()) {
         const auto& ordinary = value.at("ordinary_removal");
@@ -300,15 +317,24 @@ Decoded components(const Json& value, const PhaseConstraintAuthoringIntent& encl
         }
         result.leaves.push_back(std::move(child));
     }
-    if (result.leaves.size() < ((mixed || result.ordinary) ? 1u : 2u))
-        invalid(mixed ? "mixed demolition requires at least one historical family" :
+    if (result.leaves.size() < (independent_openings ? 0u : (mixed || result.ordinary) ? 1u : 2u))
+        invalid((mixed || independent_openings) ? "mixed demolition requires at least one historical family" :
             "coordinated demolition requires at least two distinct families");
     if (result.ordinary) for (const auto& id : result.ordinary->object_ids)
         if (targets.contains(id)) invalid("ordinary and historical demolition roots must be disjoint");
     if ((roof_selection || (complete && result.ordinary)) &&
         result.ordinary->object_ids.size() + result.ordinary->components.size() > 4096 - targets.size())
         invalid("aggregate mixed demolition root/component budget exceeded");
-    result.saved_choice = *saved_choice;
+    if (independent_openings) {
+        const auto ordinary_count = result.ordinary ? result.ordinary->object_ids.size() + result.ordinary->components.size() : 0;
+        if (result.ordinary_opening_ids.size() > 4096 - targets.size() - ordinary_count)
+            invalid("aggregate mixed demolition root/component/opening budget exceeded");
+        for (const auto& id : result.ordinary_opening_ids)
+            if (targets.contains(id) || (result.ordinary &&
+                std::binary_search(result.ordinary->object_ids.begin(), result.ordinary->object_ids.end(), id)))
+                invalid("ordinary openings and historical/ordinary demolition roots must be disjoint");
+    }
+    if (saved_choice) result.saved_choice = *saved_choice;
     return result;
 }
 
@@ -543,7 +569,8 @@ void retain_registry_order(const Entities& source, Entities& candidate,
 // registry. Catalogs are the sole exception: independently admitted exact rows
 // and fresh suffixes may compose, while protected hosted rows remain exact.
 void protected_source(const Entities& source, const Entities& candidate,
-    const std::pair<std::string, std::string>& saved_choice) {
+    const std::pair<std::string, std::string>& saved_choice,
+    const std::vector<std::string>& ordinary_opening_ids = {}) {
     std::set<std::string, std::less<>> baseline, protected_owners;
     const auto scope = constraint_phase_scope(source);
     protected_owners = scope.inactive_owner_ids;
@@ -588,7 +615,14 @@ void protected_source(const Entities& source, const Entities& candidate,
             const auto owner = source.find(host);
             if (owner != source.end() && owner->second.type == "opening") {
                 const auto wall = owner->second.properties.at("wall_id").get<std::string>();
-                retained = retained || baseline.contains(wall) || protected_owners.contains(wall);
+                // Only the new opening lane can retire a proposed cut's row
+                // on an unchanged original wall. The complete actual producer
+                // already admitted that opening/host and physically retired it.
+                const bool retired_proposed_opening = !baseline.contains(host) && !protected_owners.contains(host) &&
+                    std::binary_search(ordinary_opening_ids.begin(), ordinary_opening_ids.end(), host) &&
+                    !candidate.contains(host);
+                retained = retained || protected_owners.contains(wall) ||
+                    (baseline.contains(wall) && !retired_proposed_opening);
             }
             if (!retained) continue;
             const auto found = std::find_if(remaining.begin(), remaining.end(), [&](const Json& current) {
@@ -689,17 +723,96 @@ PhaseCoordinatedOrdinaryRemoval admitted_ordinary_selection(const Entities& sour
     return selection;
 }
 
-Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringIntent& enclosing, const Decoded& decoded) {
+// Authenticate every independent opening and its actual wall BEFORE any leaf
+// can enter native replay. Active visibility cannot grant physical retirement
+// of a baseline opening or an owner shared by preserved alternatives.
+void admit_ordinary_openings(const Entities& source, const Decoded& decoded) {
+    const auto scope = constraint_phase_scope(source);
+    const PhysicalWallPhaseState* selected = nullptr;
+    std::map<std::string, const PhysicalWallPhaseState*, std::less<>> owners;
+    std::set<std::string, std::less<>> baseline, protected_choices;
+    for (const auto& registry : scope.registries) {
+        if (registry.registry_id == decoded.saved_choice.first) selected = &registry;
+        for (const auto& id : registry.registered_entity_ids)
+            if (!owners.emplace(id, &registry).second) invalid("overlapping actual phase ownership: " + id);
+        const auto model = ModelPhases::from_json(source.at(registry.registry_id).properties.at("model"));
+        baseline.insert(model.baseline_ids().begin(), model.baseline_ids().end());
+        for (const auto& alternative : model.alternatives())
+            if (registry.registry_id != decoded.saved_choice.first || alternative.id != decoded.saved_choice.second) {
+                protected_choices.insert(alternative.proposed_ids.begin(), alternative.proposed_ids.end());
+                protected_choices.insert(alternative.demolished_ids.begin(), alternative.demolished_ids.end());
+            }
+    }
+    if (!selected || selected->alternative_id != std::optional<std::string>{decoded.saved_choice.second})
+        invalid("ordinary openings require the actual historical saved registry/alternative");
+    const auto admit = [&](const std::string& id, const char* type) {
+        const auto found = source.find(id);
+        if (found == source.end() || found->second.type != type || found->second.required ||
+            scope.inactive_owner_ids.contains(id) || protected_choices.contains(id))
+            invalid("ordinary opening/host is absent, mistyped, required, inactive or protected: " + id);
+        const auto owner = owners.find(id);
+        if (owner == owners.end()) return;
+        const auto state = owner->second->states.find(id);
+        if (owner->second != selected || state == owner->second->states.end() || state->second == ModelPhase::demolished)
+            invalid("ordinary opening/host has foreign actual saved authority: " + id);
+    };
+    for (const auto& id : decoded.ordinary_opening_ids) {
+        admit(id, "opening");
+        if (baseline.contains(id)) invalid("ordinary opening has retained baseline authority: " + id);
+        const auto& host = source.at(id).properties.at("wall_id");
+        if (!host.is_string()) invalid("ordinary opening requires an actual wall host identity");
+        admit(host.get<std::string>(), "wall");
+    }
+}
+
+std::pair<std::string, std::string> actual_opening_choice(const Entities& source,
+    const std::vector<std::string>& opening_ids) {
+    const auto scope = constraint_phase_scope(source);
+    std::map<std::string, const PhysicalWallPhaseState*, std::less<>> owners;
+    for (const auto& registry : scope.registries)
+        for (const auto& id : registry.registered_entity_ids)
+            if (!owners.emplace(id, &registry).second) invalid("overlapping actual phase ownership: " + id);
+    std::optional<std::pair<std::string, std::string>> choice;
+    for (const auto& id : opening_ids) {
+        const auto opening = source.find(id);
+        if (opening == source.end() || opening->second.type != "opening")
+            invalid("ordinary opening requires an actual semantic owner: " + id);
+        const auto& host = opening->second.properties.at("wall_id");
+        if (!host.is_string()) invalid("ordinary opening requires an actual wall host");
+        auto owner = owners.find(id);
+        if (owner == owners.end()) owner = owners.find(host.get<std::string>());
+        if (owner == owners.end()) continue; // Actual unregistered owners remain ordinary.
+        if (!owner->second->alternative_id)
+            invalid("ordinary opening requires an actual saved active alternative: " + id);
+        const auto current = std::pair{owner->second->registry_id, *owner->second->alternative_id};
+        if (choice && *choice != current) invalid("ordinary openings belong to different actual saved choices");
+        choice = current;
+    }
+    if (!choice) invalid("ordinary opening choice requires a nonempty actual selection");
+    return *choice;
+}
+
+Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringIntent& enclosing, Decoded decoded) {
     if (enclosing.source_entities_digest != entity_map_digest(source) ||
         enclosing.phase_selections.dump() != phase_constraint_authoring_selections(source).dump())
         invalid("complete demolition differs from actual source entities or saved choices");
+    if (decoded.leaves.empty()) decoded.saved_choice = actual_opening_choice(source, decoded.ordinary_opening_ids);
+    if (!decoded.ordinary_opening_ids.empty()) admit_ordinary_openings(source, decoded);
     std::vector<Entities> candidates;
-    candidates.reserve(decoded.leaves.size() + (decoded.ordinary ? 1 : 0));
+    candidates.reserve(decoded.leaves.size() + (decoded.ordinary ? 1 : 0) + (!decoded.ordinary_opening_ids.empty() ? 1 : 0));
     for (const auto& leaf : decoded.leaves) {
         auto candidate = replay_phase_constraint_authoring(source, encode_phase_constraint_authoring_intent(leaf));
         retain_registry_order(source, candidate, decoded.saved_choice);
-        protected_source(source, candidate, decoded.saved_choice);
+        protected_source(source, candidate, decoded.saved_choice, decoded.ordinary_opening_ids);
         candidates.push_back(std::move(candidate));
+    }
+    if (!decoded.ordinary_opening_ids.empty()) {
+        auto candidate = replay_hosted_opening_removal(source, decoded.ordinary_opening_ids, true, true);
+        if (!candidate) invalid("independent ordinary openings were not admitted by their actual source producer");
+        ordinary_phase_authority(source, *candidate, decoded.saved_choice);
+        retain_registry_order(source, *candidate, decoded.saved_choice);
+        protected_source(source, *candidate, decoded.saved_choice, decoded.ordinary_opening_ids);
+        candidates.push_back(std::move(*candidate));
     }
     if (decoded.ordinary) {
         const auto selection = admitted_ordinary_selection(source, candidates, decoded);
@@ -714,7 +827,7 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
             ordinary_phase_authority(source, candidate, decoded.saved_choice);
             if (roof_selection) roof_selection_phase_authority(source, candidate, selection, decoded.saved_choice);
             retain_registry_order(source, candidate, decoded.saved_choice);
-            protected_source(source, candidate, decoded.saved_choice);
+            protected_source(source, candidate, decoded.saved_choice, decoded.ordinary_opening_ids);
             candidates.push_back(std::move(candidate));
         }
     }
@@ -742,7 +855,7 @@ Entities replay_complete(const Entities& source, const PhaseConstraintAuthoringI
     auto result = candidates.size() == 1 ? candidates.front() :
         compose_ordinary_architectural_removal_candidates(source, candidates, true, true);
     retain_registry_order(source, result, decoded.saved_choice);
-    protected_source(source, result, decoded.saved_choice);
+    protected_source(source, result, decoded.saved_choice, decoded.ordinary_opening_ids);
     if (embedded_assembly_presentation_ids(result) != expected_aliases)
         invalid("complete composition changed the admitted surviving alias inventory");
     if (constraint_phase_scope(result).inactive_owner_ids != expected_inactive)
@@ -774,6 +887,15 @@ std::optional<PhaseCoordinatedOrdinaryRemoval> phase_coordinated_demolition_ordi
     const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
     try {
         return components(value, enclosing).ordinary;
+    } catch (const Json::exception& error) {
+        invalid(std::string("malformed proof: ") + error.what());
+    }
+}
+
+std::vector<std::string> phase_coordinated_demolition_ordinary_openings(
+    const Json& value, const PhaseConstraintAuthoringIntent& enclosing) {
+    try {
+        return components(value, enclosing).ordinary_opening_ids;
     } catch (const Json::exception& error) {
         invalid(std::string("malformed proof: ") + error.what());
     }

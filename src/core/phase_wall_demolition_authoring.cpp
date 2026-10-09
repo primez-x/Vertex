@@ -317,6 +317,13 @@ Historical historical(const Json& wire,const PhaseWallDemolitionIntent& wall,
         (wire.at("version")!=3 && wire.at("version")!=4 && wire.at("version")!=6 && wire.at("version")!=9 &&
          wire.at("version")!=11 && wire.at("version")!=13 && wire.at("version")!=15))
         invalid("other authoring requires a historical demolition envelope");
+    if (wire.at("version")==15) {
+        const auto coordinated=wire.find("coordinated_demolition");
+        if (coordinated==wire.end() || !coordinated->is_object() || !coordinated->contains("version") ||
+            !coordinated->at("version").is_number_integer() ||
+            (coordinated->at("version")!=1 && coordinated->at("version")!=2 && coordinated->at("version")!=3))
+            invalid("wall demolition permits only historical coordinated inner versions one through three");
+    }
     auto child=decode_phase_constraint_authoring_intent(wire);
     if (!exact_json(encode_phase_constraint_authoring_intent(child),wire)) invalid("historical envelope is not canonical");
     message_only(child.intent);if (root) same_binding(*root,child);

@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete mixed original/proposed opening source implementation
+
+Closed coordinated demolition inner five now adds an actual-source ordinary
+door/window lane to the full historical architectural operation. It also handles
+ordinary-opening-only operations by deriving the real saved choice from actual
+opening/wall membership. Pure opening
+selections, broader architectural selections and independent drawing completion
+route through the same command. Actual opening/host authority is checked before
+native replay; its admitted candidate precedes qualified ordinary-component
+closure collapse. This new typed lane can retire admitted proposed-opening rows
+from a baseline catalog carrier, including cuts on unchanged original walls,
+while preserving original definitions/materials, all other raw rows/order and
+carrier membership. Historical callers retain their previous refusals and
+protections. Native 150 / extraction 148 retain the additive meaning
+through direct, wrapped, retained and undone history.
+
+The prior independent inner-four review identified two source gaps. Historical
+wall authoring now explicitly limits coordinated children to one through three,
+preserving its existing reader floors. A shared captured removal guard now checks
+pending drawing, text, plan-label and area placement plus full selection and Site
+authority before preparation and application in pure Cut/Delete paths. Captured
+Cut content publishes only after successful application. The new opening proof
+token is reserved exclusively by inner five; inner-four identities remain valid.
+Root integrated source review is complete; this new opening lane's independent
+source review is pending.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation and runtime remain unverified; the installed candidate is
+unchanged. Original baseline-opening and protected-host safeguards remain;
+remaining authoring relationships and full production
+qualification remain unfinished. Continue source implementation without a goal
+loop or new build/package cadence.
+
 ### October 9 complete non-wall architectural/drawing removal source implementation
 
 Delete/Cut now build complete mixed architectural demolition from one actual
@@ -29,8 +62,10 @@ pending-placement and Site fences remain through application and Cut publication
 Native 149 / extraction 147 preserve the additive meaning in direct, wrapped,
 retained and undone operations. Document admission reserves complete destinations
 and active reference retirement without weakening earlier dialects. Root
-integrated source review is complete; independent review of this new composition
-is pending. The previous inner-two review found one history compatibility issue:
+integrated source review is complete. Independent review of this new composition
+found a historical child reader-floor leak and a missing pending-placement guard
+in pure architectural removal; the following source batch corrects both. The
+previous inner-two review found one history compatibility issue:
 its new vocabulary refusal now applies only to inner two, preserving inner-one
 identities. No further actionable findings were reported in that targeted review.
 

@@ -1,4 +1,47 @@
-# Vertex project formats v1 through v149
+# Vertex project formats v1 through v150
+
+## Independent ordinary openings in coordinated demolition (v150)
+
+Native reader 150 and JSON/assets extraction 148 retain coordinated demolition
+inner five through direct, drawing-wrapped, retained and undone history. The
+phase-authoring dialect remains fifteen. Inner five has exactly the eight
+inner-four fields plus `ordinary_opening_ids`: one to 1,000 ascending unique
+actual semantic opening identities, disjoint from historical and ordinary roots.
+The aggregate historical/ordinary root, component and opening count is bounded
+at 4,096. With no historical family, the saved choice is derived from actual
+opening or inherited proposed-wall membership; at least one actual active
+registry is required. Unregistered owners remain ordinary without fabricated
+membership. Inner versions one through four keep
+their exact grammars, meanings and reader floors.
+
+Every independent opening and actual wall host must pass source ownership and
+saved-choice admission before native replay. Baseline opening retirement and
+required, foreign, inactive or protected-other-alternative owners are refused.
+The actual opening-removal producer independently derives its complete map,
+including qualified catalog row and known reference retirement. Its candidate
+enters composition before ordinary component selection collapse, so original
+qualified source admission still precedes any covered-row collapse. All existing
+raw envelope, registry order, baseline body, alias, metadata and saved-alternative
+protections remain. Complete composition may contain seven admitted candidates;
+historical retirement-only callers retain their existing five/six-map bounds.
+
+Pure door/window selections and broader architectural/drawing selections use
+this same typed operation when original and ordinary/proposed openings are mixed.
+Source/selection and pending-placement fences run before preparation and before
+application; Cut publishes captured content only after application. Site
+authority includes actual opening and wall-host IDs. The new opening proof token
+is reserved only by inner five. Historical wall-authoring dialect sixteen remains
+restricted to historical coordinated children one through three, preventing new
+semantics from borrowing its older reader floor.
+
+Only this typed new lane can retire actual rows hosted on an admitted proposed
+opening from an unchanged baseline catalog carrier, including a proposed cut
+on an unchanged original wall. Original catalog definitions, materials, raw
+survivor order, all other rows and membership remain intact. Original opening
+rows and protected hosts cannot borrow this exception; unregistered openings
+inheriting a shared baseline wall still require ownership resolution. Historical
+opening callers and inner-four catalog protections remain unchanged. Compilation
+and runtime remain unverified under the source-only instruction.
 
 ## Complete coordinated architectural demolition (v149)
 
