@@ -945,7 +945,8 @@ std::vector<AssistanceProposal> suggest_label_placements(
             invalid("label anchor position is not finite");
         }
         if (anchor.label.empty() || anchor.label.size() > 4096 ||
-            anchor.label.find_first_of("\r\n\t\0") != std::string::npos) {
+            anchor.label.find_first_of("\r\n\t") != std::string::npos ||
+            anchor.label.find('\0') != std::string::npos) {
             invalid("label anchor text is empty or unsafe");
         }
         const auto id = stable_id("assist-label", anchor.entity_id + ":" + anchor.label);
@@ -961,7 +962,8 @@ std::vector<AssistanceProposal> suggest_label_placements(
 }
 
 std::vector<AssistanceProposal> parse_natural_language(std::string_view command) {
-    if (command.size() > 4096 || command.find_first_of("\r\n\t\0") != std::string_view::npos) {
+    if (command.size() > 4096 || command.find_first_of("\r\n\t") != std::string_view::npos ||
+        command.find('\0') != std::string_view::npos) {
         invalid("natural-language command is empty, oversized, or contains a control character");
     }
     const auto original = trim_copy(command);
@@ -975,7 +977,8 @@ std::vector<AssistanceProposal> parse_natural_language(std::string_view command)
     if (std::regex_match(original, label_match, label_pattern)) {
         const auto content = trim_copy(label_match[1].str());
         if (content.empty() || content.size() > 4096 ||
-            content.find_first_of("\r\n\t\0") != std::string::npos) {
+            content.find_first_of("\r\n\t") != std::string::npos ||
+            content.find('\0') != std::string::npos) {
             invalid("natural-language label content is empty or unsafe");
         }
         const Vec2 position{parse_coordinate(label_match[2].str()),

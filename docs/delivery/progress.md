@@ -14,6 +14,36 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 export-publication and assistance-label source implementation
+
+Sketch PDF, sheet PDF, ordered drawing-set PDF, SVG, PNG, native 3D image, DXF
+and IFC now share one checked publication routine. Required fingerprints and
+fidelity reports are prepared before publication and committed before the
+output. Every staging/restoration device disables direct-write fallback.
+Prior files are streamed to a sibling recovery directory with explicit absence
+records and digests; changed, linked, nonregular or duplicate destinations
+refuse publication. Late failures restore the committed prefix in reverse
+order. Incomplete restoration retains the complete recovery set and reports its
+location. DXF/IFC reports now bind the actual staged output digest. This replaces
+the previous post-output metadata saves and memory-only drawing-set rollback.
+
+Independent read-only approach review identified durable recovery copies,
+exception-contained rollback, metadata-first ordering and explicit path/presence
+handling; these are implemented in source. Sequential recovery does not claim
+multi-file filesystem atomicity, concurrent-writer protection or power-loss
+durability. Integrated source review remains in progress.
+
+Assistance label anchors, language commands and parsed label content now
+explicitly reject embedded NUL bytes. Their previous C-string search discarded
+NUL from the prohibited set. The assistance documentation and current registry
+notes now reflect the existing isolated offline OCR source and bundled English
+model while preserving historical snapshots and unresolved qualification.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. These source changes are uncompiled and runtime unverified; the installed
+candidate is unchanged. Continue implementation from actual confirmed gaps,
+without restarting completed drawing/architecture work or producing new builds.
+
 ### October 9 framed-passage and legacy-overhead source implementation
 
 Cased-opening library placement now produces real two-jamb/head framing on

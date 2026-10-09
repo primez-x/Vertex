@@ -9062,7 +9062,7 @@
       "evidence_refs": null,
       "implementation": {
         "status": "in_progress",
-        "notes": "Supported PDF imports with embedded text now extract bounded UTF-8 text and real page-selection rectangles inside the isolated reference worker, persist validated metadata, and create provisional dimension proposals through the normal review/accept/undo path. Raster images and scanned PDFs intentionally have no bundled OCR. Production AppContainer execution and representative-plan accuracy qualification remain open."
+        "notes": "Embedded PDF text and isolated offline OCR supply actual text-line rectangles and confidence to provisional dimension proposals. The source includes the pinned Tesseract engine and English model, verifies model bytes before in-memory recognition, and refuses fallback file reads. Labels and the language grammar explicitly reject embedded NUL bytes. Current source inspection corrects the earlier no-OCR note; production AppContainer execution, representative-plan accuracy and final qualification remain open. The latest source corrections are uncompiled and runtime unverified."
       },
       "focused_verification": {
         "status": "not_run",
@@ -9084,7 +9084,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "October 9 current-source audit supersedes the historical no-OCR exclusion in remaining_behavior/source_snapshot: raster and scanned-plan OCR is in scope and implemented in source. Historical snapshots and qualification states are preserved; no new runtime acceptance is claimed.",
       "source_snapshot": {
         "id": "ASSIST-002",
         "area": "assisted_workflows",
@@ -10246,8 +10246,8 @@
       "historical_evidence_refs": null,
       "evidence_refs": null,
       "implementation": {
-        "status": "source_reported_verified",
-        "notes": "Draft output stamping covers PDF, SVG, print, and native 3D images; native image export stages a visible draft/filter footer before atomic destination replacement and fails on read/stamp/write errors while retaining the fingerprint sidecar. Print preview now runs the same scene/fingerprint gate before opening and records the serialized fingerprint with driver evidence. Explicitly scaled sheet viewport rendering now shares the fitted-output boundary and suppresses interactive-only state. Invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and production authority qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+        "status": "in_progress",
+        "notes": "Existing scene, fingerprint and visible-draft guards remain. All eight file-output routes now stage mandatory metadata and output together, retain disk-backed prior files, publish metadata before the output, and restore committed files on a late failure. Incomplete restoration preserves the complete recovery set and reports its location. DXF/IFC fidelity reports bind the actual staged output digest. This latest source change is uncompiled and runtime unverified; historical evidence does not qualify the changed publication path. Integrated stale calculations/assets/reference fixtures and production authority qualification remain open."
       },
       "focused_verification": {
         "status": "not_run",

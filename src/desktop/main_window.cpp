@@ -36105,6 +36105,174 @@ public:
         return *fingerprint;
     }
 
+    bool publishOutputFiles(const QString& output_kind,
+                            const std::vector<QSaveFile*>& files,
+                            bool reject_first_commit = false) {
+        if (files.size() < 2 || !files.back()) {
+            setError(QStringLiteral("%1 export has an incomplete publication set.").arg(output_kind));
+            return false;
+        }
+        const QFileInfo output_info(files.back()->fileName());
+        const auto output_directory = output_info.absoluteDir().canonicalPath();
+        if (output_directory.isEmpty()) {
+            setError(QStringLiteral("%1 export directory is unavailable.").arg(output_kind));
+            return false;
+        }
+        struct PreviousFile {
+            QString path;
+            QString backup;
+            std::string digest;
+            bool existed{false};
+        };
+        std::vector<PreviousFile> previous;
+        std::set<QString> destinations;
+        for (auto* file : files) {
+            if (!file || !file->isOpen() || file->directWriteFallback() ||
+                !file->flush() || file->error() != QFileDevice::NoError) {
+                setError(QStringLiteral("%1 export has an incomplete staged file.").arg(output_kind));
+                return false;
+            }
+            const QFileInfo info(file->fileName());
+            const auto directory = info.absoluteDir().canonicalPath();
+            const auto path = QDir(directory).filePath(info.fileName());
+            if (directory != output_directory || info.isSymLink() ||
+                (info.exists() && !info.isFile()) ||
+                !destinations.insert(path.toCaseFolded()).second) {
+                setError(QStringLiteral("%1 export destinations must be distinct regular sibling files.")
+                             .arg(output_kind));
+                return false;
+            }
+            previous.push_back({path, {}, {}, info.exists()});
+        }
+        if (previous.front().path != previous.back().path + QStringLiteral(".fingerprint.json")) {
+            setError(QStringLiteral("%1 export is missing its staged fingerprint.").arg(output_kind));
+            return false;
+        }
+        QTemporaryDir recovery(QDir(output_directory).filePath(
+            QStringLiteral(".vertex-export-recovery-XXXXXX")));
+        if (!recovery.isValid()) {
+            setError(QStringLiteral("%1 export could not retain previous files for recovery: %2")
+                         .arg(output_kind, recovery.errorString()));
+            return false;
+        }
+        json recovery_files = json::array();
+        for (auto& entry : previous) {
+            if (entry.existed) {
+                QFile source(entry.path);
+                entry.backup = recovery.filePath(QStringLiteral("%1-%2")
+                    .arg(static_cast<qulonglong>(recovery_files.size()))
+                    .arg(QFileInfo(entry.path).fileName()));
+                QFile backup(entry.backup);
+                if (!source.open(QIODevice::ReadOnly) || !backup.open(QIODevice::WriteOnly)) {
+                    setError(QStringLiteral("%1 export could not retain %2 for recovery.")
+                                 .arg(output_kind, QFileInfo(entry.path).fileName()));
+                    return false;
+                }
+                QCryptographicHash digest(QCryptographicHash::Sha256);
+                while (!source.atEnd()) {
+                    const auto chunk = source.read(1024 * 1024);
+                    if (chunk.isEmpty() || backup.write(chunk) != chunk.size()) {
+                        setError(QStringLiteral("%1 export could not copy previous files for recovery.")
+                                     .arg(output_kind));
+                        return false;
+                    }
+                    digest.addData(chunk);
+                }
+                if (source.error() != QFileDevice::NoError || !backup.flush() ||
+                    backup.error() != QFileDevice::NoError) {
+                    setError(QStringLiteral("%1 export could not finish its recovery copy.").arg(output_kind));
+                    return false;
+                }
+                entry.digest = digest.result().toHex().toStdString();
+            }
+            recovery_files.push_back({{"destination", entry.path.toStdString()},
+                {"previously_present", entry.existed},
+                {"backup", entry.existed ? QFileInfo(entry.backup).fileName().toStdString() : ""},
+                {"sha256", entry.digest}});
+        }
+        QFile recovery_record(recovery.filePath(QStringLiteral("recovery.json")));
+        const auto recovery_bytes = QByteArray::fromStdString(json{
+            {"schema", "vertex.output-recovery.v1"}, {"files", recovery_files}}.dump(2));
+        if (!recovery_record.open(QIODevice::WriteOnly) ||
+            recovery_record.write(recovery_bytes) != recovery_bytes.size() ||
+            !recovery_record.flush() || recovery_record.error() != QFileDevice::NoError) {
+            setError(QStringLiteral("%1 export could not retain its recovery record.").arg(output_kind));
+            return false;
+        }
+        recovery_record.close();
+        // Refuse an external replacement since the recovery copies were taken.
+        // The fingerprint/report are committed first; the drawing is last, so
+        // a new drawing never precedes its mandatory metadata.
+        for (const auto& entry : previous) {
+            const QFileInfo current(entry.path);
+            if (current.isSymLink() || current.exists() != entry.existed ||
+                (entry.existed && (!current.isFile() || digestFile(entry.path) != entry.digest))) {
+                setError(QStringLiteral("%1 export destination changed while preparing the save.")
+                             .arg(output_kind));
+                return false;
+            }
+        }
+        // Preserve the complete recovery set on an exception, interruption, or
+        // failed restoration; never depend on writing a backup after failure.
+        recovery.setAutoRemove(false);
+        std::size_t committed = 0;
+        QString publication_error;
+        try {
+            while (committed < files.size()) {
+                if (reject_first_commit && committed == 0) {
+                    publication_error = QStringLiteral("injected commit failure");
+                    break;
+                }
+                if (!files[committed]->commit()) {
+                    publication_error = files[committed]->errorString();
+                    break;
+                }
+                ++committed;
+            }
+        } catch (const std::exception& error) {
+            publication_error = QString::fromUtf8(error.what());
+        } catch (...) {
+            publication_error = QStringLiteral("unexpected publication failure");
+        }
+        if (committed == files.size()) {
+            recovery.setAutoRemove(true);
+            return true;
+        }
+        for (auto* file : files) {
+            if (file->isOpen()) file->cancelWriting();
+        }
+        bool restored = true;
+        for (auto restored_index = committed; restored_index > 0;) {
+            const auto& entry = previous[--restored_index];
+            try {
+                if (!entry.existed) {
+                    restored = (!QFileInfo::exists(entry.path) || QFile::remove(entry.path)) && restored;
+                    continue;
+                }
+                QFile backup(entry.backup);
+                QSaveFile restore(entry.path);
+                restore.setDirectWriteFallback(false);
+                bool complete = backup.open(QIODevice::ReadOnly) && restore.open(QIODevice::WriteOnly);
+                while (complete && !backup.atEnd()) {
+                    const auto chunk = backup.read(1024 * 1024);
+                    complete = !chunk.isEmpty() && restore.write(chunk) == chunk.size();
+                }
+                complete = complete && backup.error() == QFileDevice::NoError &&
+                    restore.flush() && restore.error() == QFileDevice::NoError && restore.commit();
+                restored = complete && restored;
+            } catch (...) {
+                restored = false;
+            }
+        }
+        recovery.setAutoRemove(restored);
+        setError(restored
+            ? QStringLiteral("%1 export could not publish %2: %3. Previous files are unchanged.")
+                .arg(output_kind, QFileInfo(previous[committed].path).fileName(), publication_error)
+            : QStringLiteral("%1 export could not publish %2: %3. Recovery is incomplete; previous files are retained in %4.")
+                .arg(output_kind, QFileInfo(previous[committed].path).fileName(), publication_error, recovery.path()));
+        return false;
+    }
+
     bool prepareOutputFingerprint(QSaveFile& sidecar, const QString& output_path,
                                   const DocumentSnapshot& snapshot, const QString& output_kind,
                                   std::string output_digest) {
@@ -36114,6 +36282,7 @@ public:
                                   {"output_file", QFileInfo(output_path).fileName().toStdString()},
                                   {"output_sha256", std::move(output_digest)},
                                   {"fingerprint", serialize_output_fingerprint(fingerprint)}}.dump(2);
+        sidecar.setDirectWriteFallback(false);
         if (!sidecar.open(QIODevice::WriteOnly) ||
             sidecar.write(QByteArray::fromStdString(payload)) !=
                 static_cast<qint64>(payload.size()) || !sidecar.flush() ||
@@ -36136,26 +36305,12 @@ public:
                                   {"output_sha256", std::move(output_digest)},
                                   {"sheet_order", sheet_order},
                                   {"fingerprint", serialize_output_fingerprint(fingerprint)}}.dump(2);
+        sidecar.setDirectWriteFallback(false);
         if (!sidecar.open(QIODevice::WriteOnly) ||
             sidecar.write(QByteArray::fromStdString(payload)) !=
                 static_cast<qint64>(payload.size()) || !sidecar.flush() ||
             sidecar.error() != QFileDevice::NoError) {
             setError(QStringLiteral("Drawing-set export fingerprint could not be written beside the output."));
-            return false;
-        }
-        return true;
-    }
-
-    bool writeOutputFingerprint(const QString& output_path, const DocumentSnapshot& snapshot,
-                                QString output_kind) {
-        QSaveFile sidecar(output_path + QStringLiteral(".fingerprint.json"));
-        if (!prepareOutputFingerprint(sidecar, output_path, snapshot, output_kind,
-                                      digestFile(output_path))) {
-            return false;
-        }
-        if (!sidecar.commit()) {
-            setError(QStringLiteral("%1 export fingerprint could not be committed beside the output.")
-                         .arg(output_kind));
             return false;
         }
         return true;
@@ -36284,16 +36439,7 @@ public:
                 setError(QStringLiteral("Sketch PDF fingerprint could not be staged beside the output."));
                 return false;
             }
-            if (!destination.commit()) {
-                setError(QStringLiteral("Sketch PDF could not save the destination: %1")
-                    .arg(destination.errorString()));
-                return false;
-            }
-            if (!sidecar.commit()) {
-                setError(QStringLiteral("Sketch PDF was saved, but its fingerprint could not be committed: %1")
-                    .arg(sidecar.errorString()));
-                return false;
-            }
+            if (!publishOutputFiles(QStringLiteral("Sketch PDF"), {&sidecar, &destination})) return false;
             clearError();
             owner->statusBar()->showMessage(QStringLiteral("Sketch PDF exported."), 5000);
             return true;
@@ -36384,24 +36530,13 @@ public:
                 setError(QStringLiteral("PDF export could not stage the destination."));
                 return false;
             }
-            // Prepare the sidecar while the destination is still unpublished.
-            // QSaveFile keeps both old files intact if either preflight fails;
-            // the sidecar is committed only after the PDF replacement succeeds.
+            // Prepare every required file before the publication transaction.
             QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
             if (!prepareOutputFingerprint(sidecar, path, snapshot,
                                           QStringLiteral("pdf"), pdf_digest)) {
                 return false;
             }
-            if (!destination.commit()) {
-                setError(QStringLiteral("PDF export could not save the destination: %1")
-                             .arg(destination.errorString()));
-                return false;
-            }
-            if (!sidecar.commit()) {
-                setError(QStringLiteral("PDF export fingerprint could not be committed beside the output: %1")
-                             .arg(sidecar.errorString()));
-                return false;
-            }
+            if (!publishOutputFiles(QStringLiteral("PDF"), {&sidecar, &destination})) return false;
             clearError();
             owner->statusBar()->showMessage(QStringLiteral("PDF exported."), 5000);
             return true;
@@ -36542,28 +36677,6 @@ public:
             const auto pdf_digest = QCryptographicHash::hash(
                 pdf_bytes, QCryptographicHash::Sha256).toHex().toStdString();
             const auto sidecar_path = path + QStringLiteral(".fingerprint.json");
-            const auto retain_existing = [&](const QString& existing_path)
-                -> std::optional<QByteArray> {
-                if (!QFileInfo::exists(existing_path)) return std::nullopt;
-                QFile existing(existing_path);
-                if (!existing.open(QIODevice::ReadOnly))
-                    throw std::runtime_error("an existing drawing-set output cannot be retained for rollback");
-                const auto bytes = existing.readAll();
-                if (existing.error() != QFileDevice::NoError)
-                    throw std::runtime_error("an existing drawing-set output cannot be read for rollback");
-                return bytes;
-            };
-            const auto previous_pdf = retain_existing(path);
-            const auto previous_sidecar = retain_existing(sidecar_path);
-            const auto restore_existing = [](const QString& restore_path,
-                                             const std::optional<QByteArray>& previous) {
-                if (!previous) return !QFileInfo::exists(restore_path) || QFile::remove(restore_path);
-                QSaveFile restore(restore_path);
-                restore.setDirectWriteFallback(false);
-                return restore.open(QIODevice::WriteOnly) &&
-                    restore.write(*previous) == previous->size() && restore.flush() &&
-                    restore.error() == QFileDevice::NoError && restore.commit();
-            };
             QSaveFile destination(path);
             destination.setDirectWriteFallback(false);
             if (!destination.open(QIODevice::WriteOnly) ||
@@ -36575,28 +36688,10 @@ public:
             QSaveFile sidecar(sidecar_path);
             if (!prepareDrawingSetFingerprint(sidecar, path, snapshot, pdf_digest, order))
                 return false;
-            if (!destination.commit()) {
-                setError(QStringLiteral("Drawing-set PDF export could not save the destination: %1")
-                             .arg(destination.errorString()));
-                return false;
-            }
             const auto injected_commit_failure = qApp->property(
                 "vertex.testFailDrawingSetSidecarCommit").toBool();
-            if (injected_commit_failure) sidecar.cancelWriting();
-            if (injected_commit_failure || !sidecar.commit()) {
-                const auto sidecar_error = injected_commit_failure
-                    ? QStringLiteral("injected commit failure") : sidecar.errorString();
-                sidecar.cancelWriting();
-                const auto restored_pdf = restore_existing(path, previous_pdf);
-                const auto restored_sidecar = restore_existing(sidecar_path, previous_sidecar);
-                setError(QStringLiteral(
-                    "Drawing-set PDF fingerprint could not be committed beside the output: %1. "
-                    "Previous output restoration: PDF %2, fingerprint %3.")
-                             .arg(sidecar_error,
-                                  restored_pdf ? QStringLiteral("restored") : QStringLiteral("FAILED"),
-                                  restored_sidecar ? QStringLiteral("restored") : QStringLiteral("FAILED")));
-                return false;
-            }
+            if (!publishOutputFiles(QStringLiteral("Drawing-set PDF"), {&sidecar, &destination},
+                                    injected_commit_failure)) return false;
             clearError();
             owner->statusBar()->showMessage(
                 QStringLiteral("Drawing set exported locally as %1 ordered pages.")
@@ -36671,16 +36766,15 @@ public:
             svg.replace(root_match.capturedStart(), root_match.capturedLength(), root);
             const auto exact_svg = svg.toUtf8();
             QSaveFile svg_file(path);
+            svg_file.setDirectWriteFallback(false);
             if (!svg_file.open(QIODevice::WriteOnly) ||
-                svg_file.write(exact_svg) != exact_svg.size() || !svg_file.commit())
-                throw std::runtime_error("SVG destination could not be saved");
-            if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
-                setError(QStringLiteral("SVG export did not produce a file."));
-                return false;
-            }
-            if (!writeOutputFingerprint(path, snapshot, QStringLiteral("svg"))) {
-                return false;
-            }
+                exact_svg.isEmpty() || svg_file.write(exact_svg) != exact_svg.size())
+                throw std::runtime_error("SVG destination could not be staged");
+            QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
+            const auto svg_digest = QCryptographicHash::hash(
+                exact_svg, QCryptographicHash::Sha256).toHex().toStdString();
+            if (!prepareOutputFingerprint(sidecar, path, snapshot, QStringLiteral("svg"), svg_digest) ||
+                !publishOutputFiles(QStringLiteral("SVG"), {&sidecar, &svg_file})) return false;
             clearError();
             owner->statusBar()->showMessage(QStringLiteral("SVG exported."), 5000);
             return true;
@@ -36739,19 +36833,25 @@ public:
                              Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
                              outputVisibilityNote());
             painter.end();
+            QByteArray image_bytes;
+            QBuffer image_buffer(&image_bytes);
+            if (!image_buffer.open(QIODevice::WriteOnly) || !image.save(&image_buffer, "PNG") ||
+                image_bytes.isEmpty()) {
+                setError(QStringLiteral("PNG export could not encode the image."));
+                return false;
+            }
+            image_buffer.close();
             QSaveFile file(path);
-            if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit()) {
-                file.cancelWriting();
-                setError(QStringLiteral("PNG export could not save the destination."));
+            file.setDirectWriteFallback(false);
+            if (!file.open(QIODevice::WriteOnly) || file.write(image_bytes) != image_bytes.size()) {
+                setError(QStringLiteral("PNG export could not stage the destination."));
                 return false;
             }
-            if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
-                setError(QStringLiteral("PNG export did not produce a file."));
-                return false;
-            }
-            if (!writeOutputFingerprint(path, snapshot, QStringLiteral("png"))) {
-                return false;
-            }
+            QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
+            const auto image_digest = QCryptographicHash::hash(
+                image_bytes, QCryptographicHash::Sha256).toHex().toStdString();
+            if (!prepareOutputFingerprint(sidecar, path, snapshot, QStringLiteral("png"), image_digest) ||
+                !publishOutputFiles(QStringLiteral("PNG"), {&sidecar, &file})) return false;
             clearError();
             owner->statusBar()->showMessage(QStringLiteral("Image exported."), 5000);
             return true;
@@ -36785,7 +36885,7 @@ public:
         // Stage beside the chosen output, where this caller has explicitly
         // requested write access. The process-wide Windows temporary directory
         // can be unavailable to a restricted/offline launch even when the
-        // destination itself is writable. Publication remains QSaveFile atomic.
+        // destination itself is writable.
         QTemporaryDir staging(QFileInfo(path).absoluteDir().filePath(
             QStringLiteral(".vertex-3d-export-XXXXXX")));
         if (!staging.isValid()) {
@@ -36815,17 +36915,23 @@ public:
             return false;
         }
         const auto bytes = stamped.readAll();
-        QSaveFile destination(path);
-        if (stamped.error() != QFileDevice::NoError || bytes.isEmpty() ||
-            !destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() ||
-            !destination.commit()) {
-            setError(QStringLiteral("Native OCCT 3D export could not save its stamped image."));
+        if (stamped.error() != QFileDevice::NoError || bytes.isEmpty()) {
+            setError(QStringLiteral("Native OCCT 3D export could not read its stamped image."));
             return false;
         }
         try {
-            if (!writeOutputFingerprint(path, m_document->snapshot(), QStringLiteral("native-3d-image"))) {
+            QSaveFile destination(path);
+            destination.setDirectWriteFallback(false);
+            if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size()) {
+                setError(QStringLiteral("Native OCCT 3D export could not stage its stamped image."));
                 return false;
             }
+            QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
+            const auto image_digest = QCryptographicHash::hash(
+                bytes, QCryptographicHash::Sha256).toHex().toStdString();
+            if (!prepareOutputFingerprint(sidecar, path, m_document->snapshot(),
+                                          QStringLiteral("native-3d-image"), image_digest) ||
+                !publishOutputFiles(QStringLiteral("Native 3D image"), {&sidecar, &destination})) return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Native OCCT 3D output fingerprint failed: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -36866,13 +36972,17 @@ public:
             const auto mapped = export_project_dxf(source);
             const auto ascii = export_dxf_ascii(mapped.drawing);
             QSaveFile destination(path);
+            destination.setDirectWriteFallback(false);
             const QByteArray bytes(ascii.data(), static_cast<qsizetype>(ascii.size()));
-            if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() ||
-                !destination.commit()) {
-                setError(QStringLiteral("DXF export could not save the destination."));
+            if (bytes.isEmpty() || !destination.open(QIODevice::WriteOnly) ||
+                destination.write(bytes) != bytes.size()) {
+                setError(QStringLiteral("DXF export could not stage the destination."));
                 return false;
             }
+            const auto output_digest = QCryptographicHash::hash(
+                bytes, QCryptographicHash::Sha256).toHex().toStdString();
             json report{{"format", "DXF R2013"}, {"source_revision", source.revision()},
+                        {"output_sha256", output_digest},
                         {"complete", mapped.diagnostics.empty()}, {"diagnostics", json::array()}};
             for (const auto& item : mapped.diagnostics) {
                 report["diagnostics"].push_back({{"source_id", item.source_id},
@@ -36880,13 +36990,16 @@ public:
             }
             const auto report_path = path + QStringLiteral(".fidelity.json");
             QSaveFile report_file(report_path);
+            report_file.setDirectWriteFallback(false);
             const auto report_bytes = QByteArray::fromStdString(report.dump(2));
             if (!report_file.open(QIODevice::WriteOnly) ||
-                report_file.write(report_bytes) != report_bytes.size() || !report_file.commit()) {
-                setError(QStringLiteral("DXF export report could not be saved."));
+                report_file.write(report_bytes) != report_bytes.size()) {
+                setError(QStringLiteral("DXF export report could not be staged."));
                 return false;
             }
-            if (!writeOutputFingerprint(path, source, QStringLiteral("dxf"))) return false;
+            QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
+            if (!prepareOutputFingerprint(sidecar, path, source, QStringLiteral("dxf"), output_digest) ||
+                !publishOutputFiles(QStringLiteral("DXF"), {&sidecar, &report_file, &destination})) return false;
             clearError();
             owner->statusBar()->showMessage(
                 mapped.diagnostics.empty() ? QStringLiteral("DXF exported locally.")
@@ -37529,25 +37642,31 @@ public:
                 throw std::invalid_argument("IFC mapping produced no serializable output.");
             const QByteArray bytes(mapped.step.data(), static_cast<qsizetype>(mapped.step.size()));
             QSaveFile destination(path);
-            if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() ||
-                !destination.commit()) {
-                setError(QStringLiteral("IFC export could not save the destination."));
+            destination.setDirectWriteFallback(false);
+            if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size()) {
+                setError(QStringLiteral("IFC export could not stage the destination."));
                 return false;
             }
+            const auto output_digest = QCryptographicHash::hash(
+                bytes, QCryptographicHash::Sha256).toHex().toStdString();
             json report{{"format", "IFC4 STEP"}, {"source_revision", source.revision()},
+                        {"output_sha256", output_digest},
                         {"complete", mapped.diagnostics.empty()}, {"diagnostics", json::array()}};
             for (const auto& item : mapped.diagnostics)
                 report["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});
             const auto report_path = path + QStringLiteral(".fidelity.json");
             QSaveFile report_file(report_path);
+            report_file.setDirectWriteFallback(false);
             const auto report_bytes = QByteArray::fromStdString(report.dump(2));
             if (!report_file.open(QIODevice::WriteOnly) ||
-                report_file.write(report_bytes) != report_bytes.size() || !report_file.commit()) {
-                setError(QStringLiteral("IFC export report could not be saved."));
+                report_file.write(report_bytes) != report_bytes.size()) {
+                setError(QStringLiteral("IFC export report could not be staged."));
                 return false;
             }
-            if (!writeOutputFingerprint(path, source, QStringLiteral("ifc"))) return false;
+            QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
+            if (!prepareOutputFingerprint(sidecar, path, source, QStringLiteral("ifc"), output_digest) ||
+                !publishOutputFiles(QStringLiteral("IFC"), {&sidecar, &report_file, &destination})) return false;
             clearError();
             owner->statusBar()->showMessage(
                 mapped.diagnostics.empty() ? QStringLiteral("IFC exported locally.")

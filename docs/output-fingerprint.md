@@ -8,6 +8,30 @@ exports now write an adjacent `<output>.fingerprint.json` manifest generated
 from the same document snapshot and view state used for rendering. The sidecar
 also records `output_sha256`, the digest of the completed output bytes, so a
 consumer can reject a sidecar paired with a modified or different output file.
+
+Sketch PDF, sheet PDF, drawing-set PDF, SVG, PNG, native 3D image, DXF and IFC
+exports prepare every required file before publishing any destination. The
+fingerprint is committed first, followed by any fidelity report, then the
+output. DXF/IFC fidelity reports include the same `output_sha256`. Every staging
+and restoration device disables direct-write fallback. A failed preparation
+preserves the existing destinations.
+
+Before publication, the desktop retains existing regular files in a sibling
+`.vertex-export-recovery-*` directory. `recovery.json` records original presence,
+backup names and digests, including zero-byte originals and absent paths.
+Destinations must be distinct regular sibling files; symbolic links and changed
+destinations are refused. A late failure restores the committed prefix in
+reverse order and attempts every restoration. Failed restoration retains the
+complete recovery set and reports its location. Successful publication or
+complete rollback removes these temporary recovery files.
+
+This is checked sequential publication with recovery, not a filesystem
+transaction spanning several files. A process interruption can leave metadata
+paired with the old output, which consumers must reject by comparing digests;
+power-loss durability and concurrent external writers are not certified.
+Compilation and failure-path behavior of this source change remain unverified
+while builds and tests are paused.
+
 Print
 preview runs the same fingerprint gate before opening and when it paints, and
 its local driver-evidence receipt carries the serialized output fingerprint

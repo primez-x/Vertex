@@ -1,8 +1,9 @@
 # Assistance
 
-Vertex assistance is an optional, deterministic local feature. It is
-session-scoped and starts disabled. The current engine has no model weights,
-network client, account, activation check, or hosted service dependency.
+Vertex assistance is an optional local feature. It is session-scoped and starts
+disabled. Tracing, label placement and the command grammar are deterministic;
+optional text recognition uses a bundled English OCR model. Neither path needs
+a network client, account, activation check or hosted service.
 
 The engine accepts a bounded grayscale pixel buffer instead of a file path. It
 currently provides five proposal producers:
@@ -26,12 +27,19 @@ currently provides five proposal producers:
   worker. Each proposal retains the actual normalized PDF selection rectangle
   of the text line containing the match, not an estimated character position.
   A line can contain several quantities sharing that line's selection bounds.
-  Text without validated selection bounds generates no dimensions. Raster-only
-  PDF pages and image imports have no OCR and yield no text dimensions.
+  Text without validated selection bounds generates no dimensions. The
+  dimension producer can read raster references and scanned PDF pages through
+  the isolated offline OCR worker. It retains the actual text-line bounds,
+  confidence, engine identity and model digest; recognized values remain
+  provisional. Missing or invalid OCR resources refuse recognition rather than
+  downloading a model or reading an alternative from the environment.
 - **Label placement** turns named document anchors into note-label proposals.
 - **Natural language** supports the bounded commands `label <text> at x,y`,
   `set workspace measurement|architectural`, and `draw rectangle <width> x
   <height>`.
+
+Label anchors, commands and parsed label content reject embedded NUL bytes as
+well as carriage returns, line feeds and tabs before generating proposals.
 
 Every result is an `AssistanceProposal` with a stable ID, producer, source
 rectangle, confidence, resource declarations and a typed command preview. The
@@ -86,10 +94,12 @@ change. The application does not mark an inferred value verified and does not
 silently change an area classification.
 
 The deterministic implementation is recorded in
-`assets/assistance/deterministic-engine-v1.json` and is included in the
-portable allowlist under GPL-3.0-or-later. The source and package manifests
-retain the same provenance and license boundary as the rest of the application;
-no third-party model license is introduced by this engine.
+`assets/assistance/deterministic-engine-v1.json` under GPL-3.0-or-later. OCR uses
+Tesseract 5.5.2 and the pinned English tessdata-fast model declared in
+`assets/assistance/ocr-engine-v1.json`; its Apache-2.0 notice is retained in
+`assets/assistance/ocr/LICENSE`. The worker initializes from the verified model
+bytes in memory and refuses fallback file reads. Production sandbox execution
+and representative-plan accuracy remain separate qualification requirements.
 
 `tests/assistance_contract_tests.cpp` covers the proposal envelope and strict
 acceptance rules. `tests/assistance_engine_tests.cpp` covers deterministic
