@@ -33,7 +33,11 @@ retain pending-placement/selection/Site fences, and publish Cut content only
 after successful application. Native 152 / extraction 150 preserve the additive
 meaning in direct, wrapped, retained and undone history. Older inner one/two
 grammars and historical coordinated child restrictions remain unchanged. Root
-integrated source review is complete; independent review of this batch is pending.
+integrated source review is complete. Independent review of 7497252 found a
+dropped wall/component policy in the selection façade. The correction forwards
+a separate default-off wall policy through analytical admission and replay,
+while roof-only callers and non-wall host families retain their previous
+authority. Independent source review of the correction is pending.
 
 No builds, tests, probes, scripts, native jobs, launches, packages or installations
 ran. Compilation and runtime remain unverified; the installed candidate is

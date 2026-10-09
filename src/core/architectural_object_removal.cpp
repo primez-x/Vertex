@@ -718,6 +718,9 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
     Ids retained_baseline_catalogs;
     const auto retained_baseline_catalog_row = [&](const Entity& catalog, const std::string& host_id) {
         if (!complete_hosted_catalog_consequences) return false;
+        const auto host = source.find(host_id);
+        if (host != source.end() && host->second.type != "wall" && host->second.type != "opening")
+            return false; // Other host families retain their existing admission.
         const auto carrier = phase.owners.find(catalog.id);
         if (carrier == phase.owners.end()) return false;
         const auto& model = phase.models.at(carrier->second);
@@ -725,7 +728,6 @@ Entities derive(const Entities& source, const std::vector<std::string>& selectio
         if (catalog.required || phase.scope.inactive_owner_ids.contains(catalog.id) ||
             protected_carriers.contains(catalog.id) || !supported_catalog(catalog.properties.at("model")))
             reject("complete wall consequence requires an active nonrequired unprotected supported catalog: " + catalog.id);
-        const auto host = source.find(host_id);
         if (host == source.end() || host->second.required || phase.scope.inactive_owner_ids.contains(host_id))
             reject("complete wall catalog consequence has an absent or protected actual host: " + host_id);
         auto wall_id = host_id;

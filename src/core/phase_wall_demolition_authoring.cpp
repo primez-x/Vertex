@@ -757,7 +757,8 @@ Entities physical_stage(const Entities& actual,const PhaseConstraintAuthoringInt
                 found->second.type=="room" || found->second.type=="boundary") invalid("ordinary root requires its dedicated authoring lane");
         }
         auto candidate=historical_primitive ? replay_architectural_object_removal(actual,selection.object_ids,selection.components) :
-            replay_architectural_selection_removal(actual,selection,true,edit.complete_hosted_catalog_consequences);
+            replay_architectural_selection_removal(actual,selection,true,edit.complete_hosted_catalog_consequences,
+                edit.complete_hosted_catalog_consequences);
         retain_registry_order(actual,candidate,edit.wall_demolition);
         ordinary_authority(actual,candidate,edit.wall_demolition,edit.complete_hosted_catalog_consequences);
         candidates.push_back(std::move(candidate));

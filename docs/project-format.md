@@ -23,7 +23,9 @@ unchanged original wall; the actual opening must be physically absent and the
 original wall remain byte-exact. That exception persists through room review.
 
 Physical wall replay and join-inference preflight share the opt-in qualified
-catalog policy with the component producer. Admission preserves complete source
+catalog policy with the component producer. The selection façade forwards the
+separate wall policy through both component preflight and replay; roof-only
+and non-wall host admission remains independent. Admission preserves complete source
 work budgets, aliases and inactive ownership. Retained catalog envelopes,
 definitions, materials, raw survivor order and membership are proved against
 the original carrier. Compound consequences use complete source-based
