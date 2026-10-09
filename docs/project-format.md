@@ -1,5 +1,30 @@
 # Vertex project formats v1 through v134
 
+## Ordinary architectural and component removal
+
+Ordinary stair/railing, column/beam and horizontal removal captures actual
+attached rails, hosted catalog rows, dimensions and known saved presentations
+in one complete candidate. Explicit embedded component selections use exact
+catalog/instance pairs through the same producer, including ordinary wall/roof
+hosts. Catalog definitions, unaffected rows and surviving render aliases remain
+retained; unsupported affected references refuse before publication.
+
+Baseline-only registries without alternatives may retire selected baseline
+members and their registry roster together. Active proposed owners may retire
+only when no other alternative uses them. Shared/inactive baseline and other
+alternative ownership remains protected. A shared catalog carrier can lose
+only actual rows hosted by removable owners without changing its own registry.
+Unhosted rows derive their authority from the actual carrier.
+
+These commands persist their complete resulting entity maps under existing
+entity dialects without a new reader floor. Clipboard preparation redirects
+known temporary component presentation and dimension references before detached
+source admission. Local material, topology and dimension child references are
+qualified by their actual catalog or physical owner. Alias preservation is
+checked again after drawing cleanup and final command augmentation. The original
+source remains immutable. Independent and integrated source review approved;
+compilation and runtime remain unverified.
+
 ## Mixed architectural demolition (v134)
 
 Native reader 134 and JSON/assets extraction 132 retain active-design authoring

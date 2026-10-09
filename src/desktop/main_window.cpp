@@ -56,6 +56,7 @@
 #include "sketch/structural_hosted_components.hpp"
 #include "sketch/structural_clone.hpp"
 #include "sketch/model_copy_composition.hpp"
+#include "sketch/architectural_object_removal.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
@@ -30039,19 +30040,36 @@ public:
         return result;
     }
 
+    static void preserveSurvivingRemovalAliases(
+        const std::map<std::string,Entity,std::less<>>& source,
+        const std::map<std::string,Entity,std::less<>>& candidate) {
+        const auto remaining=embedded_assembly_presentation_ids(candidate);
+        for (const auto& [key,alias]:embedded_assembly_presentation_ids(source)) {
+            const auto after=remaining.find(key);
+            if (after!=remaining.end() && after->second!=alias)
+                throw std::invalid_argument("Removal would change a surviving component's presentation identity: "+key.first+"/"+key.second);
+        }
+    }
+
     std::vector<EntityChange> selectionRemovalChanges(
-        const DocumentSnapshot& snapshot, const std::vector<Entity>& graph) const {
-        std::vector<EntityChange> changes;
-        changes.reserve(graph.size());
+        const DocumentSnapshot& snapshot, const std::vector<Entity>& graph,
+        const std::vector<std::pair<std::string,std::string>>& components={}) const {
+        std::vector<std::string> physical_roots;
+        for (const auto& entity:graph)
+            if (entity.type=="stair" || entity.type=="railing" || entity.type=="slab" || structuralObject(entity))
+                physical_roots.push_back(entity.id);
+        auto candidate=physical_roots.empty() && components.empty() ? snapshot.entities() :
+            replay_architectural_object_removal(snapshot.entities(),physical_roots,components);
         for (const auto& entity : graph) {
+            const auto surviving=candidate.find(entity.id);
+            if (surviving==candidate.end()) continue;
             if (entity.type == kAnnotationEntityType &&
                 !m_selected_ids.contains(id_from(entity.id))) {
                 std::set<std::string, std::less<>> child_ids;
                 for (const auto* collection : {"labels", "symbols"})
                     for (const auto& item : entity.properties.at("state").at(collection))
                         child_ids.insert(item.at("id").get<std::string>());
-                changes.push_back(EntityChange::upsert(annotation_child_subset(
-                    snapshot.entities().at(entity.id), child_ids, false)));
+                surviving->second=annotation_child_subset(surviving->second, child_ids, false);
             } else {
                 // Measured strokes require reader support, but their authored
                 // geometry remains explicitly removable. Missing sources leave
@@ -30061,9 +30079,20 @@ public:
                     if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
                 } else if (entity.required)
                     throw std::invalid_argument("Required project entities cannot be deleted.");
-                changes.push_back(EntityChange::erase(entity.id));
+                candidate.erase(surviving);
             }
         }
+        preserveSurvivingRemovalAliases(snapshot.entities(),candidate);
+        std::vector<EntityChange> changes;
+        for (const auto& [id,entity]:snapshot.entities()) {
+            const auto after=candidate.find(id);
+            if (after==candidate.end()) changes.push_back(EntityChange::erase(id));
+            else if (entity!=after->second || entity.properties.dump()!=after->second.properties.dump() ||
+                entity.extensions.dump()!=after->second.extensions.dump())
+                changes.push_back(EntityChange::upsert(after->second));
+        }
+        for (const auto& [id,entity]:candidate)
+            if (!snapshot.entities().contains(id)) changes.push_back(EntityChange::upsert(entity));
         return changes;
     }
 
@@ -30087,15 +30116,56 @@ public:
             external = encode_document_assembly_instance(external, {binding->assembly_catalog_id, instance});
             detached_changes.push_back(EntityChange::upsert(std::move(external)));
             auto catalog = catalogs.contains(binding->assembly_catalog_id) ? catalogs.at(binding->assembly_catalog_id) : source_catalog;
-            const auto model = AssemblyModel::from_json(catalog.properties.at("model")); auto instances = model.instances();
-            std::erase_if(instances, [&](const auto& value) { return value.id == binding->instance.id; });
-            catalog.properties["model"] = AssemblyModel::create(model.materials(), model.types(), std::move(instances)).to_json();
+            auto& instances=catalog.properties.at("model").at("instances");
+            instances.erase(std::remove_if(instances.begin(),instances.end(),[&](const auto& row) {
+                return row.at("id").template get<std::string>()==binding->instance.id;
+            }),instances.end());
+            (void)AssemblyModel::from_json(catalog.properties.at("model"));
             catalogs.insert_or_assign(catalog.id, std::move(catalog));
             copied_children.emplace(original_child, instance.id); id = id_from(instance.id);
         }
         for (auto& [id, catalog] : catalogs) { (void)id; detached_changes.push_back(EntityChange::upsert(std::move(catalog))); }
         if (!copied_children.empty()) for (const auto& [id, entity] : source_snapshot.entities()) {
-            (void)id; if (entity.type != kAnnotationEntityType) continue;
+            (void)id;
+            const auto redirect=[&](json& reference) {
+                if (!reference.is_string()) return;
+                const auto found=copied_children.find(reference.get<std::string>());
+                if (found!=copied_children.end()) reference=found->second;
+            };
+            if (entity.type==kSheetViewEntityType) {
+                auto saved=entity;
+                (void)decode_sheet_view_entity(saved);
+                for (auto& view:saved.properties.at("model").at("views")) {
+                    if (view.contains("object_ids")) for (auto& object:view.at("object_ids")) redirect(object);
+                    auto& presentation=view.at("presentation");
+                    if (presentation.contains("appearance") && !presentation.at("appearance").is_null())
+                        for (auto& row:presentation.at("appearance").at("objects")) redirect(row.at("object_id"));
+                    if (view.contains("overlays")) for (auto& row:view.at("overlays")) {
+                        if (row.contains("object_id")) redirect(row.at("object_id"));
+                        if (row.contains("dimension_binding") && !row.at("dimension_binding").is_null())
+                            redirect(row.at("dimension_binding").at("object_id"));
+                    }
+                }
+                if (saved!=entity || saved.properties.dump()!=entity.properties.dump()) {
+                    validate_sheet_view_entity(saved);
+                    detached_changes.push_back(EntityChange::upsert(std::move(saved)));
+                }
+                continue;
+            }
+            if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                const auto target=entity.properties.find("target");
+                if (target!=entity.properties.end() && target->is_object() && target->contains("entity_id") &&
+                    target->at("entity_id").is_string() && copied_children.contains(target->at("entity_id").get<std::string>())) {
+                    const auto decoded=decode_boundary_dimension_entity(entity);
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                    auto dimension=entity;
+                    redirect(dimension.properties.at("target").at("entity_id"));
+                    (void)decode_boundary_dimension_entity(dimension);
+                    detached_changes.push_back(EntityChange::upsert(std::move(dimension)));
+                }
+                continue;
+            }
+            if (entity.type != kAnnotationEntityType) continue;
             auto annotation = entity;
             for (auto& record : annotation.properties.at("state").at("overrides")) {
                 const auto found = copied_children.find(record.at("target_id").get<std::string>());
@@ -31430,10 +31500,15 @@ public:
             if (std::any_of(m_selected_ids.begin(), m_selected_ids.end(), [&](const auto& id) {
                 return geometric_assembly_for_child(source, id.toStdString()).has_value();
             })) {
-                if (!copySelection()) return false;
-                if (document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot()))
+                const auto encoded=clipboardSelectionPayload(source);
+                const auto clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
+                auto* clipboard=QGuiApplication::clipboard();
+                if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+                if (!sourceEditAuthorityUnchanged(authority))
                     throw std::invalid_argument("The selection source changed before Cut. The project was not changed.");
-                return deleteSelection();
+                if (!deleteSelection()) return false;
+                clipboard->setText(clipboard_text,QClipboard::Clipboard);
+                return true;
             }
             if (hasOnlyPhysicalWallSelection(source)) return removeSelectedPhysicalWalls(source, true);
             const auto entities = clipboardSelectionGraph(source);
@@ -31448,16 +31523,20 @@ public:
                     throw std::invalid_argument("Select the area's deductions, supporting walls and measured lines to cut them together, or use Copy to preserve the originals.");
             const ApplyEntityChanges command{
                 source.revision(), selectionRemovalChanges(source, entities), {}, "Cut selection"};
-            const auto authored = augmentAuthoredCommand(Command{command});
-            (void)Document::preview_command(source, authored);
+            const auto authored = augmentAuthoredCommand(Command{command},source);
+            const auto candidate=Document::preview_command(source, authored);
+            preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
             const auto encoded = clipboardSelectionPayload(source);
             const auto clipboard_text = QString::fromUtf8(encoded.data(), static_cast<int>(encoded.size()));
             auto* clipboard = QGuiApplication::clipboard();
             if (clipboard == nullptr)
                 throw std::runtime_error("The system clipboard is unavailable.");
-            applyAuthoredCommand(authored);
+            if (!sourceEditAuthorityUnchanged(authority))
+                throw std::invalid_argument("The selected objects or active design changed before Cut.");
+            if (!applyAuthoredCommand(authored)) return false;
             clipboard->setText(clipboard_text, QClipboard::Clipboard);
             m_selected_id.clear();
+            m_selected_ids.clear();
             clearError();
             refresh();
             return true;
@@ -31954,45 +32033,24 @@ public:
                 refresh();
                 return true;
             }
-            std::map<std::string, Entity, std::less<>> embedded_catalogs;
+            std::vector<std::pair<std::string,std::string>> components;
             QStringList ordinary_ids;
-            std::set<std::string, std::less<>> removed_children;
             for (const auto& id : m_selected_ids) {
                 const auto binding = geometric_assembly_for_child(source, id.toStdString());
                 if (!binding) { ordinary_ids.push_back(id); continue; }
-                auto catalog = embedded_catalogs.contains(binding->assembly_catalog_id)
-                    ? embedded_catalogs.at(binding->assembly_catalog_id) : source.entities().at(binding->assembly_catalog_id);
-                const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
-                auto instances = model.instances();
-                std::erase_if(instances, [&](const auto& value) { return value.id == binding->instance.id; });
-                catalog.properties["model"] = AssemblyModel::create(model.materials(), model.types(), std::move(instances)).to_json();
-                embedded_catalogs.insert_or_assign(catalog.id, std::move(catalog)); removed_children.insert(id.toStdString());
+                components.emplace_back(binding->assembly_catalog_id,binding->instance.id);
             }
-            if (!embedded_catalogs.empty()) {
-                auto ordinary_graph = clipboardSelectionGraph(source, true, &ordinary_ids);
-                auto changes = selectionRemovalChanges(source, ordinary_graph);
-                for (auto& [id, catalog] : embedded_catalogs) { (void)id; changes.push_back(EntityChange::upsert(std::move(catalog))); }
-                for (const auto& [id, annotation] : source.entities()) {
-                    (void)id; if (annotation.type != kAnnotationEntityType) continue;
-                    const auto existing = std::find_if(changes.begin(), changes.end(), [&](const auto& change) {
-                        return (change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id) == annotation.id;
-                    });
-                    if (existing != changes.end() && existing->kind != EntityChangeKind::upsert) continue;
-                    auto candidate = existing == changes.end() ? annotation : existing->entity;
-                    const auto before = candidate;
-                    auto& records = candidate.properties.at("state").at("overrides");
-                    records.erase(std::remove_if(records.begin(), records.end(), [&](const auto& record) {
-                        return removed_children.contains(record.at("target_id").template get<std::string>());
-                    }), records.end());
-                    if (candidate != before) {
-                        validate_annotation_entity(candidate);
-                        if (existing == changes.end()) changes.push_back(EntityChange::upsert(std::move(candidate)));
-                        else *existing = EntityChange::upsert(std::move(candidate));
-                    }
-                }
+            if (!components.empty()) {
+                const auto ordinary_graph = clipboardSelectionGraph(source, true, &ordinary_ids);
+                auto changes = selectionRemovalChanges(source, ordinary_graph, components);
                 const Command command = ApplyEntityChanges{source.revision(), std::move(changes), {}, "Delete selected embedded assemblies"};
-                const auto candidate = Document::preview_command(source, command); validate_document_assembly_instances(candidate.entities());
-                applyAuthoredCommand(command); m_selected_id.clear(); m_selected_ids.clear(); clearError(); refresh(); return true;
+                const auto authored=augmentAuthoredCommand(command,source);
+                const auto candidate = Document::preview_command(source, authored); validate_document_assembly_instances(candidate.entities());
+                preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
+                if (!sourceEditAuthorityUnchanged(authority))
+                    throw std::invalid_argument("The selected components or active design changed before Delete.");
+                if (!applyAuthoredCommand(authored)) return false;
+                m_selected_id.clear(); m_selected_ids.clear(); clearError(); refresh(); return true;
             }
             if (hasOnlyPhysicalWallSelection(source)) return removeSelectedPhysicalWalls(source, false);
             const auto entities = clipboardSelectionGraph(source, true);
@@ -32002,10 +32060,14 @@ public:
             }
             const ApplyEntityChanges command{
                 source.revision(), selectionRemovalChanges(source, entities), {}, "Delete selection"};
-            const auto authored = augmentAuthoredCommand(Command{command});
-            (void)Document::preview_command(source, authored);
-            applyAuthoredCommand(authored);
+            const auto authored = augmentAuthoredCommand(Command{command},source);
+            const auto candidate=Document::preview_command(source, authored);
+            preserveSurvivingRemovalAliases(source.entities(),candidate.entities());
+            if (!sourceEditAuthorityUnchanged(authority))
+                throw std::invalid_argument("The selected objects or active design changed before Delete.");
+            if (!applyAuthoredCommand(authored)) return false;
             m_selected_id.clear();
+            m_selected_ids.clear();
             clearError();
             refresh();
             return true;

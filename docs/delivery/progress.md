@@ -14,6 +14,29 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 ordinary architectural and component removal source integration
+
+Delete and Cut now derive a complete ordinary removal candidate for stairs,
+railings, columns/beams and horizontal assemblies, including actual attached
+rails, hosted component rows and known dimensions/presentations. Explicit
+component removal shares that producer, including components hosted on ordinary
+walls and roofs. Shared catalogs retain their raw definitions, unaffected rows
+and surviving render identities. Baseline-only registries without alternatives
+can retire ordinary members; shared/inactive/other-alternative owners remain
+protected. General drawing/annotation removals complete against this candidate
+instead of replacing its catalog or presentation consequences.
+
+Successful removal clears the entire selection. Cut prepares its clipboard
+content before removal and publishes it only after the authored command
+succeeds. Known material/topology references retain their qualified local
+meaning, and surviving component aliases are checked after drawing cleanup and
+final command augmentation. Independent source review approved after closing
+both reference-handling findings; root integrated source review is complete.
+No builds, tests, probes,
+scripts, native jobs, launches, packages or installations ran. Compilation and
+runtime remain unverified; the installed candidate is unchanged. Mixed shared
+baseline/ordinary and roof/wall/room removal remain additional scope.
+
 ### October 9 mixed architectural demolition source integration
 
 Delete and Cut now capture demolition for multiple architectural families in
