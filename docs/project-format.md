@@ -1,4 +1,39 @@
-# Vertex project formats v1 through v144
+# Vertex project formats v1 through v145
+
+## Independent drawing removal around wall/room review (v145)
+
+Native reader 145 and JSON/assets extraction 143 retain additive command
+envelope forty-one, including undone history. It has exactly `version`, `kind`,
+`expected_revision`, `message`, `independent_drawing_removal_completion`,
+`independent_drawing_removal_intent` and `proof`. The marker is explicitly true;
+the unnested child is one exact preceding complete wall/room command with the
+same revision and message. Older envelopes keep their existing meanings.
+
+The closed version-one intent contains `version`, ascending unique `owner_ids`
+and ordered `annotations`. Each annotation has its actual `owner_id`, explicit
+`kind` (`label` or `symbol`) and local `child_id`. Render aliases, bare ambiguous
+children and annotation containers cannot grant removal authority. Independent
+area boundaries, supported measured strokes and placed dimensions use actual
+owners; physical room/wall lineage remains under its dedicated review.
+
+Analytical actual-source selection, ownership, opaque-reference and constraint
+admission precedes geometry replay. The Document independently reconstructs the
+exact original wall/room stage, then the drawing removal. Supported dimensions,
+constraints, deductions, annotation overrides and presentation memberships are
+retired with their owners. Identical already-admitted reference retirement can
+collapse; surviving raw rows, computed component aliases, inactive ownership,
+assets and metadata remain intact. The final complete Document state is checked
+before one event is applied. Cut writes the clipboard only after application.
+
+Wall-free opening/drawing combinations and wall removals without retained room
+review use the existing asset-free raw version-one command after complete source
+reconstruction and preview; they introduce no new reader floor. The desktop
+retains the complete original selection and Site source fence across room
+dialogs. The command decoder ceiling now includes existing children thirty-five
+through forty as well as the new outer envelope. Compilation, runtime and
+save/reopen remain unverified under the source-only instruction. Affected opaque
+references, protected owners and empty legacy restricted views still require
+additional authoring support rather than inferred changes.
 
 ## Ordinary stair attachment edits in existing raw commands
 

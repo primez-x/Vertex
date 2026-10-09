@@ -14,6 +14,34 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 mixed drawing and annotation source implementation
+
+The canvas Delete/Cut routes now capture independently selected area boundaries,
+measured strokes, placed dimensions, labels and symbols alongside ordinary
+walls, openings and architectural/component owners. Annotation authority uses
+actual owner/kind/child rows, including qualified Site presentations. Mixed
+wall review retains the complete original selection, even when its primary
+selection is a drawing item, and no extra drawing deletion is published until
+the complete wall/room decision is accepted.
+
+The new analytical replay derives known references and presentation cleanup from
+the actual source. The command producer reconstructs the original geometry or
+removal stage, then the independent drawing lane, and requires exact real
+Document preview. Retained room commands use closed outer forty-one; native
+145/extraction 143 cover retained and undone history. Ordinary combinations keep
+raw version one. The shared command decoder now accepts the already-supported
+thirty-five through forty envelopes as well as forty-one.
+
+Independent source review approved after qualifying annotation override
+retirement by its actual target namespace and preserving the historical child
+proof depth beneath the new enclosure. Root integrated source review is
+complete; scoped whitespace inspection passed. No builds, tests, probes, scripts, native
+jobs, launches, packages or installations ran. Compilation and runtime remain
+unverified; the installed candidate is unchanged. Protected baseline wall
+cohorts, opaque affected references, empty legacy restricted view upgrades,
+jointly valid stair retirements, conservative capacity limits and production
+qualification remain unfinished.
+
 ### October 9 ordinary stair attachment source implementation
 
 The stair editor now offers explicit attachment choices for ordinary stairs as

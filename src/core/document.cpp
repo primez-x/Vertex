@@ -45,6 +45,7 @@
 #endif
 #include "sketch/joint_translation_replay.hpp"
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+#include "sketch/drawing_selection_removal.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
@@ -1855,6 +1856,29 @@ static ApplyBoundaryConstraintChanges without_selection_completion(ApplyBoundary
     return command;
 }
 
+static bool has_independent_drawing_removal(const ApplyBoundaryConstraintChanges& command) {
+    return command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null();
+}
+
+static ApplyBoundaryConstraintChanges without_independent_drawing_removal(ApplyBoundaryConstraintChanges command) {
+    command.independent_drawing_removal_completion=false;
+    command.independent_drawing_removal_intent=nullptr;
+    return command;
+}
+
+static void validate_independent_drawing_removal_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.independent_drawing_removal_completion || command.independent_drawing_removal_intent.is_null() ||
+        (!(command.room_review_completion && command.room_review_geometry_completion) && !command.phase_room_review_completion))
+        throw std::invalid_argument("Independent drawing removal requires a complete wall/room review and its semantic intent");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto intent=decode_drawing_selection_removal_intent(command.independent_drawing_removal_intent);
+    if (encode_drawing_selection_removal_intent(intent).dump()!=command.independent_drawing_removal_intent.dump())
+        throw std::invalid_argument("Independent drawing removal must retain its canonical semantic intent");
+#else
+    throw std::invalid_argument("Independent drawing removal requires the production authoring engine");
+#endif
+}
+
 static bool exact_entity_payload(const Entity& left, const Entity& right);
 
 // Shared with ordinary ApplyEntityChanges admission. Composition does not lend
@@ -2564,6 +2588,9 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
+        // The new independent removal is one validated outer enclosure;
+        // preserve the historical child walk's existing depth allowance.
+        else if (version==41) self(self,proof.at("proof"),depth);
         else if (version==22 || version==19) self(self,proof.at("proof"),depth+1);
         else if (proof.contains("room_review_geometry_proof"))
             self(self,proof.at("room_review_geometry_proof"),depth+1);
@@ -3477,6 +3504,14 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_independent_drawing_removal(command)) {
+        // Both exact stages and their final state are admitted by complete
+        // reconstruction; partial wall authority cannot validate their union.
+        try { validate_independent_drawing_removal_mode(command); (void)command_to_json(Command{command}); }
+        catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
     if (has_phase_constraint_authoring(command) && !has_selection_completion(command) && !has_disto_measurement_completion(command)) {
         try {
             validate_phase_constraint_authoring_mode(command);
@@ -4991,6 +5026,37 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false) {
     const bool active_policy=active_phase_constraints || !phase_constraint_authoring_proofs(command).empty();
+    if (has_independent_drawing_removal(command)) {
+        try {
+            validate_independent_drawing_removal_mode(command);
+            (void)command_to_json(Command{command});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            const auto intent=decode_drawing_selection_removal_intent(command.independent_drawing_removal_intent);
+            // Source/selection and opaque-reference admission are analytical
+            // and must precede the original wall/room geometry reconstruction.
+            (void)replay_drawing_selection_removal(source,intent,active_policy);
+            if (has_complete_wall_join_deletion_proof(command))
+                for (const auto& [owner,ids]:complete_wall_join_deletion_destinations(command)) {
+                    (void)owner;
+                    for (const auto& id:ids)
+                        if (id=="independent_drawing_removal_completion" || id=="independent_drawing_removal_intent" ||
+                            id=="owner_ids" || id=="annotations" || id=="owner_id" || id=="child_id")
+                            throw std::invalid_argument("A fresh removal destination borrows an independent drawing proof token");
+                }
+            const auto original=without_independent_drawing_removal(command);
+            const auto stage=completed_boundary_constraint_entities(history,source,source_assets,
+                original,retained_replay,active_policy);
+            validate_completed_constraint_change(source,stage,original,retained_replay);
+            auto result=replay_drawing_selection_removal_after_review(source,stage,intent,active_policy);
+            validate_boundary_identity_transition(history,source,result);
+            (void)validate_state(result,source_assets,active_policy);
+            return result;
+#else
+            throw std::invalid_argument("Independent drawing removal requires the production authoring engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     if (has_phase_constraint_authoring(command) && !has_selection_completion(command) && !has_disto_measurement_completion(command)) {
         try {
             validate_phase_constraint_authoring_mode(command);
@@ -6677,6 +6743,23 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_independent_drawing_removal(typed)) {
+                try {
+                    validate_independent_drawing_removal_mode(typed);
+                    const auto proof=command_to_json(Command{without_independent_drawing_removal(typed)});
+                    if (proof.at("kind")!="apply_boundary_constraint_changes" || !proof.at("version").is_number_integer() ||
+                        proof.at("version").get<int>()<1 || proof.at("version").get<int>()>40)
+                        throw std::invalid_argument("Independent drawing removal requires one preceding unnested wall/room proof");
+                    auto encoded=nlohmann::json{{"version",41},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"independent_drawing_removal_completion",true},
+                        {"independent_drawing_removal_intent",typed.independent_drawing_removal_intent},{"proof",proof}};
+                    if (encoded.dump().size()>1024*1024)
+                        throw std::invalid_argument("Independent drawing removal exceeds the persisted proof budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_phase_room_review_completion(typed)) {
                 try {
                     validate_phase_room_review_mode(typed);
@@ -7111,7 +7194,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>34) ||
+            (value.at("version")<1 || value.at("version")>41) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -7214,6 +7297,32 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==41) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "independent_drawing_removal_completion","independent_drawing_removal_intent","proof"},
+                    DocumentErrorCode::invalid_entity,"serialized independent drawing removal");
+                if (value.dump().size()>1024*1024 || !value.at("independent_drawing_removal_completion").is_boolean() ||
+                    !value.at("independent_drawing_removal_completion").get<bool>())
+                    throw std::invalid_argument("Independent drawing removal mode or proof budget is invalid");
+                const auto& proof=value.at("proof");
+                if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
+                    proof.at("version").get<std::int64_t>()<1 || proof.at("version").get<std::int64_t>()>40 ||
+                    !proof.contains("kind") || proof.at("kind")!=kind)
+                    throw std::invalid_argument("Independent drawing removal requires one preceding unnested proof");
+                const auto decoded=command_from_json(proof,asset_resolver);
+                const auto* original=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+                if (!original || has_independent_drawing_removal(*original) ||
+                    original->expected_revision!=command_revision(value.at("expected_revision"),"Independent drawing removal revision") ||
+                    !value.at("message").is_string() || value.at("message")!=proof.at("message"))
+                    throw std::invalid_argument("Independent drawing removal must retain its original command identity");
+                auto result=*original;
+                result.independent_drawing_removal_completion=true;
+                result.independent_drawing_removal_intent=value.at("independent_drawing_removal_intent");
+                validate_independent_drawing_removal_mode(result);
+                if (command_to_json(Command{result}).dump()!=value.dump())
+                    throw std::invalid_argument("Independent drawing removal proof is not canonical");
+                return result;
+            }
             if (value.at("version")==34) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "phase_constraint_authoring_completion","phase_constraint_authoring_intent"},

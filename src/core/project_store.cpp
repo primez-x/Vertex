@@ -433,6 +433,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_constraint_changes) {
             required = std::max(required, 8U);
             const auto& command = *revision.boundary_constraint_changes;
+            if (command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null())
+                required=std::max(required,145U);
             const auto active_constraint_proof=[](const nlohmann::json& proof) {
                 if (!proof.is_object() || !proof.contains("kind") || proof.at("kind")!="apply_boundary_constraint_changes" ||
                     !proof.contains("version")) return false;
@@ -2458,6 +2460,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
          sqlite3_column_int(user_version.get(), 0) != 144 &&
+         sqlite3_column_int(user_version.get(), 0) != 145 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
          sqlite3_column_int(user_version.get(), 0) != 141 &&
@@ -3056,6 +3059,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=145)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 145 for independent drawing removal with wall and room review");
         if (required_format>=144)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 144 for mixed wall and opening removal with room review");
         if (required_format>=143)

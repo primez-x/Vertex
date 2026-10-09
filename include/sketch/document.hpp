@@ -420,6 +420,11 @@ struct ApplyBoundaryConstraintChanges {
     // Raw geometry and competing completion fields cannot grant this authority.
     nlohmann::json phase_constraint_authoring_intent=nullptr;
     bool phase_constraint_authoring_completion{};
+    // Additive envelope forty-one retains the exact complete wall/room review,
+    // then derives independent drawing/annotation removal from actual source.
+    // The semantic intent has no raw entity-change or geometry authority.
+    nlohmann::json independent_drawing_removal_intent=nullptr;
+    bool independent_drawing_removal_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

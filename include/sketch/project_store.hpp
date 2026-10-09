@@ -193,7 +193,9 @@ public:
     // requires v143 throughout direct, coordinated and wrapped history.
     // Mixed wall and independently selected opening removal with room review
     // requires v144 in current and all retained command history.
-    static constexpr std::uint32_t format_version = 144;
+    // Independent drawing removal around exact wall/room review requires v145,
+    // including wrapped, retained and undone command history.
+    static constexpr std::uint32_t format_version = 145;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
