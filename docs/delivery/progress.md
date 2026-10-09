@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 phase-preserving shared roof removal source integration
+
+Cut and Delete now derive phase retention before the older baseline demolition
+path. A roof shared with an actual preserved, mutually exclusive join remains
+physically exact; its real saved registry enrolls an ordinary member as baseline
+when necessary and marks it demolished only in the current alternative. Active
+join survivors are split through the existing native producer, while preserved
+joins, retained openings, supported dimensions and presentation remain exact.
+Fresh join and overlay IDs reserve all retained history and asset spellings.
+
+Retention derives from validated actual join ownership and registry membership;
+foreign or proposed members cannot be promoted to baseline. Unknown affected
+references and future ownership envelopes refuse mutation. No new saved schema
+is needed for these existing ModelPhases fields. Independent source review
+approved after refusing unknown ownership as retention authority and preventing
+rejected retention from falling through to demolition in another registry.
+Active baseline joins with cross-role members still require extended
+typed demolition; this slice does not resolve that separate operation.
+
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, interaction and storage round trips remain
+unverified; the installed candidate remains unchanged. No production acceptance,
+completion percentage or ETA is claimed.
+
 ### October 8 independent component height and hosted plan scaling source integration
 
 Assembly placements and nested transforms now represent width/depth independently

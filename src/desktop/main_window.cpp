@@ -41877,22 +41877,22 @@ private:
 
     std::optional<Command> roofRemovalCommand(const DocumentSnapshot& source,
         const std::vector<std::string>& selected_ids, const std::string& message) {
-        if (const auto alternative = alternativeRoofDemolitionCommand(source, selected_ids, message)) return alternative;
         if (selected_ids.empty() || !std::all_of(selected_ids.begin(), selected_ids.end(), [&](const auto& id) {
                 const auto found = source.entities().find(id);
                 return found != source.entities().end() && found->second.type == "roof";
-            })) return std::nullopt;
-        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids);
+            })) return alternativeRoofDemolitionCommand(source, selected_ids, message);
+        const auto plan = inspect_roof_removal_plan(source.entities(), selected_ids, true);
+        // Retained members must enter the phase-preserving removal producer
+        // before the older complete-baseline demolition path sees them.
+        if (!plan.phase_retention_required)
+            if (const auto alternative = alternativeRoofDemolitionCommand(source, selected_ids, message)) return alternative;
         if (!plan.ready()) {
             QStringList reasons;
             for (const auto& diagnostic : plan.diagnostics) if (diagnostic.blocking)
                 reasons.push_back(id_from(diagnostic.entity_id) + QStringLiteral(": ") + QString::fromStdString(diagnostic.reason));
             throw std::invalid_argument(reasons.join(QStringLiteral("\n")).toStdString());
         }
-        std::set<std::string, std::less<>> occupied;
-        for (const auto& record : source.history())
-            for (const auto& [id, entity] : record.entities) { (void)entity; occupied.insert(id); }
-        for (const auto& [id, asset] : source.assets()) { (void)asset; occupied.insert(id); }
+        auto occupied = retainedSlabIdentityNames(source);
         RoofRemovalAdditionalIdentities additional;
         for (const auto& [original, count] : plan.additional_identity_counts) {
             auto& copies = additional[original];
@@ -41902,7 +41902,7 @@ private:
                 copies.push_back(std::move(proposed));
             }
         }
-        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional);
+        const auto replay = replay_roof_removal(source.entities(), selected_ids, additional, true);
         ApplyEntityChanges command{source.revision(), {}, {}, message};
         for (const auto& [id, entity] : source.entities()) {
             const auto after = replay.entities.find(id);
