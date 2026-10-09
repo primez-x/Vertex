@@ -515,6 +515,7 @@ std::string normalized_quantity_expression(std::string expression) {
 struct DimensionMatch {
     std::size_t offset{};
     std::string text;
+    std::string expression;
 };
 
 std::vector<DimensionMatch> find_dimension_tokens(std::string_view text) {
@@ -525,9 +526,14 @@ std::vector<DimensionMatch> find_dimension_tokens(std::string_view text) {
     // Compound alternatives precede simple quantities so a feet/inches label
     // remains one source selection, including its exact spaces and fractions.
     static const std::regex expression(
-        "[+-]?" + number + R"(\s*(?:(?:ft|')\s*)" + number +
-            R"(\s*(?:inches|inch|in|")|(?:mm|cm|feet|foot|ft|inches|inch|in|m|['"])))",
+        "([+-]?)(" + number +
+            ")\\s*(?:(ft|feet|foot|')\\s*(?:-\\s*)?(" + number +
+            ")\\s*(inches|inch|in|\")|(mm|cm|feet|foot|ft|inches|inch|in|m|['\"]))",
         std::regex_constants::icase);
+    static const std::regex incomplete_feet_prefix(
+        "(^|[^A-Za-z0-9_])" + number + R"(\s*(?:ft|feet|foot|')\s*(?:-\s*)*$)",
+        std::regex_constants::icase);
+    static const std::regex separated_sign_prefix(R"([+-]\s*$)");
     std::vector<DimensionMatch> result;
     const std::string input(text);
     for (auto iterator = std::sregex_iterator(input.begin(), input.end(), expression);
@@ -543,7 +549,21 @@ std::vector<DimensionMatch> find_dimension_tokens(std::string_view text) {
         // unit prefix from ordinary words such as "12 models".
         if ((offset && adjacent(static_cast<unsigned char>(input[offset - 1]))) ||
             (end < input.size() && adjacent(static_cast<unsigned char>(input[end])))) continue;
-        result.push_back({offset, match.str()});
+        if (offset && std::regex_search(input.begin(), input.begin() + offset,
+                                        incomplete_feet_prefix)) continue;
+        if (offset && std::regex_search(input.begin(), input.begin() + offset,
+                                        separated_sign_prefix)) continue;
+
+        std::string expression_text;
+        if (match[3].matched) {
+            // parse_quantity owns all numeric conversion; normalize only the
+            // architectural spelling and separator that it does not accept.
+            expression_text = match[1].str() + match[2].str() + "ft " +
+                              match[4].str() + "in";
+        } else {
+            expression_text = normalized_quantity_expression(match.str());
+        }
+        result.push_back({offset, match.str(), std::move(expression_text)});
         if (result.size() == maximum_dimension_proposals) break;
     }
     return result;
@@ -867,10 +887,9 @@ std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raste
                     match.offset + match.text.size() <= candidate.offset + candidate.length;
             });
         if (run == raster.text_runs.end()) continue;
-        const auto expression = normalized_quantity_expression(match.text);
         Quantity quantity;
         try {
-            quantity = parse_quantity(expression, Unit::metre);
+            quantity = parse_quantity(match.expression, Unit::metre);
         } catch (const std::exception&) {
             continue;
         }
@@ -883,7 +902,7 @@ std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raste
         if (!target_boundary_id.empty()) affected.push_back(target_boundary_id);
         if (!target_segment_id.empty() && target_segment_id != target_boundary_id)
             affected.push_back(target_segment_id);
-        Json args{{"length_expression", expression}, {"length_metres", quantity.metres},
+        Json args{{"length_expression", match.expression}, {"length_metres", quantity.metres},
                   {"source_text", match.text}, {"source_offset", match.offset},
                   {"target_boundary_id", target_boundary_id}};
         if (!target_boundary_id.empty()) args["target_segment_id"] = target_segment_id;

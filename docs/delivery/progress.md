@@ -14,6 +14,20 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 architectural dimension recognition source integration
+
+Offline dimension extraction now keeps feet/inches labels such as `12'-6"`
+and `12 feet 6 1/2 inches` in one source span. Only spelling and the explicit
+architectural separator normalize; numeric conversion still uses the shared
+quantity parser. Exact source text/byte offsets, containing OCR run, confidence,
+resource provenance and source-based identity remain retained. Malformed or
+signed suffixes cannot become positive standalone inch suggestions. Wall
+dimension extraction shares the same path; acceptance remains explicit.
+
+Root source review and the scoped whitespace check passed. No builds, tests,
+probes, scripts, native jobs, launches, packages or installations ran.
+Compilation and recognition behavior remain unverified.
+
 ### October 8 uniform roof scaling source integration
 
 Roof scaling now has actual-source uniform XYZ authority. Numeric architectural
