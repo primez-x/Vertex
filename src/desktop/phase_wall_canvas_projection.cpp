@@ -4,14 +4,19 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/area_type_presets.hpp"
 #include "sketch/architecture.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_geometry.hpp"
+#include "sketch/building_plan_projection.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/document_wall_plan.hpp"
+#include "sketch/document_solid.hpp"
 #include "sketch/hosted_opening_plan.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/physical_wall_room_data.hpp"
+#include "sketch/plan_axis_resize.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_measurement.hpp"
 
@@ -101,6 +106,10 @@ void project_entity(CanvasEntity& item,const ArchitecturalViewContext& context,b
     if (item.resize_frame) {
         item.resize_frame->center=project_point(item.resize_frame->center,context.frame);
         item.resize_frame->rotation_radians=project_angle(item.resize_frame->rotation_radians,context.frame);
+        if (item.resize_frame->source_rotation_radians) {
+            const auto right=right_axis(context.frame),up=up_axis(context.frame);
+            item.resize_frame->source_rotation_direction=right.x*up.y-right.y*up.x;
+        }
     }
     if (item.opening_width_controls) {
         auto& controls=*item.opening_width_controls;
@@ -129,6 +138,72 @@ Boundary project_solid(const TopoDS_Shape& shape,const ArchitecturalViewContext&
     auto clipped=clip_shape_to_view_depth(shape,context.depth);
     if (!clipped.IsNull() && context.crop) clipped=clip_shape_to_view_crop(clipped,*context.crop);
     return clipped.IsNull() ? Boundary{} : project_shape_view(clipped,BuildingViewKind::plan,context.frame);
+}
+TopoDS_Shape coordinated_shape(const Entities& entities,const std::string& id) {
+    const auto& entity=entities.at(id);
+    if (entity.id!=id) throw std::invalid_argument("Coordinated canvas owner identity differs from its actual map key.");
+    if (entity.type=="roof") return make_building_shape(
+        decode_building_entity(resolve_vertical_placement(entities,entity)),entities);
+    if (entity.type=="slab") {
+        Slab slab;std::string error;
+        if (!read_document_slab(resolve_vertical_placement(entities,entity),slab,error))
+            throw std::invalid_argument("Coordinated canvas slab "+id+": "+error);
+        return make_slab(slab);
+    }
+    if (entity.type=="roof_join") {
+        const auto join=parse_roof_join(entity.properties,id);
+        std::vector<TopoDS_Shape> shapes;
+        for (const auto& member:join.roof_ids) {
+            if (entities.at(member).type!="roof") throw std::invalid_argument("Coordinated canvas join has a non-roof member.");
+            shapes.push_back(coordinated_shape(entities,member));
+        }
+        return make_roof_join(join,shapes);
+    }
+    throw std::invalid_argument("Coordinated canvas has an unsupported physical host: "+id);
+}
+CanvasSelectionFrame physical_frame(const Entity& entity) {
+    const auto angle=plan_axis_resize_frame(entity);
+    const auto bounds=plan_axis_resize_bounds(entity);
+    const auto x=std::midpoint(bounds.minimum.x,bounds.maximum.x),y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
+    const auto c=std::cos(angle),s=std::sin(angle);
+    CanvasSelectionFrame frame{{c*x-s*y,s*x+c*y},angle,
+        bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+    frame.source_rotation_radians=angle;
+    return frame;
+}
+Boundary placed_path(const Boundary& path,const AssemblyTransform& placement) {
+    Boundary result;
+    for (const auto& edge:path) {
+        const auto a=transform_assembly_point({edge.start.x,edge.start.y,0},placement);
+        const auto b=transform_assembly_point({edge.end.x,edge.end.y,0},placement);
+        result.push_back({{a.x,a.y},{b.x,b.y},placement.mirrored_y ? -edge.sweep_radians : edge.sweep_radians});
+    }
+    return result;
+}
+AssemblyTransform instance_transform(const AssemblyInstance& instance) {
+    if (instance.root_transform) return *instance.root_transform;
+    if (!instance.placement) return {};
+    const auto& p=*instance.placement;
+    return {{p.translation_m.x,p.translation_m.y,p.translation_z_m},p.rotation_radians,p.scale,p.mirrored_y,p.vertical_scale};
+}
+CanvasSelectionFrame path_frame(Boundary paths,double angle) {
+    const auto c=std::cos(angle),s=std::sin(angle);
+    for (auto& edge:paths) {
+        for (auto* point:{&edge.start,&edge.end}) *point={c*point->x+s*point->y,-s*point->x+c*point->y};
+    }
+    const auto bounds=boundary_bounds(paths);
+    const auto x=std::midpoint(bounds.minimum.x,bounds.maximum.x),y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
+    CanvasSelectionFrame frame{{c*x-s*y,s*x+c*y},angle,
+        bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
+    frame.source_rotation_radians=angle;
+    return frame;
+}
+bool supported_point(const CanvasEntity& entity,Vec2 point) {
+    constexpr auto tolerance=default_geometry_tolerance_metres;
+    const Bounds2 vicinity{{point.x-tolerance,point.y-tolerance},{point.x+tolerance,point.y+tolerance}};
+    const auto intersects=[&](const Boundary& path){return !clip_boundary_to_bounds(path,vicinity,tolerance/16).empty();};
+    return intersects(entity.segments) || (entity.stroke_segments && intersects(*entity.stroke_segments)) ||
+        std::any_of(entity.holes.begin(),entity.holes.end(),intersects);
 }
 TopoDS_Shape opening_solid(const Entity& entity,const Wall& wall,const HostedOpening& opening) {
     const auto kind=entity.properties.at("opening_kind").get<std::string>();
@@ -438,18 +513,28 @@ bool analytical_canvas_plan_context(BuildingViewKind kind, const ArchitecturalVi
 PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& source,
     const PhaseWallReplacementAuthoringPreview& physical,const std::vector<CanvasEntity>& retained,
     const std::vector<CanvasEntity>& eligible,const std::vector<CanvasLabel>& labels,bool metric_units,
-    const std::optional<ArchitecturalViewContext>& view_context) {
+    const std::optional<ArchitecturalViewContext>& view_context,
+    const std::optional<PhaseWallCanvasCoordinatedPhysicalInput>& coordinated) {
     const auto& stage=physical.edited_entities;
-    const auto& aliases=physical.replacement.original_to_proposed;
+    auto aliases=physical.replacement.original_to_proposed;
+    if (coordinated) for (const auto& [original,proposed]:coordinated->original_to_proposed) {
+        const auto [entry,inserted]=aliases.emplace(original,proposed);
+        if (!inserted && entry->second!=proposed)
+            throw std::invalid_argument("Coordinated canvas has conflicting physical aliases: "+original);
+    }
     if (stage.empty() || aliases.empty()) throw std::invalid_argument("Phase wall canvas preview requires a complete qualified physical stage.");
     std::set<std::string,std::less<>> fresh;
     for (const auto& [original,proposed]:aliases) {
-        if (original==proposed || source.entities().contains(proposed) || !fresh.insert(proposed).second)
+        if (original.empty() || proposed.empty() || original==proposed || aliases.contains(proposed) ||
+            source.entities().contains(proposed) || !fresh.insert(proposed).second)
             throw std::invalid_argument("Phase wall canvas preview requires injective fresh physical identities.");
         if (const auto before=source.entities().find(original);before!=source.entities().end()) {
             const auto after=stage.find(proposed);
             if (after==stage.end() || after->second.id!=proposed || after->second.type!=before->second.type)
                 throw std::invalid_argument("Phase wall canvas preview lost a qualified replacement owner: "+original);
+            if (coordinated && (before->second.type=="wall" || before->second.type=="roof" || before->second.type=="slab") &&
+                (!stage.contains(original) || stage.at(original)!=before->second))
+                throw std::invalid_argument("Coordinated canvas changed a retained baseline owner: "+original);
         }
     }
     const auto proposed_id=[&](const std::string& id) {
@@ -498,6 +583,79 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
         const auto old=old_plans.find(id);
         if (old!=old_plans.end() && (!same_path(plan.footprint,old->second.footprint) || !same_path(plan.strokes,old->second.strokes))) affected.insert(id);
     }
+    if (coordinated) {
+        for (const auto& [id,before]:source.entities()) {
+            if (aliases.contains(id)) continue;
+            const auto after=stage.find(id);
+            if (before.type=="roof" || before.type=="slab" || before.type=="roof_join") {
+                if (after==stage.end() || after->second.id!=id || after->second.type!=before.type)
+                    throw std::invalid_argument("Coordinated canvas lost an actual physical owner: "+id);
+                bool changed=after->second!=before;
+                if (before.type=="roof" || before.type=="slab")
+                    changed=changed || resolve_vertical_placement(stage,after->second)!=resolve_vertical_placement(source.entities(),before);
+                else if (!changed) {
+                    const auto join=parse_roof_join(after->second.properties,id);
+                    for (const auto& member:join.roof_ids) {
+                        if (!source.entities().contains(member) || !stage.contains(member) ||
+                            resolve_vertical_placement(stage,stage.at(member))!=resolve_vertical_placement(source.entities(),source.entities().at(member))) {
+                            changed=true;break;
+                        }
+                    }
+                }
+                if (changed) affected.insert(id);
+            } else if (can_recognize_boundary_dimension_entity_type(before.type)) {
+                if (after==stage.end() || after->second.id!=id || after->second.type!=before.type)
+                    throw std::invalid_argument("Coordinated canvas lost an actual dimension owner: "+id);
+                const auto decoded=decode_boundary_dimension_entity(after->second);
+                if (!decoded.supported()) {
+                    if (after->second!=before) throw std::invalid_argument(decoded.unsupported_reason);
+                    continue;
+                }
+                if (after->second!=before || affected.contains(decoded.dimension->boundary_id) || aliases.contains(decoded.dimension->boundary_id))
+                    affected.insert(id);
+            }
+        }
+        // Dimension order in the entity map does not determine dependency order.
+        for (const auto& [id,entity]:source.entities()) if (can_recognize_boundary_dimension_entity_type(entity.type) && !aliases.contains(id)) {
+            const auto decoded=decode_boundary_dimension_entity(stage.at(id));
+            if (!decoded.supported()) continue;
+            if (affected.contains(decoded.dimension->boundary_id)) affected.insert(id);
+        }
+    }
+    std::map<std::string,std::pair<std::string,std::string>,std::less<>> embedded;
+    std::map<std::string,AssemblyModel,std::less<>> source_catalogs,stage_catalogs;
+    std::map<std::pair<std::string,std::string>,AssemblyExpansion> source_expansions,stage_expansions;
+    AssemblyExpansionBudget source_assembly_budget,stage_assembly_budget;
+    if (coordinated) {
+        for (const auto& [owner,render]:embedded_assembly_presentation_ids(source.entities()))
+            if (!embedded.emplace(render,owner).second)
+                throw std::invalid_argument("Coordinated canvas has ambiguous source assembly aliases.");
+        std::set<std::string,std::less<>> hosted_fresh;
+        for (const auto& [owner,proposed]:coordinated->original_to_hosted_instance_proposed) {
+            if (proposed.empty() || fresh.contains(proposed) || source.entities().contains(proposed) ||
+                !hosted_fresh.insert(proposed).second || !source.entities().contains(owner.first) ||
+                source.entities().at(owner.first).type!="assembly_model")
+                throw std::invalid_argument("Coordinated canvas has invalid qualified hosted aliases.");
+            if (!source_catalogs.contains(owner.first)) source_catalogs.emplace(owner.first,
+                AssemblyModel::from_json(source.entities().at(owner.first).properties.at("model")));
+            const auto& rows=source_catalogs.at(owner.first).instances();
+            const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==owner.second;});
+            if (row==rows.end() || !row->placement || !aliases.contains(row->placement->host_entity_id) ||
+                !source.entities().contains(row->placement->host_entity_id) ||
+                source.entities().at(row->placement->host_entity_id).type!="slab" || !aliases.contains(owner.first))
+                throw std::invalid_argument("Coordinated canvas hosted alias has no actual replacement host.");
+            const auto catalog_id=proposed_id(owner.first);
+            if (!stage.contains(catalog_id) || stage.at(catalog_id).id!=catalog_id || stage.at(catalog_id).type!="assembly_model")
+                throw std::invalid_argument("Coordinated canvas hosted alias lost its actual proposed catalog.");
+            if (!stage_catalogs.contains(catalog_id)) stage_catalogs.emplace(catalog_id,
+                AssemblyModel::from_json(stage.at(catalog_id).properties.at("model")));
+            const auto& proposed_rows=stage_catalogs.at(catalog_id).instances();
+            const auto proposed_row=std::find_if(proposed_rows.begin(),proposed_rows.end(),[&](const auto& value){return value.id==proposed;});
+            if (proposed_row==proposed_rows.end() || !proposed_row->placement ||
+                proposed_row->placement->host_entity_id!=proposed_id(row->placement->host_entity_id))
+                throw std::invalid_argument("Coordinated canvas hosted alias lost its exact proposed host.");
+        }
+    }
     std::map<std::string,MeasurementLineworkReplay,std::less<>> strokes;
     const auto stroke=[&](const std::string& id) -> const MeasurementLineworkReplay& {
         if (!strokes.contains(id)) {
@@ -514,6 +672,103 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
     };
     for (const auto& [key,prototype]:prototypes) {
         const auto id=prototype.id.toStdString();
+        if (coordinated && prototype.type==QStringLiteral("assembly_instance") && embedded.contains(id)) {
+            const auto& [catalog_id,instance_id]=embedded.at(id);
+            if (!source_catalogs.contains(catalog_id)) source_catalogs.emplace(catalog_id,
+                AssemblyModel::from_json(source.entities().at(catalog_id).properties.at("model")));
+            const auto& source_rows=source_catalogs.at(catalog_id).instances();
+            const auto original=std::find_if(source_rows.begin(),source_rows.end(),[&](const auto& value){return value.id==instance_id;});
+            if (original==source_rows.end()) throw std::invalid_argument("Coordinated canvas lost an actual assembly source row.");
+            const auto copied=coordinated->original_to_hosted_instance_proposed.find({catalog_id,instance_id});
+            const auto target_catalog=copied==coordinated->original_to_hosted_instance_proposed.end() ? catalog_id : proposed_id(catalog_id);
+            const auto target_instance=copied==coordinated->original_to_hosted_instance_proposed.end() ? instance_id : copied->second;
+            if (!stage.contains(target_catalog) || stage.at(target_catalog).type!="assembly_model")
+                throw std::invalid_argument("Coordinated canvas lost an actual assembly catalog.");
+            if (copied==coordinated->original_to_hosted_instance_proposed.end() &&
+                stage.at(target_catalog)==source.entities().at(catalog_id) &&
+                (!original->placement || !affected.contains(original->placement->host_entity_id))) continue;
+            if (!stage_catalogs.contains(target_catalog)) stage_catalogs.emplace(target_catalog,
+                AssemblyModel::from_json(stage.at(target_catalog).properties.at("model")));
+            const auto& rows=stage_catalogs.at(target_catalog).instances();
+            const auto proposed=std::find_if(rows.begin(),rows.end(),[&](const auto& value){return value.id==target_instance;});
+            if (proposed==rows.end()) throw std::invalid_argument("Coordinated canvas lost a qualified assembly stage row.");
+            if (copied==coordinated->original_to_hosted_instance_proposed.end() && *proposed==*original &&
+                stage_catalogs.at(target_catalog).types()==source_catalogs.at(catalog_id).types() &&
+                stage_catalogs.at(target_catalog).materials()==source_catalogs.at(catalog_id).materials() &&
+                (!original->placement || (stage.contains(original->placement->host_entity_id) &&
+                    source.entities().contains(original->placement->host_entity_id) &&
+                    stage.at(original->placement->host_entity_id)==source.entities().at(original->placement->host_entity_id)))) continue;
+            if (original->placement && (!proposed->placement ||
+                proposed->placement->host_entity_id!=(copied==coordinated->original_to_hosted_instance_proposed.end() ?
+                    original->placement->host_entity_id : proposed_id(original->placement->host_entity_id))))
+                throw std::invalid_argument("Coordinated canvas assembly changed its qualified host.");
+            const auto stage_key=std::make_pair(target_catalog,target_instance);
+            if (!stage_expansions.contains(stage_key)) stage_expansions.emplace(stage_key,
+                stage_catalogs.at(target_catalog).expand(*proposed,stage_assembly_budget));
+            const auto& expansion=stage_expansions.at(stage_key);
+            auto projected=prototype;clear_geometry(projected);
+            Boundary frame_paths;
+            bool world=true;
+            if (!prototype.presentation_key.isEmpty()) {
+                const auto identity=decode_assembly_profile_presentation_identity(nlohmann::json::parse(prototype.presentation_key.toStdString()));
+                if (identity.catalog_id!=catalog_id || identity.instance_id!=instance_id || identity.document_entity_id)
+                    throw std::invalid_argument("Coordinated canvas profile alias differs from its actual source owner.");
+                const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& value){
+                    return value.part_path==identity.part_path && value.type_id==identity.type_id && value.profile.id==identity.profile_id;
+                });
+                if (profile==expansion.profiles.end()) throw std::invalid_argument("Coordinated canvas lost an actual assembly profile.");
+                // Validate the captured profile against its source, independently
+                // of the proposed catalog and of render-ID spellings.
+                const auto source_key=std::make_pair(catalog_id,instance_id);
+                if (!source_expansions.contains(source_key)) source_expansions.emplace(source_key,
+                    source_catalogs.at(catalog_id).expand(*original,source_assembly_budget));
+                const auto& before=source_expansions.at(source_key);
+                if (std::none_of(before.profiles.begin(),before.profiles.end(),[&](const auto& value){
+                    return value.part_path==identity.part_path && value.type_id==identity.type_id && value.profile.id==identity.profile_id;
+                })) throw std::invalid_argument("Coordinated canvas profile has no actual captured source.");
+                for (const auto& value:expansion.profiles) {
+                    const auto path=placed_path(value.profile.outer,value.transform);
+                    frame_paths.insert(frame_paths.end(),path.begin(),path.end());
+                }
+                AssemblyExpansion part;part.profiles.push_back(*profile);
+                if (view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context)) {
+                    projected.segments=project_solid(make_assembly_geometry(part).shape,*view_context);world=false;
+                } else {
+                    projected.segments=placed_path(profile->profile.outer,profile->transform);
+                    for (const auto& hole:profile->profile.holes) projected.holes.push_back(placed_path(hole,profile->transform));
+                    projected.hit_segments=project_assembly_plan(part);
+                }
+            } else {
+                if (!expansion.profiles.empty() || !proposed->placement || !original->placement)
+                    throw std::invalid_argument("Coordinated canvas host-copy assembly changed geometry ownership.");
+                const auto& host=stage.at(proposed->placement->host_entity_id);
+                if (host.type!="slab") throw std::invalid_argument("Coordinated canvas host-copy requires an actual slab owner.");
+                Slab slab;std::string error;
+                if (!read_document_slab(resolve_vertical_placement(stage,host),slab,error)) throw std::invalid_argument(error);
+                const auto transform=instance_transform(*proposed);
+                frame_paths=placed_path(slab.boundary,transform);
+                projected.thickness_metres=slab.thickness*transform.scale*transform.vertical_scale;
+                if (view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context)) {
+                    projected.segments=project_solid(transform_assembly_shape(make_slab(slab),transform),*view_context);world=false;
+                } else projected.segments=frame_paths;
+            }
+            if (horizontal_plan && prototype.resize_frame && !frame_paths.empty()) {
+                projected.resize_frame=path_frame(frame_paths,instance_transform(*proposed).rotation_radians);
+                if (!world && view_context) {
+                    auto& frame=*projected.resize_frame;
+                    frame.center=project_point(frame.center,view_context->frame);
+                    frame.rotation_radians=project_angle(frame.rotation_radians,view_context->frame);
+                    const auto right=right_axis(view_context->frame),up=up_axis(view_context->frame);
+                    frame.source_rotation_direction=right.x*up.y-right.y*up.x;
+                }
+            }
+            if (view_context && world) project_entity(projected,*view_context);
+            if (!semantic_visible.contains(target_catalog) ||
+                (proposed->placement && !semantic_visible.contains(proposed->placement->host_entity_id))) clear_geometry(projected);
+            if (projected.segments.empty()) projected.resize_frame.reset();
+            if (captured.contains(key) || !projected.segments.empty()) result.entities.push_back(std::move(projected));
+            continue;
+        }
         if (!affected.contains(id)) continue;
         const auto target=proposed_id(id);
         const auto found=stage.find(target);
@@ -588,6 +843,82 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                 if (prototype.opening_width_controls) projected.opening_width_controls=CanvasOpeningWidthControls{
                     span.start,span.end,opening->width,opening->height,source.revision(),wall.baseline,opening->offset};
             }
+        } else if (coordinated && (entity.type=="roof" || entity.type=="slab" || entity.type=="roof_join")) {
+            const auto shape=coordinated_shape(stage,target);
+            const bool custom=view_context && !analytical_canvas_plan_context(BuildingViewKind::plan,*view_context);
+            std::optional<Slab> slab;
+            if (entity.type=="slab") {
+                slab.emplace();std::string error;
+                if (!read_document_slab(resolve_vertical_placement(stage,entity),*slab,error)) throw std::invalid_argument(error);
+                projected.thickness_metres=slab->thickness;
+            }
+            if (semantic_visible.contains(target)) {
+                if (custom) {projected.segments=project_solid(shape,*view_context);world=false;}
+                else if (slab) {projected.segments=slab->boundary;projected.holes=slab->holes;}
+                else projected.segments=project_shape_view(shape,BuildingViewKind::plan);
+            }
+            if (horizontal_plan && entity.type!="roof_join" && !projected.segments.empty()) {
+                if (prototype.resize_frame) {
+                    projected.resize_frame=physical_frame(entity);
+                    if (!world && view_context) {
+                        auto& frame=*projected.resize_frame;
+                        frame.center=project_point(frame.center,view_context->frame);
+                        frame.rotation_radians=project_angle(frame.rotation_radians,view_context->frame);
+                        const auto right=right_axis(view_context->frame),up=up_axis(view_context->frame);
+                        frame.source_rotation_direction=right.x*up.y-right.y*up.x;
+                    }
+                }
+                const auto present=[&](Vec2 point){return !world && view_context ? project_point(point,view_context->frame) : point;};
+                for (const auto& handle:prototype.vertex_handles) {
+                    Vec2 point;
+                    if (entity.type=="roof" && handle.id.startsWith(QStringLiteral("roof:corner:"))) {
+                        bool valid{};const auto index=handle.id.mid(12).toUInt(&valid);
+                        if (!valid || index>=4) throw std::invalid_argument("Coordinated canvas has an unknown roof corner.");
+                        const auto frame=physical_frame(entity);
+                        const std::array<Vec2,4> corners{{{-frame.width_metres/2,-frame.depth_metres/2},
+                            {frame.width_metres/2,-frame.depth_metres/2},{frame.width_metres/2,frame.depth_metres/2},
+                            {-frame.width_metres/2,frame.depth_metres/2}}};
+                        const auto c=std::cos(frame.rotation_radians),s=std::sin(frame.rotation_radians);
+                        point={frame.center.x+c*corners[index].x-s*corners[index].y,
+                            frame.center.y+s*corners[index].x+c*corners[index].y};
+                    } else if (slab) {
+                        const auto parts=handle.id.split(QLatin1Char(':'));
+                        bool valid{};
+                        if (parts.size()==3 && parts[0]==QStringLiteral("footprint") && parts[1]==QStringLiteral("outer")) {
+                            const auto index=parts[2].toUInt(&valid);
+                            if (!valid || index>=slab->boundary.size()) throw std::invalid_argument("Coordinated canvas lost a slab outer vertex.");
+                            point=slab->boundary[index].start;
+                        } else if (parts.size()==4 && parts[0]==QStringLiteral("footprint") && parts[1]==QStringLiteral("hole")) {
+                            const auto hole=parts[2].toUInt(&valid);
+                            if (!valid || hole>=slab->holes.size()) throw std::invalid_argument("Coordinated canvas lost a slab hole.");
+                            const auto index=parts[3].toUInt(&valid);
+                            if (!valid || index>=slab->holes[hole].size()) throw std::invalid_argument("Coordinated canvas lost a slab hole vertex.");
+                            point=slab->holes[hole][index].start;
+                        } else throw std::invalid_argument("Coordinated canvas has an unknown slab handle.");
+                    } else throw std::invalid_argument("Coordinated canvas has an unknown physical handle.");
+                    point=present(point);
+                    if (supported_point(projected,point)) projected.vertex_handles.push_back({handle.id,point,handle.source_revision});
+                }
+                if (!prototype.snap_segments.empty()) projected.snap_segments=projected.segments;
+                if (!prototype.drawing_alignment_segments.empty()) projected.drawing_alignment_segments=projected.segments;
+                if (!prototype.snap_points.empty()) {
+                    if (slab) {
+                        const auto retain=[&](const Boundary& ring) {for (const auto& edge:ring) {
+                            const auto point=present(edge.start);
+                            if (supported_point(projected,point)) projected.snap_points.push_back(point);
+                        }};
+                        retain(slab->boundary);for (const auto& hole:slab->holes) retain(hole);
+                    } else {
+                        const auto frame=physical_frame(entity);
+                        const auto c=std::cos(frame.rotation_radians),s=std::sin(frame.rotation_radians);
+                        for (const auto x:{-frame.width_metres/2,frame.width_metres/2})
+                            for (const auto y:{-frame.depth_metres/2,frame.depth_metres/2}) {
+                                const auto point=present({frame.center.x+c*x-s*y,frame.center.y+s*x+c*y});
+                                if (supported_point(projected,point)) projected.snap_points.push_back(point);
+                            }
+                    }
+                }
+            }
         } else if (entity.type=="measurement_linework" || can_recognize_boundary_entity_type(entity.type)) {
             if (!horizontal_plan) throw std::invalid_argument("Phase wall canvas preview analytical owner requires a horizontal plan: "+id);
             std::map<std::string,Vec2,std::less<>> vertices;
@@ -623,6 +954,8 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             }
         } else throw std::invalid_argument("Phase wall canvas preview has unsupported affected geometry: "+id+" ("+entity.type+").");
         if (view_context && world) project_entity(projected,*view_context,prototype.type==QStringLiteral("dimension_line"));
+        if (coordinated && (entity.type=="roof" || entity.type=="slab"))
+            std::erase_if(projected.vertex_handles,[&](const auto& handle){return !supported_point(projected,handle.position);});
         if (captured.contains(key) || !projected.segments.empty() || !projected.holes.empty()) result.entities.push_back(std::move(projected));
     }
     std::map<std::string,std::size_t,std::less<>> legacy_counts;
@@ -725,7 +1058,9 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
             const auto opening=std::find_if(wall.openings.begin(),wall.openings.end(),[&](const auto& value){return value.id==target;});
             if (opening==wall.openings.end()) throw std::invalid_argument("Phase wall preview bound view dimension lost its opening.");
             support=project_shape_view(opening_solid(owner,wall,*opening),BuildingViewKind::plan,view_context->frame);
-        } else if (horizontal_plan && can_recognize_boundary_entity_type(owner.type))
+        } else if (coordinated && (owner.type=="roof" || owner.type=="slab" || owner.type=="roof_join"))
+            support=project_shape_view(coordinated_shape(stage,target),BuildingViewKind::plan,view_context->frame);
+        else if (horizontal_plan && can_recognize_boundary_entity_type(owner.type))
             support=project_path(boundary_geometry(decode_identified_boundary_entity(owner)),view_context->frame);
         else throw std::invalid_argument("Phase wall preview has an unsupported affected bound view dimension owner: "+binding.object_id);
         if (support.empty()) throw std::invalid_argument("Phase wall preview bound view dimension has no complete source silhouette.");

@@ -5580,6 +5580,7 @@ class MainWindow::Impl {
         SiteSelectionMoveIntent intent;
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
+        Command command;
     };
     struct PlanMovePreviewCommand {
         std::shared_ptr<const TransformViewportCapture> capture;
@@ -8705,12 +8706,17 @@ public:
         if (changes.empty() && annotation_moves.empty() && reference_moves.empty() &&
             !model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
                 const auto found = source.entities().find(id.toStdString());
-                return found != source.entities().end() && (found->second.type == "roof" || found->second.type == "slab");
+                return found != source.entities().end() &&
+                    (found->second.type == "wall" || found->second.type == "roof" || found->second.type == "slab");
             })) {
             std::vector<ArchitecturalGroupTransformTarget> targets;
             for (const auto& id : model_ids)
                 targets.push_back({id.toStdString(), {{}, {offset.x, offset.y, 0.0}, 0.0, 1.0, false, false}});
-            return sourceDerivedRoofSlabTransformCommand(source, targets, "Move roofs and horizontal assemblies");
+            if (const auto coordinated = sourceDerivedWallRoofSlabTransformCommand(source, targets,
+                    "Move walls, roofs and horizontal assemblies")) return *coordinated;
+            if (std::none_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
+                    return source.entities().at(id.toStdString()).type == "wall";
+                })) return sourceDerivedRoofSlabTransformCommand(source, targets, "Move roofs and horizontal assemblies");
         }
         if (!model_ids.isEmpty() && std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
                 const auto found = source.entities().find(id.toStdString());
@@ -12767,6 +12773,9 @@ public:
         std::map<std::string,std::string,std::less<>> candidate_copy_ids;
         std::map<std::pair<std::string,std::string>,std::string> candidate_copy_children;
         std::optional<DocumentSnapshot> candidate_snapshot;
+        std::optional<PhaseWallCanvasProposal> candidate_wall_proposal;
+        const auto numeric_canvas_geometry = selection_canvas->entities();
+        const auto numeric_canvas_labels = selection_canvas->labels();
         std::uint64_t input_generation{};
         bool room_review_active{};
         QDialog dialog(owner);
@@ -12846,6 +12855,7 @@ public:
             ++input_generation;
             candidate_command.reset();
             candidate_snapshot.reset();
+            candidate_wall_proposal.reset();
             candidate_copy_ids.clear();
             candidate_copy_children.clear();
             freedom->clear();
@@ -13125,6 +13135,29 @@ public:
                         // a visible-root shortcut cannot choose hidden frames.
                         geometric_owner_transform=callout_owner_transform;
                     }
+                    if (!geometry_selection.isEmpty() && !architectural_selection.empty() &&
+                        presentation.entity_changes.empty() && embedded_targets.empty() &&
+                        std::all_of(geometry_selection.begin(), geometry_selection.end(), [&](const auto& id) {
+                            return source.entities().at(id.toStdString()).type == "wall";
+                        }) && std::all_of(architectural_selection.begin(), architectural_selection.end(), [&](const auto& id) {
+                            const auto& type = source.entities().at(id).type;
+                            return type == "roof" || type == "slab";
+                        })) {
+                        std::vector<ArchitecturalGroupTransformTarget> coordinated_targets;
+                        const auto append_target = [&](const std::string& id, const PlanarTransform& operation) {
+                            coordinated_targets.push_back({id, {{operation.pivot.x, operation.pivot.y, 0.0},
+                                {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
+                                operation.flip_horizontal, operation.flip_vertical}});
+                        };
+                        for (const auto& id : geometry_selection)
+                            append_target(id.toStdString(), geometric_owner_transform ?
+                                geometric_owner_transform(id.toStdString()) : geometry_transform);
+                        for (const auto& id : architectural_selection)
+                            append_target(id, site_group ? callout_owner_transform(id) : transform);
+                        if (const auto coordinated = sourceDerivedWallRoofSlabTransformCommand(source,
+                                coordinated_targets, "Transform walls, roofs and horizontal assemblies"))
+                            return {*coordinated, primary_render_id.toStdString()};
+                    }
                     auto command=geometry_selection.isEmpty() ? Command{std::move(presentation)} :
                         makeSelectionGeometryTransformCommand(source,geometry_selection,geometry_transform,
                             std::move(presentation.entity_changes),geometric_owner_transform);
@@ -13211,6 +13244,82 @@ public:
                     candidate.first = validateIndependentAreaCopy(source,*copied,&roof_copy_capture);
                     requireIndependentCopyRegistrations(source,*copy_intent,
                         std::get<ApplyEntityChanges>(candidate.first),&roof_copy_capture);
+                }
+                if (group && !clone->isChecked() && presentation_scene) {
+                    PreparedCanvasEdit detached;
+                    const auto& retained = site_group ? numeric_site_translation_input->geometry : numeric_canvas_geometry;
+                    const auto& retained_labels = site_group ? numeric_site_translation_input->labels : numeric_canvas_labels;
+                    const auto view_context = site_group ? std::optional<ArchitecturalViewContext>{} :
+                        boundaryVertexViewContext(selection_canvas, source);
+                    if (auto physical_preview = projectAlternativeWallCanvasCommand(source, candidate.first,
+                            retained, retained, retained_labels, context.metric_units, view_context, &detached)) {
+                        if (!detached.alternative_wall)
+                            throw std::invalid_argument("The transform preview lost its pending wall review authority.");
+                        const auto identities = alternativeCommandReplacementIdentities(candidate.first);
+                        const auto changed_owner = [&](const QString& id) {
+                            if (identities.contains(id.toStdString())) return true;
+                            const auto before = source.entities().find(id.toStdString());
+                            const auto after = detached.alternative_wall->physical.edited_entities.find(id.toStdString());
+                            return before != source.entities().end() &&
+                                (after == detached.alternative_wall->physical.edited_entities.end() || after->second != before->second);
+                        };
+                        const auto same_path = [](const Boundary& first, const Boundary& second) {
+                            if (first.size() != second.size()) return false;
+                            for (std::size_t index = 0; index < first.size(); ++index) {
+                                const auto& a = first[index]; const auto& b = second[index];
+                                if (a.start.x != b.start.x || a.start.y != b.start.y || a.end.x != b.end.x ||
+                                    a.end.y != b.end.y || a.sweep_radians != b.sweep_radians) return false;
+                            }
+                            return true;
+                        };
+                        std::vector<CanvasEntity> geometry;
+                        std::vector<CanvasLabel> labels;
+                        for (auto item : physical_preview->entities) {
+                            const auto original = std::find_if(retained.begin(), retained.end(), [&](const auto& before) {
+                                return before.id == item.id && before.presentation_key == item.presentation_key;
+                            });
+                            const bool changed = changed_owner(item.id) || original == retained.end() ||
+                                !same_path(original->segments, item.segments) ||
+                                original->stroke_segments.has_value() != item.stroke_segments.has_value() ||
+                                (original->stroke_segments && !same_path(*original->stroke_segments, *item.stroke_segments));
+                            if (!changed) continue;
+                            if (original != retained.end()) {
+                                auto before = *original;
+                                before.selected = false; before.type = QStringLiteral("source");
+                                if (site_group) before = site_presented_canvas_entity(before,
+                                    numeric_site_translation_input->frames.geometryAt(before));
+                                geometry.push_back(std::move(before));
+                            }
+                            item.selected = true;
+                            if (site_group) item = site_presented_canvas_entity(item,
+                                numeric_site_translation_input->frames.geometryAt(item));
+                            geometry.push_back(std::move(item));
+                        }
+                        for (auto label : physical_preview->labels) {
+                            const auto original = std::find_if(retained_labels.begin(), retained_labels.end(), [&](const auto& before) {
+                                return plan_label_instance_key(before) == plan_label_instance_key(label);
+                            });
+                            if (!changed_owner(label.id) && original != retained_labels.end() &&
+                                original->text == label.text && original->position.x == label.position.x &&
+                                original->position.y == label.position.y && original->rotation_radians == label.rotation_radians) continue;
+                            if (original != retained_labels.end()) {
+                                auto before = *original; before.selected = false; before.color = QColor(140,148,158);
+                                if (site_group) before = site_presented_canvas_label(before,
+                                    numeric_site_translation_input->frames.auxiliary.at(before.id));
+                                labels.push_back(std::move(before));
+                            }
+                            label.selected = true; label.color = QColor(35,115,190);
+                            if (site_group) label = site_presented_canvas_label(label,
+                                numeric_site_translation_input->frames.auxiliary.at(label.id));
+                            labels.push_back(std::move(label));
+                        }
+                        preview->setEntities(std::move(geometry)); preview->setLabels(std::move(labels));
+                        preview->setReferences({}); preview->fitView();
+                        candidate_wall_proposal = std::move(detached.alternative_wall);
+                        candidate_command = std::move(candidate);
+                        status->clear(); buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+                        return;
+                    }
                 }
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
                 const auto proposed = changes && changes->entity_changes.empty() ? source :
@@ -13612,6 +13721,7 @@ public:
             } catch (const Standard_Failure& error) {
                 candidate_command.reset();
                 candidate_snapshot.reset();
+                candidate_wall_proposal.reset();
                 preview->setEntities({});
                 preview->setLabels({});
                 preview->setReferences({});
@@ -13621,6 +13731,7 @@ public:
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             } catch (const std::exception& error) {
                 candidate_command.reset(); candidate_snapshot.reset();
+                candidate_wall_proposal.reset();
                 preview->setEntities({});
                 preview->setLabels({});
                 preview->setReferences({});
@@ -13637,6 +13748,7 @@ public:
             // pending. Coalesce typing before preparing the complete graph.
             candidate_command.reset();
             candidate_snapshot.reset();
+            candidate_wall_proposal.reset();
             ++input_generation;
             candidate_copy_ids.clear();
             candidate_copy_children.clear();
@@ -13664,6 +13776,7 @@ public:
                 if (supported_selection) {
                     candidate_command.reset();
                     candidate_snapshot.reset();
+                    candidate_wall_proposal.reset();
                     freedom->clear();
                     preview->setEntities({});
                     preview->setLabels({});
@@ -13673,17 +13786,45 @@ public:
                 return;
             }
             if (supported_selection) {
-                if (!candidate_command || !candidate_snapshot) return;
+                if (!candidate_command || (!candidate_snapshot && !candidate_wall_proposal)) return;
                 try {
-                    const auto review_primary=authority.context.selected_id.toStdString();
-                    const bool wall_selection=physicalWallRoomReviewSelection(source,authority.selection,review_primary);
+                    if (candidate_wall_proposal) {
+                        const auto retained = *candidate_command;
+                        const auto proposal = *candidate_wall_proposal;
+                        const auto* child = std::get_if<ApplyBoundaryConstraintChanges>(&retained.first);
+                        if (!child || !child->phase_constraint_authoring_completion ||
+                            child->phase_constraint_authoring_intent.dump() != encode_phase_constraint_authoring_intent(proposal.intent).dump())
+                            throw std::invalid_argument("The numeric transform differs from its displayed physical proposal.");
+                        const auto generation = input_generation;
+                        const auto values = input_values();
+                        const auto input_fence = [&] {
+                            if (!context_current()) throw std::invalid_argument(lastError().toStdString());
+                            if (generation != input_generation || values != input_values() || clone->isChecked() || preview_debounce.isActive())
+                                throw std::invalid_argument("The entered transform changed during room review. Preview it again.");
+                        };
+                        candidate_command.reset(); candidate_snapshot.reset(); candidate_wall_proposal.reset();
+                        buttons->button(QDialogButtonBox::Apply)->setEnabled(false); room_review_active = true;
+                        PhaseWallReplacementIdentityMap proposed_ids;
+                        const auto reviewed = proposal.intent.coordinated_replacements.is_null()
+                            ? finishAlternativeWallEdit(source, proposal.intent, *child, proposed_ids, input_fence)
+                            : finishCoordinatedAlternativeWallEdit(source, proposal.intent, *child, proposed_ids, input_fence);
+                        room_review_active = false;
+                        if (!reviewed) { clearError(); update_preview(); return; }
+                        input_fence();
+                        if (!applyAuthoredCommand(*reviewed)) { update_preview(); return; }
+                        clearError(); refresh(); dialog.accept(); return;
+                    }
+                    const auto primary = authority.context.selected_id.toStdString();
+                    const auto coordinated_room_seed = coordinatedOrdinaryWallRoomReviewRoot(source, candidate_command->first, authority.selection);
+                    const auto review_primary = coordinated_room_seed.value_or(primary);
+                    const bool wall_selection = coordinated_room_seed || physicalWallRoomReviewSelection(source,authority.selection,primary);
                     if (wall_selection &&
                         !clone->isChecked() &&
-                        !siteCanvas(selection_canvas) &&
+                        (coordinated_room_seed || !siteCanvas(selection_canvas)) &&
                         affectedPhysicalWallRooms(source, candidate_snapshot->entities(), review_primary) != 0) {
                         const auto retained = *candidate_command;
                         const auto admitted = *candidate_snapshot;
-                        if (retained.second!=review_primary ||
+                        if (retained.second!=primary ||
                             fullSnapshotDigest(Document::preview_command(source,retained.first))!=fullSnapshotDigest(admitted))
                             throw std::invalid_argument("The wall transform's admitted command or history changed.");
                         const auto generation = input_generation;
@@ -13695,7 +13836,7 @@ public:
                                 preview_debounce.isActive())
                                 throw std::invalid_argument("The entered transform changed during room review. Preview it again.");
                         };
-                        candidate_command.reset(); candidate_snapshot.reset();
+                        candidate_command.reset(); candidate_snapshot.reset(); candidate_wall_proposal.reset();
                         buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                         room_review_active = true;
                         const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, admitted, retained.first,
@@ -13703,7 +13844,7 @@ public:
                         room_review_active = false;
                         if (!reviewed) { clearError(); update_preview(); return; }
                         input_fence();
-                        applyAuthoredCommand(*reviewed);
+                        if (!applyAuthoredCommand(*reviewed)) { update_preview(); return; }
                         m_selected_id = id_from(retained.second);
                         if (group) {
                             m_selected_ids=selection;
@@ -13793,6 +13934,7 @@ public:
                 } catch (const std::exception& error) {
                     room_review_active = false;
                     candidate_command.reset(); candidate_snapshot.reset();
+                    candidate_wall_proposal.reset();
                     buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                     status->setText(QString::fromUtf8(error.what()));
                 }
@@ -13811,6 +13953,7 @@ public:
             if (candidate_command && !context_current()) {
                 candidate_command.reset();
                 candidate_snapshot.reset();
+                candidate_wall_proposal.reset();
                 freedom->clear();
                 preview->setEntities({});
                 preview->setLabels({});
@@ -24254,10 +24397,28 @@ public:
         if (!child || !child->phase_constraint_authoring_completion ||
             child->phase_constraint_authoring_intent.is_null()) return std::nullopt;
         auto intent = decode_phase_constraint_authoring_intent(child->phase_constraint_authoring_intent);
-        if (intent.wall_replacement.is_null()) return std::nullopt;
-        auto physical = inspect_phase_wall_replacement_authoring(source, intent);
+        std::optional<PhaseWallCanvasCoordinatedPhysicalInput> coordinated;
+        PhaseWallReplacementAuthoringPreview physical;
+        if (!intent.coordinated_replacements.is_null()) {
+            const auto wall = intent.coordinated_replacements.find("wall_authoring");
+            if (wall == intent.coordinated_replacements.end() || wall->is_null() ||
+                decode_phase_constraint_authoring_intent(*wall).wall_replacement.is_null()) return std::nullopt;
+            physical = inspect_phase_coordinated_authoring(source, intent);
+            coordinated.emplace();
+            coordinated->original_to_proposed = alternativePhysicalReplacementIdentities(intent);
+            for (const auto& component : phase_constraint_replacement_components(intent))
+                if (!component.slab_replacement.is_null()) {
+                    const auto slab = decode_phase_slab_replacement_authoring(component.slab_replacement);
+                    for (const auto& [original, proposed] : slab.hosted_instance_identities)
+                        if (!coordinated->original_to_hosted_instance_proposed.emplace(original, proposed).second)
+                            throw std::invalid_argument("The coordinated preview repeats a qualified hosted component identity.");
+                }
+        } else {
+            if (intent.wall_replacement.is_null()) return std::nullopt;
+            physical = inspect_phase_wall_replacement_authoring(source, intent);
+        }
         auto projected = project_phase_wall_canvas(source, physical, retained, eligible, labels,
-            metric_units, view_context);
+            metric_units, view_context, coordinated);
         VertexPreviewProjection result;
         result.entities = std::move(projected.entities);
         result.labels = std::move(projected.labels);
@@ -26193,6 +26354,13 @@ public:
                             : augmentAuthoredCommand(prepareDetachedSiteTranslationCommand(*source,
                                 site_wall_move->ids,site_wall_move->canvas_delta,*site_input),*source);
                         if (!cancellation.is_cancelled()) {
+                            if (!plan_move_command)
+                                throw std::invalid_argument("The Site move has no retained command output.");
+                            if (auto proposed = projectAlternativeWallCanvasCommand(*source, command, *retained,
+                                    *eligible, *labels, metric_units, view_context, prepared_move.get())) {
+                                *result = std::move(proposed);
+                                *plan_move_command = command;
+                            } else {
                             const auto candidate=prepareCanvasEdit(*source,command,edit_source,*prepared_move);
                             if (no_op) {
                                 VertexPreviewProjection unchanged;
@@ -26278,6 +26446,8 @@ public:
                                 }
                             }
                             else result->reset();
+                            if (*result && !cancellation.is_cancelled()) *plan_move_command = command;
+                            }
                         }
                     } else if (rotation_command && rigid_transform) {
                         auto command=physicalPlanRotationCommand(*source,id,*rigid_transform);
@@ -27577,7 +27747,9 @@ public:
             child->phase_constraint_authoring_intent.dump() != encode_phase_constraint_authoring_intent(proposal.intent).dump())
             throw std::invalid_argument("The released wall intent differs from its displayed physical proposal.");
         PhaseWallReplacementIdentityMap proposed_ids;
-        const auto reviewed = finishAlternativeWallEdit(source, proposal.intent, *child, proposed_ids, require_current);
+        const auto reviewed = proposal.intent.coordinated_replacements.is_null()
+            ? finishAlternativeWallEdit(source, proposal.intent, *child, proposed_ids, require_current)
+            : finishCoordinatedAlternativeWallEdit(source, proposal.intent, *child, proposed_ids, require_current);
         if (!reviewed) { clearError(); refreshInspector(); return false; }
         require_current();
         return applyAuthoredCommand(*reviewed);
@@ -27616,10 +27788,13 @@ public:
         if (candidate && fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(*candidate))
             throw std::invalid_argument("The wall move's admitted command or history changed.");
         const auto primary=authority->context.selected_id.toStdString();
-        if (prepared->alternative_wall || physicalWallRoomReviewSelection(*source,authority->selection,primary)) {
+        const auto coordinated_room_seed = coordinatedOrdinaryWallRoomReviewRoot(*source, command, authority->selection);
+        const auto room_seed = coordinated_room_seed.value_or(primary);
+        if (prepared->alternative_wall || coordinated_room_seed ||
+            physicalWallRoomReviewSelection(*source,authority->selection,primary)) {
             if (!sameSelectionMembership(ids,authority->selection))
                 throw std::invalid_argument("The wall move selection differs from its captured original objects.");
-            if (prepared->alternative_wall || (candidate && affectedPhysicalWallRooms(*source, candidate->entities(), primary) != 0)) {
+            if (prepared->alternative_wall || (candidate && affectedPhysicalWallRooms(*source, candidate->entities(), room_seed) != 0)) {
                 const auto source_publication=m_plan_publication_source;
                 const auto site_publication=m_site_publication_source;
                 const auto site_generation=m_site_edit_generation;
@@ -27695,7 +27870,7 @@ public:
                     clearError(); refresh(); return true;
                 }
                 const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(*source,*candidate,command,
-                    primary,*authority,owner,move_fence);
+                    room_seed,*authority,owner,move_fence);
                 if (!reviewed) { clearError(); refreshInspector(); return false; }
                 move_fence();
                 // The old prepared ticket is never published beside the
@@ -27740,6 +27915,56 @@ public:
         const auto prepared=preview->prepared;
         const auto edit_source=preview->edit_source;
         if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
+        const auto source = m_wall_move_source;
+        const auto authority = m_wall_move_authority;
+        const auto command = preview->command;
+        const auto coordinated_room_seed = coordinatedOrdinaryWallRoomReviewRoot(*source, command, authority->selection);
+        std::optional<DocumentSnapshot> room_candidate;
+        if (coordinated_room_seed) {
+            if (edit_source->workspace) {
+                if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
+                    throw std::invalid_argument("The Site wall move's recovery authority changed.");
+                room_candidate = prepared->workspace->preview();
+            } else {
+                if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
+                    throw std::invalid_argument("The Site wall move's document authority changed.");
+                room_candidate = prepared->document->preview();
+            }
+            if (fullSnapshotDigest(Document::preview_command(*source, command)) != fullSnapshotDigest(*room_candidate))
+                throw std::invalid_argument("The Site wall move's complete admitted proposal changed.");
+        }
+        if (prepared->alternative_wall || (room_candidate &&
+                affectedPhysicalWallRooms(*source, room_candidate->entities(), *coordinated_room_seed) != 0)) {
+            const auto proposal = prepared->alternative_wall;
+            const auto require_current = [this, canvas = QPointer<PlanCanvas>(canvas), capture, source, authority] {
+                if (!canvas || !source || !authority || !canvas->isVisible() ||
+                    capture->generation != m_site_edit_generation || m_site_edit_source != source ||
+                    !sourceEditAuthorityUnchanged(*authority))
+                    throw std::invalid_argument("The Site move source or view changed during room review.");
+                requireSiteEditCurrent();
+                const auto center = canvas->viewCenter();
+                if (center.x != capture->view_center.x || center.y != capture->view_center.y ||
+                    canvas->viewScale() != capture->zoom || canvas->size() != capture->size ||
+                    canvas->devicePixelRatioF() != capture->dpr ||
+                    canvas->navigationGeneration() != capture->navigation_generation)
+                    throw std::invalid_argument("The Site viewport changed during room review.");
+            };
+            require_current();
+            m_wall_move_site_capture.reset(); m_wall_move_source.reset(); m_wall_move_authority.reset();
+            m_wall_move_ids.clear(); m_model_move_edit_source.reset();
+            canvas->setEntities(canvas->entities());
+            if (proposal) {
+                if (!publishReviewedAlternativeWallCanvasEdit(*source, command, *proposal, *authority,
+                        edit_source, require_current)) return false;
+            } else {
+                const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(*source, *room_candidate, command,
+                    *coordinated_room_seed, *authority, owner, require_current);
+                if (!reviewed) { clearError(); refreshInspector(); return false; }
+                require_current();
+                if (!applyAuthoredCommand(*reviewed)) return false;
+            }
+            clearError(); refresh(); return true;
+        }
         publishPreparedCanvasEdit(prepared,edit_source);
         clearError(); refresh(); return true;
     }
@@ -27796,6 +28021,7 @@ public:
             request.authority=m_wall_move_authority;
             request.label_font=input->label_font;
             request.site_wall_move=SiteSelectionMoveIntent{ids,delta};
+            request.plan_move_command=std::make_shared<std::optional<Command>>();
             request.site_wall_move_capture=capture;
             request.model_edit_source=m_model_move_edit_source;
             request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
@@ -28165,9 +28391,10 @@ public:
                     *request.plan_move,request.model_edit_source,request.model_edit_prepared,**request.plan_move_command};
             }
             if (request.site_wall_move) {
-                if (!request.site_wall_move_capture) { reject(request); continue; }
+                if (!request.site_wall_move_capture || !request.plan_move_command || !*request.plan_move_command)
+                    { reject(request); continue; }
                 m_site_wall_move_preview=SiteWallMovePreviewCommand{request.site_wall_move_capture,request.serial,
-                    *request.site_wall_move,request.model_edit_source,request.model_edit_prepared};
+                    *request.site_wall_move,request.model_edit_source,request.model_edit_prepared,**request.plan_move_command};
             }
             if (request.plan_endpoint_capture) {
                 if (!request.plan_endpoint_command || !*request.plan_endpoint_command) { reject(request); continue; }
@@ -42135,7 +42362,9 @@ private:
         PhaseWallReplacementIdentityMap result;
         for (const auto& component : phase_constraint_replacement_components(intent)) {
             PhaseWallReplacementIdentityMap identities;
-            if (!component.slab_replacement.is_null())
+            if (!component.wall_replacement.is_null())
+                identities = decode_phase_wall_replacement_authoring(component.wall_replacement).identities;
+            else if (!component.slab_replacement.is_null())
                 identities = decode_phase_slab_replacement_authoring(component.slab_replacement).identities;
             else if (!component.roof_replacement.is_null()) {
                 const auto replacement = decode_phase_roof_replacement_authoring(component.roof_replacement);
@@ -42150,12 +42379,33 @@ private:
         return result;
     }
 
+    static PhaseWallReplacementIdentityMap alternativeCommandReplacementIdentities(const Command& command) {
+        PhaseWallReplacementIdentityMap identities;
+        if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command)) return identities;
+        // Room completion retains the complete geometry command in its closed
+        // proof envelope. Follow only the same canonical wrappers as Document;
+        // presentation metadata never grants replacement authority.
+        const auto visit = [&](const auto& self, const json& encoded, unsigned depth) -> void {
+            if (depth > 2) throw std::invalid_argument("The alternative edit proof wrapper depth is invalid.");
+            if (encoded.at("kind") != "apply_boundary_constraint_changes") return;
+            const auto version = encoded.at("version").get<int>();
+            if (version == 34) {
+                const auto intent = decode_phase_constraint_authoring_intent(encoded.at("phase_constraint_authoring_intent"));
+                for (const auto& [original, proposed] : alternativePhysicalReplacementIdentities(intent)) {
+                    const auto [found, inserted] = identities.emplace(original, proposed);
+                    if (!inserted && found->second != proposed)
+                        throw std::invalid_argument("The reviewed alternative edit has conflicting proposed identities.");
+                }
+            } else if (version == 19 || version == 22) self(self, encoded.at("proof"), depth + 1);
+            else if (encoded.contains("room_review_geometry_proof"))
+                self(self, encoded.at("room_review_geometry_proof"), depth + 1);
+        };
+        visit(visit, command_to_json(command), 0);
+        return identities;
+    }
+
     static std::string alternativeReplacementTargetID(const Command& command, const std::string& original) {
-        const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
-        if (!phase || !phase->phase_constraint_authoring_completion ||
-            phase->phase_constraint_authoring_intent.is_null()) return original;
-        const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
-        const auto identities = alternativePhysicalReplacementIdentities(intent);
+        const auto identities = alternativeCommandReplacementIdentities(command);
         const auto found = identities.find(original);
         return found != identities.end() ? found->second : original;
     }
@@ -42163,16 +42413,13 @@ private:
     static PhaseWallReplacementIdentityMap admittedAlternativeSelectionRedirect(
         const DocumentSnapshot& source, const DocumentSnapshot& candidate, const Command& command) {
         PhaseWallReplacementIdentityMap result;
-        const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
-        if (!phase || !phase->phase_constraint_authoring_completion ||
-            phase->phase_constraint_authoring_intent.is_null()) return result;
-        const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
-        const auto identities = alternativePhysicalReplacementIdentities(intent);
+        const auto identities = alternativeCommandReplacementIdentities(command);
         for (const auto& [original_id, proposed_id] : identities) {
             const auto original = source.entities().find(original_id);
             if (original == source.entities().end() ||
                 (original->second.type != "roof" && original->second.type != "roof_join" &&
-                 original->second.type != "slab")) continue;
+                 original->second.type != "slab" && original->second.type != "wall" &&
+                 original->second.type != "opening")) continue;
             const auto proposed = candidate.entities().find(proposed_id);
             if (proposed == candidate.entities().end() || proposed->second.type != original->second.type)
                 throw std::invalid_argument("The admitted alternative edit lost its proposed selection owner.");
@@ -42471,6 +42718,106 @@ private:
         return sourceDerivedSlabEditCommand(source, {}, {}, geometry, message);
     }
 
+    static std::optional<Command> sourceDerivedWallRoofSlabTransformCommand(const DocumentSnapshot& source,
+        std::span<const ArchitecturalGroupTransformTarget> targets, const std::string& message) {
+        if (targets.empty() || targets.size() > maximum_architectural_group_targets)
+            throw std::invalid_argument("Select a bounded group of walls, roofs and horizontal assemblies.");
+        std::set<std::string, std::less<>> owners;
+        std::vector<ArchitecturalGroupTransformTarget> physical_targets;
+        WallGeometryMoveIntent wall_move;
+        wall_move.complete_saved_dimensions = true;
+        for (const auto& target : targets) {
+            const auto found = source.entities().find(target.entity_id);
+            if (found == source.entities().end() || !owners.insert(target.entity_id).second)
+                throw std::invalid_argument("The architectural group contains a missing or repeated source owner.");
+            if (found->second.type == "roof" || found->second.type == "slab") {
+                physical_targets.push_back(target);
+                continue;
+            }
+            if (found->second.type != "wall")
+                throw std::invalid_argument("This coordinated edit requires actual walls, roofs and horizontal assemblies.");
+            const auto& operation = target.transform;
+            if (operation.scale != 1.0 || operation.offset.z != 0.0)
+                throw std::invalid_argument("This wall group edit requires a horizontal rigid transform.");
+            if (operation.rotation_z_radians == 0.0 && !operation.flip_horizontal && !operation.flip_vertical &&
+                operation.offset.x == 0.0 && operation.offset.y == 0.0) continue;
+            const auto baseline = read_segment(found->second.properties.at("baseline"));
+            if (!baseline) throw std::invalid_argument("The selected wall has no valid source baseline.");
+            const PlanarTransform planar{{operation.pivot.x, operation.pivot.y}, operation.rotation_z_radians,
+                operation.flip_horizontal, operation.flip_vertical, {operation.offset.x, operation.offset.y}};
+            const auto transformed = transform_segment(*baseline, planar);
+            wall_move.targets.push_back({target.entity_id, transformed.start, transformed.end, planar});
+        }
+        if (physical_targets.empty()) return std::nullopt;
+        const auto physical_command = sourceDerivedRoofSlabTransformCommand(source, physical_targets, message);
+        if (wall_move.targets.empty()) return physical_command;
+        ConstraintAuthoringIntent wall_semantic;
+        wall_semantic.wall_geometry_move = std::move(wall_move);
+        wall_semantic.message = message;
+        auto wall_intent = make_phase_constraint_authoring_intent(source, wall_semantic);
+        auto occupied = retainedSlabIdentityNames(source);
+        auto wall_proposal = prepare_phase_wall_canvas_proposal(source, wall_semantic, [&](std::string_view) {
+            auto proposed = new_id("proposed");
+            while (!occupied.insert(proposed).second) proposed = new_id("proposed");
+            return proposed;
+        });
+        if (wall_proposal) wall_intent = std::move(wall_proposal->intent);
+        const auto* physical_phase = std::get_if<ApplyBoundaryConstraintChanges>(&physical_command);
+        if (!wall_proposal && (!physical_phase || !physical_phase->phase_constraint_authoring_completion))
+            return std::nullopt; // Ordinary connected groups keep their established complete solve.
+
+        ConstraintAuthoringIntent semantic;
+        semantic.message = message;
+        auto intent = make_phase_constraint_authoring_intent(source, semantic);
+        json coordinated{{"version", 2}, {"wall_authoring", encode_phase_constraint_authoring_intent(wall_intent)},
+            {"roof_replacement", nullptr}, {"slab_replacement", nullptr},
+            {"ordinary_roof_edits", json::array()}, {"ordinary_slab_geometry", json::array()}};
+        if (physical_phase) {
+            const auto physical_intent = decode_phase_constraint_authoring_intent(physical_phase->phase_constraint_authoring_intent);
+            if (!physical_intent.coordinated_replacements.is_null()) {
+                for (const auto* key : {"roof_replacement", "slab_replacement", "ordinary_roof_edits", "ordinary_slab_geometry"})
+                    coordinated.at(key) = physical_intent.coordinated_replacements.at(key);
+            } else {
+                coordinated.at("roof_replacement") = physical_intent.roof_replacement;
+                coordinated.at("slab_replacement") = physical_intent.slab_replacement;
+            }
+        } else {
+            std::vector<RoofRigidTransformIntent> roofs;
+            for (const auto& target : physical_targets) {
+                if (source.entities().at(target.entity_id).type == "roof") roofs.push_back({target.entity_id, target.transform});
+                else coordinated.at("ordinary_slab_geometry").push_back(
+                    encode_slab_geometry_edit_intent(slabTransformGeometryIntent(target.entity_id, target.transform)));
+            }
+            if (!roofs.empty()) {
+                const auto transformed = replay_roof_rigid_transform_entities(source.entities(), roofs);
+                for (const auto& operation : roofs)
+                    if (const auto captured = capture_roof_rigid_transform(source.entities().at(operation.roof_id),
+                            transformed.at(operation.roof_id), operation.transform)) {
+                        RoofEditIntent edit;
+                        edit.roof_id = operation.roof_id;
+                        edit.transform = *captured;
+                        coordinated.at("ordinary_roof_edits").push_back(encode_roof_edit_intent(edit));
+                    }
+            }
+        }
+        if (coordinated.at("roof_replacement").is_null() && coordinated.at("slab_replacement").is_null() &&
+            coordinated.at("ordinary_roof_edits").empty() && coordinated.at("ordinary_slab_geometry").empty())
+            return wall_proposal ? std::optional<Command>{phase_wall_replacement_authoring_command(wall_intent)} : std::nullopt;
+        intent.coordinated_replacements = std::move(coordinated);
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision = source.revision();
+        command.message = message;
+        command.phase_constraint_authoring_completion = true;
+        command.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(intent);
+        if (wall_intent.wall_replacement.is_null()) {
+            const auto candidate = Document::preview_command(source, Command{command});
+            validate_architectural_geometry_changes(source, candidate);
+        }
+        // A replacement wall stage remains detached until its mandatory room
+        // decisions are complete. Preview and release retain this exact intent.
+        return Command{std::move(command)};
+    }
+
     static Command sourceDerivedRoofSlabTransformCommand(const DocumentSnapshot& source,
         std::span<const ArchitecturalGroupTransformTarget> targets, const std::string& message) {
         if (targets.empty() || targets.size() > maximum_architectural_group_targets)
@@ -42740,13 +43087,35 @@ private:
     }
 
     std::optional<Command> reviewAlternativeWallEdit(const Command& command,
-        PhaseWallReplacementIdentityMap& proposed_ids) {
+        PhaseWallReplacementIdentityMap& proposed_ids, bool review_ordinary_rooms = true) {
+        proposed_ids = alternativeCommandReplacementIdentities(command);
         const auto* constrained=std::get_if<ApplyBoundaryConstraintChanges>(&command);
         if (!constrained || !constrained->phase_constraint_authoring_completion ||
             constrained->phase_constraint_authoring_intent.is_null()) return command;
         auto intent=decode_phase_constraint_authoring_intent(constrained->phase_constraint_authoring_intent);
         if (!intent.coordinated_replacements.is_null()) {
-            proposed_ids = alternativePhysicalReplacementIdentities(intent);
+            const auto wall = intent.coordinated_replacements.find("wall_authoring");
+            if (wall != intent.coordinated_replacements.end() && !wall->is_null() &&
+                !decode_phase_constraint_authoring_intent(*wall).wall_replacement.is_null())
+                return finishCoordinatedAlternativeWallEdit(authoringSnapshot(), intent, *constrained, proposed_ids);
+            if (review_ordinary_rooms && wall != intent.coordinated_replacements.end() && !wall->is_null()) {
+                const auto ordinary_wall = decode_phase_constraint_authoring_intent(*wall);
+                if (ordinary_wall.intent.wall_geometry_move && !ordinary_wall.intent.wall_geometry_move->targets.empty()) {
+                    const auto source = authoringSnapshot();
+                    const auto candidate = Document::preview_command(source, command);
+                    const auto& seed = ordinary_wall.intent.wall_geometry_move->targets.front().wall_id;
+                    if (affectedPhysicalWallRooms(source, candidate.entities(), seed) != 0) {
+                        const auto authority = captureSourceEditAuthority(source);
+                        const auto selected_seed = coordinatedOrdinaryWallRoomReviewRoot(source, command, authority.selection);
+                        if (!selected_seed)
+                            throw std::invalid_argument("Retain the original wall, roof and floor selection to review affected rooms.");
+                        const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, candidate, command,
+                            *selected_seed, authority, owner);
+                        if (!reviewed) return std::nullopt;
+                        return Command{*reviewed};
+                    }
+                }
+            }
             return command;
         }
         if (!intent.slab_demolition.is_null()) return command;
@@ -42789,6 +43158,31 @@ private:
             for (const auto& id:*ids) replacement.identities.emplace(id,new_id("proposed"));
         intent.wall_replacement=encode_phase_wall_replacement_authoring(replacement);
         return finishAlternativeWallEdit(source,intent,*constrained,proposed_ids);
+    }
+
+    std::optional<Command> finishCoordinatedAlternativeWallEdit(const DocumentSnapshot& source,
+        const PhaseConstraintAuthoringIntent& intent, const ApplyBoundaryConstraintChanges& original,
+        PhaseWallReplacementIdentityMap& proposed_ids, const std::function<void()>& additional_fence = {}) {
+        if (additional_fence) additional_fence();
+        const auto wall = decode_phase_constraint_authoring_intent(intent.coordinated_replacements.at("wall_authoring"));
+        if (wall.wall_replacement.is_null())
+            throw std::invalid_argument("The coordinated room review requires an actual wall replacement.");
+        const auto wall_command = phase_wall_replacement_authoring_command(wall);
+        PhaseWallReplacementIdentityMap wall_ids;
+        const auto reviewed = finishAlternativeWallEdit(source, wall, wall_command, wall_ids, additional_fence);
+        if (!reviewed) return std::nullopt;
+        const auto* completed_wall = std::get_if<ApplyBoundaryConstraintChanges>(&*reviewed);
+        if (!completed_wall || !completed_wall->phase_constraint_authoring_completion)
+            throw std::invalid_argument("The coordinated room review lost its actual wall authoring proof.");
+        auto completed_intent = intent;
+        completed_intent.coordinated_replacements.at("wall_authoring") = completed_wall->phase_constraint_authoring_intent;
+        auto completed = original;
+        completed.phase_constraint_authoring_intent = encode_phase_constraint_authoring_intent(completed_intent);
+        const auto candidate = Document::preview_command(source, Command{completed});
+        validate_architectural_geometry_changes(source, candidate);
+        proposed_ids = alternativePhysicalReplacementIdentities(completed_intent);
+        if (additional_fence) additional_fence();
+        return Command{std::move(completed)};
     }
 
     std::optional<Command> finishAlternativeWallEdit(const DocumentSnapshot& source,
@@ -49992,6 +50386,24 @@ private:
         // Host movement owns opening cuts. A selected opening cannot acquire
         // a second free-space edit merely by joining this group.
         geometry_ids=translationModelRoots(source,std::move(geometry_ids));
+        if (!geometry_ids.isEmpty() && !physical_targets.empty() && dimension_ids.isEmpty() &&
+            annotation_targets.empty() && reference_targets.empty() && embedded_targets.empty() &&
+            std::all_of(geometry_ids.begin(), geometry_ids.end(), [&](const auto& id) {
+                return source.entities().at(id.toStdString()).type == "wall";
+            }) && std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
+                const auto& type = source.entities().at(target.entity_id).type;
+                return type == "roof" || type == "slab";
+            })) {
+            auto coordinated_targets = physical_targets;
+            for (const auto& id : geometry_ids) {
+                const auto operation = selected_operation(id);
+                coordinated_targets.push_back({id.toStdString(), {{operation.pivot.x, operation.pivot.y, 0.0},
+                    {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
+                    operation.flip_horizontal, operation.flip_vertical}});
+            }
+            if (const auto coordinated = sourceDerivedWallRoofSlabTransformCommand(source, coordinated_targets,
+                    "Move walls, roofs and horizontal assemblies on Site")) return *coordinated;
+        }
         if (geometry_ids.isEmpty() && dimension_ids.isEmpty() && annotation_targets.empty() &&
             reference_targets.empty() && embedded_targets.empty() && !physical_targets.empty() &&
             std::all_of(physical_targets.begin(), physical_targets.end(), [&](const auto& target) {
@@ -57222,6 +57634,47 @@ public:
         return true;
     }
 
+    static std::optional<std::string> coordinatedOrdinaryWallRoomReviewRoot(const DocumentSnapshot& source,
+        const Command& command, const QStringList& selection) {
+        const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!phase || !phase->phase_constraint_authoring_completion || phase->phase_constraint_authoring_intent.is_null())
+            return std::nullopt;
+        const auto intent = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
+        if (intent.coordinated_replacements.is_null() || intent.coordinated_replacements.at("version") != 2)
+            return std::nullopt;
+        const auto& encoded_wall = intent.coordinated_replacements.at("wall_authoring");
+        if (encoded_wall.is_null()) return std::nullopt;
+        const auto wall = decode_phase_constraint_authoring_intent(encoded_wall);
+        if (!wall.wall_replacement.is_null() || !wall.intent.wall_geometry_move ||
+            wall.intent.wall_geometry_move->targets.empty() || selection.isEmpty()) return std::nullopt;
+        if (intent.expected_revision != source.revision() ||
+            intent.source_snapshot_digest != document_snapshot_digest(source) ||
+            intent.source_authoring_digest != document_authoring_source_digest_v2(source) ||
+            intent.source_entities_digest != entity_map_digest(source.entities()) ||
+            intent.source_saved_revision != source.saved_revision_optional())
+            throw std::invalid_argument("The coordinated room proposal belongs to a different project source.");
+        std::set<std::string, std::less<>> selected_roots;
+        for (const auto& id : selection) {
+            if (annotation_child_exists(source, id.toStdString()) || embeddedAssemblyChild(source, id.toStdString()))
+                return std::nullopt;
+            const auto found = source.entities().find(id.toStdString());
+            if (found == source.entities().end() || !selected_roots.insert(found->first).second)
+                return std::nullopt;
+        }
+        selected_roots.clear();
+        for (const auto& id : translationModelRoots(source, selection)) {
+            const auto& entity = source.entities().at(id.toStdString());
+            if (entity.type != "wall" && entity.type != "roof" && entity.type != "slab") return std::nullopt;
+            selected_roots.insert(entity.id);
+        }
+        for (const auto& target : wall.intent.wall_geometry_move->targets)
+            if (!selected_roots.contains(target.wall_id) || source.entities().at(target.wall_id).type != "wall")
+                return std::nullopt;
+        // The original primary may be a roof or floor. A real selected wall
+        // seeds discovery without substituting a fabricated wall-only selection.
+        return wall.intent.wall_geometry_move->targets.front().wall_id;
+    }
+
     static std::vector<PhysicalWallRoomReviewGroup> affectedPhysicalWallRoomGroups(const DocumentSnapshot& source,
         const std::map<std::string, Entity, std::less<>>& candidate, const std::string& selected_wall_id,
         bool allow_removal = false) {
@@ -57350,8 +57803,12 @@ public:
                 authority.selection.contains(authority.context.selected_id) &&
                 authority.context.selected_id == QString::fromStdString(selected_wall_id);
         }
+        const auto coordinated_seed = coordinatedOrdinaryWallRoomReviewRoot(source, geometry_command, authority.selection);
         const bool grouped_geometry = !deletion && authority.selection.size()>1;
         const bool selection_matches = deletion ? deletion_selection
+            : coordinated_seed ? *coordinated_seed == selected_wall_id &&
+                authority.selection.contains(authority.context.selected_id) &&
+                is_physical_wall_room_active_constraint_review_command(geometry_command)
             : authority.context.selected_id == QString::fromStdString(selected_wall_id) &&
                 (grouped_geometry
                     ? physicalWallRoomReviewSelection(source,authority.selection,selected_wall_id) &&
@@ -57374,9 +57831,18 @@ public:
             entity_map_digest(derived.entities()) != entity_map_digest(candidate.entities()) || derived.assets() != candidate.assets())
             throw std::invalid_argument("The room review geometry differs from the admitted wall proposal.");
         PhaseWallReplacementIdentityMap proposed_ids;
-        const auto replacement=reviewAlternativeWallEdit(geometry_command,proposed_ids);
+        const auto replacement=reviewAlternativeWallEdit(geometry_command,proposed_ids,false);
         if (!replacement) return std::nullopt;
-        if (!proposed_ids.empty()) {
+        const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
+        const bool reviewed_wall_replacement = phase && phase->phase_constraint_authoring_completion &&
+            !phase->phase_constraint_authoring_intent.is_null() && [&] {
+                const auto components = phase_constraint_replacement_components(
+                    decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent));
+                return std::any_of(components.begin(), components.end(), [](const auto& component) {
+                    return !component.wall_replacement.is_null();
+                });
+            }();
+        if (reviewed_wall_replacement) {
             (void)current_source();
             const auto* completed=std::get_if<ApplyBoundaryConstraintChanges>(&*replacement);
             if (!completed) throw std::invalid_argument("The proposed wall edit lost its complete room review command.");

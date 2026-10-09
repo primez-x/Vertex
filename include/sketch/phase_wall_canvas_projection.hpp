@@ -5,6 +5,8 @@
 #include "sketch/sheet_view_model.hpp"
 #include "plan_canvas.hpp"
 
+#include <utility>
+
 namespace sketch::desktop {
 
 // Shared saved-view input. This contains presentation values only; the actual
@@ -28,6 +30,15 @@ struct PhaseWallCanvasProjection {
     std::vector<CanvasLabel> labels;
 };
 
+// Opt-in coordinated physical projection. These are the actual coordinator's
+// entity/owned-child mappings, not persisted render aliases. Hosted instances
+// have a catalog-qualified namespace and therefore retain a separate mapping.
+struct PhaseWallCanvasCoordinatedPhysicalInput {
+    PhaseWallReplacementIdentityMap original_to_proposed;
+    std::map<std::pair<std::string, std::string>, std::string>
+        original_to_hosted_instance_proposed;
+};
+
 // Shared with settled canvas rendering: the default frame/default depth is
 // analytical even though its conventional far depth is finite.
 [[nodiscard]] bool analytical_canvas_plan_context(
@@ -39,6 +50,10 @@ struct PhaseWallCanvasProjection {
 // Unsupported affected geometry throws std::invalid_argument; no stale source
 // presentation is silently substituted. Unreviewed physical room facts and
 // their room labels deliberately remain outside this physical-stage preview.
+// Supplying coordinated input additionally projects actual changed roof/slab
+// owners, their joins and hosted catalog presentations from edited_entities.
+// Retained/eligible presentations must come from the captured source visibility
+// and object roster. Their original IDs/keys remain gesture rendering aliases.
 [[nodiscard]] PhaseWallCanvasProjection project_phase_wall_canvas(
     const DocumentSnapshot& source,
     const PhaseWallReplacementAuthoringPreview& physical,
@@ -46,6 +61,7 @@ struct PhaseWallCanvasProjection {
     const std::vector<CanvasEntity>& eligible,
     const std::vector<CanvasLabel>& labels,
     bool metric_units,
-    const std::optional<ArchitecturalViewContext>& view_context = std::nullopt);
+    const std::optional<ArchitecturalViewContext>& view_context = std::nullopt,
+    const std::optional<PhaseWallCanvasCoordinatedPhysicalInput>& coordinated = std::nullopt);
 
 } // namespace sketch::desktop

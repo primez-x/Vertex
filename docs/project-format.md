@@ -1,4 +1,40 @@
-# Vertex project formats v1 through v118
+# Vertex project formats v1 through v119
+
+## Coordinated wall, roof and horizontal replacement (v119)
+
+Native format 119 and JSON/assets extraction version 117 retain outer phase
+constraint authoring version eight in direct, wrapped and historical commands.
+Its coordinated inner version two has exactly the five version-one fields plus
+`wall_authoring`. Absent families have null replacement fields and empty ordinary
+lists. Each present family carries one lane, at least two families participate,
+and at least one requires actual baseline replacement. Older outer and inner
+dialects retain their closed fields and meanings.
+
+The wall child is canonical outer authoring one or two, containing only an actual
+wall geometry move and any required typed replacement/room decisions. Every
+child source binding equals the enclosing captured source. Actual replacement
+leaves must name the same registry and saved alternative. Each family derives
+its complete candidate independently from the unchanged actual source.
+
+Disjoint physical consequences compose with explicit codec-known registry,
+annotation and saved-view rows. Retained row order and envelope fields stay
+exact; a source row may have one consequence, and fresh destinations are disjoint.
+Unsupported physical/catalog overlap refuses. Baseline owners, source fences,
+whole-map ownership and full retained identity lifetime remain authoritative.
+
+Canvas preview carries a detached physical map and the full enclosing intent;
+it does not construct a publishable snapshot from unreviewed room facts. Wall,
+roof, floor and hosted component presentations use actual staged geometry and
+qualified render aliases. Release completes the existing wall room/relationship
+review, inserts that child into the same captured coordinated proof, and admits
+one complete undoable command. An ordinary wall with a replaced roof or floor
+retains the complete mixed geometry proof through a separate typed room suffix.
+The original mixed selection supplies review authority even when its primary
+owner is a roof or floor. Numeric previews retain the detached intent until
+review completes. Admission validates the complete geometry stage independently
+of room decisions and prevents the suffix from changing physical owners.
+Source implementation is uncompiled and
+interaction, output and storage remain unverified.
 
 ## Singleton roof material relationships (v118)
 

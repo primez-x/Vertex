@@ -1733,7 +1733,10 @@ void validate_physical_room_source_transition(
         !reviewed_batch->phase_constraint_authoring_intent.is_null()) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
         const auto intent=decode_phase_constraint_authoring_intent(reviewed_batch->phase_constraint_authoring_intent);
-        if (!intent.wall_replacement.is_null()) {
+        const auto components = phase_constraint_replacement_components(intent);
+        if (std::any_of(components.begin(), components.end(), [](const auto& component) {
+                return !component.wall_replacement.is_null();
+            })) {
             (void)command_to_json(Command{*reviewed_batch});
             auto replay=replay_phase_constraint_authoring(before,reviewed_batch->phase_constraint_authoring_intent);
             const bool ordinary_suffix=composed_selection || reviewed_batch->selection_completion;
@@ -2578,7 +2581,7 @@ static void validate_phase_constraint_composed_originals(const std::map<std::str
         if (!intent.coordinated_replacements.is_null()) {
             const auto replay = replay_phase_constraint_authoring(source, encoded);
             if (entity_map_digest(replay) != entity_map_digest(candidate))
-                throw std::invalid_argument("Coordinated roof and horizontal replacements differ from their actual source replay");
+                throw std::invalid_argument("Coordinated architectural replacements differ from their actual source replay");
             continue;
         }
         if (!intent.wall_replacement.is_null()) validate_phase_wall_replacement_originals(source,candidate,intent);
@@ -2813,7 +2816,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         }
         for (const auto& [original,id]:replacement.identities) {
             (void)original;fresh.insert(id);
-            if (!replacement.wall_stacks.empty()) nested_fresh.insert(id);
+            if (complete_envelope_reservation) nested_fresh.insert(id);
         }
         for (const auto& stack : replacement.wall_stacks) {
             const auto& original=source.at(stack.wall_id);
@@ -2836,6 +2839,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             const auto reserve_room=[&](const std::string& id) {
                 if (mapped.contains(id)) throw std::invalid_argument("Proposed room identity overlaps a declared wall copy: "+id);
                 fresh.insert(id);
+                if (complete_envelope_reservation) nested_fresh.insert(id);
             };
             for (const auto& plane:room.planes) {
                 for (const auto& decision:plane.fresh) {
@@ -4895,8 +4899,28 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
             const auto replay=has_room_review_batch_completion(command) ?
                 replay_physical_wall_room_review_batch(reviewed_source,room_review_intents(command),active_policy) :
                 replay_physical_wall_room_review(reviewed_source,command.room_review_intent,active_policy);
-            if (!phase_constraint_authoring_proofs(command).empty())
-                validate_phase_constraint_composed_originals(source,replay.entities,command);
+            if (!phase_constraint_authoring_proofs(command).empty()) {
+                // Geometry and the separately reviewed room suffix have
+                // different authority. Compare the complete coordinated
+                // geometry with its admitted stage, then replay room decisions
+                // against that exact stage without granting physical edits.
+                validate_phase_constraint_composed_originals(source,reviewed_source,command);
+                const auto physical_owner = [](const Entity& entity) {
+                    return entity.type == "wall" || entity.type == "opening" || entity.type == "wall_join" ||
+                        entity.type == "roof" || entity.type == "roof_join" || entity.type == "slab" ||
+                        entity.type == "column" || entity.type == "beam" || entity.type == "stair" ||
+                        entity.type == "railing" || entity.type == "assembly_model" || entity.type == "assembly_instance";
+                };
+                for (const auto& [id, entity] : reviewed_source) {
+                    if (!physical_owner(entity)) continue;
+                    const auto retained = replay.entities.find(id);
+                    if (retained == replay.entities.end() || !exact_entity_payload(entity, retained->second))
+                        throw std::invalid_argument("Room review changed an admitted coordinated physical owner: " + id);
+                }
+                for (const auto& [id, entity] : replay.entities)
+                    if (physical_owner(entity) && !reviewed_source.contains(id))
+                        throw std::invalid_argument("Room review created an unreviewed coordinated physical owner: " + id);
+            }
             validate_boundary_identity_transition(history,source,replay.entities);
             if (active_policy) {
                 validate_active_design_preserved_dependents(source,replay.entities,false);

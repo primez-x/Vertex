@@ -390,6 +390,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 replacement_proof(replacement_proof,command.room_review_geometry_proof,0))
                 required=std::max(required,87U);
             const auto profile_intent=[](const nlohmann::json& intent)->std::uint32_t {
+                if (intent.is_object() && intent.value("version",0)==8) return 119U;
                 if (intent.is_object() && intent.value("version",0)==7) return 117U;
                 if (intent.is_object() && intent.value("version",0)==6) return 102U;
                 if (intent.is_object() && intent.value("version",0)==5) {
@@ -2266,6 +2267,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 119 &&
          sqlite3_column_int(user_version.get(), 0) != 118 &&
          sqlite3_column_int(user_version.get(), 0) != 117 &&
          sqlite3_column_int(user_version.get(), 0) != 116 &&
@@ -2839,6 +2841,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=119)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 119 for coordinated wall, roof and horizontal design replacement");
         if (required_format>=118)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 118 for singleton roof material relationships");
         if (required_format>=117)

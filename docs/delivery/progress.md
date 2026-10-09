@@ -14,6 +14,33 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 coordinated wall, roof and floor source integration
+
+Mixed wall/roof/horizontal plan edits now prepare source-bound wall geometry
+alongside the existing roof and slab producers. Outer authoring eight/inner two
+retains actual family roles and one registry/alternative. Complete family maps
+derive independently from the same captured source and compose only disjoint
+physical changes and explicit registry/presentation rows. Baseline owners,
+history/asset/child reservations and phase ownership remain authoritative.
+
+Dragging, transform actions and Site movement carry the complete intent into
+detached physical preview. Roof, floor, join and hosted component geometry
+projects from that actual stage with qualified render aliases. Release completes
+the existing wall room and relationship review before admitting the combined
+command. Native 119/extraction 117 retains the new meaning in saved history.
+
+Independent integrated source review approved after completing mixed ordinary
+wall room review and detached numeric previews. Room completion retains the
+entire coordinated geometry proof and its actual mixed selection, including
+when a roof or floor is primary. Geometry and the typed room suffix admit
+separately; the latter preserves all admitted physical owners, joins and
+catalogs. Wrapped replacement aliases survive completion and selection refresh.
+Existing unsupported wall incoming references and overlapping catalog
+consequences remain explicit gaps; presentation closure is the next source slice.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation, interaction, output and storage round trips remain unverified;
+the installed candidate is unchanged.
+
 ### October 8 singleton roof material relationship source integration
 
 Roof Cut/Delete now preserves the effective material when only one member of a

@@ -6,6 +6,8 @@
 
 namespace sketch {
 
+struct PhaseWallReplacementAuthoringPreview;
+
 // Versioned semantic authority. Geometry payloads are outputs of replay;
 // every source binding and saved phase choice describes the actual source.
 struct PhaseConstraintAuthoringIntent {
@@ -35,7 +37,10 @@ struct PhaseConstraintAuthoringIntent {
     // Dialect seven: one actual-source roof lane and one horizontal geometry
     // lane. Each is either a replacement leaf or a nonempty ordinary typed
     // list; at least one replacement is required. Historical leaves retain
-    // their own codecs and replay semantics.
+    // their own codecs and replay semantics. Dialect eight selects coordinated
+    // inner version two: an optional canonical wall geometry authoring child
+    // joins optional roof/horizontal lanes, with at least two families present
+    // and at least one actual replacement. Every child binds the same source.
     nlohmann::json coordinated_replacements=nullptr;
 };
 
@@ -52,6 +57,10 @@ struct PhaseConstraintAuthoringIntent {
     const DocumentSnapshot& source, const ConstraintAuthoringIntent& intent);
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
+// Detached physical preview only for coordinated inner v2 wall replacements.
+// Pending room decisions remain pending; this map is not publication authority.
+[[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_coordinated_authoring(
+    const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);
 
 // Independently evaluated saved selections, including the empty-registry case.
 [[nodiscard]] nlohmann::json phase_constraint_authoring_selections(
