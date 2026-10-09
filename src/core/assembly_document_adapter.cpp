@@ -526,13 +526,22 @@ ApplyEntityChanges embedded_assembly_group_transform_command(const DocumentSnaps
             // Patch only owned pose fields, retaining an existing explicit
             // false parity field and all raw override/nested-override records.
             auto& encoded = raw["root_transform"];
-            if (!encoded.is_object()) encoded = nlohmann::json::object();
-            encoded["translation_m"] = {pose.translation_m.x, pose.translation_m.y, pose.translation_m.z};
-            encoded["rotation_radians"] = pose.rotation_radians;
-            encoded["scale"] = pose.scale;
-            if (pose.mirrored_y || encoded.contains("mirrored_y")) encoded["mirrored_y"] = pose.mirrored_y;
-            if (pose.vertical_scale != 1 || encoded.contains("vertical_scale"))
-                encoded["vertical_scale"] = pose.vertical_scale;
+            if (!encoded.is_object()) {
+                encoded = encode_assembly_transform(pose);
+            } else {
+                const auto& previous = roots[i].pose;
+                auto& translation = encoded.at("translation_m");
+                if (pose.translation_m.x != previous.translation_m.x) translation[0] = pose.translation_m.x;
+                if (pose.translation_m.y != previous.translation_m.y) translation[1] = pose.translation_m.y;
+                if (pose.translation_m.z != previous.translation_m.z) translation[2] = pose.translation_m.z;
+                if (pose.rotation_radians != previous.rotation_radians) encoded["rotation_radians"] = pose.rotation_radians;
+                if (pose.scale != previous.scale) encoded["scale"] = pose.scale;
+                if (pose.mirrored_y != previous.mirrored_y) encoded["mirrored_y"] = pose.mirrored_y;
+                if (pose.vertical_scale != previous.vertical_scale) encoded["vertical_scale"] = pose.vertical_scale;
+            }
+            // A retained v7 row may omit both envelope slots. Materializing its
+            // selected root must supply the pair without changing other rows.
+            if (!raw.contains("nested_overrides")) raw["nested_overrides"] = nlohmann::json::array();
         }
         if (target.copy_instance_id) instances.push_back(std::move(raw));
         else instances.at(roots[i].raw_index) = std::move(raw);
@@ -606,11 +615,13 @@ ApplyEntityChanges embedded_assembly_group_copy_command(const DocumentSnapshot& 
             [&](const auto& value) { return value.at("id") == target.instance_id; });
         require(row != rows.end(), "embedded assembly copy lost its raw source record");
         auto raw = *row;
-        raw["schema"] = proposed.properties.at("model").value("schema", nlohmann::json{}) == "sketch.assemblies.v6"
+        const auto catalog_schema = proposed.properties.at("model").value("schema", nlohmann::json{});
+        raw["schema"] = catalog_schema == "sketch.assemblies.v6" || catalog_schema == "sketch.assemblies.v7"
             ? "sketch.assembly-instance.v2" : "sketch.assembly-instance.v1";
         raw["id"] = *target.copy_instance_id;
-        if (raw.contains("placement") || !raw.at("root_transform").is_object())
+        if (raw.contains("placement") || !raw.contains("root_transform") || !raw.at("root_transform").is_object())
             raw["root_transform"] = encode_assembly_transform(expansion.nodes.front().transform);
+        if (!raw.contains("nested_overrides")) raw["nested_overrides"] = nlohmann::json::array();
         raw.erase("placement");
         Entity copy = original;
         copy.id = *target.copy_instance_id;

@@ -40,6 +40,11 @@ struct AssemblyTransform {
     double vertical_scale{1.0};
     bool operator==(const AssemblyTransform&) const = default;
 };
+struct AssemblyRotationComponents {
+    double cosine{}, sine{};
+};
+// Exact axis-aligned turns; other finite angles retain ordinary trigonometry.
+[[nodiscard]] AssemblyRotationComponents assembly_rotation_components(double radians);
 [[nodiscard]] AssemblyPoint3 transform_assembly_point(AssemblyPoint3 point, const AssemblyTransform& transform);
 [[nodiscard]] AssemblyTransform compose_assembly_transform(const AssemblyTransform& parent, const AssemblyTransform& local);
 struct AssemblyProfile {
@@ -110,10 +115,13 @@ struct AssemblyPlacement {
     const AssemblyTransform& world_transform, bool host_geometry_transformed);
 // Patch actual hosted catalog instances without reconstructing saved definitions,
 // overrides or unchanged numeric representations. Unknown/unhosted IDs fail.
+// Preserve untouched rows through a row-local v7 upgrade when requested.
 [[nodiscard]] nlohmann::json transform_hosted_assembly_model(const nlohmann::json& actual_model,
-    const std::map<std::string, AssemblyTransform, std::less<>>& instance_transforms);
+    const std::map<std::string, AssemblyTransform, std::less<>>& instance_transforms,
+    bool preserve_untouched_rows = false);
 // Retain an existing XYZ/vertical placement dialect after canonical edits or
-// catalog closure, supplying only its required envelope fields.
+// catalog closure, supplying only its required envelope fields. Saved v7 keeps
+// row-local optional envelopes and unchanged raw rows without adding defaults.
 [[nodiscard]] nlohmann::json retain_assembly_catalog_dialect(
     const nlohmann::json& actual_model, nlohmann::json generated_model);
 struct AssemblyInstance {
@@ -129,7 +137,7 @@ struct AssemblyInstance {
     bool operator==(const AssemblyInstance&) const = default;
 };
 // Strict independent-instance codec (v1 uniform, v2 vertical scaling). Legacy
-// embedded catalog instances use the separate V1-V6 catalog representation.
+// embedded catalog instances use the separate V1-V7 catalog representation.
 [[nodiscard]] nlohmann::json encode_assembly_instance(const AssemblyInstance& instance);
 [[nodiscard]] AssemblyInstance decode_assembly_instance(const nlohmann::json& value);
 [[nodiscard]] nlohmann::json encode_assembly_transform(const AssemblyTransform& transform);

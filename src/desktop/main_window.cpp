@@ -46,6 +46,7 @@
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
 #include "sketch/phase_structural_replacement.hpp"
+#include "sketch/structural_hosted_components.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/roof_clone.hpp"
 #include "sketch/slab_clone.hpp"
@@ -42462,9 +42463,9 @@ private:
 
     static Command sourceDerivedStructuralEditCommand(const DocumentSnapshot& source,
         const std::vector<StructuralObjectEditIntent>& edits,const std::string& message) {
-        const auto staged=replay_structural_object_edit_entities(source.entities(),edits);
         const auto request=phase_structural_edit_replacement_request(source.entities(),edits);
         if (!request) {
+            const auto staged=replay_structural_hosted_component_geometry(source.entities(),edits);
             ApplyEntityChanges command{source.revision(),{}, {},message};
             for (const auto& [id,after]:staged) {
                 const auto& before=source.entities().at(id);
@@ -42475,7 +42476,7 @@ private:
             return augmentAuthoredCommand(command,source);
         }
         const auto plan=inspect_phase_structural_replacement_plan(source.entities(),request->seed_object_ids,
-            request->registry_id,request->alternative_id);
+            request->registry_id,request->alternative_id,true);
         if (!plan.ready()) {
             std::string reasons;
             for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) {
@@ -42489,7 +42490,8 @@ private:
         replacement.alternative_id=request->alternative_id;
         replacement.seed_object_ids=request->seed_object_ids;
         replacement.edits=edits;
-        auto occupied=retainedSlabIdentityNames(source);
+        replacement.complete_hosted=true;
+        auto occupied=retainedSlabIdentityNames(source,true);
         for (const auto* ids:{&plan.required_entity_ids,&plan.required_child_ids})
             for (const auto& original:*ids) {
                 auto proposed=new_id("proposed");
@@ -42497,6 +42499,12 @@ private:
                 if (!replacement.identities.emplace(original,std::move(proposed)).second)
                     throw std::invalid_argument("A structural replacement identity has multiple owners.");
             }
+        for (const auto& original:plan.required_hosted_instance_ids) {
+            auto proposed=new_id("proposed-component");
+            while (!occupied.insert(proposed).second) proposed=new_id("proposed-component");
+            if (!replacement.hosted_instance_identities.emplace(original,std::move(proposed)).second)
+                throw std::invalid_argument("A structural component has multiple qualified owners.");
+        }
         ConstraintAuthoringIntent semantic;
         semantic.message=message;
         auto intent=make_phase_constraint_authoring_intent(source,semantic);
@@ -42599,7 +42607,8 @@ private:
         return result;
     }
 
-    static PhaseWallReplacementIdentityMap alternativeCommandReplacementIdentities(const Command& command) {
+    static PhaseWallReplacementIdentityMap alternativeCommandReplacementIdentities(const Command& command,
+        std::vector<PhaseStructuralReplacementAuthoring>* structural_components=nullptr) {
         PhaseWallReplacementIdentityMap identities;
         if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command)) return identities;
         // Room completion retains the complete geometry command in its closed
@@ -42611,6 +42620,10 @@ private:
             const auto version = encoded.at("version").get<int>();
             if (version == 34) {
                 const auto intent = decode_phase_constraint_authoring_intent(encoded.at("phase_constraint_authoring_intent"));
+                if (structural_components)
+                    for (const auto& component:phase_constraint_replacement_components(intent))
+                        if (!component.structural_replacement.is_null())
+                            structural_components->push_back(decode_phase_structural_replacement_authoring(component.structural_replacement));
                 for (const auto& [original, proposed] : alternativePhysicalReplacementIdentities(intent)) {
                     const auto [found, inserted] = identities.emplace(original, proposed);
                     if (!inserted && found->second != proposed)
@@ -42633,23 +42646,40 @@ private:
     static PhaseWallReplacementIdentityMap admittedAlternativeSelectionRedirect(
         const DocumentSnapshot& source, const DocumentSnapshot& candidate, const Command& command) {
         PhaseWallReplacementIdentityMap result;
-        const auto identities = alternativeCommandReplacementIdentities(command);
+        std::vector<PhaseStructuralReplacementAuthoring> structural_components;
+        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components);
         for (const auto& [original_id, proposed_id] : identities) {
             const auto original = source.entities().find(original_id);
             if (original == source.entities().end() ||
                 (original->second.type != "roof" && original->second.type != "roof_join" &&
                  original->second.type != "slab" && original->second.type != "wall" &&
                  original->second.type != "opening" && original->second.type != "column" &&
-                 original->second.type != "beam")) continue;
+                 original->second.type != "beam" && original->second.type != "assembly_model")) continue;
             const auto proposed = candidate.entities().find(proposed_id);
             if (proposed == candidate.entities().end() || proposed->second.type != original->second.type)
                 throw std::invalid_argument("The admitted alternative edit lost its proposed selection owner.");
             result.emplace(original_id, proposed_id);
         }
+        const bool hosted=std::any_of(structural_components.begin(),structural_components.end(),[](const auto& component) {
+            return !component.hosted_instance_identities.empty();
+        });
+        if (hosted) {
+            const auto before=embedded_assembly_presentation_ids(source.entities());
+            const auto after=embedded_assembly_presentation_ids(candidate.entities());
+            for (const auto& component:structural_components)
+                for (const auto& [original,proposed]:component.hosted_instance_identities) {
+                    const auto& old_id=before.at(original);
+                    const auto& new_id=after.at({component.identities.at(original.first),proposed});
+                    const auto [existing,inserted]=result.emplace(old_id,new_id);
+                    if (!inserted && existing->second!=new_id)
+                        throw std::invalid_argument("The admitted structural edit has conflicting component selections.");
+                }
+        }
         return result;
     }
 
-    static std::set<std::string, std::less<>> retainedSlabIdentityNames(const DocumentSnapshot& source) {
+    static std::set<std::string, std::less<>> retainedSlabIdentityNames(const DocumentSnapshot& source,
+        bool complete_history_aliases=false) {
         std::set<std::string, std::less<>> occupied;
         std::size_t nodes{}, bytes{};
         const auto reserve_text = [&](const std::string& text) {
@@ -42670,6 +42700,10 @@ private:
             }
         };
         for (const auto& revision : source.history()) {
+            if (complete_history_aliases)
+                for (const auto& [qualified,alias]:embedded_assembly_presentation_ids(revision.entities)) {
+                    (void)qualified; reserve_text(alias);
+                }
             for (const auto& [id, entity] : revision.entities) {
                 reserve_text(id); reserve_text(entity.type);
                 reserve(entity.properties); reserve(entity.extensions);

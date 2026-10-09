@@ -14,6 +14,30 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 8 structural hosted components source integration
+
+Actual column and beam edits now carry hosted component placement through the
+same captured world operation. Active alternatives create private proposed
+catalogs for affected baseline instances while retaining baseline physical
+objects and original component rows. Computed aliases and their saved-view,
+appearance, dimension and annotation references follow the proposed instances.
+Qualified catalog/local identities and retained historical aliases stay distinct.
+
+The shared assembly rotation path now uses exact cardinal components in point
+and native geometry evaluation. Row-local catalog dialect seven is now added
+to retain untouched baseline rows and type definitions during XYZ placement
+upgrades, including mixed baseline/ordinary hosts in one original catalog.
+Native 124/extraction 122 fences the new catalog and leaf-three meaning in
+current and retained history.
+
+Independent integrated source review approved after correcting actual Site
+coordinate frames and preserving small movement at distant Site origins.
+Root source review and the scoped whitespace check passed. Unsupported affected reference families
+and mixed structural/other-family authoring remain unfinished source scope.
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, geometry, interactions, output and storage
+remain unverified; the installed candidate is unchanged.
+
 ### October 8 structural alternative lifecycle source integration
 
 Column and beam dimension/placement edits now derive proposed replacements

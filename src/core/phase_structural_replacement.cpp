@@ -7,6 +7,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/structural_hosted_components.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -35,6 +36,11 @@ void source_child_identity(const std::string& id) {
     if (id.empty() || id.size() > 128 || std::all_of(id.begin(), id.end(), [](unsigned char c) {
         return std::isspace(c);
     })) reject("source overlay identity must be nonblank and at most 128 bytes");
+}
+void source_hosted_instance_identity(const std::string& id) {
+    if (id.size() > maximum_authoring_bytes) reject("source hosted instance identity exceeds authoring byte budget");
+    if (id.empty() || std::all_of(id.begin(), id.end(), [](unsigned char c) { return std::isspace(c); }))
+        reject("source hosted instance identity must be nonblank");
 }
 bool exact(const Entity& a, const Entity& b) {
     return a == b && a.properties.dump() == b.properties.dump() && a.extensions.dump() == b.extensions.dump();
@@ -343,7 +349,7 @@ bool PhaseStructuralReplacementPlan::ready() const noexcept {
 
 PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
     const PhaseStructuralReplacementEntities& actual, const std::vector<std::string>& seeds,
-    const std::string& registry_id, const std::string& alternative_id) {
+    const std::string& registry_id, const std::string& alternative_id, bool complete_hosted) {
     try {
         identity(registry_id); identity(alternative_id); (void)occupied_strings(actual);
         const auto scope = memberships(actual);
@@ -367,6 +373,19 @@ PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
                 reject("seed must be an actual baseline structural owner in the selected registry: " + id);
             active_owner(model, id);
         }
+        Ids presentation_owners = owners, catalogs, render_aliases;
+        if (complete_hosted) {
+            const auto hosted = inspect_structural_hosted_components(actual, plan.seed_object_ids);
+            for (const auto& item : hosted.diagnostics) diagnostic(plan, item.entity_id, item.reason);
+            catalogs.insert(hosted.catalog_ids.begin(), hosted.catalog_ids.end());
+            plan.required_hosted_instance_ids = hosted.instance_ids;
+            for (const auto& [key, alias] : hosted.original_presentation_ids) {
+                (void)key; presentation_owners.insert(alias);
+            }
+            if (hosted.ready()) for (const auto& [key, alias] : embedded_assembly_presentation_ids(actual)) {
+                (void)key; render_aliases.insert(alias);
+            }
+        }
         Ids children, ambiguous;
         // Use a structural pair, not a delimiter-composed owner string: IDs
         // may contain ':', and distinct view entities may reuse local view IDs.
@@ -378,31 +397,33 @@ PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
                     const auto decoded = decode_sheet_view_entity(entity);
                     for (const auto& view : decoded.views()) for (const auto& overlay : view.overlays) {
                         source_child_identity(overlay.id);
-                        if (actual.contains(overlay.id) ||
+                        if (actual.contains(overlay.id) || render_aliases.contains(overlay.id) ||
                             !child_owners.emplace(overlay.id, OverlayOwner{id, view.id}).second)
                             ambiguous.insert(overlay.id);
-                        if (owners.contains(overlay.object_id) ||
-                            (overlay.dimension_binding && owners.contains(overlay.dimension_binding->object_id)))
+                        if (presentation_owners.contains(overlay.object_id) ||
+                            (overlay.dimension_binding && presentation_owners.contains(overlay.dimension_binding->object_id)))
                             children.insert(overlay.id);
                     }
-                } else if (entity.type == "assembly_model") {
+                } else if (!complete_hosted && entity.type == "assembly_model") {
                     const auto catalog = AssemblyModel::from_json(entity.properties.at("model"));
                     for (const auto& instance : catalog.instances())
                         if (instance.placement && owners.contains(instance.placement->host_entity_id))
                             diagnostic(plan, id, "hosted assembly instance requires qualified catalog/instance copy and placement replay: " + instance.id);
                 }
             } catch (const std::exception& error) {
-                if (owners.contains(id) || touches(entity.properties, owners) || touches(entity.extensions, owners))
+                if (owners.contains(id) || touches(entity.properties, presentation_owners) || touches(entity.extensions, presentation_owners))
                     diagnostic(plan, id, "affected child/catalog codec is unsupported: " + std::string(error.what()));
             }
         }
         for (const auto& child : children) if (ambiguous.contains(child))
-            diagnostic(plan, child, "copied overlay identity aliases another actual entity or qualified overlay owner");
-        if (owners.size() + children.size() > maximum_replacements) reject("replacement entity/child budget exceeded");
-        Ids affected = owners; affected.insert(children.begin(), children.end());
+            diagnostic(plan, child, "copied overlay identity aliases an actual entity, render alias or qualified overlay owner");
+        if (owners.size() + catalogs.size() + children.size() + plan.required_hosted_instance_ids.size() > maximum_replacements)
+            reject("replacement entity/child/hosted budget exceeded");
+        Ids affected = presentation_owners; affected.insert(children.begin(), children.end());
         for (const auto& [id, entity] : actual) {
             try {
-                const auto remainder = opaque_remainder(entity);
+                const auto remainder = complete_hosted && catalogs.contains(id)
+                    ? structural_hosted_catalog_opaque_remainder(entity) : opaque_remainder(entity);
                 if (touches(remainder.properties, affected) || touches(remainder.extensions, affected))
                     diagnostic(plan, id, "affected reference has no qualified structural replacement codec; original remains preserved");
             } catch (const std::exception& error) {
@@ -412,7 +433,8 @@ PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
         }
         try { admit_structural(actual, owners); }
         catch (const std::exception& error) { diagnostic(plan, registry_id, "source structural admission failed: " + std::string(error.what())); }
-        plan.required_entity_ids.assign(owners.begin(), owners.end());
+        Ids required = owners; required.insert(catalogs.begin(), catalogs.end());
+        plan.required_entity_ids.assign(required.begin(), required.end());
         plan.required_child_ids.assign(children.begin(), children.end());
         std::sort(plan.diagnostics.begin(), plan.diagnostics.end(), [](const auto& a, const auto& b) {
             return std::pair{a.entity_id, a.reason} < std::pair{b.entity_id, b.reason};
@@ -468,7 +490,8 @@ std::optional<PhaseStructuralEditReplacementRequest> phase_structural_demolition
 nlohmann::json encode_phase_structural_replacement_authoring(const PhaseStructuralReplacementAuthoring& authoring) {
     identity(authoring.registry_id); identity(authoring.alternative_id);
     if (authoring.demolition) {
-        if (!authoring.identities.empty() || !authoring.edits.empty() || authoring.seed_object_ids.empty() ||
+        if (authoring.complete_hosted || !authoring.hosted_instance_identities.empty() ||
+            !authoring.identities.empty() || !authoring.edits.empty() || authoring.seed_object_ids.empty() ||
             authoring.seed_object_ids.size() > maximum_replacements)
             reject("demolition authoring requires bounded seeds and no identity or physical edit authority");
         Ids seeds;
@@ -480,10 +503,14 @@ nlohmann::json encode_phase_structural_replacement_authoring(const PhaseStructur
         if (result.dump().size() > maximum_authoring_bytes) reject("demolition authoring byte budget exceeded");
         return result;
     }
+    if (!authoring.complete_hosted && !authoring.hosted_instance_identities.empty())
+        reject("v1 cannot author qualified hosted identities");
     if (authoring.seed_object_ids.empty() || authoring.seed_object_ids.size() > maximum_replacements ||
         authoring.identities.empty() || authoring.identities.size() > maximum_replacements ||
         authoring.edits.empty() || authoring.edits.size() > maximum_replacements)
         reject("authoring requires bounded nonempty seeds, identities and edits");
+    if (authoring.hosted_instance_identities.size() > maximum_replacements - authoring.identities.size())
+        reject("authoring entity/child/hosted identity budget exceeded");
     Ids seeds, fresh, targets;
     for (const auto& id : authoring.seed_object_ids) {
         identity(id); if (!seeds.insert(id).second) reject("duplicate authoring seed");
@@ -491,6 +518,17 @@ nlohmann::json encode_phase_structural_replacement_authoring(const PhaseStructur
     for (const auto& [old_id, new_id] : authoring.identities) {
         source_child_identity(old_id); identity(new_id);
         if (old_id == new_id || !fresh.insert(new_id).second) reject("authoring identities must be fresh and injective");
+    }
+    Json hosted_rows = Json::array();
+    std::size_t hosted_bytes{};
+    for (const auto& [key, new_id] : authoring.hosted_instance_identities) {
+        identity(key.first); source_hosted_instance_identity(key.second); identity(new_id);
+        const auto size = key.first.size() + key.second.size() + new_id.size();
+        if (size > maximum_authoring_bytes - hosted_bytes) reject("qualified hosted identity byte budget exceeded");
+        hosted_bytes += size;
+        if (key.second == new_id || !fresh.insert(new_id).second)
+            reject("qualified hosted identities must be fresh and injective across all mappings");
+        hosted_rows.push_back({{"catalog_id", key.first}, {"instance_id", key.second}, {"proposed_instance_id", new_id}});
     }
     Json rows = Json::array();
     std::size_t bytes{};
@@ -503,8 +541,12 @@ nlohmann::json encode_phase_structural_replacement_authoring(const PhaseStructur
     }
     for (const auto& id : seeds) if (!authoring.identities.contains(id) || !targets.contains(id))
         reject("every authoring seed requires its mapped identity and actual typed edit");
-    Json result{{"version", 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
+    Json result{{"version", authoring.complete_hosted ? 3 : 1}, {"registry_id", authoring.registry_id}, {"alternative_id", authoring.alternative_id},
         {"seed_object_ids", authoring.seed_object_ids}, {"identities", authoring.identities}, {"edits", std::move(rows)}};
+    if (authoring.complete_hosted) {
+        result["complete_hosted"] = true;
+        result["hosted_instance_identities"] = std::move(hosted_rows);
+    }
     Strings budget; budget.node_limit = maximum_authoring_bytes; budget.byte_limit = maximum_authoring_bytes;
     budget.read(result);
     if (result.dump().size() > maximum_authoring_bytes) reject("authoring byte budget exceeded");
@@ -532,17 +574,25 @@ PhaseStructuralReplacementAuthoring decode_phase_structural_replacement_authorin
             if (canonical != value || canonical.dump() != value.dump()) reject("demolition authoring differs from its canonical typed encoding");
             return result;
         }
-        if (!value.is_object() || value.size() != 6 || !value.contains("version") ||
-            !value.at("version").is_number_integer() || value.at("version") != 1 ||
+        const bool hosted = value.is_object() && value.contains("version") &&
+            value.at("version").is_number_integer() && value.at("version") == 3;
+        if (!value.is_object() || value.size() != (hosted ? 8U : 6U) || !value.contains("version") ||
+            !value.at("version").is_number_integer() || (!hosted && value.at("version") != 1) ||
             !value.contains("registry_id") || !value.at("registry_id").is_string() ||
             !value.contains("alternative_id") || !value.at("alternative_id").is_string() ||
             !value.contains("seed_object_ids") || !value.at("seed_object_ids").is_array() ||
             !value.contains("identities") || !value.at("identities").is_object() ||
             !value.contains("edits") || !value.at("edits").is_array())
-            reject("authoring must contain exactly its six v1 fields");
+            reject("authoring must contain exactly its six v1 fields or eight v3 fields");
+        if (hosted && (!value.contains("complete_hosted") || !value.at("complete_hosted").is_boolean() ||
+            value.at("complete_hosted") != true || !value.contains("hosted_instance_identities") ||
+            !value.at("hosted_instance_identities").is_array()))
+            reject("v3 requires complete_hosted:true and a qualified hosted identity array");
         if (value.at("seed_object_ids").size() > maximum_replacements ||
             value.at("identities").size() > maximum_replacements || value.at("edits").size() > maximum_replacements)
             reject("authoring item budget exceeded");
+        if (hosted && value.at("hosted_instance_identities").size() > maximum_replacements - value.at("identities").size())
+            reject("authoring entity/child/hosted identity budget exceeded");
         Strings budget; budget.node_limit = maximum_authoring_bytes; budget.byte_limit = maximum_authoring_bytes;
         budget.read(value);
         if (value.dump().size() > maximum_authoring_bytes) reject("authoring byte budget exceeded");
@@ -551,6 +601,17 @@ PhaseStructuralReplacementAuthoring decode_phase_structural_replacement_authorin
         result.alternative_id = value.at("alternative_id").get<std::string>();
         result.seed_object_ids = value.at("seed_object_ids").get<std::vector<std::string>>();
         result.identities = value.at("identities").get<PhaseStructuralReplacementIdentityMap>();
+        result.complete_hosted = hosted;
+        if (hosted) for (const auto& row : value.at("hosted_instance_identities")) {
+            if (!row.is_object() || row.size() != 3 || !row.contains("catalog_id") || !row.at("catalog_id").is_string() ||
+                !row.contains("instance_id") || !row.at("instance_id").is_string() ||
+                !row.contains("proposed_instance_id") || !row.at("proposed_instance_id").is_string())
+                reject("qualified hosted identity row must contain exactly three string fields");
+            if (!result.hosted_instance_identities.emplace(
+                std::pair{row.at("catalog_id").get<std::string>(), row.at("instance_id").get<std::string>()},
+                row.at("proposed_instance_id").get<std::string>()).second)
+                reject("duplicate qualified hosted source identity");
+        }
         for (const auto& row : value.at("edits")) result.edits.push_back(decode_structural_object_edit_intent(row));
         const auto canonical = encode_phase_structural_replacement_authoring(result);
         if (canonical != value || canonical.dump() != value.dump()) reject("authoring differs from its canonical typed encoding");
@@ -572,26 +633,59 @@ PhaseStructuralReplacementEntities replay_phase_structural_replacement_authoring
                 Ids(authoring.seed_object_ids.begin(), authoring.seed_object_ids.end()))
             reject("replacement seeds differ from actually changed saved baseline membership");
         const auto plan = inspect_phase_structural_replacement_plan(actual, authoring.seed_object_ids,
-            authoring.registry_id, authoring.alternative_id);
+            authoring.registry_id, authoring.alternative_id, authoring.complete_hosted);
         if (!plan.ready()) reject("replacement has unresolved affected dependencies");
         const Ids seeds(plan.seed_object_ids.begin(), plan.seed_object_ids.end());
         Ids expected(plan.required_entity_ids.begin(), plan.required_entity_ids.end());
         expected.insert(plan.required_child_ids.begin(), plan.required_child_ids.end());
         if (authoring.identities.size() != expected.size()) reject("requires complete exact entity/child mapping");
+        const std::set<StructuralHostedInstanceKey> expected_instances(
+            plan.required_hosted_instance_ids.begin(), plan.required_hosted_instance_ids.end());
+        if (authoring.hosted_instance_identities.size() != expected_instances.size())
+            reject("requires complete exact qualified hosted-instance mapping");
         if (plan.required_entity_ids.size() > maximum_entities - actual.size()) reject("final entity budget exceeded");
-        const auto occupied = occupied_strings(actual);
+        auto occupied = occupied_strings(actual);
+        EmbeddedAssemblyPresentationIds original_aliases;
+        if (authoring.complete_hosted) {
+            original_aliases = embedded_assembly_presentation_ids(actual);
+            for (const auto& [key, alias] : original_aliases) { (void)key; occupied.reserve(alias); }
+        }
         Ids fresh;
         for (const auto& [old_id, new_id] : authoring.identities) {
             if (!expected.contains(old_id)) reject("mapping contains an unrequested source identity: " + old_id);
+            if (authoring.complete_hosted && std::any_of(original_aliases.begin(), original_aliases.end(),
+                [&](const auto& entry) { return entry.second == old_id; }))
+                reject("computed render aliases cannot be authored mapping keys");
             identity(new_id);
             if (occupied.values.contains(new_id) || !fresh.insert(new_id).second) reject("fresh identity collision: " + new_id);
+        }
+        for (const auto& [key, new_id] : authoring.hosted_instance_identities) {
+            if (!expected_instances.contains(key)) reject("mapping contains an unrequested qualified hosted identity");
+            identity(new_id);
+            if (occupied.values.contains(new_id) || !fresh.insert(new_id).second)
+                reject("fresh qualified hosted identity collision: " + new_id);
         }
         // Also reserve authored opaque content: proposed tokens cannot silently
         // turn an intent's unrelated key or value into a live entity identity.
         Strings authored;
         for (const auto& edit : authoring.edits) authored.read(encode_structural_object_edit_intent(edit));
         for (const auto& id : fresh) if (authored.values.contains(id)) reject("fresh identity collides with authored content: " + id);
-        auto candidate = actual;
+        std::vector<StructuralObjectEditIntent> baseline_edits, ordinary_edits;
+        StructuralHostedIdentityMap host_ids, catalog_ids;
+        for (const auto& edit : authoring.edits)
+            (seeds.contains(edit.object_id) ? baseline_edits : ordinary_edits).push_back(edit);
+        for (const auto& id : seeds) host_ids.emplace(id, authoring.identities.at(id));
+        for (const auto& id : plan.required_entity_ids) if (!seeds.contains(id))
+            catalog_ids.emplace(id, authoring.identities.at(id));
+        // These independently replay disjoint edit partitions against the same
+        // actual source. An ordinary hosted row may share a retained catalog
+        // with baseline rows; only the latter enter the new private catalog.
+        auto candidate = authoring.complete_hosted
+            ? replay_structural_hosted_component_geometry(actual, ordinary_edits) : actual;
+        StructuralHostedComponentCopyResult hosted_copy;
+        if (authoring.complete_hosted)
+            hosted_copy = copy_structural_hosted_components(actual, baseline_edits, host_ids,
+                catalog_ids, authoring.hosted_instance_identities);
         Ids final_owners;
         for (const auto& edit : authoring.edits) {
             const auto& id = edit.object_id;
@@ -604,6 +698,8 @@ PhaseStructuralReplacementEntities replay_phase_structural_replacement_authoring
                 if (!exact(actual.at(id), physical.at(id))) final_owners.insert(id);
             }
         }
+        for (auto& catalog : hosted_copy.catalogs)
+            if (!candidate.emplace(catalog.id, std::move(catalog)).second) reject("proposed hosted catalog identity already exists");
         const auto model = ModelPhases::from_json(actual.at(plan.registry_id).properties.at("model"));
         auto model_ids = model.entity_ids(); auto alternatives = model.alternatives();
         auto selected = std::find_if(alternatives.begin(), alternatives.end(), [&](const auto& row) { return row.id == plan.alternative_id; });
@@ -611,21 +707,67 @@ PhaseStructuralReplacementEntities replay_phase_structural_replacement_authoring
         for (const auto& id : plan.required_entity_ids) {
             model_ids.push_back(authoring.identities.at(id));
             selected->proposed_ids.push_back(authoring.identities.at(id));
-            selected->demolished_ids.push_back(id);
         }
+        for (const auto& id : plan.seed_object_ids) selected->demolished_ids.push_back(id);
         const auto final_model = ModelPhases::create(model_ids, model.baseline_ids(), alternatives, model.active_alternative());
         auto raw = actual.at(plan.registry_id).properties.at("model");
         for (const auto& id : plan.required_entity_ids) raw.at("entity_ids").push_back(authoring.identities.at(id));
-        for (auto& alternative : raw.at("alternatives")) if (alternative.at("id") == plan.alternative_id)
-            for (const auto& id : plan.required_entity_ids) {
+        for (auto& alternative : raw.at("alternatives")) if (alternative.at("id") == plan.alternative_id) {
+            for (const auto& id : plan.required_entity_ids)
                 alternative.at("proposed_ids").push_back(authoring.identities.at(id));
-                alternative.at("demolished_ids").push_back(id);
-            }
+            for (const auto& id : plan.seed_object_ids) alternative.at("demolished_ids").push_back(id);
+        }
         if (ModelPhases::from_json(raw).to_json() != final_model.to_json()) reject("retained registry differs from typed additive update");
         candidate.at(plan.registry_id).properties.at("model") = std::move(raw);
-        complete_presentation(candidate, actual, seeds, authoring.identities);
+        auto presentation_ids = authoring.identities;
+        Ids presentation_owners = seeds;
+        for (const auto& [original, proposed] : hosted_copy.original_to_proposed_presentation) {
+            if (!presentation_ids.emplace(original, proposed).second)
+                reject("computed render identity overlaps authored source mapping");
+            presentation_owners.insert(original);
+        }
+        complete_presentation(candidate, actual, presentation_owners, presentation_ids);
         admit_structural(candidate, final_owners);
         (void)memberships(candidate);
+        if (authoring.complete_hosted) {
+            (void)occupied_strings(candidate);
+            const auto final_aliases = embedded_assembly_presentation_ids(candidate);
+            for (const auto& [key, alias] : original_aliases)
+                if (final_aliases.at(key) != alias) reject("complete candidate changed a retained original render alias");
+            Ids proposed_aliases;
+            for (const auto& [key, proposed_instance] : authoring.hosted_instance_identities) {
+                const auto& alias = final_aliases.at({catalog_ids.at(key.first), proposed_instance});
+                if (alias != hosted_copy.original_to_proposed_presentation.at(original_aliases.at(key)))
+                    reject("complete candidate changed a proposed render alias after presentation replay");
+                if (occupied.values.contains(alias) || authored.values.contains(alias) || fresh.contains(alias) ||
+                    !proposed_aliases.insert(alias).second)
+                    reject("complete candidate render alias collision");
+                const auto& old_rows = actual.at(key.first).properties.at("model").at("instances");
+                const auto& retained_rows = candidate.at(key.first).properties.at("model").at("instances");
+                const auto row_with_id = [&](const auto& rows) {
+                    return std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.at("id") == key.second; });
+                };
+                const auto old_row = row_with_id(old_rows), retained_row = row_with_id(retained_rows);
+                if (old_row == old_rows.end() || retained_row == retained_rows.end() ||
+                    *old_row != *retained_row || old_row->dump() != retained_row->dump())
+                    reject("replacement changed a retained baseline hosted row");
+            }
+            const auto hosted_final = inspect_structural_hosted_components(candidate,
+                {final_owners.begin(), final_owners.end()});
+            if (!hosted_final.ready()) reject("complete candidate hosted/native admission failed");
+            std::vector<std::string> proposed_hosts;
+            for (const auto& [id, proposed] : host_ids) { (void)id; proposed_hosts.push_back(proposed); }
+            const auto copied_final = inspect_structural_hosted_components(candidate, proposed_hosts);
+            if (!copied_final.ready()) reject("complete candidate copied hosted admission failed");
+            Ids expected_catalogs;
+            std::set<StructuralHostedInstanceKey> proposed_instances;
+            for (const auto& [id, proposed] : catalog_ids) { (void)id; expected_catalogs.insert(proposed); }
+            for (const auto& [key, proposed] : authoring.hosted_instance_identities)
+                proposed_instances.emplace(catalog_ids.at(key.first), proposed);
+            if (Ids(copied_final.catalog_ids.begin(), copied_final.catalog_ids.end()) != expected_catalogs ||
+                std::set<StructuralHostedInstanceKey>(copied_final.instance_ids.begin(), copied_final.instance_ids.end()) != proposed_instances)
+                reject("complete candidate copied roster differs from actual-source authority");
+        }
         for (const auto& id : seeds) if (!exact(candidate.at(id), actual.at(id))) reject("replacement changed a retained baseline owner");
         return candidate;
     } catch (const Json::exception& error) { reject(std::string("malformed typed replay: ") + error.what()); }

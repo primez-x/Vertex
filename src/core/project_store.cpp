@@ -106,7 +106,8 @@ bool has_architectural_appraisal_v57_semantics(const Entity& entity) {
         if (model != entity.properties.end() && model->is_object() &&
             (model->value("schema", nlohmann::json()) == "sketch.assemblies.v4" ||
              model->value("schema", nlohmann::json()) == "sketch.assemblies.v5" ||
-             model->value("schema", nlohmann::json()) == "sketch.assemblies.v6")) return true;
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v6" ||
+             model->value("schema", nlohmann::json()) == "sketch.assemblies.v7")) return true;
     }
     if (entity.type == "roof_join" &&
         (entity.properties.value("version", nlohmann::json()) == 2 ||
@@ -471,7 +472,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 return false;
             };
             const auto profile_intent=[&](const nlohmann::json& intent)->std::uint32_t {
-                if (intent.is_object() && intent.value("version",0)==9) return 123U;
+                if (intent.is_object() && intent.value("version",0)==9) {
+                    const auto structural=intent.find("structural_replacement");
+                    if (structural!=intent.end() && structural->is_object() && structural->value("version",0)==3)
+                        return 124U;
+                    return 123U;
+                }
                 if (intent.is_object() && intent.value("version", 0) == 4) {
                     const auto roof = intent.find("roof_replacement");
                     if (roof != intent.end() && has_uniform_roof_edits(*roof)) return 121U;
@@ -705,6 +711,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             (void)id;
             if (entity.type == "assembly_model" && entity.properties.is_object()) {
                 const auto model = entity.properties.find("model");
+                if (model != entity.properties.end() && model->is_object() &&
+                    model->value("schema", nlohmann::json()) == "sketch.assemblies.v7")
+                    required = std::max(required, 124U);
                 if (model != entity.properties.end() && model->is_object() &&
                     model->value("schema", nlohmann::json()) == "sketch.assemblies.v6")
                     required = std::max(required, 115U);
@@ -2377,6 +2386,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 124 &&
          sqlite3_column_int(user_version.get(), 0) != 123 &&
          sqlite3_column_int(user_version.get(), 0) != 122 &&
          sqlite3_column_int(user_version.get(), 0) != 121 &&
@@ -2955,6 +2965,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     ProjectStoreAccess::publish_history(snapshot, std::move(history));
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=124)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 124 for proposed structural hosted components");
         if (required_format>=123)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 123 for source-derived structural alternative edits");
         if (required_format>=122)

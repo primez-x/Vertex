@@ -2751,6 +2751,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool roof_mixed_asset_reservation=false;
     bool wall_presentation_asset_reservation=false;
     bool structural_asset_reservation=false;
+    bool structural_hosted_alias_reservation=false;
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
@@ -2776,8 +2777,15 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             const auto replacement=decode_phase_structural_replacement_authoring(intent.structural_replacement);
             complete_envelope_reservation=true;
             structural_asset_reservation=true;
+            structural_hosted_alias_reservation=structural_hosted_alias_reservation || replacement.complete_hosted;
             for (const auto& [original,id]:replacement.identities) {
                 (void)original;fresh.insert(id);nested_fresh.insert(id);
+            }
+            for (const auto& [original,id]:replacement.hosted_instance_identities) {
+                if (!fresh.insert(id).second)
+                    throw std::invalid_argument("A proposed structural component overlaps another fresh identity: "+id);
+                nested_fresh.insert(id);
+                proposed_hosted_instances.emplace(replacement.identities.at(original.first),id);
             }
         }
         if (!intent.roof_replacement.is_null()) {
@@ -2947,8 +2955,17 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                             if (fresh.contains(upsert.opening_id))
                                 throw std::invalid_argument("Roof opening identity was already reserved by retained intent: "+upsert.opening_id);
                 }
-                if (!intent.structural_replacement.is_null())
-                    require_unused(decode_phase_structural_replacement_authoring(intent.structural_replacement).identities);
+                if (!intent.structural_replacement.is_null()) {
+                    const auto structural=decode_phase_structural_replacement_authoring(intent.structural_replacement);
+                    require_unused(structural.identities);
+                    require_unused(structural.hosted_instance_identities);
+                }
+            }
+        if (structural_hosted_alias_reservation)
+            for (const auto& [qualified,alias]:embedded_assembly_presentation_ids(record.entities)) {
+                (void)qualified;
+                if (fresh.contains(alias))
+                    throw std::invalid_argument("A proposed structural identity was reserved by a historical component presentation: "+alias);
             }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);

@@ -7,7 +7,6 @@
 #include <BRep_Builder.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS_Compound.hxx>
-#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_GTrsf.hxx>
@@ -34,20 +33,20 @@ TopoDS_Shape transform_assembly_shape(const TopoDS_Shape& source,const AssemblyT
     try {
         if(source.IsNull() || !BRepCheck_Analyzer(source).IsValid())
             throw std::invalid_argument("Assembly solid transform requires a valid source shape");
+        const auto [c,s]=assembly_rotation_components(placement.rotation_radians);
         TopoDS_Shape result;
         if(placement.vertical_scale==1) {
             gp_Trsf mirror, scale, rotation, translation;
             if(placement.mirrored_y)
                 mirror.SetMirror(gp_Ax2(gp_Pnt(0,0,0),gp_Dir(0,1,0)));
             scale.SetScale(gp_Pnt(0,0,0),placement.scale);
-            rotation.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,0,1)),placement.rotation_radians);
+            rotation.SetValues(c,-s,0,0,s,c,0,0,0,0,1,0);
             translation.SetTranslation(gp_Vec(offset.x,offset.y,offset.z));
             // OCCT multiplication applies the rightmost transform first.
             BRepBuilderAPI_Transform transformed(source,translation*rotation*scale*mirror,true);
             if(!transformed.IsDone())throw std::invalid_argument("Assembly solid transform failed");
             result=transformed.Shape();
         } else {
-            const auto c=std::cos(placement.rotation_radians),s=std::sin(placement.rotation_radians);
             const auto parity=placement.mirrored_y ? -1.0:1.0;
             const gp_Mat linear(placement.scale*c,-placement.scale*s*parity,0,
                 placement.scale*s,placement.scale*c*parity,0,0,0,scale_z);

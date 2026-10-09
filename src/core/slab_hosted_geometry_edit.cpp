@@ -57,7 +57,8 @@ bool affected_catalog(const Json& model, const Ids& owners) {
     const bool supported = schema && schema->is_string() &&
         (*schema == "sketch.assemblies.v1" || *schema == "sketch.assemblies.v2" ||
          *schema == "sketch.assemblies.v3" || *schema == "sketch.assemblies.v4" ||
-         *schema == "sketch.assemblies.v5" || *schema == "sketch.assemblies.v6");
+         *schema == "sketch.assemblies.v5" || *schema == "sketch.assemblies.v6" ||
+         *schema == "sketch.assemblies.v7");
     // Unknown dialects may rename or relocate binding slots, including keyed
     // inventories. Opaque actual-owner references cannot acquire motion rules.
     if (!supported && contains_owner(model,owners)) return true;

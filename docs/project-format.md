@@ -1,4 +1,50 @@
-# Vertex project formats v1 through v123
+# Vertex project formats v1 through v124
+
+## Source-derived structural hosted components (v124)
+
+Native format 124 and JSON/assets extraction version 122 retain structural
+replacement leaf three inside active-design authoring nine. Leaf three has the
+six leaf-one keys plus `complete_hosted:true` and `hosted_instance_identities`.
+The latter is an ordered array of exact `{catalog_id, instance_id,
+proposed_instance_id}` rows. Catalog identities are document owners; embedded
+instance identities remain catalog-qualified. Computed canvas identities never
+become authored mapping keys. Leaf one and registry-only demolition leaf two
+retain their original closed meanings.
+
+Actual baseline host edits derive fresh physical objects and private catalogs
+containing only their affected embedded instances. Original definitions,
+materials, type profiles, instance overrides, ordering and metadata remain
+retained. Proposed catalogs enroll in the saved alternative; only original
+physical seeds become demolished. Ordinary hosts sharing the operation retain
+their IDs and receive their own independently replayed placement changes.
+Saved views, bound overlays, appearances and model annotation placements append
+rows for proposed physical owners and the computed component identities.
+The complete final map recomputes aliases and preserves every original alias.
+Current and retained history, including assets, local instance IDs and escaped
+presentation aliases, reserve fresh identities.
+
+Physical authoring uses the actual host's source-frame operation G. With Site
+placement F, type-owned world profiles follow `(F*G*F^-1)*A`; legacy geometry
+derived from a moving source-frame host follows `G*A*G^-1`, matching its
+existing native publication frame. Captured levels supply the native host
+datum once. Exact cardinal rotations share the same point and native-solid
+evaluation; adjacent arbitrary angles are not snapped and saved angles are not
+rewritten.
+
+The new closed `sketch.assemblies.v7` catalog supports retained row-local
+envelopes. A type has both `profiles` and `parts` or neither (implicit empty
+arrays); an instance has both `root_transform` and `nested_overrides` or neither
+(implicit null and empty array). Each placement independently has two or three
+translation coordinates and optional `vertical_scale` (implicit one).
+Transforming selected placements changes only their understood fields. A
+necessary XYZ promotion changes the catalog schema without adding defaults to
+unaffected rows or original type definitions. Dialects one through six keep
+their original required fields and meanings. Current and historical v7
+catalogs require reader 124 even without a retained phase proof.
+
+Independent integrated source review approved, including actual Site frames
+and small-delta precision at distant origins. Compilation, interactions, geometry and
+storage remain unverified under the implementation-only instruction.
 
 ## Source-derived structural alternative edits (v123)
 
@@ -32,9 +78,10 @@ Supported hosted catalogs retain their records and follow actual host visibility
 
 Current authoring refuses a same-ID active-baseline column/beam mutation or
 removal. Historical ordinary records retain their original meanings. Unsupported
-affected opaque references and hosted component replacement remain separate
-gaps. Integrated source review is pending; no build, test, runtime or storage
-round trip was performed.
+affected opaque references remain separate gaps; hosted component replacement
+uses opt-in leaf three above. Independent integrated source review approved the
+leaf-one/two source integration. No build, test, runtime or storage round trip
+was performed.
 
 ## Architectural imperial input spelling (v122)
 

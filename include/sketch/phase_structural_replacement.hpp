@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sketch {
@@ -27,13 +28,14 @@ struct PhaseStructuralReplacementPlan {
     std::vector<std::string> required_entity_ids;
     std::vector<std::string> required_child_ids;
     std::vector<PhaseStructuralReplacementDiagnostic> diagnostics;
+    std::vector<std::pair<std::string, std::string>> required_hosted_instance_ids;
     [[nodiscard]] bool ready() const noexcept;
     bool operator==(const PhaseStructuralReplacementPlan&) const = default;
 };
 
 [[nodiscard]] PhaseStructuralReplacementPlan inspect_phase_structural_replacement_plan(
     const PhaseStructuralReplacementEntities& actual, const std::vector<std::string>& seed_object_ids,
-    const std::string& registry_id, const std::string& alternative_id);
+    const std::string& registry_id, const std::string& alternative_id, bool complete_hosted = false);
 
 struct PhaseStructuralReplacementAuthoring {
     std::string registry_id;
@@ -42,6 +44,8 @@ struct PhaseStructuralReplacementAuthoring {
     PhaseStructuralReplacementIdentityMap identities;
     std::vector<StructuralObjectEditIntent> edits;
     bool demolition{};
+    bool complete_hosted{};
+    std::map<std::pair<std::string, std::string>, std::string> hosted_instance_identities;
 };
 
 // Closed v1: version, registry_id, alternative_id, seed_object_ids, identities,
@@ -51,6 +55,10 @@ struct PhaseStructuralReplacementAuthoring {
 // Closed v2: version, registry_id, alternative_id, seed_object_ids,
 // demolition:true. Identity and edit collections must be empty. Only the saved
 // alternative's demolition roster changes; all physical/presentation rows stay.
+// Closed v3: the six v1 fields, complete_hosted:true and an exact qualified
+// hosted_instance_identities array of catalog_id, instance_id and
+// proposed_instance_id rows. Catalogs use identities; render aliases are
+// computed from actual source and the complete candidate, never authored keys.
 [[nodiscard]] nlohmann::json encode_phase_structural_replacement_authoring(
     const PhaseStructuralReplacementAuthoring& authoring);
 [[nodiscard]] PhaseStructuralReplacementAuthoring decode_phase_structural_replacement_authoring(
