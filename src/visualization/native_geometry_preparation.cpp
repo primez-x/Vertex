@@ -10,6 +10,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/opening_host_geometry.hpp"
 #include "sketch/terrain_surface.hpp"
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
@@ -841,6 +842,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         append_unique(errors, "assembly document expansion: unknown failure");
     }
 
+    std::size_t opening_native_work{};
+    std::map<std::string,TopoDS_Shape,std::less<>> opening_host_shapes;
     const auto make_assembly_host_shape = [&](const std::string& host_id) -> TopoDS_Shape {
         const auto host = entities.find(host_id);
         if (host == entities.end()) {
@@ -848,6 +851,13 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         }
         const auto& source = host->second;
         const auto geometry_entity = effective_geometry_entity(snapshot, source);
+        if (geometry_entity.type == "opening") {
+            const auto found=opening_host_shapes.find(host_id);
+            if (found!=opening_host_shapes.end()) return found->second;
+            auto shape=make_document_opening_host_shape(snapshot,host_id,&opening_native_work);
+            opening_host_shapes.emplace(host_id,shape);
+            return shape;
+        }
         if (can_recognize_building_entity_type(geometry_entity.type)) {
             return make_building_shape(decode_building_entity(geometry_entity), entities);
         }
@@ -930,6 +940,11 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 content.push_back('\0');
                 append_entity_content(content, geometry_entity);
                 append_building_dependencies(content, snapshot, geometry_entity);
+                if (geometry_entity.type=="opening") {
+                    const auto wall_id=geometry_entity.properties.at("wall_id").get<std::string>();
+                    const auto resolved_wall=effective_geometry_entity(snapshot,entities.at(wall_id));
+                    content.append(entity_content(resolved_wall,openings_by_wall[wall_id]));
+                }
                 if (geometry_entity.type == "wall") {
                     for (const auto* opening : openings_by_wall[host->first]) {
                         if (opening != nullptr) append_entity_content(content, *opening);

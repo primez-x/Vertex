@@ -45,6 +45,9 @@
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/phase_opening_demolition.hpp"
 #include "sketch/phase_wall_demolition.hpp"
+#include "sketch/hosted_opening_removal.hpp"
+#include "sketch/opening_host_geometry.hpp"
+#include "sketch/wall_join_removal.hpp"
 #include "sketch/phase_roof_replacement.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_slab_demolition.hpp"
@@ -25047,7 +25050,8 @@ public:
 
     static TopoDS_Shape makeAssemblyHostShape(const DocumentSnapshot& snapshot,
         const std::string& host_id,
-        const std::map<std::string,AssemblyExpansion,std::less<>>* independent_assemblies=nullptr) {
+        const std::map<std::string,AssemblyExpansion,std::less<>>* independent_assemblies=nullptr,
+        std::size_t* opening_native_work=nullptr) {
         const auto& source=snapshot.entities().at(host_id);
         const auto entity=source.type=="wall" || source.type=="slab" || source.type=="room" ||
             can_recognize_building_entity_type(source.type)
@@ -25058,6 +25062,7 @@ public:
             return make_assembly_geometry(expand_document_assembly_instance(entity,snapshot.entities(),budget)).shape;
         }
         if (entity.type=="roof_join") return document_roof_join_shape(snapshot,entity);
+        if (entity.type=="opening") return make_document_opening_host_shape(snapshot,host_id,opening_native_work);
         if (can_recognize_building_entity_type(entity.type))
             return make_building_shape(decode_building_entity(entity),snapshot.entities());
         std::string error;
@@ -25444,6 +25449,15 @@ public:
                 }
                 return candidate_assembly_expansions.at(id);
             };
+            std::size_t candidate_opening_native_work{};
+            std::map<std::string,TopoDS_Shape,std::less<>> candidate_host_shapes;
+            const auto candidate_host_shape=[&](const std::string& host_id) {
+                const auto cached=candidate_host_shapes.find(host_id);
+                if (cached!=candidate_host_shapes.end()) return cached->second;
+                auto shape=makeAssemblyHostShape(candidate_snapshot,host_id,nullptr,&candidate_opening_native_work);
+                candidate_host_shapes.emplace(host_id,shape);
+                return shape;
+            };
             for (const auto& [item_id, item] : projection_sources) {
                 (void)item_id;
                 const bool typed_annotation=site_input && site_input->move_frame &&
@@ -25528,7 +25542,7 @@ public:
                         // projected, hidden or absent from this presentation.
                         if (view_context && !analytical_plan_context(BuildingViewKind::plan,*view_context)) {
                             const auto shape=transformAssemblyHostShape(
-                                makeAssemblyHostShape(candidate_snapshot,placement.host_entity_id),placement);
+                                candidate_host_shape(placement.host_entity_id),placement);
                             proposed.segments=project_architectural_view_shape(shape,
                                 BuildingViewKind::plan,*view_context).value_or(Boundary{});
                         } else {
@@ -31442,6 +31456,67 @@ public:
             });
     }
 
+    bool hasOnlyHostedOpeningSelection(const DocumentSnapshot& source) const {
+        return !m_selected_ids.isEmpty() && std::all_of(m_selected_ids.begin(),m_selected_ids.end(),[&](const auto& id) {
+            const auto found=source.entities().find(id.toStdString());
+            return found!=source.entities().end() && found->second.type=="opening";
+        });
+    }
+
+    bool removeSelectedHostedOpenings(const DocumentSnapshot& source,bool cut) {
+        const auto authority=captureSourceEditAuthority(source);
+        if (authority.selection.isEmpty() || !authority.selection.contains(authority.context.selected_id))
+            throw std::invalid_argument("The selected opening changed. Select the openings again.");
+        std::vector<std::string> opening_ids;
+        std::set<std::string> unique;
+        for (const auto& id:authority.selection) {
+            const auto found=source.entities().find(id.toStdString());
+            if (found==source.entities().end() || found->second.type!="opening" ||
+                annotationActionTarget(source,id,false) || !unique.insert(found->first).second)
+                throw std::invalid_argument("Select unambiguous hosted openings to remove together.");
+            opening_ids.push_back(found->first);
+        }
+        const bool site=siteCanvas(m_architecturalCanvas);
+        const auto generation=m_site_publication_generation;
+        const auto require_current=[&] {
+            if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
+                m_text_placement_context || m_plan_label_context || m_armed_area_class)
+                throw std::invalid_argument("The opening removal, project, selection or workspace changed. Select the openings again.");
+            if (site) {
+                requireSitePublicationCurrent();
+                if (generation!=m_site_publication_generation || !m_site_publication_source ||
+                    fullSnapshotDigest(*m_site_publication_source)!=authority.source_digest)
+                    throw std::invalid_argument("The displayed Site Plan changed during opening removal.");
+            }
+        };
+        require_current();
+        const auto graph=clipboardSelectionGraph(source,true,&authority.selection);
+        for (const auto& id:opening_ids)
+            if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id && entity.type=="opening";}))
+                throw std::invalid_argument("The selected opening has an ambiguous drawing identity.");
+        QString clipboard_text;
+        QClipboard* clipboard=nullptr;
+        if (cut) {
+            const auto encoded=clipboardSelectionPayload(source);
+            clipboard_text=QString::fromUtf8(encoded.data(),static_cast<int>(encoded.size()));
+            clipboard=QGuiApplication::clipboard();
+            if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+        }
+        require_current();
+        std::optional<Command> command;
+        if (const auto demolition=phase_opening_demolition_command(source,opening_ids))
+            command=Command{*demolition};
+        else if (const auto removal=prepare_hosted_opening_removal(source,opening_ids,
+                cut ? "Cut hosted openings and attached objects" : "Delete hosted openings and attached objects"))
+            command=Command{*removal};
+        if (!command) throw std::invalid_argument("The selected openings cannot be removed from this source.");
+        require_current();
+        if (!applyAuthoredCommand(*command)) return false;
+        if (cut) clipboard->setText(clipboard_text,QClipboard::Clipboard);
+        m_selected_id.clear();m_selected_ids.clear();clearError();refresh();
+        return true;
+    }
+
     bool removeSelectedPhysicalWalls(const DocumentSnapshot& source, bool cut) {
         const auto authority = captureSourceEditAuthority(source);
         if (authority.selection.isEmpty() ||
@@ -31498,9 +31573,30 @@ public:
             final_command=reviewRemodelingRoomChanges(source,*demolition,
                 PhysicalWallPhaseSelection{registry.id,phases.active_alternative()},authority,owner);
         } else {
+            const auto join_plan=inspect_physical_wall_join_removal(source.entities(),wall_ids);
+            if (!join_plan.ready()) {
+                std::string reasons;
+                for (const auto& diagnostic:join_plan.diagnostics) if (diagnostic.blocking) {
+                    if (!reasons.empty()) reasons+='\n';
+                    reasons+=diagnostic.entity_id+": "+diagnostic.reason;
+                }
+                throw std::invalid_argument(reasons.empty() ? "The selected walls have an unresolved join dependency." : reasons);
+            }
+            PhysicalWallJoinRemovalAdditionalIdentities additional;
+            if (!join_plan.additional_identity_counts.empty()) {
+                auto occupied=retainedSlabIdentityNames(source,true);
+                for (const auto& [original,count]:join_plan.additional_identity_counts) {
+                    auto& copies=additional[original];
+                    for (std::size_t index=0;index<count;++index) {
+                        auto proposed=new_id("wall_join");
+                        while (!occupied.insert(proposed).second) proposed=new_id("wall_join");
+                        copies.push_back(std::move(proposed));
+                    }
+                }
+            }
             auto deletion = wall_ids.size() == 1
-                ? prepare_physical_wall_deletion(source, wall_ids.front(),true)
-                : prepare_physical_walls_deletion(source, wall_ids,true);
+                ? prepare_physical_wall_deletion(source, wall_ids.front(),true,true,additional)
+                : prepare_physical_walls_deletion(source, wall_ids,true,true,additional);
             if (cut) deletion.message = "Cut walls and attached objects";
             const Command command = std::move(deletion);
             const auto candidate = preview_physical_wall_room_review_geometry(source, command);
@@ -31527,6 +31623,7 @@ public:
         try {
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,true);
             const auto authority = captureSourceEditAuthority(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
@@ -32059,6 +32156,7 @@ public:
         try {
             const auto source = authoringSnapshot();
             if (!source.is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (hasOnlyHostedOpeningSelection(source)) return removeSelectedHostedOpenings(source,false);
             const auto authority = captureSourceEditAuthority(source);
             std::vector<std::string> selected_ids;
             selected_ids.reserve(m_selected_ids.size());
@@ -45092,16 +45190,19 @@ private:
         const auto source = authoringSnapshot();
         const auto scope = constraint_phase_scope(source.entities());
         std::set<std::string, std::less<>> shared_hosts;
+        std::set<std::string, std::less<>> proposed_openings;
         for (const auto& registry : scope.registries) if (registry.alternative_id) {
             const auto model = ModelPhases::from_json(source.entities().at(registry.registry_id).properties.at("model"));
             for (const auto& id : model.baseline_ids())
                 if (source.entities().at(id).type == "wall" && !scope.inactive_owner_ids.contains(id))
                     shared_hosts.insert(id);
+            for (const auto& [id,state]:registry.states)
+                if (state==ModelPhase::proposed && source.entities().at(id).type=="opening") proposed_openings.insert(id);
         }
         const auto shared = [&](const std::string& id) {
             const auto found = source.entities().find(id);
             if (found == source.entities().end() || found->second.type != "opening" ||
-                scope.inactive_owner_ids.contains(id)) return false;
+                scope.inactive_owner_ids.contains(id) || proposed_openings.contains(id)) return false;
             const auto host = found->second.properties.find("wall_id");
             return host != found->second.properties.end() && host->is_string() &&
                 shared_hosts.contains(host->get_ref<const std::string&>());
@@ -52824,8 +52925,14 @@ private:
         } catch (const std::exception& error) {
             append_geometry_error(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
         }
+        std::size_t opening_native_work{};
+        std::map<std::string,TopoDS_Shape,std::less<>> assembly_host_shapes;
         const auto make_assembly_host_shape = [&](const std::string& host_id) {
-            return makeAssemblyHostShape(snapshot,host_id,&independent_assemblies);
+            const auto found=assembly_host_shapes.find(host_id);
+            if (found!=assembly_host_shapes.end()) return found->second;
+            auto shape=makeAssemblyHostShape(snapshot,host_id,&independent_assemblies,&opening_native_work);
+            assembly_host_shapes.emplace(host_id,shape);
+            return shape;
         };
         const auto transform_assembly_shape = [](const TopoDS_Shape& shape, const AssemblyPlacement& placement) {
             return transformAssemblyHostShape(shape,placement);

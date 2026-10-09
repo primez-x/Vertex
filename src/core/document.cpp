@@ -59,6 +59,7 @@
 #include "sketch/slab_layer_stack_edit.hpp"
 #include "sketch/wall_layer_stack_edit.hpp"
 #include "sketch/phase_wall_replacement_command.hpp"
+#include "sketch/wall_join_removal.hpp"
 #endif
 
 #ifdef _WIN32
@@ -2452,7 +2453,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
         throw std::invalid_argument("Room review requires one bounded direct physical-wall proof");
     const auto version=proof.at("version").get<int>();
     const bool grouped_deletion=proof.at("kind")=="physical_wall_deletion";
-    if ((grouped_deletion && version!=31 && version!=35) || (!grouped_deletion &&
+    if ((grouped_deletion && version!=31 && version!=35 && version!=36) || (!grouped_deletion &&
         version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=23 && version!=34 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
@@ -2800,6 +2801,22 @@ static void validate_retained_phase_constraint_authoring_source(const DocumentSn
 static void validate_phase_room_review_lifetime(const nlohmann::json& encoded,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records);
 #endif
+static bool has_complete_wall_join_deletion_proof(const ApplyBoundaryConstraintChanges& command) {
+    const auto& proof=command.room_review_geometry_proof;
+    return command.room_review_geometry_completion && proof.is_object() &&
+        proof.contains("kind") && proof.at("kind")=="physical_wall_deletion" &&
+        proof.contains("version") && proof.at("version").is_number_integer() && proof.at("version")==36;
+}
+static PhysicalWallJoinRemovalAdditionalIdentities complete_wall_join_deletion_destinations(
+    const ApplyBoundaryConstraintChanges& command) {
+    if (!has_complete_wall_join_deletion_proof(command)) return {};
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    (void)decode_physical_wall_deletion_review_proof(command.room_review_geometry_proof);
+#else
+    throw std::invalid_argument("Complete wall-join removal review is unavailable");
+#endif
+    return command.room_review_geometry_proof.at("additional_join_identities").get<PhysicalWallJoinRemovalAdditionalIdentities>();
+}
 static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records,
@@ -2813,11 +2830,32 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     bool wall_presentation_asset_reservation=false;
     bool structural_asset_reservation=false;
     bool structural_hosted_alias_reservation=false;
+    const bool wall_join_asset_reservation=has_complete_wall_join_deletion_proof(command);
     std::set<std::pair<std::string,std::string>> proposed_hosted_instances;
     std::set<std::string,std::less<>> ordinary_roof_destinations;
     for (const auto& [id,entity] : candidate) {
         (void)entity;
         if (!source.contains(id)) fresh.insert(id);
+    }
+    if (wall_join_asset_reservation) {
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+        (void)decode_physical_wall_deletion_review_proof(command.room_review_geometry_proof);
+#else
+        throw std::invalid_argument("Complete wall-join removal review is unavailable");
+#endif
+        complete_envelope_reservation=true;
+        structural_hosted_alias_reservation=true;
+        PhysicalWallJoinRemovalAdditionalIdentities join_additional;
+        for (const auto& [original,ids]:command.room_review_geometry_proof.at("additional_join_identities").items()) {
+            for (const auto& encoded:ids) {
+                const auto id=encoded.get<std::string>();
+                if (!nested_fresh.insert(id).second)
+                    throw std::invalid_argument("A wall-join split repeats a declared destination: "+id);
+                fresh.insert(id);
+                join_additional[original].push_back(id);
+            }
+        }
+        validate_physical_wall_join_removal_identity_lifetime(source,history,preceding_records,join_additional);
     }
     for (const auto& encoded:phase_constraint_authoring_proofs(command)) {
         const auto root_intent=decode_phase_constraint_authoring_intent(encoded);
@@ -3012,7 +3050,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     for (std::size_t index=0;index<preceding_records;++index) {
         const auto& record=history.at(index);
         if (wall_stack_asset_reservation || hosted_slab_asset_reservation || roof_mixed_asset_reservation ||
-            wall_presentation_asset_reservation || structural_asset_reservation)
+            wall_presentation_asset_reservation || structural_asset_reservation || wall_join_asset_reservation)
             for (const auto& [id,asset]:record.assets) {
                 (void)asset;
                 if (fresh.contains(id))
@@ -3021,6 +3059,15 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
         // A deliberately omitted fresh relationship copy is still a declared
         // identity in the recorded semantic operation. Undo cannot release it.
         if (record.boundary_constraint_changes) {
+            if (has_complete_wall_join_deletion_proof(*record.boundary_constraint_changes))
+                for (const auto& [original,ids]:record.boundary_constraint_changes->room_review_geometry_proof.at("additional_join_identities").items()) {
+                    (void)original;
+                    for (const auto& encoded:ids) {
+                        const auto id=encoded.get<std::string>();
+                        if (fresh.contains(id))
+                            throw std::invalid_argument("Fresh identity was already reserved by retained wall-join split intent: "+id);
+                    }
+                }
             for (const auto& encoded:phase_constraint_authoring_proofs(*record.boundary_constraint_changes)) {
                 const auto root=decode_phase_constraint_authoring_intent(encoded);
                 if (root.coordinated_demolition.is_null()) continue;
@@ -3093,7 +3140,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
             }
         for (const auto& [id,entity] : history.at(index).entities) {
             if (fresh.contains(id)) throw std::invalid_argument("Active design identity was already used in retained history: "+id);
-            if ((hosted_slab_asset_reservation || roof_mixed_asset_reservation || structural_asset_reservation) &&
+            if ((hosted_slab_asset_reservation || roof_mixed_asset_reservation || structural_asset_reservation || wall_join_asset_reservation) &&
                 entity.type=="assembly_model" && entity.properties.is_object()) {
                 const auto model=entity.properties.find("model");
                 if (model!=entity.properties.end() && model->is_object()) {
@@ -3107,7 +3154,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
                             }
                 }
             }
-            if (!nested_fresh.empty()) {
+            if (!nested_fresh.empty() && !wall_join_asset_reservation) {
                 if (complete_envelope_reservation && nested_fresh.contains(entity.type))
                     throw std::invalid_argument("Proposed identity aliases a retained entity type: "+entity.type);
                 // Openings, assembly layers and view overlays own identities
@@ -7280,7 +7327,7 @@ Command command_from_json(const nlohmann::json& value,
                 (void)command_to_json(Command{result});
                 return result;
             }
-            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35) {
+            if (value.at("version")==18 || value.at("version")==24 || value.at("version")==25 || value.at("version")==26 || value.at("version")==27 || value.at("version")==28 || value.at("version")==29 || value.at("version")==30 || value.at("version")==31 || value.at("version")==32 || value.at("version")==35 || value.at("version")==36) {
                 const bool geometry=value.at("version")!=18 && value.at("version")!=29;
                 const bool batch=value.at("version")==27;
                 if (batch)
@@ -8164,11 +8211,15 @@ Revision Document::apply(const Command& command) {
                 }
 #endif
                 next.boundary_constraint_changes = typed_command;
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                if (has_complete_wall_join_deletion_proof(typed_command))
+                    validate_physical_wall_join_removal_identity_lifetime(snapshot(),complete_wall_join_deletion_destinations(typed_command));
+#endif
                 next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, current.assets, typed_command,false,source_active_policy);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
                 next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                if (!phase_constraint_authoring_proofs(typed_command).empty())
+                if (!phase_constraint_authoring_proofs(typed_command).empty() || has_complete_wall_join_deletion_proof(typed_command))
                     validate_phase_constraint_fresh_lifetime(current.entities,next.entities,history_,history_.size(),typed_command);
 #endif
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
@@ -8656,9 +8707,13 @@ Document Document::restore(DocumentSnapshot snapshot) {
                         }
                     }
 #endif
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    if (has_complete_wall_join_deletion_proof(proof))
+                        validate_physical_wall_join_removal_identity_lifetime(previous.entities,snapshot.history(),index,complete_wall_join_deletion_destinations(proof));
+#endif
                     expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets, proof, true,active_policies.at(index-1));
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                    if (!phase_constraint_authoring_proofs(proof).empty())
+                    if (!phase_constraint_authoring_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
                         validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);
 #endif
                     expected.assets = boundary_constraint_assets(previous.assets, proof);

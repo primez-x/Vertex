@@ -1,6 +1,7 @@
 #pragma once
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/wall_join_removal.hpp"
 
 namespace sketch {
 enum class PhysicalWallRoomRetainedDisposition { retain, retire };
@@ -102,16 +103,27 @@ using PreparedPhysicalWallRoomReviewAfterCurve=PreparedPhysicalWallRoomReviewAft
 // Opt-in complete removal includes actual semantic openings and qualified
 // hosted catalog rows. Only a closed v35 proof grants its additional replay
 // authority; historical raw singleton/v31 consequences retain their meaning.
+// Join completion additionally requires hosted completion and exact explicit
+// fresh split-join slots. Only closed v36 enables those source consequences.
 [[nodiscard]] ApplyEntityChanges prepare_physical_wall_deletion(
-    const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal=false);
+    const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal=false,
+    bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
 // Wall-only selections are sorted; duplicates and more than 128 roots refuse.
 // Legacy singleton commands retain their raw-v1 proof and message. Legacy
 // groups require explicit v31 qualification; complete consequences use v35.
 [[nodiscard]] ApplyEntityChanges prepare_physical_walls_deletion(
-    const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal=false);
+    const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal=false,
+    bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
+// Complete immutable actual-map replay for a larger source-derived removal
+// composition. Includes hosted and join consequences. The enclosing authoring
+// command owns snapshot/history/assets/fresh-ID reservation and room review;
+// this function grants neither supplied-candidate nor arbitrary erase authority.
+[[nodiscard]] std::map<std::string,Entity,std::less<>> replay_complete_physical_walls_deletion(
+    const std::map<std::string,Entity,std::less<>>& actual,const std::vector<std::string>& wall_ids,
+    const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={});
 [[nodiscard]] nlohmann::json encode_physical_wall_deletion_review_proof(
     const DocumentSnapshot& source,const Command& command);
-// Accepts only bounded canonical grouped v31 or complete v35 envelopes and
+// Accepts only bounded canonical grouped v31 or complete v35/v36 envelopes and
 // returns their raw child. Actual source must validate all declared roots.
 [[nodiscard]] Command decode_physical_wall_deletion_review_proof(const nlohmann::json& proof);
 [[nodiscard]] bool is_physical_wall_room_deletion_review_command(const Command& command);

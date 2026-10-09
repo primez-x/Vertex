@@ -59,6 +59,12 @@ struct RoomVolume {
 // does not replace the individual wall entities or their quantities.
 [[nodiscard]] TopoDS_Shape make_wall_join(const WallJoin& join,
                                           std::span<const Wall> walls);
+// Already admitted actual wall solids and semantic walls have the same authored
+// order. Uses the historic join's baseline junction AND solid-contact rule.
+// Bounded to 32 members, 128 openings and 32 layers per wall; components retain
+// authored order, including singletons. Invalid geometry throws.
+[[nodiscard]] std::vector<std::vector<std::size_t>> wall_shape_connected_components(
+    std::span<const Wall> walls, std::span<const TopoDS_Shape> wall_shapes);
 // Build the derived frame, leaf/sash, and glazing solids for one hosted
 // opening. The wall cut and opening dimensions remain authoritative; this
 // result is a coordinated-view presentation only.

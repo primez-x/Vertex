@@ -1112,6 +1112,57 @@ TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
     }
 }
 
+std::vector<std::vector<std::size_t>> wall_shape_connected_components(
+    std::span<const Wall> walls, std::span<const TopoDS_Shape> wall_shapes) {
+    if (walls.size() != wall_shapes.size() || walls.size() > 32)
+        throw std::invalid_argument("Wall connectivity requires matching bounded wall/shape counts");
+    std::set<std::string, std::less<>> ids;
+    // Bound all supplied semantic work before entering native shape admission.
+    for (const auto& wall : walls) {
+        if (wall.openings.size() > 128 || wall.layers.size() > 32 ||
+            !ids.insert(wall.id).second)
+            throw std::invalid_argument("Wall connectivity source work/identity budget exceeded");
+        validate_wall_semantics(wall);
+    }
+    try {
+        for (const auto& shape : wall_shapes) {
+            if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid() ||
+                !std::isfinite(solid_volume(shape)) ||
+                solid_volume(shape) <= tolerance * tolerance * tolerance)
+                throw std::invalid_argument("Wall connectivity source is not a valid positive-mass solid");
+        }
+        const auto adjacent = [&](std::size_t first, std::size_t second) {
+            const auto& left = walls[first];
+            const auto& right = walls[second];
+            const std::array<Vec2, 2> left_endpoints{left.baseline.start, left.baseline.end};
+            const std::array<Vec2, 2> right_endpoints{right.baseline.start, right.baseline.end};
+            bool touches = wall_baselines_have_interior_contact(left.baseline, right.baseline);
+            for (const auto& left_endpoint : left_endpoints)
+                for (const auto& right_endpoint : right_endpoints)
+                    if (endpoint_distance(left_endpoint, right_endpoint) <= tolerance) touches = true;
+            return touches && shapes_touch(wall_shapes[first], wall_shapes[second]);
+        };
+        std::vector<std::vector<std::size_t>> components;
+        std::vector<bool> assigned(walls.size(), false);
+        for (std::size_t first = 0; first < walls.size(); ++first) {
+            if (assigned[first]) continue;
+            auto& component = components.emplace_back();
+            component.push_back(first);
+            assigned[first] = true;
+            for (std::size_t cursor = 0; cursor < component.size(); ++cursor)
+                for (std::size_t next = 0; next < walls.size(); ++next)
+                    if (!assigned[next] && adjacent(component[cursor], next)) {
+                        assigned[next] = true;
+                        component.push_back(next);
+                    }
+            std::sort(component.begin(), component.end());
+        }
+        return components;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Wall connectivity geometry failed: ") + error.what());
+    }
+}
+
 std::vector<std::vector<std::size_t>> roof_shape_connected_components(
     std::span<const TopoDS_Shape> roofs) {
     try {

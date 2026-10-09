@@ -845,6 +845,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/model_copy_composition.cpp
     src/core/architectural_object_removal.cpp
     src/core/architectural_selection_removal.cpp
+    src/core/hosted_opening_removal.cpp src/core/opening_host_geometry.cpp
+    src/core/wall_join_removal.cpp
     src/core/phase_slab_profile_edit.cpp src/core/phase_slab_replacement.cpp src/core/phase_slab_demolition.cpp
     src/core/phase_stair_demolition.cpp
     src/core/phase_stair_demolition_retirement.cpp

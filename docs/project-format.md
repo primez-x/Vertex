@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v138
+# Vertex project formats v1 through v139
+
+## Complete wall-join removal with room review (v139)
+
+Native reader 139 and JSON/assets extraction 137 retain physical-wall deletion
+proof thirty-six under single room-review dialect thirty-six or batch
+twenty-seven. The closed nine fields extend proof thirty-five with exactly
+`complete_join_removal: true` and `additional_join_identities`, a source-join
+map of captured destination IDs in derived component order. Original joins are
+admitted against actual walls and openings before removal. Surviving connected
+multiwall groups keep the original join ID for the first group and use the exact
+declared fresh IDs for later groups; isolated walls retain no join owner.
+
+Replay independently derives the complete wall, opening, component, join,
+membership and known-reference consequences from the original source. The raw
+child must equal the whole derived command. Rooms and physical lineage remain
+unchanged until the same context/plane review accepts their consequences. Shared
+baseline joins, required/inactive owners, foreign alternatives and opaque
+affected references remain protected. Unrelated catalog definitions, survivors,
+aliases and raw phase roster order remain exact.
+
+Declared join destinations are reserved against actual source, retained history,
+assets, local/opaque metadata and component presentation aliases. Undone command
+intent also reserves its names. Production and Document replay share a bounded
+read-only reservation engine; retained replay considers only preceding records.
+Historical raw singleton, grouped thirty-one and hosted-complete thirty-five
+retain their original producer meanings. Projects without thirty-six retain
+their previous required reader floor. Independent and root source integration
+reviews are complete; compilation and runtime remain unverified.
 
 ## Complete hosted wall removal with room review (v138)
 

@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 opening and wall-join removal source implementation
+
+Standalone door/window Delete/Cut now handles actual ordinary and active-proposed
+openings, attached catalog rows, known references and saved presentation cleanup.
+Baseline openings retain their existing demolition path. Complete source and
+selection authority are checked again before one command applies, and Cut
+publishes only after success. Legacy opening-hosted component geometry now uses
+the actual wall and active sibling cuts in previews and native preparation;
+candidate-local caches and cumulative native admission avoid repeated host
+factories. Resolved wall dependencies enter rendering fingerprints while legacy
+component copies retain their historical world-coordinate placement.
+
+Ordinary wall Delete/Cut now captures actual surviving join components and fresh
+split-join identities, then retains the existing detached room review. New closed
+physical-wall deletion child thirty-six retains these complete consequences;
+historical raw/thirty-one/thirty-five meanings remain unchanged. Native 139 and
+extraction 137 retain the new single/batch room proof and history. A shared bounded
+reservation engine protects split-join destinations throughout actual source,
+retained intent, assets and computed presentation namespaces.
+
+Opening and joined-wall independent source reviews approved. Root integrated
+source review is complete. Fresh destinations are admitted before encoder or
+live/history native reconstruction, unjoined walls retain their wider existing
+geometry domain, and intermediate aliases account for rows actually retired
+with their host while protecting every surviving component.
+No builds, tests, probes, scripts, native jobs, launches, packages or installations
+ran. Compilation and runtime remain unverified; the installed candidate remains
+d882d75 / build40 / source6f5d7de. Broader mixed wall/room/drawing removal, remaining
+authoring relationships and full production qualification are still unfinished.
+Mixed wall/architectural/component removal has a new source module awaiting
+controller/room-proof integration. Wall removal with legacy catalog rows hosted
+on the wall's openings remains an explicit source gap.
+
 ### October 9 baseline wall demolition source integration
 
 Wall Delete/Cut now distinguishes physical removal from demolition in the

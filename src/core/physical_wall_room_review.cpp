@@ -5,6 +5,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/phase_wall_profile_capture.hpp"
+#include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -557,7 +558,9 @@ void refuse_retired_wall_overlay_references(const Entities& source,const Entitie
         }
     }
 }
-std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities& source,const std::vector<std::string>& wall_ids) {
+std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities& source,const std::vector<std::string>& wall_ids,
+    bool complete_join_removal=false,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities={}) {
+    if (!complete_join_removal && !additional_join_identities.empty()) invalid("fresh join identities require join completion");
     bound_complete_wall_deletion_source(source);
     if (wall_ids.empty() || wall_ids.size()>128) invalid("deletion requires one to 128 physical walls");
     const auto scope=constraint_phase_scope(source);
@@ -662,6 +665,12 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         }
     }
     std::sort(components.begin(),components.end());
+    if (complete_join_removal) for (const auto& [catalog,model]:catalogs) for (const auto& row:model.instances()) {
+        if (!row.placement) continue;
+        const auto host=source.find(row.placement->host_entity_id);
+        if (host!=source.end() && host->second.type=="wall_join")
+            invalid("catalog placement on a wall join has no actual Document host contract: "+catalog+"/"+row.id);
+    }
     const auto aliases=embedded_assembly_presentation_ids(source);
     auto cleanup_names=removed;
     for (const auto& key:components) cleanup_names.insert(aliases.at(key));
@@ -699,7 +708,9 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         if (!read_document_wall(resolve_vertical_placement(source,source.at(wall_id)),openings[wall_id],wall,error)) invalid(error);
         if (wall.layers.size()>1024) invalid("complete deletion wall layer budget exceeded");
         validate_wall_semantics(wall);
-        const auto cost=1+wall.layers.size()+wall.openings.size();costs.emplace(wall_id,cost);add(cost*3);
+        const auto cost=complete_join_removal ? (1+wall.layers.size())*(1+wall.openings.size()) :
+            1+wall.layers.size()+wall.openings.size();
+        costs.emplace(wall_id,cost);add(cost*3);
         const auto material=[&](const std::string& catalog,const std::string& local) {
             const auto found=catalogs.find(catalog);
             if (found==catalogs.end() || std::none_of(found->second.materials().begin(),found->second.materials().end(),
@@ -741,7 +752,11 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
             if (assembly) {
                 // Current manufactured families have at most three panels and
                 // a fixed frame; reserve their complete native construction.
-                add(32);manufactured_openings.push_back({wall_id,index,*assembly,operation});
+                // Manufacture admission can rebuild the entire cut/layered
+                // host and compare its parts. Charge that per opening in the
+                // new lane; preserve the historical v35 work contract.
+                add(complete_join_removal ? 32*(1+cost) : 32);
+                manufactured_openings.push_back({wall_id,index,*assembly,operation});
             }
         }
         walls.emplace(wall_id,std::move(wall));
@@ -754,8 +769,58 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         if (expansion.profiles.empty()) add(costs.at(row.placement->host_entity_id));
     }
     add(expansion_budget.consumed_nodes);add(expansion_budget.consumed_profile_segments);
+    Entities join_candidate;
+    if (complete_join_removal) {
+        // Bound the combined hosted and join lane before either leaf enters
+        // kernels. The join leaf independently admits the complete actual
+        // source, including every original member and semantic opening.
+        std::set<std::string> join_walls;
+        for (const auto& [owner,entity]:source) if (entity.type=="wall_join" &&
+            (mentions(entity.properties,roots) || mentions(entity.extensions,roots))) {
+            const auto join=parse_wall_join(entity.properties,owner);
+            if (join.wall_ids.size()>4096) invalid("complete deletion join member budget exceeded");
+            add(2*join.wall_ids.size()*join.wall_ids.size());
+            join_walls.insert(join.wall_ids.begin(),join.wall_ids.end());
+        }
+        if (join_walls.size()>4096) invalid("complete deletion joined wall expansion budget exceeded");
+        std::map<std::string,std::size_t,std::less<>> joined_openings;
+        for (const auto& [owner,entity]:source) if (entity.type=="opening" && !scope.inactive_owner_ids.contains(owner)) {
+            std::string host,error;
+            if (!read_document_wall_id(entity,host,error)) invalid(error);
+            if (join_walls.contains(host)) ++joined_openings[host];
+        }
+        for (const auto& owner:join_walls) {
+            const auto actual=source.find(owner);
+            if (actual==source.end() || actual->second.type!="wall") invalid("joined member is not an actual wall");
+            const auto& p=actual->second.properties;
+            const auto layers=p.contains("layers") ? p.at("layers").size() : 0;
+            if (layers>32 || joined_openings[owner]>128) invalid("complete deletion joined source geometry budget exceeded");
+            add(4*(1+layers)*(1+joined_openings[owner]));
+        }
+        join_candidate=replay_physical_wall_join_removal(source,wall_ids,additional_join_identities);
+        for (const auto& [owner,entity]:source) if (entity.type=="wall_join" && !join_candidate.contains(owner)) {
+            mutable_owner(owner);removed.insert(owner);cleanup_names.insert(owner);
+        }
+        // Only physically retired joins acquire removal authority. References
+        // to retained/split join owners remain their exact original bytes.
+        for (const auto& [owner,entity]:source) {
+            bool attached=false;
+            if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                attached=decoded.supported() && removed.contains(decoded.dimension->boundary_id);
+            } else if (entity.type=="constraint") {
+                const auto decoded=decode_constraint_entity(entity);
+                attached=decoded.supported() && std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
+                    [&](const auto& binding){return removed.contains(binding.owner_id);});
+                if (attached && !constraint_participates(*decoded.constraint,scope))
+                    invalid("retired join constraint belongs to retained inactive geometry: "+owner);
+            }
+            if (attached) { mutable_owner(owner);removed.insert(owner);cleanup_names.insert(owner); }
+            if (removed.size()>4096) invalid("complete deletion joined reference budget exceeded");
+        }
+    }
     // Analytical preflight uses a complete source copy, never a native source.
-    auto preflight=source;
+    auto preflight=complete_join_removal ? join_candidate : source;
     for (const auto& [catalog,retired]:retired_rows) {
         auto& rows=preflight.at(catalog).properties.at("model").at("instances");
         rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row){return retired.contains(row.at("id").template get<std::string>());}),rows.end());
@@ -781,6 +846,8 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
             entity.extensions.dump()!=after->second.extensions.dump()) mutable_owner(entity_id);
     }
     auto candidate=components.empty() ? source : replay_architectural_object_removal(source,{},components);
+    if (complete_join_removal) candidate=components.empty() ? join_candidate :
+        compose_ordinary_architectural_removal_candidates(source,{join_candidate,candidate});
     for (const auto& owner:removed) candidate.erase(owner);
     candidate=remove_known_object_memberships(std::move(candidate),removed,true);
     refuse_unresolved_wall_deletion_references(source,candidate,removed,true);
@@ -798,6 +865,10 @@ std::vector<EntityChange> complete_physical_wall_deletion_changes(const Entities
         mutable_owner(entity_id);
         if (after==candidate.end()) changes.push_back(EntityChange::erase(entity_id));
         else changes.push_back(EntityChange::upsert(after->second));
+    }
+    if (complete_join_removal) for (const auto& [owner,entity]:candidate) if (!source.contains(owner)) {
+        if (entity.type!="wall_join") invalid("complete deletion created an unrelated source owner");
+        changes.push_back(EntityChange::upsert(entity));
     }
     for (const auto& [wall_id,wall]:walls) { (void)wall_id;(void)make_wall(wall); }
     for (const auto& opening:manufactured_openings) {
@@ -1565,13 +1636,141 @@ bool is_physical_wall_room_deletion_review_command(const Command& command) {
     } catch (const std::exception&) { return false; }
 }
 
+namespace {
+// Encoder inspection is a native join admission too. Reserve the hosted and
+// join work together before asking the helper to derive its canonical slots.
+// This is analytical source admission, never a modified native source map.
+void bound_wall_deletion_join_inference(const Entities& source,const std::vector<std::string>& wall_ids) {
+    bound_complete_wall_deletion_source(source);
+    const std::set<std::string> roots(wall_ids.begin(),wall_ids.end());
+    std::set<std::string> joined_walls;
+    std::size_t work{};
+    const auto add=[&](std::size_t count) {
+        if (count>262144-work) invalid("aggregate wall deletion join inference work budget exceeded");
+        work+=count;
+    };
+    for (const auto& [owner,entity]:source) if (entity.type=="wall_join" &&
+        (mentions(entity.properties,roots) || mentions(entity.extensions,roots))) {
+        const auto join=parse_wall_join(entity.properties,owner);
+        if (join.wall_ids.size()>4096) invalid("join inference member budget exceeded");
+        add(2*join.wall_ids.size()*join.wall_ids.size());
+        joined_walls.insert(join.wall_ids.begin(),join.wall_ids.end());
+    }
+    if (joined_walls.size()>4096) invalid("join inference wall expansion budget exceeded");
+    const auto scope=constraint_phase_scope(source);
+    std::map<std::string,std::size_t,std::less<>> joined_openings,removed_openings,manufactured_openings;
+    for (const auto& [owner,entity]:source) {
+        if (entity.type!="opening" && entity.type!="door" && entity.type!="window") continue;
+        std::string host,error;
+        if (!read_document_wall_id(entity,host,error)) invalid(error);
+        if (entity.type=="opening" && !scope.inactive_owner_ids.contains(owner) && joined_walls.contains(host)) ++joined_openings[host];
+        if (roots.contains(host)) {
+            ++removed_openings[host];
+            if (entity.properties.contains("opening_kind")) {
+                const auto& kind=entity.properties.at("opening_kind");
+                if (!kind.is_string()) invalid("malformed join inference opening kind");
+                if (parse_opening_assembly_kind(kind.get<std::string>())) ++manufactured_openings[host];
+            }
+        }
+    }
+    std::map<std::string,std::size_t,std::less<>> costs;
+    for (const auto& owner:roots) {
+        const auto actual=source.find(owner);
+        if (actual==source.end() || actual->second.type!="wall") invalid("join inference requires actual walls");
+        const auto& p=actual->second.properties;
+        const auto layers=p.contains("layers") ? p.at("layers").size() : 0;
+        if (layers>1024) invalid("join inference wall layer budget exceeded");
+        const auto cost=(1+layers)*(1+removed_openings[owner]);costs.emplace(owner,cost);add(3*cost);
+        add(32*(1+cost)*manufactured_openings[owner]);
+    }
+    for (const auto& owner:joined_walls) {
+        const auto actual=source.find(owner);
+        if (actual==source.end() || actual->second.type!="wall") invalid("join inference member is not an actual wall");
+        const auto& p=actual->second.properties;
+        const auto layers=p.contains("layers") ? p.at("layers").size() : 0;
+        if (layers>32 || joined_openings[owner]>128) invalid("join inference source geometry budget exceeded");
+        add(4*(1+layers)*(1+joined_openings[owner]));
+    }
+    AssemblyExpansionBudget expansion_budget;
+    for (const auto& [owner,entity]:source) if (entity.type=="assembly_model") {
+        (void)owner;
+        const auto model=AssemblyModel::from_json(entity.properties.at("model"));
+        for (const auto& row:model.instances()) if (row.placement) {
+            const auto host=source.find(row.placement->host_entity_id);
+            if (host!=source.end() && host->second.type=="wall_join")
+                invalid("catalog placement on a wall join has no actual Document host contract");
+            if (!roots.contains(row.placement->host_entity_id)) continue;
+            if (model.expand(row,expansion_budget).profiles.empty()) add(costs.at(row.placement->host_entity_id));
+        }
+    }
+    add(expansion_budget.consumed_nodes);add(expansion_budget.consumed_profile_segments);
+}
+PhysicalWallJoinRemovalAdditionalIdentities decode_wall_deletion_join_identities(const Json& value) {
+    if (!value.is_object() || value.size()>128) invalid("unsupported additional join identity map");
+    PhysicalWallJoinRemovalAdditionalIdentities result;
+    std::set<std::string> destinations;
+    for (const auto& [owner,rows]:value.items()) {
+        id(owner);
+        if (!rows.is_array() || rows.empty() || rows.size()>4096-destinations.size())
+            invalid("additional join identity slots must be bounded and nonempty");
+        auto values=rows.get<std::vector<std::string>>();
+        for (const auto& destination:values) {
+            id(destination);
+            if (destination==owner || !destinations.insert(destination).second)
+                invalid("additional join identity destinations repeat or borrow their owner");
+        }
+        result.emplace(owner,std::move(values));
+    }
+    for (const auto& [owner,rows]:result) {
+        (void)rows;
+        if (destinations.contains(owner)) invalid("additional join identity keys and destinations overlap");
+    }
+    if (Json(result).dump()!=value.dump()) invalid("additional join identity map is not canonical");
+    return result;
+}
+PhysicalWallJoinRemovalAdditionalIdentities infer_wall_deletion_join_identities(
+    const Entities& source,const std::vector<std::string>& wall_ids,const ApplyEntityChanges& ordinary) {
+    bound_wall_deletion_join_inference(source,wall_ids);
+    const auto plan=inspect_physical_wall_join_removal(source,wall_ids);
+    if (!plan.ready()) for (const auto& diagnostic:plan.diagnostics) if (diagnostic.blocking) invalid(diagnostic.reason);
+    if (plan.source_join_ids.empty()) invalid("join completion requires actual affected source joins");
+    std::map<std::string,WallJoin,std::less<>> fresh;
+    for (const auto& change:ordinary.entity_changes) if (change.kind==EntityChangeKind::upsert && !source.contains(change.entity.id)) {
+        if (change.entity.type!="wall_join" || !fresh.emplace(change.entity.id,parse_wall_join(change.entity.properties,change.entity.id)).second)
+            invalid("join completion has foreign or duplicate fresh owner changes");
+    }
+    PhysicalWallJoinRemovalAdditionalIdentities result;
+    std::set<std::string> used;
+    for (const auto& [owner,count]:plan.additional_identity_counts) {
+        auto& destinations=result[owner];bool first=true;
+        for (const auto& component:plan.surviving_join_components.at(owner)) if (component.size()>=2) {
+            if (first) { first=false;continue; }
+            std::optional<std::string> matched;
+            for (const auto& [destination,join]:fresh) if (join.wall_ids==component) {
+                if (matched || used.contains(destination)) invalid("additional join cohort is ambiguous or repeated");
+                matched=destination;
+            }
+            if (!matched) invalid("missing actual fresh join member cohort");
+            used.insert(*matched);destinations.push_back(*matched);
+        }
+        if (destinations.size()!=count) invalid("additional join slots differ from source-derived cohorts");
+    }
+    if (used.size()!=fresh.size()) invalid("join completion has unnecessary fresh join identities");
+    return decode_wall_deletion_join_identities(Json(result));
+}
+} // namespace
+
 Command decode_physical_wall_deletion_review_proof(const Json& proof) {
-    const bool complete=proof.is_object() && proof.contains("version") && proof.at("version")==35;
-    if (complete) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal"});
+    const bool joins=proof.is_object() && proof.contains("version") && proof.at("version")==36;
+    const bool complete=joins || (proof.is_object() && proof.contains("version") && proof.at("version")==35);
+    if (joins) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal",
+        "complete_join_removal","additional_join_identities"});
+    else if (complete) keys(proof,{"version","kind","expected_revision","message","wall_ids","proof","complete_hosted_removal"});
     else keys(proof,{"version","kind","expected_revision","message","wall_ids","proof"});
     if (proof.dump().size()>1024*1024 || !proof.at("version").is_number_integer() ||
-        proof.at("version")!=(complete ? 35 : 31) || proof.at("kind")!="physical_wall_deletion" ||
+        proof.at("version")!=(joins ? 36 : complete ? 35 : 31) || proof.at("kind")!="physical_wall_deletion" ||
         (complete && (!proof.at("complete_hosted_removal").is_boolean() || proof.at("complete_hosted_removal")!=true)) ||
+        (joins && (!proof.at("complete_join_removal").is_boolean() || proof.at("complete_join_removal")!=true)) ||
         !proof.at("wall_ids").is_array() || proof.at("wall_ids").size()<(complete ? 1u : 2u) || proof.at("wall_ids").size()>128)
         invalid("unsupported grouped wall deletion proof");
     const auto wall_ids=proof.at("wall_ids").get<std::vector<std::string>>();
@@ -1585,18 +1784,31 @@ Command decode_physical_wall_deletion_review_proof(const Json& proof) {
     if (!is_physical_wall_room_deletion_review_command(command) || command_to_json(command).dump()!=raw_proof.dump())
         invalid("grouped deletion requires a bounded canonical asset-free child");
     const auto& ordinary=std::get<ApplyEntityChanges>(command);
-    std::set<std::string> erased;
-    for (const auto& change:ordinary.entity_changes)
+    const auto additional=joins ? decode_wall_deletion_join_identities(proof.at("additional_join_identities")) :
+        PhysicalWallJoinRemovalAdditionalIdentities{};
+    std::set<std::string> erased,changed,declared_fresh,upserted_fresh;
+    for (const auto& [owner,rows]:additional) { (void)owner;declared_fresh.insert(rows.begin(),rows.end()); }
+    for (const auto& change:ordinary.entity_changes) {
+        const auto owner=change.kind==EntityChangeKind::erase ? change.entity_id : change.entity.id;
+        if (joins && !changed.insert(owner).second) invalid("join deletion child repeats or cross-owns an entity change");
+        if (joins && declared_fresh.contains(owner)) {
+            if (change.kind!=EntityChangeKind::upsert || change.entity.type!="wall_join")
+                invalid("declared fresh join is not a typed join upsert");
+            (void)parse_wall_join(change.entity.properties,owner);upserted_fresh.insert(owner);
+        }
         if (change.kind==EntityChangeKind::erase) {
             const bool inserted=erased.insert(change.entity_id).second;
             if (complete && !inserted) invalid("wall deletion child repeats an erased identity");
         }
+    }
+    if (joins && upserted_fresh!=declared_fresh) invalid("declared fresh join is missing from the raw child");
     for (const auto& wall_id:wall_ids)
         if (!erased.contains(wall_id)) invalid("declared physical wall is not erased by the grouped child");
-    Json canonical{{"version",complete ? 35 : 31},{"kind","physical_wall_deletion"},
+    Json canonical{{"version",joins ? 36 : complete ? 35 : 31},{"kind","physical_wall_deletion"},
         {"expected_revision",ordinary.expected_revision},{"message",ordinary.message},
         {"wall_ids",wall_ids},{"proof",command_to_json(command)}};
     if (complete) canonical["complete_hosted_removal"]=true;
+    if (joins) { canonical["complete_join_removal"]=true;canonical["additional_join_identities"]=additional; }
     if (canonical.dump()!=proof.dump()) invalid("grouped wall deletion proof is not canonical or differs from its child");
     return command;
 }
@@ -1613,6 +1825,11 @@ Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,c
     if (wall_ids.empty() || wall_ids.size()>128) invalid("wall deletion proof requires one to 128 original physical walls");
     std::sort(wall_ids.begin(),wall_ids.end());ids(wall_ids);
     const auto raw_proof=command_to_json(command);
+    std::vector<std::string> fresh_joins;
+    for (const auto& change:ordinary.entity_changes)
+        if (change.kind==EntityChangeKind::upsert && change.entity.type=="wall_join" && !source.entities().contains(change.entity.id))
+            fresh_joins.push_back(change.entity.id);
+    validate_physical_wall_join_removal_identity_lifetime(source,fresh_joins);
     bool legacy_exact=false;
     try {
         const ApplyEntityChanges legacy{ordinary.expected_revision,physical_wall_deletion_changes(source.entities(),wall_ids),{},ordinary.message};
@@ -1621,16 +1838,31 @@ Json encode_physical_wall_deletion_review_proof(const DocumentSnapshot& source,c
         // The complete producer must still independently admit the entire
         // actual source and exactly reproduce every supplied child change.
     }
-    if (!legacy_exact) {
+    bool complete_exact=false;
+    if (!legacy_exact) try {
         const ApplyEntityChanges complete{ordinary.expected_revision,complete_physical_wall_deletion_changes(source.entities(),wall_ids),{},ordinary.message};
-        if (command_to_json(Command{complete}).dump()!=raw_proof.dump())
-            invalid("complete wall deletion differs from exact original-source consequences");
+        complete_exact=command_to_json(Command{complete}).dump()==raw_proof.dump();
+    } catch (const WallDeletionReferenceRefusal&) {
+        // Only the expected unsupported-reference refusal permits the fully
+        // admitted join lane; malformed or native source failures propagate.
+    }
+    PhysicalWallJoinRemovalAdditionalIdentities additional;
+    if (!legacy_exact && !complete_exact) {
+        additional=infer_wall_deletion_join_identities(source.entities(),wall_ids,ordinary);
+        validate_physical_wall_join_removal_identity_lifetime(source,additional);
+        const ApplyEntityChanges joined{ordinary.expected_revision,
+            complete_physical_wall_deletion_changes(source.entities(),wall_ids,true,additional),{},ordinary.message};
+        if (command_to_json(Command{joined}).dump()!=raw_proof.dump())
+            invalid("join-complete wall deletion differs from the whole original-source command");
     }
     if (legacy_exact && wall_ids.size()==1) return raw_proof;
-    Json proof{{"version",legacy_exact ? 31 : 35},{"kind","physical_wall_deletion"},
+    Json proof{{"version",legacy_exact ? 31 : complete_exact ? 35 : 36},{"kind","physical_wall_deletion"},
         {"expected_revision",ordinary.expected_revision},{"message",ordinary.message},
         {"wall_ids",wall_ids},{"proof",raw_proof}};
     if (!legacy_exact) proof["complete_hosted_removal"]=true;
+    if (!legacy_exact && !complete_exact) {
+        proof["complete_join_removal"]=true;proof["additional_join_identities"]=additional;
+    }
     (void)decode_physical_wall_deletion_review_proof(proof);
     return proof;
 }
@@ -1650,20 +1882,29 @@ void validate_physical_wall_room_deletion_review_source(const Entities& source,c
     std::sort(wall_ids.begin(),wall_ids.end());ids(wall_ids);
     const auto raw_proof=command_to_json(command);
     bool complete_hosted_removal=false;
+    bool complete_join_removal=false;
+    PhysicalWallJoinRemovalAdditionalIdentities additional;
     if (!retained_proof.is_null() && retained_proof.is_object() && retained_proof.value("kind",std::string{})=="physical_wall_deletion") {
         const auto decoded=decode_physical_wall_deletion_review_proof(retained_proof);
         if (command_to_json(decoded).dump()!=raw_proof.dump() ||
             retained_proof.at("wall_ids").get<std::vector<std::string>>()!=wall_ids)
             invalid("grouped deletion proof differs from the exact original wall erasures");
-        complete_hosted_removal=retained_proof.at("version")==35;
+        complete_join_removal=retained_proof.at("version")==36;
+        complete_hosted_removal=complete_join_removal || retained_proof.at("version")==35;
+        if (complete_join_removal) additional=decode_wall_deletion_join_identities(retained_proof.at("additional_join_identities"));
     } else {
         if (wall_ids.size()!=1) invalid("one wall deletion review cannot remove several physical walls");
         if (!retained_proof.is_null() && retained_proof.dump()!=raw_proof.dump())
             invalid("single wall deletion retained proof differs from its raw child");
     }
     const ApplyEntityChanges expected{ordinary.expected_revision,
-        complete_hosted_removal ? complete_physical_wall_deletion_changes(source,wall_ids) : physical_wall_deletion_changes(source,wall_ids),
+        complete_hosted_removal ? complete_physical_wall_deletion_changes(source,wall_ids,complete_join_removal,additional) : physical_wall_deletion_changes(source,wall_ids),
         {},ordinary.message};
+    if (complete_join_removal && std::none_of(expected.entity_changes.begin(),expected.entity_changes.end(),[&](const auto& change) {
+        if (change.kind==EntityChangeKind::upsert) return change.entity.type=="wall_join";
+        const auto actual=source.find(change.entity_id);
+        return actual!=source.end() && actual->second.type=="wall_join";
+    })) invalid("version36 requires actual changed or retired wall join consequences");
     if (command_to_json(Command{expected}).dump()!=command_to_json(command).dump())
         invalid("wall deletion contains unrelated changes or differs from exact attached-object cleanup");
     auto replayed=source;
@@ -1674,16 +1915,35 @@ void validate_physical_wall_room_deletion_review_source(const Entities& source,c
     if (!exact_entities(candidate,replayed)) invalid("wall deletion candidate differs from its original source consequences");
 }
 
-ApplyEntityChanges prepare_physical_wall_deletion(const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal) {
-    return prepare_physical_walls_deletion(source,{std::string(wall_id)},complete_hosted_removal);
+Entities replay_complete_physical_walls_deletion(const Entities& actual,const std::vector<std::string>& wall_ids,
+    const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities) {
+    if (wall_ids.empty() || wall_ids.size()>128) invalid("complete replay requires one to 128 physical walls");
+    auto roots=wall_ids;std::sort(roots.begin(),roots.end());ids(roots);
+    const auto changes=complete_physical_wall_deletion_changes(actual,roots,true,additional_join_identities);
+    auto candidate=actual;
+    for (const auto& change:changes) {
+        if (change.kind==EntityChangeKind::erase) candidate.erase(change.entity_id);
+        else candidate.insert_or_assign(change.entity.id,change.entity);
+    }
+    return candidate;
 }
 
-ApplyEntityChanges prepare_physical_walls_deletion(const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal) {
+ApplyEntityChanges prepare_physical_wall_deletion(const DocumentSnapshot& source,std::string_view wall_id,bool complete_hosted_removal,
+    bool complete_join_removal,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities) {
+    return prepare_physical_walls_deletion(source,{std::string(wall_id)},complete_hosted_removal,complete_join_removal,additional_join_identities);
+}
+
+ApplyEntityChanges prepare_physical_walls_deletion(const DocumentSnapshot& source,const std::vector<std::string>& wall_ids,bool complete_hosted_removal,
+    bool complete_join_removal,const PhysicalWallJoinRemovalAdditionalIdentities& additional_join_identities) {
     if (!source.is_editable()) invalid("captured document is read-only");
+    if (complete_join_removal && !complete_hosted_removal) invalid("join completion requires complete hosted removal");
+    if (!complete_join_removal && !additional_join_identities.empty()) invalid("additional join identities require join completion");
     if (wall_ids.empty() || wall_ids.size()>128) invalid("deletion requires one to 128 physical walls");
+    if (complete_join_removal)
+        validate_physical_wall_join_removal_identity_lifetime(source,additional_join_identities);
     auto roots=wall_ids;std::sort(roots.begin(),roots.end());
     ApplyEntityChanges command{source.revision(),
-        complete_hosted_removal ? complete_physical_wall_deletion_changes(source.entities(),roots) : physical_wall_deletion_changes(source.entities(),roots),{},
+        complete_hosted_removal ? complete_physical_wall_deletion_changes(source.entities(),roots,complete_join_removal,additional_join_identities) : physical_wall_deletion_changes(source.entities(),roots),{},
         roots.size()==1 ? "Delete wall and attached objects" : "Delete walls and attached objects"};
     const auto proof=encode_physical_wall_deletion_review_proof(source,Command{command});
     const auto candidate=Document::preview_command(source,Command{command});
