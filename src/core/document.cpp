@@ -1684,6 +1684,7 @@ void validate_phase_entity_import_transition(const RevisionRecord& source,
     std::set<std::string,std::less<>> actual_reviewed_hierarchy;
     std::optional<ProjectOrganization> annotation_organization;
     std::optional<std::map<std::string,std::size_t,std::less<>>> imported_view_ids;
+    std::optional<std::set<std::string,std::less<>>> existing_view_ids;
     for (const auto& id:imported) {
         const auto found=candidate.entities.find(id);
         if (found==candidate.entities.end())
@@ -1717,7 +1718,44 @@ void validate_phase_entity_import_transition(const RevisionRecord& source,
                  destination->second.type!="vertical_levels"))
                 document_error(DocumentErrorCode::invalid_entity,"Phase import semantic dependencies must be fresh: "+reference.id);
         }
-        if (entity.type=="constraint") {
+        if (entity.type==kSheetViewEntityType) {
+            const auto model=decode_sheet_view_entity(entity);
+            if (!existing_view_ids) {
+                existing_view_ids.emplace();
+                for (const auto& [owner_id,owner]:source.entities) {
+                    (void)owner_id;
+                    if (owner.type==kSheetViewEntityType) {
+                        const auto existing_model=decode_sheet_view_entity(owner);
+                        for (const auto& view:existing_model.views()) existing_view_ids->insert(view.id);
+                    }
+                    if (owner.type==kAnnotationEntityType)
+                        for (const auto& row:owner.properties.at("state").at("overrides"))
+                            if (row.at("target_kind")=="output_view")
+                                existing_view_ids->insert(row.at("target_id").get<std::string>());
+                }
+            }
+            const auto require_fresh_target=[&](const std::string& target) {
+                if (imported.contains(target)) return;
+                const auto existing=source.entities.find(target);
+                if (existing!=source.entities.end() &&
+                    (existing->second.type=="property" || existing->second.type=="building" ||
+                     existing->second.type=="floor" || existing->second.type=="layer" ||
+                     existing->second.type=="vertical_levels")) return;
+                document_error(DocumentErrorCode::invalid_entity,"Phase import sheet semantic owner must be fresh: "+target);
+            };
+            for (const auto& view:model.views()) {
+                if (existing_view_ids->contains(view.id))
+                    document_error(DocumentErrorCode::invalid_entity,"Phase import view shadows an existing output view: "+view.id);
+                for (const auto& target:view.object_ids) require_fresh_target(target);
+                if (view.presentation.appearance)
+                    for (const auto& object:view.presentation.appearance->objects) require_fresh_target(object.object_id);
+                for (const auto& overlay:view.overlays) {
+                    if (!overlay.object_id.empty() && candidate.entities.contains(overlay.object_id))
+                        require_fresh_target(overlay.object_id);
+                    if (overlay.dimension_binding) require_fresh_target(overlay.dimension_binding->object_id);
+                }
+            }
+        } else if (entity.type=="constraint") {
             const auto decoded=decode_constraint_entity(entity);
             if (!decoded.supported())
                 document_error(DocumentErrorCode::invalid_entity,"Phase import requires supported constraint bindings: "+id);
@@ -1791,6 +1829,17 @@ void validate_phase_entity_import_transition(const RevisionRecord& source,
         document_error(DocumentErrorCode::invalid_entity,"Phase import registry inventory must match all fresh registries");
     if (actual_reviewed_hierarchy!=reviewed_hierarchy)
         document_error(DocumentErrorCode::invalid_entity,"Reviewed phase import hierarchy inventory must match every reused roster owner");
+    // Existing detached overlays must stay detached when fresh owners arrive.
+    // Import cannot change their stored coordinates or infer a new attachment.
+    for (const auto& [id,entity]:source.entities) {
+        (void)id;
+        if (entity.type!=kSheetViewEntityType) continue;
+        const auto model=decode_sheet_view_entity(entity);
+        for (const auto& view:model.views()) for (const auto& overlay:view.overlays)
+            if (!overlay.object_id.empty() && !source.entities.contains(overlay.object_id) &&
+                candidate.entities.contains(overlay.object_id))
+                document_error(DocumentErrorCode::invalid_entity,"Phase import would attach an existing unresolved overlay: "+overlay.object_id);
+    }
     // This resolves all saved alternatives, exclusive rosters and actual
     // physical host participation. Metadata alone cannot grant the policy.
     (void)constraint_phase_scope(candidate.entities);

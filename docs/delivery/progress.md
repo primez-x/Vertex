@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 coordinated sheet/view transfer — source integration
+
+The V9 source graph now requires version three exactly when sheet/view
+companions are retained. A new bounded typed helper preserves raw sheet models,
+viewports, overlays, revisions, schedules and cross-sheet links, remapping actual
+global object/appearance/dimension hosts and companion-scoped view identities.
+Saved output-view overrides resolve an actual unambiguous source companion;
+native local names retain their native contract rather than a document-owner
+length limit. Desktop import allocates fresh view identities. Authenticated
+empty companion pictures carry editable metadata and explicitly do not claim
+external CAD paper-layout authoring.
+
+Source review found valid detached overlay witnesses were being treated as
+mandatory hosts. Unresolved witnesses now retain raw names and coordinates;
+binding rejects accidental attachment to existing or newly staged geometry in
+both directions. Imported views cannot shadow existing output views. Conflicting
+unresolved witness names remain a declared transfer gap. Private retained import
+proof admission now checks nested sheet semantic targets, fresh view names and
+existing unresolved witnesses. Saved output-view target names are reserved even
+when their old view is missing, preventing accidental presentation activation.
+
+The desktop sheet selector, layout editing, revisions/callouts, page rendering,
+fingerprints, print, PDF and Pinc projection now use the selected companion owner
+and exact local sheet identity. Imported pages are exposed without merging or
+renaming their models. Source review corrected whitespace trimming, ambiguous
+callout choices and owner redirection during nested dialogs. Modal captures
+fence the actual selected sheet owner; nested prompt chains retain captured IDs.
+Drawing-set output follows the selected companion's sheet order. Interactive
+resolution and cross-owner callout support are not claimed.
+
+Root and independent integrated source review closed the concrete findings;
+no remaining P1/P2 was identified in this bounded increment. Scoped diff checks
+and requirements JSON inspection passed. The explicit source-kit allowlist
+matches all 1,897 tracked/new source paths with no extras or duplicates.
+
+No build, test, new test, probe, script, launch, package or installation has run.
+Recent source remains uncompiled and runtime-unqualified; the installed
+candidate is unchanged. Canonical catalog references, asset closure and all
+wider production delivery packages remain open. This is a bounded implementation
+increment, not a completion percentage or production acceptance.
+
 ### October 10 furnished design-set transfer — source integration
 
 The V9 graph now has a separate support inventory for saved annotation states,

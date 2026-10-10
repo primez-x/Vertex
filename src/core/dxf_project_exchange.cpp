@@ -2,6 +2,7 @@
 #include "sketch/dxf_phase_source.hpp"
 #include "sketch/dxf_annotation_source.hpp"
 #include "sketch/dxf_constraint_source.hpp"
+#include "sketch/dxf_sheet_view_source.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/site_frame.hpp"
 
@@ -2900,6 +2901,8 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
         const auto& owner = graph.entities.at(id);
         if (native_dxf_annotation_source_type(owner.type))
             admit_native_dxf_annotation_source_work(owner, graph.entities, budget);
+        else if (native_dxf_sheet_view_source_type(owner.type))
+            validate_native_dxf_sheet_view_source(owner, graph.entities, &budget);
         else if (!native_dxf_constraint_source_type(owner.type))
             throw std::invalid_argument("V9 unsupported support depiction owner");
     }
@@ -3057,6 +3060,11 @@ PhasePlans phase_support_plans(const NativeDxfPhaseSourceGraph& graph,
                 diagnostic(result.diagnostics, id, owner.type, "annotation_cad_style_subset_original_retained");
             if (!state.overrides.empty())
                 diagnostic(result.diagnostics, id, owner.type, "annotation_presentation_overrides_retained_source_only");
+        } else if (native_dxf_sheet_view_source_type(owner.type)) {
+            // The native graph retains all sheets, views and their links.
+            // This model-space carrier does not flatten paper layouts into
+            // duplicate editable geometry or claim external paper-space output.
+            diagnostic(result.diagnostics, id, owner.type, "sheet_view_authoring_retained_no_cad_paper_layout");
         } else if (owner.type == "dimension") {
             // Reuse current native target resolution and the existing linear,
             // arc/angular/callout policy. Its shared CAD pictures supply actual
@@ -5774,6 +5782,7 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
             // so a legacy proof cannot take ownership of shared source context.
             for (const auto& [id, owner] : document.entities())
                 if (owner.type == "model_phases" || native_dxf_annotation_source_type(owner.type) || native_dxf_constraint_source_type(owner.type) ||
+                    native_dxf_sheet_view_source_type(owner.type) ||
                     (is_model_phase_entity_type(owner.type) && owner.type != "building" && owner.type != "floor"))
                     seeds.push_back(id);
             const auto graph = capture_native_dxf_phase_source_graph(document, seeds, &wall_source_budget);

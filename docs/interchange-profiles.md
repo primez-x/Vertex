@@ -143,6 +143,12 @@ relationships participate in that closure. Bodies, catalogs, registries,
 reviewed contexts, support owners and stair children require separate owner
 mappings. Support-free graph version one remains unchanged; graph version two
 adds saved annotation states, dimensions and constraints in `support_ids`.
+Graph version three uses those fields and requires coordinated sheet/view
+companions; earlier graph versions cannot carry them. Their complete raw model
+retains viewports, cross-sheet links, revisions, overlays and schedule placement.
+Actual global object/appearance/dimension hosts are remapped; view identities
+and output-view overrides follow an exact companion-scoped map. Other sheet,
+viewport, callout and model-local identities remain unchanged.
 Placed label/symbol IDs have separate annotation-owner-scoped maps; catalog,
 template, alternative and boundary-local identities retain their own namespaces.
 
@@ -166,7 +172,9 @@ duplicate, orphaned or malformed carrier records and overlapping legacy source
 ownership. PSIP0004 repeats the ownership checks at the worker trust boundary.
 Individual `PHASE_SUPPORT_PLAN_V1` blocks authenticate the complete support
 inventory, exact vector primitives/text and child placement/layer assignments.
-Hidden/inactive presentation and constraints have authenticated empty pictures.
+Hidden/inactive presentation, constraints and sheet/view companions have
+authenticated empty pictures. Sheet/view transport reports that external CAD
+paper-layout authoring is not provided by this carrier.
 Saved symbol previews and the existing native dimension pictures provide CAD
 depiction; original styles and pinned SVG remain in the editable source graph.
 CAD style/artwork limitations produce fidelity diagnostics. Authenticated support
@@ -203,9 +211,14 @@ The desktop authoring target now selects among existing phase registries, with
 each registry retaining its saved active alternative. Enrollment, deletion,
 hosted ownership, annotation filtering and automatic wall measurements evaluate
 the actual registry graph. V1-V8 retain their prior contracts and are not
-retrospectively treated as complete phase authoring inventories. V9 still
-refuses saved output-view overrides until companion sheet/view transport exists,
-and unsupported canonical catalog references. Scoped annotation owner contexts
+retrospectively treated as complete phase authoring inventories. V9 now retains
+saved output-view overrides through actual, unambiguous companion view identities;
+native local view names do not receive document-owner length restrictions.
+Missing unbound overlay witnesses stay detached. Admission rejects accidental
+rebinding against existing or newly staged owners in either direction, and
+imported views cannot shadow existing output-view identities. Conflicting
+unresolved witness names remain an explicit transfer limitation; unsupported
+canonical catalog references also remain open. Scoped annotation owner contexts
 must match actual layer ancestry, while children may use independent layers.
 Fresh phase import uses an explicit retained command policy rather than legacy
 constraint satisfaction for inactive alternatives. Existing legacy commands

@@ -156,7 +156,8 @@ if(MSVC)
 endif()
 add_library(sketch_dxf_project_exchange src/core/dxf_project_exchange.cpp
   src/core/dxf_architectural_source.cpp src/core/dxf_phase_source.cpp
-  src/core/dxf_annotation_source.cpp src/core/dxf_constraint_source.cpp)
+  src/core/dxf_annotation_source.cpp src/core/dxf_constraint_source.cpp
+  src/core/dxf_sheet_view_source.cpp)
 target_include_directories(sketch_dxf_project_exchange PUBLIC include)
 target_link_libraries(sketch_dxf_project_exchange PUBLIC sketch_dxf_exchange sketch_document sketch_precision sketch_document_wall sketch_hosted_opening_geometry sketch_door_operation sketch_opening_assembly)
 if(MSVC)

@@ -31,7 +31,7 @@ struct NativeDxfPhaseSourceGraph {
     std::vector<std::string> catalog_ids;
     std::vector<std::string> registry_ids;
     std::vector<std::string> context_ids;
-    // Constraints and placed presentation owners are retained support, not
+    // Constraints, placed presentation and sheet/view owners are retained support, not
     // architectural bodies and not registry enrollment inferred by transfer.
     std::vector<std::string> support_ids;
     std::vector<std::string> enrolled_hierarchy_ids;
@@ -50,7 +50,9 @@ struct NativeDxfPhaseSourceGraph {
 // Version 1 has an exact sorted entities array of raw five-field Entity rows
 // and six explicit sorted unique role/subset arrays. Version 2 adds a nonempty
 // support_ids array for annotations, dimensions and constraints; support-free
-// graphs retain version 1. No canonical entity/model encoder is used.
+// graphs retain version 1. Version 3 uses the same inventory fields and is
+// mandatory exactly when coordinated sheet/view companions are retained.
+// No canonical entity/model encoder is used.
 // Admission precedes semantic decoders and the organizer;
 // failed attempts remain charged to the shared catalog/architectural ledger.
 [[nodiscard]] nlohmann::json encode_native_dxf_phase_source_graph(
@@ -76,6 +78,9 @@ struct NativeDxfPhaseDestinationMaps {
     // Child IDs are scoped by their actual source annotation owner. They are
     // freshened for desktop selection without changing catalog/template IDs.
     std::map<std::string, NativeDxfPhaseOwnerMap, std::less<>> annotation_child_ids;
+    // View IDs are scoped by their original sheet/view companion. Other sheet,
+    // viewport and callout identities remain local and unchanged.
+    std::map<std::string, NativeDxfPhaseOwnerMap, std::less<>> sheet_view_ids;
 };
 struct NativeDxfPhaseDestinationBinding {
     NativeDxfPhaseSourceGraph mapped_graph;

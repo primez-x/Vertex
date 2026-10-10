@@ -19,7 +19,8 @@ struct NativeDxfWallSourceWorkBudget;
 // Object appearance resolves supported actual bodies before same-state children.
 [[nodiscard]] std::map<std::string, std::string, std::less<>>
 native_dxf_annotation_source_dependencies(const Entity& source,
-    const std::map<std::string, Entity, std::less<>>& authored);
+    const std::map<std::string, Entity, std::less<>>& authored,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 using NativeDxfAnnotationChildMaps = std::map<std::string,
     std::map<std::string, std::string, std::less<>>, std::less<>>;
 // Sorted unique label/symbol identities, qualified by this annotation owner.
@@ -33,7 +34,9 @@ void remap_native_dxf_annotation_source_dependencies(Entity& source,
     const std::map<std::string, Entity, std::less<>>& authored,
     const std::map<std::string, std::string, std::less<>>& owner_mapping,
     const std::map<std::string, std::string, std::less<>>& context_mapping,
-    const NativeDxfAnnotationChildMaps& child_mapping = {});
+    const NativeDxfAnnotationChildMaps& child_mapping = {},
+    const NativeDxfAnnotationChildMaps& sheet_view_mapping = {},
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 // Raw/work admission precedes every annotation/dimension codec and retained
 // target resolver. All attempts share catalog_transfer; failed work stays charged.
 // Pinned SVG uses the actual bounded admission consumer with incremental billing
@@ -44,8 +47,9 @@ void admit_native_dxf_annotation_source_work(const Entity& source,
 // Call after admission with the actual complete source map. Dimension targets
 // are structurally validated, including retained stale physical-room targets;
 // this does not qualify a current quantity or active physical inventory.
-// Saved output-view overrides explicitly refuse until companion sheet/view
-// transport is implemented; their local spellings are never remapped to owners.
+// Saved output-view overrides require one actual typed companion; view IDs are
+// mapped in its local namespace, never substituted with document owner IDs.
 void validate_native_dxf_annotation_source(const Entity& source,
-    const std::map<std::string, Entity, std::less<>>& authored);
+    const std::map<std::string, Entity, std::less<>>& authored,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
 } // namespace sketch

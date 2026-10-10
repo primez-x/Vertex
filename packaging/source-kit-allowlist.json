@@ -3471,6 +3471,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/dxf_sheet_view_source.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/field_adapter_contract.hpp"
     },
     {
@@ -4736,6 +4740,10 @@
     {
       "category": "source",
       "path": "src/core/dxf_project_exchange.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/dxf_sheet_view_source.cpp"
     },
     {
       "category": "source",

@@ -116,6 +116,7 @@
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/dxf_phase_source.hpp"
 #include "sketch/dxf_annotation_source.hpp"
+#include "sketch/dxf_sheet_view_source.hpp"
 #include "sketch/ifc_project_exchange.hpp"
 #include "sketch/project_import_worker.hpp"
 #include "sketch/geometry_operations.hpp"
@@ -10846,33 +10847,13 @@ public:
             if (number.trimmed().isEmpty())
                 throw std::invalid_argument("Sheet number cannot be empty");
             const auto source = authoringSnapshot();
-            const Entity* sheet_entity = nullptr;
-            std::optional<SheetViewModel> model;
-            for (const auto& [id, candidate] : source.entities()) {
-                (void)id;
-                if (candidate.type != kSheetViewEntityType) continue;
-                try {
-                    auto decoded = decode_sheet_view_entity(candidate);
-                    const auto sheet_matches = sheet_id.trimmed().isEmpty() ||
-                        std::any_of(decoded.sheets().begin(), decoded.sheets().end(),
-                            [&](const auto& sheet) {
-                                return sheet.id == sheet_id.trimmed().toStdString();
-                            });
-                    if (sheet_matches) {
-                        model = std::move(decoded);
-                        sheet_entity = &candidate;
-                        break;
-                    }
-                } catch (const std::exception&) {
-                    // Let the selected typed entity report its validation
-                    // failure below rather than silently editing another one.
-                    if (sheet_id.trimmed().isEmpty()) throw;
-                }
-            }
+            const auto record = selectedSheetModel(source, sheet_id);
+            const Entity* sheet_entity = record ? &source.entities().at(record->entity_id) : nullptr;
+            const auto* model = record ? &record->model : nullptr;
             if (sheet_entity == nullptr || !model || model->sheets().empty())
                 throw std::invalid_argument("Drawing sheet was not found");
-            const auto selected_sheet_id = sheet_id.trimmed().isEmpty()
-                ? model->sheets().front().id : sheet_id.trimmed().toStdString();
+            const auto selected_sheet_id = sheet_id.isEmpty()
+                ? model->sheets().front().id : sheet_id.toStdString();
             const auto found = std::find_if(model->sheets().begin(), model->sheets().end(),
                 [&](const auto& sheet) { return sheet.id == selected_sheet_id; });
             if (found == model->sheets().end())
@@ -10923,36 +10904,11 @@ public:
             const auto height = parse_finite(height_mm, "Viewport height");
             const auto scale = parse_finite(scale_denominator, "Viewport scale");
             const auto source = authoringSnapshot();
-            const Entity* sheet_entity = nullptr;
-            std::optional<SheetViewModel> model;
-            const auto wanted_sheet = sheet_id.trimmed().toStdString();
-            const auto wanted_viewport = viewport_id.trimmed().toStdString();
-            for (const auto& [id, candidate] : source.entities()) {
-                (void)id;
-                if (candidate.type != kSheetViewEntityType) continue;
-                try {
-                    auto decoded = decode_sheet_view_entity(candidate);
-                    const bool sheet_matches = wanted_sheet.empty() ||
-                        std::any_of(decoded.sheets().begin(), decoded.sheets().end(),
-                            [&](const auto& sheet) { return sheet.id == wanted_sheet; });
-                    if (!sheet_matches) continue;
-                    const auto selected_sheet = wanted_sheet.empty()
-                        ? decoded.sheets().front().id : wanted_sheet;
-                    const auto sheet = std::find_if(decoded.sheets().begin(), decoded.sheets().end(),
-                        [&](const auto& candidate_sheet) { return candidate_sheet.id == selected_sheet; });
-                    if (sheet == decoded.sheets().end()) continue;
-                    const bool viewport_matches = wanted_viewport.empty() ||
-                        std::any_of(sheet->viewports.begin(), sheet->viewports.end(),
-                            [&](const auto& viewport) { return viewport.id == wanted_viewport; });
-                    if (viewport_matches) {
-                        model = std::move(decoded);
-                        sheet_entity = &candidate;
-                        break;
-                    }
-                } catch (const std::exception&) {
-                    if (wanted_sheet.empty() || wanted_viewport.empty()) throw;
-                }
-            }
+            const auto wanted_sheet = sheet_id.toStdString();
+            const auto wanted_viewport = viewport_id.toStdString();
+            const auto record = selectedSheetModel(source, sheet_id);
+            const Entity* sheet_entity = record ? &source.entities().at(record->entity_id) : nullptr;
+            const auto* model = record ? &record->model : nullptr;
             if (sheet_entity == nullptr || !model || model->sheets().empty())
                 throw std::invalid_argument("Drawing sheet viewport was not found");
             const auto selected_sheet_id = wanted_sheet.empty()
@@ -11013,36 +10969,11 @@ public:
             const auto width = parse_finite(width_mm, "Schedule width");
             const auto height = parse_finite(height_mm, "Schedule height");
             const auto source = authoringSnapshot();
-            const Entity* sheet_entity = nullptr;
-            std::optional<SheetViewModel> model;
-            const auto wanted_sheet = sheet_id.trimmed().toStdString();
-            const auto wanted_placement = placement_id.trimmed().toStdString();
-            for (const auto& [id, candidate] : source.entities()) {
-                (void)id;
-                if (candidate.type != kSheetViewEntityType) continue;
-                try {
-                    auto decoded = decode_sheet_view_entity(candidate);
-                    const bool sheet_matches = wanted_sheet.empty() ||
-                        std::any_of(decoded.sheets().begin(), decoded.sheets().end(),
-                            [&](const auto& sheet) { return sheet.id == wanted_sheet; });
-                    if (!sheet_matches) continue;
-                    const auto selected_sheet = wanted_sheet.empty()
-                        ? decoded.sheets().front().id : wanted_sheet;
-                    const auto sheet = std::find_if(decoded.sheets().begin(), decoded.sheets().end(),
-                        [&](const auto& candidate_sheet) { return candidate_sheet.id == selected_sheet; });
-                    if (sheet == decoded.sheets().end()) continue;
-                    const bool placement_matches = wanted_placement.empty() ||
-                        std::any_of(sheet->schedules.begin(), sheet->schedules.end(),
-                            [&](const auto& placement) { return placement.id == wanted_placement; });
-                    if (placement_matches) {
-                        model = std::move(decoded);
-                        sheet_entity = &candidate;
-                        break;
-                    }
-                } catch (const std::exception&) {
-                    if (wanted_sheet.empty() || wanted_placement.empty()) throw;
-                }
-            }
+            const auto wanted_sheet = sheet_id.toStdString();
+            const auto wanted_placement = placement_id.toStdString();
+            const auto record = selectedSheetModel(source, sheet_id);
+            const Entity* sheet_entity = record ? &source.entities().at(record->entity_id) : nullptr;
+            const auto* model = record ? &record->model : nullptr;
             if (sheet_entity == nullptr || !model || model->sheets().empty())
                 throw std::invalid_argument("Schedule placement was not found");
             const auto selected_sheet_id = wanted_sheet.empty()
@@ -11090,10 +11021,10 @@ public:
         }
         try {
             const auto source = authoringSnapshot();
-            const auto record = decode_sheet_model(source);
+            const auto record = selectedSheetModel(source, sheet_id);
             if (!record || record->model.sheets().empty())
                 throw std::invalid_argument("No drawing sheets are defined");
-            const auto wanted = sheet_id.trimmed().toStdString();
+            const auto wanted = sheet_id.toStdString();
             const auto found = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
                 [&](const auto& sheet) { return wanted.empty() || sheet.id == wanted; });
             if (found == record->model.sheets().end())
@@ -11123,7 +11054,7 @@ public:
         const auto accepted = applySheetModelMutation(
             QStringLiteral("Add sheet revision"), sheet_id,
             [id, date, description, sheet_id](const SheetViewModel& model) {
-                const auto wanted = sheet_id.trimmed().toStdString();
+                const auto wanted = sheet_id.toStdString();
                 const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
                     [&](const auto& sheet) { return wanted.empty() || sheet.id == wanted; });
                 if (found == model.sheets().end())
@@ -11139,8 +11070,8 @@ public:
         return applySheetModelMutation(
             QStringLiteral("Edit sheet revision"), sheet_id,
             [revision_id, date, description, sheet_id](const SheetViewModel& model) {
-                const auto wanted_sheet = sheet_id.trimmed().toStdString();
-                const auto wanted_revision = revision_id.trimmed().toStdString();
+                const auto wanted_sheet = sheet_id.toStdString();
+                const auto wanted_revision = revision_id.toStdString();
                 const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
                     [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
                 if (found == model.sheets().end())
@@ -11161,8 +11092,8 @@ public:
         return applySheetModelMutation(
             QStringLiteral("Remove sheet revision"), sheet_id,
             [revision_id, sheet_id](const SheetViewModel& model) {
-                const auto wanted_sheet = sheet_id.trimmed().toStdString();
-                const auto wanted_revision = revision_id.trimmed().toStdString();
+                const auto wanted_sheet = sheet_id.toStdString();
+                const auto wanted_revision = revision_id.toStdString();
                 const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
                     [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
                 if (found == model.sheets().end())
@@ -11194,14 +11125,14 @@ public:
         const auto accepted = applySheetModelMutation(
             QStringLiteral("Add sheet callout"), sheet_id,
             [id, label, target_sheet_id, target_viewport_id, x, y, sheet_id](const SheetViewModel& model) {
-                const auto wanted = sheet_id.trimmed().toStdString();
+                const auto wanted = sheet_id.toStdString();
                 const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
                     [&](const auto& sheet) { return wanted.empty() || sheet.id == wanted; });
                 if (found == model.sheets().end())
                     throw std::invalid_argument("Drawing sheet identity was not found");
                 SheetCallout callout{id.toStdString(), label.toStdString(),
-                                     target_sheet_id.trimmed().toStdString(),
-                                     target_viewport_id.trimmed().toStdString(), x, y};
+                                     target_sheet_id.toStdString(),
+                                     target_viewport_id.toStdString(), x, y};
                 return model.with_added_callout(found->id, std::move(callout));
             });
         return accepted ? id : QString();
@@ -11225,8 +11156,8 @@ public:
                 QStringLiteral("Edit sheet callout"), sheet_id,
                 [callout_id, label, target_sheet_id, target_viewport_id, x, y, sheet_id](
                     const SheetViewModel& model) {
-                    const auto wanted_sheet = sheet_id.trimmed().toStdString();
-                    const auto wanted_callout = callout_id.trimmed().toStdString();
+                    const auto wanted_sheet = sheet_id.toStdString();
+                    const auto wanted_callout = callout_id.toStdString();
                     const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
                         [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
                     if (found == model.sheets().end())
@@ -11237,8 +11168,8 @@ public:
                         throw std::invalid_argument("Sheet callout identity was not found");
                     auto replacement = *callout;
                     replacement.label = label.toStdString();
-                    replacement.target_sheet_id = target_sheet_id.trimmed().toStdString();
-                    replacement.target_viewport_id = target_viewport_id.trimmed().toStdString();
+                    replacement.target_sheet_id = target_sheet_id.toStdString();
+                    replacement.target_viewport_id = target_viewport_id.toStdString();
                     replacement.x_mm = x;
                     replacement.y_mm = y;
                     return model.with_callout(found->id, std::move(replacement));
@@ -11254,12 +11185,12 @@ public:
         return applySheetModelMutation(
             QStringLiteral("Remove sheet callout"), sheet_id,
             [callout_id, sheet_id](const SheetViewModel& model) {
-                const auto wanted_sheet = sheet_id.trimmed().toStdString();
+                const auto wanted_sheet = sheet_id.toStdString();
                 const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
                     [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
                 if (found == model.sheets().end())
                     throw std::invalid_argument("Drawing sheet identity was not found");
-                return model.with_removed_callout(found->id, callout_id.trimmed().toStdString());
+                return model.with_removed_callout(found->id, callout_id.toStdString());
             });
     }
 
@@ -15681,7 +15612,7 @@ public:
         const auto context = activeFloorContext(snapshot);
         if (!context || context->floor_id.empty()) return std::nullopt;
         std::vector<PincPageRecord> pages;
-        try { pages = pincPages(snapshot); }
+        try { pages = selectedPincPages(snapshot); }
         catch (const std::exception&) { /* The page control reports invalid metadata. */ }
         if (std::any_of(pages.begin(), pages.end(), [&](const auto& page) {
                 return page.sheet_id == m_output_sheet_id.toStdString() &&
@@ -15703,7 +15634,7 @@ public:
             // Page navigation focuses only the interactive canvas. Keep this
             // mask out of the user's visibility settings and saved-view output.
             std::vector<PincPageRecord> pages;
-            try { pages = pincPages(snapshot); }
+            try { pages = selectedPincPages(snapshot); }
             catch (const std::exception&) { /* Preserve ordinary floor tracing after a metadata error. */ }
             const auto current = std::find_if(pages.begin(), pages.end(), [&](const auto& page) {
                 return page.sheet_id == m_output_sheet_id.toStdString() &&
@@ -15871,7 +15802,7 @@ public:
             const auto width = parse_finite(width_mm, "Sheet width");
             const auto height = parse_finite(height_mm, "Sheet height");
             const auto source = authoringSnapshot();
-            const auto record = decode_sheet_model(source);
+            const auto record = selectedSheetModel(source);
             if (!record || record->model.sheets().empty())
                 throw std::invalid_argument("No typed drawing sheet is available");
             for (const auto& sheet : record->model.sheets()) {
@@ -15926,6 +15857,8 @@ public:
                 "Create drawing sheet"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
+            m_output_sheet_owner = QString::fromStdString(record->entity_id);
+            m_output_sheet_document = m_document;
             m_output_sheet_id = QString::fromStdString(id);
             clearError();
             refresh();
@@ -15942,10 +15875,10 @@ public:
             return false;
         }
         try {
-            const auto wanted = sheet_id.trimmed().toStdString();
+            const auto wanted = sheet_id.toStdString();
             if (wanted.empty()) throw std::invalid_argument("Choose a sheet to remove");
             const auto source = authoringSnapshot();
-            const auto record = decode_sheet_model(source);
+            const auto record = selectedSheetModel(source, sheet_id);
             if (!record) throw std::invalid_argument("No typed drawing sheet is available");
             const auto updated_model = record->model.with_removed_sheet(wanted);
             auto updated_entity = source.entities().at(record->entity_id);
@@ -15956,6 +15889,8 @@ public:
                 "Remove drawing sheet"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
+            m_output_sheet_owner = QString::fromStdString(record->entity_id);
+            m_output_sheet_document = m_document;
             if (m_output_sheet_id == QString::fromStdString(wanted) ||
                 !std::any_of(updated_model.sheets().begin(), updated_model.sheets().end(),
                              [&](const auto& sheet) { return QString::fromStdString(sheet.id) == m_output_sheet_id; })) {
@@ -15978,10 +15913,10 @@ public:
         try {
             if (offset != -1 && offset != 1)
                 throw std::invalid_argument("Sheet moves must be one page at a time");
-            const auto wanted = sheet_id.trimmed().toStdString();
+            const auto wanted = sheet_id.toStdString();
             if (wanted.empty()) throw std::invalid_argument("Choose a sheet to move");
             const auto source = authoringSnapshot();
-            const auto record = decode_sheet_model(source);
+            const auto record = selectedSheetModel(source, sheet_id);
             if (!record) throw std::invalid_argument("No typed drawing sheet is available");
             auto order = record->model.sheet_order();
             const auto found = std::find(order.begin(), order.end(), wanted);
@@ -16002,6 +15937,8 @@ public:
                 "Reorder drawing sheets"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
+            m_output_sheet_owner = QString::fromStdString(record->entity_id);
+            m_output_sheet_document = m_document;
             m_output_sheet_id = QString::fromStdString(wanted);
             clearError();
             refresh();
@@ -16012,16 +15949,84 @@ public:
         }
     }
 
-    [[nodiscard]] bool selectOutputSheet(const QString& sheet_id) {
+    // Local sheet IDs belong to their companion; selection is transient UI
+    // state and must never rewrite imported IDs or the persisted model.
+    QString selectedSheetOwnerId(const DocumentSnapshot& snapshot) const {
+        if (m_output_sheet_document.lock() == m_document && !m_output_sheet_owner.isEmpty()) {
+            const auto found = snapshot.entities().find(m_output_sheet_owner.toStdString());
+            if (found != snapshot.entities().end() && found->second.type == kSheetViewEntityType)
+                return m_output_sheet_owner;
+        }
+        for (const auto& [id, entity] : snapshot.entities())
+            if (entity.type == kSheetViewEntityType) return QString::fromStdString(id);
+        return {};
+    }
+
+    std::optional<SheetModelRecord> selectedSheetModel(
+        const DocumentSnapshot& snapshot, const QString& sheet_id = {}) const {
+        const auto wanted = sheet_id.toStdString();
+        const auto contains_sheet = [&](const SheetViewModel& model) {
+            return wanted.empty() || std::any_of(model.sheets().begin(), model.sheets().end(),
+                [&](const auto& sheet) { return sheet.id == wanted; });
+        };
+        if (m_output_sheet_document.lock() == m_document && !m_output_sheet_owner.isEmpty()) {
+            const auto found = snapshot.entities().find(m_output_sheet_owner.toStdString());
+            if (found != snapshot.entities().end() && found->second.type == kSheetViewEntityType) {
+                auto model = decode_sheet_view_entity(found->second);
+                if (contains_sheet(model)) return SheetModelRecord{found->first, std::move(model)};
+                // An existing owner is authoritative. A stale local ID must
+                // fail rather than editing a same-ID page in another owner.
+                throw std::invalid_argument("Drawing sheet identity was not found in the selected set");
+            }
+        }
+        bool has_sheet_owner = false;
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != kSheetViewEntityType) continue;
+            has_sheet_owner = true;
+            auto model = decode_sheet_view_entity(entity);
+            if (contains_sheet(model)) return SheetModelRecord{id, std::move(model)};
+        }
+        if (has_sheet_owner && !wanted.empty())
+            throw std::invalid_argument("Drawing sheet identity was not found");
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool selectOutputSheet(const QString& sheet_id, const QString& owner_id = {}) {
         try {
-            const auto wanted = sheet_id.trimmed().toStdString();
-            const auto record = decode_sheet_model(m_document->snapshot());
-            if (!record || !std::any_of(record->model.sheets().begin(), record->model.sheets().end(),
-                                        [&](const auto& sheet) { return sheet.id == wanted; })) {
+            const auto wanted = sheet_id.toStdString();
+            const auto snapshot = m_document->snapshot();
+            auto record = owner_id.isEmpty() ? selectedSheetModel(snapshot)
+                                             : std::optional<SheetModelRecord>{};
+            const auto contains_sheet = [&](const SheetViewModel& model) {
+                return std::any_of(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& sheet) { return sheet.id == wanted; });
+            };
+            if (!owner_id.isEmpty()) {
+                const auto found = snapshot.entities().find(owner_id.toStdString());
+                if (found != snapshot.entities().end() && found->second.type == kSheetViewEntityType)
+                    record = SheetModelRecord{found->first, decode_sheet_view_entity(found->second)};
+            } else if (!record || !contains_sheet(record->model)) {
+                // The public single-ID API can still select a unique page in
+                // another set. Repeated IDs retain the current owner's scope;
+                // the UI supplies an explicit owner when changing that scope.
+                record.reset();
+                for (const auto& [id, entity] : snapshot.entities()) {
+                    if (entity.type != kSheetViewEntityType) continue;
+                    auto model = decode_sheet_view_entity(entity);
+                    if (!contains_sheet(model)) continue;
+                    if (record)
+                        throw std::invalid_argument("Choose a sheet set for this repeated drawing sheet identity");
+                    record = SheetModelRecord{id, std::move(model)};
+                }
+            }
+            if (!record || !contains_sheet(record->model)) {
                 throw std::invalid_argument("Drawing sheet identity was not found");
             }
+            m_output_sheet_owner = QString::fromStdString(record->entity_id);
+            m_output_sheet_document = m_document;
             m_output_sheet_id = QString::fromStdString(wanted);
-            if (activatePincPage(wanted)) refresh();
+            (void)activatePincPage(wanted);
+            refresh();
             clearError();
             return true;
         } catch (const std::exception& error) {
@@ -16032,9 +16037,11 @@ public:
 
     [[nodiscard]] QString outputSheetId() const {
         try {
-            const auto record = decode_sheet_model(m_document->snapshot());
+            const auto record = selectedSheetModel(m_document->snapshot());
             if (!record || record->model.sheets().empty()) return {};
-            if (!m_output_sheet_id.isEmpty() &&
+            if (m_output_sheet_document.lock() == m_document &&
+                (m_output_sheet_owner.isEmpty() || m_output_sheet_owner == QString::fromStdString(record->entity_id)) &&
+                !m_output_sheet_id.isEmpty() &&
                 std::any_of(record->model.sheets().begin(), record->model.sheets().end(),
                             [&](const auto& sheet) {
                                 return QString::fromStdString(sheet.id) == m_output_sheet_id;
@@ -35963,6 +35970,8 @@ public:
             m_file_sha256.clear();
             m_selected_id.clear();
             m_output_sheet_id.clear();
+            m_output_sheet_owner.clear();
+            m_output_sheet_document.reset();
             m_project_resource_catalog.reset();
             m_project_resource_names.clear();
             clearPreview();
@@ -36089,6 +36098,8 @@ public:
             }
             m_selected_id.clear();
             m_output_sheet_id.clear();
+            m_output_sheet_owner.clear();
+            m_output_sheet_document.reset();
             m_project_resource_catalog.reset();
             m_project_resource_names.clear();
             clearPreview();
@@ -36133,7 +36144,7 @@ public:
 
     [[nodiscard]] QSizeF sheetPageMm(const DocumentSnapshot& snapshot,
                                      const std::string& sheet_id) const {
-        const auto record = decode_sheet_model(snapshot);
+        const auto record = selectedSheetModel(snapshot, QString::fromStdString(sheet_id));
         if (!record) return QPageSize(selectedPageSize()).size(QPageSize::Millimeter);
         const auto& sheets = record->model.sheets();
         if (sheets.empty()) throw std::invalid_argument("no drawing sheets are defined");
@@ -36171,21 +36182,15 @@ public:
             setError(QStringLiteral("Sheet output blocked: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
-        const Entity* sheet_entity = nullptr;
-        for (const auto& [id, entity] : snapshot.entities()) {
-            (void)id;
-            if (entity.type == kSheetViewEntityType) {
-                sheet_entity = &entity;
-                break;
-            }
-        }
-        if (sheet_entity == nullptr) {
-            outputCanvas()->renderScene(painter, target, true, background);
-            return true;
-        }
         try {
-            const auto model = decode_sheet_view_entity(*sheet_entity);
-            const auto imported_pages=pincPages(snapshot);
+            const auto record = selectedSheetModel(snapshot, QString::fromStdString(sheet_id));
+            if (!record) {
+                outputCanvas()->renderScene(painter, target, true, background);
+                return true;
+            }
+            const auto* sheet_entity = &snapshot.entities().at(record->entity_id);
+            const auto& model = record->model;
+            const auto imported_pages=pincPages(snapshot, record->entity_id);
             if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
             const auto selected_sheet = std::find_if(
                 model.sheets().begin(), model.sheets().end(),
@@ -36825,20 +36830,19 @@ public:
 
     [[nodiscard]] OutputFingerprint outputFingerprintForSnapshot(
         const DocumentSnapshot& snapshot, const std::string& requested_sheet_id) const {
-        const auto sheet = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
-            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
-        if (sheet == snapshot.entities().end()) {
+        const auto sheet = selectedSheetModel(snapshot, QString::fromStdString(requested_sheet_id));
+        if (!sheet) {
             return make_output_fingerprint(snapshot, outputFingerprintInputs(snapshot));
         }
 
-        const auto model = decode_sheet_view_entity(sheet->second);
+        const auto& model = sheet->model;
         if (model.sheets().empty()) {
             throw std::invalid_argument("the persisted sheet graph contains no drawing sheets");
         }
         const auto inputs = outputFingerprintInputs(snapshot, false);
         const auto selected_sheet_id = requested_sheet_id.empty()
             ? model.sheet_order().front() : requested_sheet_id;
-        const auto scene = make_sheet_output_scene(snapshot, sheet->first,
+        const auto scene = make_sheet_output_scene(snapshot, sheet->entity_id,
                                                    selected_sheet_id,
                                                    inputs);
         const auto current = check_sheet_output_scene_current(scene, snapshot, inputs);
@@ -36869,12 +36873,11 @@ public:
 
     [[nodiscard]] OutputFingerprint drawingSetFingerprintForSnapshot(
         const DocumentSnapshot& snapshot) const {
-        const auto sheet = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
-            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
-        if (sheet == snapshot.entities().end())
+        const auto sheet = selectedSheetModel(snapshot);
+        if (!sheet)
             throw std::invalid_argument("the persisted sheet graph is unavailable");
         const auto inputs = outputFingerprintInputs(snapshot, false);
-        const auto scene = make_sheet_set_output_scene(snapshot, sheet->first, inputs);
+        const auto scene = make_sheet_set_output_scene(snapshot, sheet->entity_id, inputs);
         const auto current = check_sheet_set_output_scene_current(scene, snapshot, inputs);
         if (!current.valid)
             throw std::invalid_argument("drawing set output scene is invalid: " + current.error);
@@ -37405,7 +37408,7 @@ public:
         }
         try {
             const auto snapshot = m_document->snapshot();
-            const auto record = decode_sheet_model(snapshot);
+            const auto record = selectedSheetModel(snapshot);
             if (!record || record->model.sheet_order().empty())
                 throw std::invalid_argument("no drawing sheets are defined");
             const auto order = record->model.sheet_order();
@@ -37859,9 +37862,10 @@ public:
         });
     }
 
-    static std::vector<PincPageRecord> pincPages(const DocumentSnapshot& snapshot) {
+    static std::vector<PincPageRecord> pincPages(
+        const DocumentSnapshot& snapshot, const std::string& owner_id = {}) {
         for (const auto& [id,entity]:snapshot.entities()) {
-            (void)id;
+            if (!owner_id.empty() && id != owner_id) continue;
             if (entity.type!=kSheetViewEntityType || !entity.extensions.contains("pinc_import")) continue;
             const auto& metadata=entity.extensions.at("pinc_import");
             if (!metadata.is_object() || metadata.value("version",0)!=1 || !metadata.contains("pages") ||
@@ -37907,11 +37911,21 @@ public:
         return {};
     }
 
+    std::vector<PincPageRecord> selectedPincPages(const DocumentSnapshot& snapshot) const {
+        const auto record = selectedSheetModel(snapshot);
+        return record ? pincPages(snapshot, record->entity_id) : std::vector<PincPageRecord>{};
+    }
+
     bool activatePincPage(const std::string& sheet_id) {
-        const auto pages=pincPages(m_document->snapshot());
+        const auto snapshot = m_document->snapshot();
+        const auto record = selectedSheetModel(snapshot, QString::fromStdString(sheet_id));
+        if (!record) return false;
+        const auto pages=pincPages(snapshot, record->entity_id);
         const auto found=std::find_if(pages.begin(),pages.end(),[&](const auto& page){return page.sheet_id==sheet_id;});
         if (found==pages.end()) return false;
         m_active_layer_id=QString::fromStdString(found->calculation_layer_id);
+        m_output_sheet_owner=QString::fromStdString(record->entity_id);
+        m_output_sheet_document=m_document;
         m_output_sheet_id=QString::fromStdString(sheet_id);
         m_selected_id.clear();m_selected_ids.clear();
         setSketchCompositionGuideEnabled(found->show_print_guide);
@@ -37923,21 +37937,25 @@ public:
         const QSignalBlocker blocker(m_pinc_pages_combo);
         m_pinc_pages_combo->clear();
         try {
-            const auto pages=pincPages(snapshot);
+            const auto record = selectedSheetModel(snapshot);
+            const auto pages=record ? pincPages(snapshot, record->entity_id) : std::vector<PincPageRecord>{};
             m_pinc_pages_combo->setVisible(!pages.empty());
             if (pages.empty()) {m_pinc_pages_document.reset();return;}
             if (m_pinc_pages_document.lock()!=m_document) {
                 m_pinc_pages_document=m_document;
                 std::size_t initial=0;
                 for (const auto& [id,entity]:snapshot.entities()) {
-                    (void)id;
+                    if (record && id != record->entity_id) continue;
                     if (entity.type==kSheetViewEntityType && entity.extensions.contains("pinc_import")) {
                         const auto value=entity.extensions.at("pinc_import").value("current_page",std::size_t{});
                         if (value<pages.size()) initial=value;
                         break;
                     }
                 }
-                (void)activatePincPage(pages[initial].sheet_id);
+                // Reopening restores the imported initial page. A deliberate
+                // sheet-owner selection already supplies the requested page.
+                if (m_output_sheet_document.lock() != m_document)
+                    (void)activatePincPage(pages[initial].sheet_id);
             }
             for (const auto& page:pages) m_pinc_pages_combo->addItem(QString::fromStdString(page.name),QString::fromStdString(page.sheet_id));
             m_pinc_pages_combo->setCurrentIndex(m_pinc_pages_combo->findData(m_output_sheet_id));
@@ -38074,6 +38092,7 @@ public:
             initializeDrawingContext();m_active_layer_id=QString::fromStdString(current.calculation.layer_id);
             m_selected_id.clear();m_selected_ids.clear();m_active_named_view.clear();m_active_named_view_owner.clear();
             m_output_sheet_id=QString::fromStdString(candidate.sheets.sheet_order().at(candidate.current_page));
+            m_output_sheet_owner.clear();m_output_sheet_document.reset();
             m_project_resource_catalog.reset();m_project_resource_names.clear();clearPreview();
             m_tool=CanvasTool::select;m_workspace=Workspace::measurement;syncToolControls();clearError();refresh();fitView();
             return true;
@@ -38158,6 +38177,11 @@ public:
                 auto& children = maps.annotation_child_ids[id];
                 for (const auto& child : native_dxf_annotation_child_identity_ids(owner))
                     children.emplace(child, allocate("annotation-child"));
+            }
+            if (native_dxf_sheet_view_source_type(owner.type)) {
+                auto& views = maps.sheet_view_ids[id];
+                for (const auto& view : native_dxf_sheet_view_source_view_identity_ids(owner, &budget))
+                    views.emplace(view, allocate("sheet-view"));
             }
         }
         std::set<std::string, std::less<>> created_contexts;
@@ -39292,7 +39316,7 @@ public:
         }
         try {
             const auto snapshot = m_document->snapshot();
-            const auto record = decode_sheet_model(snapshot);
+            const auto record = selectedSheetModel(snapshot);
             if (!record || record->model.sheet_order().empty())
                 throw std::invalid_argument("no drawing sheets are defined");
             const auto order = record->model.sheet_order();
@@ -39710,10 +39734,17 @@ public:
         const auto selected_id = [&] {
             return selector->currentData().toString();
         };
+        const auto update_move_buttons = [&] {
+            const auto index = selector->currentIndex();
+            const auto sheet_owner = selector->currentData(Qt::UserRole + 1);
+            move_up->setEnabled(index > 0 && selector->itemData(index - 1, Qt::UserRole + 1) == sheet_owner);
+            move_down->setEnabled(index >= 0 && index + 1 < selector->count() &&
+                selector->itemData(index + 1, Qt::UserRole + 1) == sheet_owner);
+        };
         const auto fill_fields = [&] {
             try {
                 const auto source = authoringSnapshot();
-                const auto record = decode_sheet_model(source);
+                const auto record = selectedSheetModel(source, selected_id());
                 if (!record) {
                     status->setText(QStringLiteral("No drawing sheets are defined."));
                     return;
@@ -39763,33 +39794,49 @@ public:
         const auto fill_selector = [&] {
             try {
                 const auto source = authoringSnapshot();
-                const auto record = decode_sheet_model(source);
+                const auto selected_record = selectedSheetModel(source);
                 QSignalBlocker block(selector);
                 selector->clear();
-                if (!record) {
+                if (!selected_record) {
+                    update_move_buttons();
                     fill_fields();
+                    context = captureModalContext();
                     return;
                 }
-                auto wanted = outputSheetId();
+                const auto wanted = outputSheetId();
                 int wanted_index = -1;
-                const auto& order = record->model.sheet_order();
-                for (int index = 0; index < static_cast<int>(order.size()); ++index) {
-                    const auto found = std::find_if(
-                        record->model.sheets().begin(), record->model.sheets().end(),
-                        [&](const auto& sheet) { return sheet.id == order[static_cast<std::size_t>(index)]; });
-                    if (found == record->model.sheets().end()) continue;
-                    const auto& sheet = *found;
-                    selector->addItem(QStringLiteral("%1  ·  %2")
-                                          .arg(QString::fromStdString(sheet.number),
-                                               QString::fromStdString(sheet.title_block.title)),
-                                      QString::fromStdString(sheet.id));
-                    if (QString::fromStdString(sheet.id) == wanted) wanted_index = index;
+                const auto owner_count = std::count_if(source.entities().begin(), source.entities().end(),
+                    [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+                int set_index = 0;
+                for (const auto& [entity_id, entity] : source.entities()) {
+                    if (entity.type != kSheetViewEntityType) continue;
+                    const auto model = decode_sheet_view_entity(entity);
+                    ++set_index;
+                    for (const auto& sheet_id : model.sheet_order()) {
+                        const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                            [&](const auto& sheet) { return sheet.id == sheet_id; });
+                        if (found == model.sheets().end()) continue;
+                        const auto& sheet = *found;
+                        auto label = QStringLiteral("%1  ·  %2")
+                            .arg(QString::fromStdString(sheet.number), QString::fromStdString(sheet.title_block.title));
+                        if (owner_count > 1) label += QStringLiteral("  ·  Sheet set %1").arg(set_index);
+                        const auto index = selector->count();
+                        selector->addItem(label, QString::fromStdString(sheet.id));
+                        selector->setItemData(index, QString::fromStdString(entity_id), Qt::UserRole + 1);
+                        if (entity_id == selected_record->entity_id && QString::fromStdString(sheet.id) == wanted)
+                            wanted_index = index;
+                    }
                 }
                 if (wanted_index < 0 && selector->count() > 0) wanted_index = 0;
-                if (wanted_index >= 0) selector->setCurrentIndex(wanted_index);
-                move_up->setEnabled(wanted_index > 0);
-                move_down->setEnabled(wanted_index >= 0 && wanted_index + 1 < selector->count());
+                if (wanted_index >= 0) {
+                    selector->setCurrentIndex(wanted_index);
+                    m_output_sheet_owner = selector->currentData(Qt::UserRole + 1).toString();
+                    m_output_sheet_id = selected_id();
+                    m_output_sheet_document = m_document;
+                }
+                update_move_buttons();
                 fill_fields();
+                context = captureModalContext();
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Sheet list is unavailable: %1")
                                     .arg(QString::fromUtf8(error.what())));
@@ -39798,12 +39845,23 @@ public:
         QObject::connect(selector, &QComboBox::currentIndexChanged, &dialog,
                          [&](int index) {
                              if (index < 0) return;
-                             if (selectOutputSheet(selector->itemData(index).toString())) {
-                                 move_up->setEnabled(index > 0);
-                                 move_down->setEnabled(index + 1 < selector->count());
+                             if (selectOutputSheet(selector->itemData(index).toString(),
+                                                   selector->itemData(index, Qt::UserRole + 1).toString())) {
+                                 update_move_buttons();
                                  fill_fields();
+                                 context = captureModalContext();
                              }
                          });
+        const auto sheet_context_current = [&] {
+            if (modalContextUnchanged(context)) return true;
+            fill_selector();
+            return false;
+        };
+        const auto nested_context_current = [&](const ModalContext& nested_context) {
+            if (modalContextUnchanged(nested_context)) return true;
+            fill_selector();
+            return false;
+        };
         const auto move_selected = [&](int offset) {
             const auto id = selected_id();
             if (id.isEmpty() || !modalContextUnchanged(context)) {
@@ -39834,6 +39892,8 @@ public:
             }
         });
         QObject::connect(add, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
             bool accepted = false;
             const auto new_number = QInputDialog::getText(
                 &dialog, QStringLiteral("Add drawing sheet"), QStringLiteral("Sheet number:"),
@@ -39842,18 +39902,21 @@ public:
             const auto new_title = QInputDialog::getText(
                 &dialog, QStringLiteral("Add drawing sheet"), QStringLiteral("Sheet title:"),
                 QLineEdit::Normal, QStringLiteral("New sheet"), &accepted).trimmed();
-            if (!accepted) return;
+            if (!accepted || !nested_context_current(nested_context)) return;
             if (!createDrawingSheet(new_number, QStringLiteral("420"), QStringLiteral("297"), new_title).isEmpty()) {
                 context = captureModalContext();
                 fill_selector();
             }
         });
         QObject::connect(remove, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
             const auto id = selected_id();
             if (id.isEmpty()) return;
             if (QMessageBox::question(&dialog, QStringLiteral("Remove drawing sheet"),
                                       QStringLiteral("Remove the selected sheet? This can be undone.")) !=
                 QMessageBox::Yes) return;
+            if (!nested_context_current(nested_context)) return;
             if (removeDrawingSheet(id)) {
                 context = captureModalContext();
                 fill_selector();
@@ -39861,7 +39924,7 @@ public:
         });
 
         const auto sheet_for_tools = [&]() -> std::optional<DrawingSheet> {
-            const auto record = decode_sheet_model(authoringSnapshot());
+            const auto record = selectedSheetModel(authoringSnapshot(), selected_id());
             if (!record) return std::nullopt;
             const auto id = selected_id().toStdString();
             const auto found = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
@@ -39870,6 +39933,9 @@ public:
             return *found;
         };
         QObject::connect(add_revision, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
+            const auto sheet_id = selected_id();
             if (selected_id().isEmpty()) return;
             bool accepted = false;
             const auto date = QInputDialog::getText(&dialog, QStringLiteral("Add revision"),
@@ -39879,13 +39945,16 @@ public:
             const auto description = QInputDialog::getText(&dialog, QStringLiteral("Add revision"),
                                                            QStringLiteral("Description:"),
                                                            QLineEdit::Normal, {}, &accepted);
-            if (!accepted) return;
-            if (!addSheetRevision(selected_id(), date, description).isEmpty()) {
+            if (!accepted || !nested_context_current(nested_context)) return;
+            if (!addSheetRevision(sheet_id, date, description).isEmpty()) {
                 context = captureModalContext();
                 fill_selector();
             }
         });
         QObject::connect(edit_revision, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
+            const auto sheet_id = selected_id();
             const auto* item = revisions->currentItem();
             if (!item || selected_id().isEmpty()) return;
             const auto revision_id = item->data(Qt::UserRole).toString();
@@ -39904,36 +39973,47 @@ public:
                                                            QStringLiteral("Description:"),
                                                            QLineEdit::Normal, QString::fromStdString(found->description),
                                                            &accepted);
-            if (!accepted) return;
-            if (editSheetRevision(selected_id(), revision_id, date, description)) {
+            if (!accepted || !nested_context_current(nested_context)) return;
+            if (editSheetRevision(sheet_id, revision_id, date, description)) {
                 context = captureModalContext();
                 fill_selector();
             }
         });
         QObject::connect(remove_revision, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
+            const auto sheet_id = selected_id();
             const auto* item = revisions->currentItem();
             if (!item || selected_id().isEmpty()) return;
+            const auto revision_id = item->data(Qt::UserRole).toString();
             if (QMessageBox::question(&dialog, QStringLiteral("Remove revision"),
                                       QStringLiteral("Remove the selected revision? This can be undone.")) !=
                 QMessageBox::Yes) return;
-            if (removeSheetRevision(selected_id(), item->data(Qt::UserRole).toString())) {
+            if (!nested_context_current(nested_context)) return;
+            if (removeSheetRevision(sheet_id, revision_id)) {
                 context = captureModalContext();
                 fill_selector();
             }
         });
         QObject::connect(add_callout, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
+            const auto sheet_id = selected_id();
             if (selected_id().isEmpty()) return;
             const auto sheet = sheet_for_tools();
             if (!sheet) return;
-            const auto record = decode_sheet_model(authoringSnapshot());
+            const auto record = selectedSheetModel(authoringSnapshot(), selected_id());
             if (!record || record->model.sheets().size() < 2) {
                 setError(QStringLiteral("Add sheet callout: create a second drawing sheet first."));
                 return;
             }
             QStringList target_sheets;
+            std::vector<std::string> target_sheet_ids;
             for (const auto& candidate : record->model.sheets()) {
                 if (candidate.id == sheet->id) continue;
-                target_sheets.push_back(QStringLiteral("%1  ·  %2")
+                target_sheet_ids.push_back(candidate.id);
+                target_sheets.push_back(QStringLiteral("%1. %2  ·  %3")
+                                            .arg(static_cast<qulonglong>(target_sheet_ids.size()))
                                             .arg(QString::fromStdString(candidate.number),
                                                  QString::fromStdString(candidate.id)));
             }
@@ -39946,12 +40026,13 @@ public:
                                                              QStringLiteral("Target sheet:"), target_sheets,
                                                              0, false, &accepted);
             if (!accepted) return;
-            // Resolve the selected display row by its stable ID rather than
-            // relying on collection order or the target sheet's number.
+            // The displayed choices have an explicit ID mapping. Suffix
+            // matching would confuse valid local IDs such as b and a-b.
+            const auto target_index = target_sheets.indexOf(target_choice);
+            if (target_index < 0) return;
+            const auto& target_id = target_sheet_ids.at(static_cast<std::size_t>(target_index));
             const auto target_pos = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
-                [&](const auto& candidate) {
-                    return target_choice.endsWith(QString::fromStdString(candidate.id));
-                });
+                [&](const auto& candidate) { return candidate.id == target_id; });
             if (target_pos == record->model.sheets().end() || target_pos->viewports.empty()) return;
             QStringList target_viewports;
             for (const auto& viewport : target_pos->viewports)
@@ -39967,21 +40048,25 @@ public:
             const auto y = QInputDialog::getText(&dialog, QStringLiteral("Add callout"),
                                                  QStringLiteral("Y on sheet (mm):"), QLineEdit::Normal,
                                                  QStringLiteral("20"), &accepted);
-            if (!accepted) return;
-            if (!addSheetCallout(selected_id(), label, QString::fromStdString(target_pos->id),
+            if (!accepted || !nested_context_current(nested_context)) return;
+            if (!addSheetCallout(sheet_id, label, QString::fromStdString(target_pos->id),
                                  viewport, x, y).isEmpty()) {
                 context = captureModalContext();
                 fill_selector();
             }
         });
         QObject::connect(edit_callout, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
+            const auto sheet_id = selected_id();
             const auto* item = callouts->currentItem();
             if (!item || selected_id().isEmpty()) return;
+            const auto callout_id = item->data(Qt::UserRole).toString();
             const auto sheet = sheet_for_tools();
-            const auto record = decode_sheet_model(authoringSnapshot());
+            const auto record = selectedSheetModel(authoringSnapshot(), selected_id());
             if (!sheet || !record) return;
             const auto found = std::find_if(sheet->callouts.begin(), sheet->callouts.end(),
-                [&](const auto& value) { return QString::fromStdString(value.id) == item->data(Qt::UserRole).toString(); });
+                [&](const auto& value) { return QString::fromStdString(value.id) == callout_id; });
             if (found == sheet->callouts.end()) return;
             bool accepted = false;
             const auto label = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
@@ -40005,20 +40090,25 @@ public:
             const auto y = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
                                                  QStringLiteral("Y on sheet (mm):"), QLineEdit::Normal,
                                                  QString::number(found->y_mm, 'g', 12), &accepted);
-            if (!accepted) return;
-            if (editSheetCallout(selected_id(), item->data(Qt::UserRole).toString(), label,
+            if (!accepted || !nested_context_current(nested_context)) return;
+            if (editSheetCallout(sheet_id, callout_id, label,
                                  target_sheet_id, target_viewport_id, x, y)) {
                 context = captureModalContext();
                 fill_selector();
             }
         });
         QObject::connect(remove_callout, &QPushButton::clicked, &dialog, [&] {
+            if (!sheet_context_current()) return;
+            const auto nested_context = captureModalContext();
+            const auto sheet_id = selected_id();
             const auto* item = callouts->currentItem();
             if (!item || selected_id().isEmpty()) return;
+            const auto callout_id = item->data(Qt::UserRole).toString();
             if (QMessageBox::question(&dialog, QStringLiteral("Remove callout"),
                                       QStringLiteral("Remove the selected callout? This can be undone.")) !=
                 QMessageBox::Yes) return;
-            if (removeSheetCallout(selected_id(), item->data(Qt::UserRole).toString())) {
+            if (!nested_context_current(nested_context)) return;
+            if (removeSheetCallout(sheet_id, callout_id)) {
                 context = captureModalContext();
                 fill_selector();
             }
@@ -40035,7 +40125,7 @@ public:
         const auto context = captureModalContext();
         try {
             const auto source = authoringSnapshot();
-            const auto record = decode_sheet_model(source);
+            const auto record = selectedSheetModel(source);
             if (!record || record->model.sheets().empty())
                 throw std::invalid_argument("No typed drawing sheet is available.");
             const auto source_sheet_id=outputSheetId();
@@ -40050,7 +40140,8 @@ public:
             // Accepting unchanged or restored fields must not register it in
             // an older saved model or create an authoring history entry.
             if (replacement.to_json() == prepared.to_json()) {
-                if (!selected_sheet.isEmpty()) (void)selectOutputSheet(selected_sheet);
+                if (!selected_sheet.isEmpty())
+                    (void)selectOutputSheet(selected_sheet, QString::fromStdString(record->entity_id));
                 return;
             }
             // The dialog can select a newly staged page. Validate the original
@@ -40061,7 +40152,8 @@ public:
                                          })) {
                 return;
             }
-            if (!selected_sheet.isEmpty()) (void)selectOutputSheet(selected_sheet);
+            if (!selected_sheet.isEmpty())
+                (void)selectOutputSheet(selected_sheet, QString::fromStdString(record->entity_id));
         } catch (const std::exception& error) {
             setError(QStringLiteral("Sheet layout: %1").arg(QString::fromUtf8(error.what())));
         }
@@ -52231,6 +52323,22 @@ private:
             // Source acquisition must precede selection reconciliation: a
             // replaced recovery head cannot prune selection from a stale base.
             const auto snapshot = authoringSnapshot();
+            if (m_output_sheet_document.lock() == m_document && !m_output_sheet_owner.isEmpty()) {
+                const auto found = snapshot.entities().find(m_output_sheet_owner.toStdString());
+                if (found == snapshot.entities().end() || found->second.type != kSheetViewEntityType) {
+                    m_output_sheet_owner.clear();
+                    m_output_sheet_id.clear();
+                    m_output_sheet_document.reset();
+                    m_pinc_pages_document.reset();
+                } else {
+                    const auto model = decode_sheet_view_entity(found->second);
+                    if (std::none_of(model.sheets().begin(), model.sheets().end(),
+                        [&](const auto& sheet) { return sheet.id == m_output_sheet_id.toStdString(); })) {
+                        m_output_sheet_id = model.sheet_order().empty() ? QString{}
+                            : QString::fromStdString(model.sheet_order().front());
+                    }
+                }
+            }
             // Legacy single-object authoring commands still set the primary ID.
             // Reconcile that deliberate replacement before presenting selection.
             if (m_generated_label_selection_document.lock()!=m_document || !m_selected_id.isEmpty())
@@ -56687,7 +56795,7 @@ private:
         m_architecturalCanvas->clearFloorGhost();
         m_floor_reference_projection_error.clear();
         try {
-            const auto pages=pincPages(snapshot);
+            const auto pages=selectedPincPages(snapshot);
             const auto current=std::find_if(pages.begin(),pages.end(),[&](const auto& page){return page.sheet_id==m_output_sheet_id.toStdString();});
             if (current!=pages.end() && current->ghost_previous && current!=pages.begin() &&
                 std::prev(current)->source_page_index+1==current->source_page_index) {
@@ -61700,6 +61808,7 @@ private:
         std::optional<DocumentSnapshot> source;
         std::vector<CanvasLabelPresentationIdentity> generated_label_selection;
         QString phase_registry_id;
+        QString sheet_owner_id;
     };
 
     struct WorkspaceAuthorityToken {
@@ -62024,11 +62133,15 @@ private:
         ModalContext context{m_document, m_document->revision(), m_selected_id, m_active_layer_id, m_metric_units, {}};
         context.generated_label_selection=m_selected_generated_labels;
         context.phase_registry_id=modelPhaseRegistryId();
-        try { context.source=authoringSnapshot(); }
+        try {
+            context.source=authoringSnapshot();
+            context.sheet_owner_id = selectedSheetOwnerId(*context.source);
+        }
         catch (const std::exception&) {
             // Signal handlers may capture focus/input context without an
             // exception boundary. An unavailable source creates no authority;
             // admission below refuses this absent capture without throwing.
+            context.source.reset();
         }
         return context;
     }
@@ -62043,6 +62156,11 @@ private:
                 return false;
             }
             const auto current=authoringSnapshot();
+            const auto sheet_owner_id = selectedSheetOwnerId(current);
+            if (sheet_owner_id != context.sheet_owner_id) {
+                setError(QStringLiteral("The selected sheet set changed while the dialog was open. Reopen the tool to use the current sheet set."));
+                return false;
+            }
             // Save markers do not change the authored source. Shared immutable
             // history is an exact fast path; detached sources compare the
             // complete v2 proof domain, including geometry-edit receipts.
@@ -65171,6 +65289,8 @@ private:
     QAction* m_architectural_view_control_action{};
     std::vector<QAction*> m_architectural_actions;
     QString m_output_sheet_id;
+    QString m_output_sheet_owner;
+    std::weak_ptr<Document> m_output_sheet_document;
     bool m_pinc_import_active{};
     QComboBox* m_pinc_pages_combo{};
     std::weak_ptr<Document> m_pinc_pages_document;

@@ -18,6 +18,8 @@ namespace {
 using Json = nlohmann::json;
 using Owners = std::map<std::string, Entity, std::less<>>;
 using References = std::map<std::string, std::string, std::less<>>;
+References output_view_sources(const Entity& source, const Owners& authored,
+    NativeDxfWallSourceWorkBudget* work_budget);
 
 [[noreturn]] void refuse(const std::string& reason) {
     throw std::invalid_argument("Native DXF annotation source: " + reason);
@@ -30,6 +32,13 @@ std::string reference(const Json& value) {
         std::none_of(text.begin(), text.end(), [](unsigned char c) { return c < 32 || c == 127; }) &&
         !std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isspace(c); }),
         "invalid document owner reference");
+    return text;
+}
+const std::string& local_view_id(const Json& value) {
+    require(value.is_string(), "local view identity must be a string");
+    const auto& text = value.get_ref<const std::string&>();
+    require(!text.empty() && !std::all_of(text.begin(), text.end(),
+        [](unsigned char c) { return std::isspace(c); }), "blank local view identity");
     return text;
 }
 void supported_source(const Entity& source) {
@@ -80,7 +89,8 @@ bool local_child_override(const Json& row, const Owners& authored, const std::se
     // Other same-spelled document records do not shadow local artwork.
     return (owner == authored.end() || !appearance_owner(owner->second.type)) && children.contains(id);
 }
-template<class Callback> void references(const Entity& source, const Owners& authored, Callback visit) {
+template<class Callback> void references(const Entity& source, const Owners& authored, Callback visit,
+    NativeDxfWallSourceWorkBudget* work_budget) {
     supported_source(source);
     if (source.type != kAnnotationEntityType) {
         visit(source.properties.at("target").at("entity_id"), std::string_view{});
@@ -100,6 +110,7 @@ template<class Callback> void references(const Entity& source, const Owners& aut
                 visit(placement.at("layer_id"), std::string_view{"layer"});
         }
     }
+    const auto view_sources = output_view_sources(source, authored, work_budget);
     for (const auto& row : state.at("overrides")) {
         require(row.is_object() && row.contains("target_kind") && row.at("target_kind").is_string() &&
             row.contains("target_id") && row.at("target_id").is_string(), "invalid presentation target");
@@ -108,6 +119,8 @@ template<class Callback> void references(const Entity& source, const Owners& aut
         // Saved output-view IDs belong to the sheet/view model's own namespace.
         if (owner_override(kind) && !local_child_override(row, authored, children))
             visit(row.at("target_id"), std::string_view{});
+        if (kind == "output_view")
+            visit(Json(view_sources.at(row.at("target_id").get_ref<const std::string&>())), std::string_view{"sheet_view_model"});
     }
 }
 void charge(std::size_t& consumed, std::size_t amount, std::size_t maximum, const char* reason) {
@@ -121,6 +134,51 @@ void work(NativeDxfWallSourceWorkBudget& budget, std::size_t amount) {
 void product_work(NativeDxfWallSourceWorkBudget& budget, std::size_t a, std::size_t b) {
     require(!b || a <= native_dxf_phase_source_work_limit / b, "support work product limit");
     work(budget, a * b);
+}
+References output_view_sources(const Entity& source, const Owners& authored,
+    NativeDxfWallSourceWorkBudget* work_budget) {
+    if (source.type != kAnnotationEntityType) return {};
+    NativeDxfWallSourceWorkBudget local; auto& budget = work_budget ? *work_budget : local;
+    const auto& rows = source.properties.at("state").at("overrides");
+    require(rows.is_array() && rows.size() <= native_dxf_phase_source_node_limit, "view override inventory limit");
+    product_work(budget, rows.size(), 512);
+    References requested;
+    for (const auto& row : rows)
+        if (row.at("target_kind") == "output_view") {
+            const auto& id = local_view_id(row.at("target_id"));
+            require(id.size() <= 256, "output view target identity limit");
+            work(budget, id.size() + 1);
+            requested.emplace(id, std::string{});
+        }
+    if (requested.empty()) return {};
+    require(authored.size() <= native_dxf_phase_source_owner_limit, "view companion owner inventory limit");
+    product_work(budget, authored.size(), 256);
+    std::set<std::string, std::less<>> ambiguous;
+    std::size_t view_count = 0;
+    std::size_t lookup_steps = 1;
+    for (auto count = requested.size(); count > 1; count = (count + 1) / 2) ++lookup_steps;
+    for (const auto& [owner_id, owner] : authored) {
+        if (owner.type != "sheet_view_model") continue;
+        require(owner.id == owner_id && owner.properties.is_object(), "view companion identity mismatch");
+        const auto& model = owner.properties.at("model");
+        const auto& views = model.at("views");
+        require(views.is_array(), "view companion inventory shape");
+        charge(view_count, views.size(), native_dxf_phase_source_node_limit, "view companion inventory limit");
+        product_work(budget, views.size(), 512);
+        for (const auto& view : views) {
+            const auto& id = local_view_id(view.at("id"));
+            product_work(budget, id.size() + 1, lookup_steps);
+            const auto found = requested.find(id);
+            if (found == requested.end()) continue;
+            if (!found->second.empty()) ambiguous.insert(id);
+            else found->second = reference(Json(owner_id));
+        }
+    }
+    for (const auto& [id, owner] : requested)
+        require(!owner.empty() && !ambiguous.contains(id), "output view requires one unambiguous actual companion: " + id);
+    // This reads only typed identities. The graph admits and validates each
+    // selected companion with its strict codec before granting publication.
+    return requested;
 }
 std::size_t raw(const Json& value, NativeDxfWallSourceWorkBudget& budget, std::size_t depth = 0) {
     require(depth <= native_dxf_phase_source_depth_limit, "raw JSON depth limit");
@@ -228,7 +286,8 @@ std::vector<std::string> native_dxf_annotation_child_identity_ids(const Entity& 
     }
     return {result.begin(), result.end()};
 }
-References native_dxf_annotation_source_dependencies(const Entity& source, const Owners& authored) {
+References native_dxf_annotation_source_dependencies(const Entity& source, const Owners& authored,
+    NativeDxfWallSourceWorkBudget* work_budget) {
     References result;
     references(source, authored, [&](const Json& value, std::string_view role) {
         const auto id = reference(value);
@@ -236,13 +295,15 @@ References native_dxf_annotation_source_dependencies(const Entity& source, const
         require(inserted || role.empty() || found->second.empty() || found->second == role,
             "conflicting support reference roles " + id);
         if (!role.empty()) found->second = role;
-    });
+    }, work_budget);
     return result;
 }
 void remap_native_dxf_annotation_source_dependencies(Entity& source,
     const Owners& authored, const References& owner_mapping, const References& context_mapping,
-    const NativeDxfAnnotationChildMaps& child_mapping) {
-    (void)native_dxf_annotation_source_dependencies(source, authored);
+    const NativeDxfAnnotationChildMaps& child_mapping, const NativeDxfAnnotationChildMaps& sheet_view_mapping,
+    NativeDxfWallSourceWorkBudget* work_budget) {
+    (void)native_dxf_annotation_source_dependencies(source, authored, work_budget);
+    const auto view_sources = output_view_sources(source, authored, work_budget);
     const auto child_ids = native_dxf_annotation_child_identity_ids(source);
     const std::set<std::string, std::less<>> children(child_ids.begin(), child_ids.end());
     const auto child_scope = child_mapping.find(source.id);
@@ -270,7 +331,7 @@ void remap_native_dxf_annotation_source_dependencies(Entity& source,
                 id = mapped(id, context_mapping);
             }
         }
-        for (auto& row : state.at("overrides"))
+        for (auto& row : state.at("overrides")) {
             if (owner_override(row.at("target_kind").get_ref<const std::string&>())) {
                 auto& id = row.at("target_id");
                 if (local_child_override(row, authored, children)) {
@@ -278,6 +339,21 @@ void remap_native_dxf_annotation_source_dependencies(Entity& source,
                         id = child_scope->second.at(id.get_ref<const std::string&>());
                 } else id = mapped(id, owner_mapping);
             }
+            if (row.at("target_kind") == "output_view") {
+                auto& id = row.at("target_id");
+                const auto companion = view_sources.at(id.get_ref<const std::string&>());
+                const auto scope = sheet_view_mapping.find(companion);
+                if (scope != sheet_view_mapping.end()) {
+                    const auto found = scope->second.find(local_view_id(id));
+                    require(found != scope->second.end(), "local view missing from destination map");
+                    const auto& destination = found->second;
+                    require(destination.size() <= 256, "mapped output view target identity limit");
+                    if (work_budget) work(*work_budget, destination.size() + 1);
+                    (void)local_view_id(Json(destination));
+                    id = destination;
+                }
+            }
+        }
     }
     // Mapped owners are not present in the source evidence map. Recheck only
     // intrinsic shape/local identities; destination closure is the graph's job.
@@ -296,7 +372,7 @@ void admit_native_dxf_annotation_source_work(const Entity& source, const Owners&
     const auto nodes = raw_owner(source, budget);
     product_work(budget, nodes, 32 * codec_replays);
     supported_source(source);
-    (void)native_dxf_annotation_source_dependencies(source, authored);
+    (void)native_dxf_annotation_source_dependencies(source, authored, &budget);
     if (source.type == kAnnotationEntityType) {
         const auto& state = source.properties.at("state");
         // Reserve the built-in catalog's construction/validation and searches
@@ -332,14 +408,13 @@ void admit_native_dxf_annotation_source_work(const Entity& source, const Owners&
         reserve_target(target, budget);
     }
 }
-void validate_native_dxf_annotation_source(const Entity& source, const Owners& authored) {
+void validate_native_dxf_annotation_source(const Entity& source, const Owners& authored,
+    NativeDxfWallSourceWorkBudget* work_budget) {
     supported_source(source);
     const auto& owner = actual(authored, source.id, source.type);
     require(owner == source, "support owner differs from actual source inventory");
-    for (const auto& [id, role] : native_dxf_annotation_source_dependencies(source, authored)) (void)actual(authored, id, role);
+    for (const auto& [id, role] : native_dxf_annotation_source_dependencies(source, authored, work_budget)) (void)actual(authored, id, role);
     if (source.type == kAnnotationEntityType) {
-        for (const auto& row : source.properties.at("state").at("overrides"))
-            require(row.at("target_kind") != "output_view", "saved output-view override requires companion sheet/view source transport");
         validate_annotation_entity(source);
     }
     else {

@@ -21,11 +21,20 @@ admission. Projects without this proof retain their existing reader floor.
 
 The V9 DXF authoring graph now accepts version two with a nonempty `support_ids`
 inventory for annotation states, dimensions and constraints; support-free graphs
-continue using version one. Annotation child placement IDs can be freshened
+continue using version one. Version three has the same fields and is required
+exactly when a sheet/view companion is present. Annotation child placement IDs can be freshened
 independently of document-owner and catalog IDs. `PHASE_SUPPORT_PLAN_V1` CAD
 blocks authenticate each support owner's retained depiction separately from
-architectural body blocks. Output-view presentation overrides still require
-companion sheet/view transport and are not silently discarded.
+architectural body blocks. Sheet/view companions retain their complete raw
+models, including sheets, viewports, overlays, revisions, schedules and
+cross-sheet callouts. Object, appearance and associative dimension hosts follow
+actual owner maps. View identities use companion-scoped maps, including saved
+output-view presentation overrides; other local identities remain unchanged.
+Missing unbound overlay witnesses retain detached coordinates and raw names.
+Admission rejects a map that would attach such a witness to an unrelated
+imported or existing owner in either direction. Imported view names must not
+shadow existing output views. Sheet support blocks are authenticated metadata
+with empty CAD pictures; this does not implement external CAD paper layouts.
 
 These are source contracts under integration. Compilation, storage round trips,
 history/recovery replay and external CAD interoperability remain unverified.
