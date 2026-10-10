@@ -1,7 +1,10 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/slab_semantics.hpp"
+#include "sketch/wall_semantics.hpp"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <iterator>
@@ -26,6 +29,57 @@ void local_identifier(const std::string& value) {
     // characters/length on authored part, type, profile or embedded instance IDs.
     require(!value.empty() && !std::all_of(value.begin(), value.end(),
         [](unsigned char c) { return std::isspace(c); }), "assembly identifier/name must not be blank");
+}
+struct ArchitecturalMaterialReferenceSite {
+    // Absence identifies the root properties.material_assignment envelope.
+    std::optional<std::size_t> layer_index;
+    ArchitecturalMaterialSourceReference reference;
+};
+std::vector<ArchitecturalMaterialReferenceSite> architectural_material_reference_sites(const Entity& source) {
+    const auto& properties = source.properties;
+    require(properties.is_object(), "architectural material source properties must be an object");
+    std::vector<ArchitecturalMaterialReferenceSite> result;
+    if (properties.contains("material_assignment")) {
+        static constexpr std::array<std::string_view, 11> roles{
+            "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam", "roof_join"};
+        require(std::find(roles.begin(), roles.end(), source.type) != roles.end(),
+            "material assignment requires an architectural object");
+        const auto& assignment = properties.at("material_assignment");
+        require(assignment.is_object() && assignment.contains("version") &&
+            assignment.at("version").is_number_integer() && assignment.at("version") == 1 &&
+            assignment.contains("catalog_id") && assignment.at("catalog_id").is_string() &&
+            assignment.contains("material_id") && assignment.at("material_id").is_string(),
+            "architectural material assignment must be version 1 with string identities");
+        ArchitecturalMaterialSourceReference reference{assignment.at("catalog_id").get<std::string>(),
+            assignment.at("material_id").get<std::string>()};
+        identifier(reference.catalog_id);
+        local_identifier(reference.material_id);
+        result.push_back({std::nullopt, std::move(reference)});
+    }
+    if ((source.type == "wall" || source.type == "slab") && properties.contains("layers")) {
+        const auto& raw_layers = properties.at("layers");
+        // The codecs enforce the same cap after decoding; charge it before their
+        // reserve/iteration as this inventory may inspect detached input.
+        require(raw_layers.is_array() && raw_layers.size() <= 1024,
+            "architectural material source layer count exceeds the supported limit or is not an array");
+        const auto canonical = properties.find("thickness_m");
+        const auto legacy = properties.find("thickness");
+        const auto* thickness = canonical != properties.end() ? &canonical.value() :
+            (legacy != properties.end() ? &legacy.value() : nullptr);
+        require(thickness != nullptr && thickness->is_number(),
+            "architectural material source layers require a numeric thickness_m");
+        const auto append = [&](const auto& layers) {
+            for (std::size_t i = 0; i < layers.size(); ++i) {
+                if (layers[i].material) {
+                    const auto& material = *layers[i].material;
+                    result.push_back({i, {material.catalog_id, material.material_id}});
+                }
+            }
+        };
+        if (source.type == "wall") append(parse_wall_layers(raw_layers, thickness->get<double>()));
+        else append(parse_slab_layers(raw_layers, thickness->get<double>()));
+    }
+    return result;
 }
 void validate_profile_presentation_identity(const AssemblyProfilePresentationIdentity& identity) {
     identifier(identity.catalog_id);
@@ -70,6 +124,34 @@ ApplyEntityChanges upsert(const DocumentSnapshot& source, Entity entity,
     validate_document_assembly_instances(candidate);
     return {expected, {EntityChange::upsert(std::move(entity))}, {}, label};
 }
+}
+
+std::vector<ArchitecturalMaterialSourceReference> architectural_material_source_refs(const Entity& source) {
+    std::set<std::pair<std::string, std::string>> unique;
+    for (const auto& site : architectural_material_reference_sites(source))
+        unique.emplace(site.reference.catalog_id, site.reference.material_id);
+    std::vector<ArchitecturalMaterialSourceReference> result;
+    result.reserve(unique.size());
+    for (const auto& [catalog_id, material_id] : unique) result.push_back({catalog_id, material_id});
+    return result;
+}
+Entity remap_architectural_material_source_refs(const Entity& source,
+    const std::map<std::string, std::string, std::less<>>& catalog_mapping) {
+    const auto sites = architectural_material_reference_sites(source);
+    // Validate all reached mappings before copying or patching any raw data.
+    for (const auto& site : sites) {
+        const auto destination = catalog_mapping.find(site.reference.catalog_id);
+        require(destination != catalog_mapping.end(), "architectural material catalog mapping is missing");
+        identifier(destination->second);
+    }
+    Entity result = source;
+    for (const auto& site : sites) {
+        auto& assignment = site.layer_index
+            ? result.properties.at("layers").at(*site.layer_index).at("material_assignment")
+            : result.properties.at("material_assignment");
+        assignment.at("catalog_id") = catalog_mapping.at(site.reference.catalog_id);
+    }
+    return result;
 }
 
 nlohmann::json encode_assembly_profile_presentation_identity(

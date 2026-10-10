@@ -61,6 +61,23 @@ using EmbeddedAssemblyPresentationIds =
     expand_document_assembly_instances(const AssemblyDocumentEntities& entities,
         AssemblyExpansionBudget& budget);
 void validate_document_assembly_instances(const AssemblyDocumentEntities& entities);
+struct ArchitecturalMaterialSourceReference {
+    std::string catalog_id;
+    std::string material_id;
+    bool operator==(const ArchitecturalMaterialSourceReference&) const = default;
+};
+// Sorted unique catalog/local-material pairs from architectural root assignments
+// and wall/slab layer assignments. Validates the typed envelopes and layer stack,
+// including its count bound, without resolving catalog existence or material rows.
+// Root assignment extras and unrelated nested JSON are opaque.
+[[nodiscard]] std::vector<ArchitecturalMaterialSourceReference>
+    architectural_material_source_refs(const Entity& source);
+// Requires a valid explicit destination document ID for every reached catalog.
+// Patches only typed catalog_id slots; entity/local IDs, raw numeric forms, layer
+// order, assignment extras and all other properties/extensions remain unchanged.
+// Catalog transport and destination admission remain the caller's responsibility.
+[[nodiscard]] Entity remap_architectural_material_source_refs(const Entity& source,
+    const std::map<std::string, std::string, std::less<>>& catalog_mapping);
 // Detached minimal catalogs for selected independent roots. Validates the entire
 // source first; catalogs contain no legacy instances or host references.
 [[nodiscard]] AssemblyDocumentEntities assembly_clipboard_dependencies(

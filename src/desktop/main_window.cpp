@@ -702,7 +702,8 @@ void remap_copy_room_repair_history(json& operations,
 }
 
 void remap_entity_references(Entity& entity,
-                            const std::map<std::string, std::string, std::less<>>& remap) {
+                            const std::map<std::string, std::string, std::less<>>& remap,
+                            const std::map<std::string, std::string, std::less<>>* material_catalog_mapping = nullptr) {
     const auto reference = [&](json& object, const char* key) {
         const auto found = object.find(key);
         if (found != object.end()) remap_clipboard_json(*found, remap);
@@ -788,8 +789,19 @@ void remap_entity_references(Entity& entity,
                     reference(object,"object_id");
         }
     }
-    if (properties.contains("material_assignment"))
-        reference(properties.at("material_assignment"), "catalog_id");
+    const auto material_sources = architectural_material_source_refs(entity);
+    if (!material_sources.empty()) {
+        std::map<std::string, std::string, std::less<>> catalogs;
+        for (const auto& material : material_sources) {
+            // Catalog owners occupy a document namespace. Local geometry IDs
+            // in remap may have identical spelling and must not capture them.
+            // Same-project edits retain catalogs; detached paste supplies a
+            // separate map derived only from actual catalog payload owners.
+            catalogs.emplace(material.catalog_id, material_catalog_mapping
+                ? material_catalog_mapping->at(material.catalog_id) : material.catalog_id);
+        }
+        entity = remap_architectural_material_source_refs(entity, catalogs);
+    }
     if (entity.type == "boundary" || entity.type == "measurement_boundary" ||
         entity.type == "room_boundary") {
         std::map<std::pair<std::string,std::string>,std::string> source_segment_ids;
@@ -30854,10 +30866,8 @@ public:
         std::vector<std::string> independent_roots;
         for(const auto& entity : entities) {
             if (entity.type == "assembly_instance") independent_roots.push_back(entity.id);
-            if(!entity.properties.contains("material_assignment")) continue;
-            const auto& assignment = entity.properties.at("material_assignment");
-            material_dependencies[assignment.at("catalog_id").get<std::string>()].insert(
-                assignment.at("material_id").get<std::string>());
+            for (const auto& material : architectural_material_source_refs(entity))
+                material_dependencies[material.catalog_id].insert(material.material_id);
         }
         auto assembly_dependencies = assembly_clipboard_dependencies(snapshot, independent_roots);
         for(const auto& [catalog_id, material_ids] : material_dependencies) {
@@ -30872,8 +30882,11 @@ public:
             for(const auto& material : catalog.materials())
                 if(material_ids.contains(material.id) && std::none_of(used.begin(),used.end(),
                     [&](const auto& value) { return value.id == material.id; })) used.push_back(material);
+            const auto retained_model = retain_assembly_catalog_dialect(
+                snapshot.entities().at(catalog_id).properties.at("model"),
+                AssemblyModel::create(std::move(used),std::move(used_types),{}).to_json());
             assembly_dependencies.insert_or_assign(catalog_id, Entity{catalog_id,"assembly_model",{{"version",1},
-                {"model",AssemblyModel::create(std::move(used),std::move(used_types),{}).to_json()}},false,json::object()});
+                {"model",retained_model}},false,json::object()});
         }
         for (auto& [id,catalog] : assembly_dependencies) {
             (void)id;
@@ -33075,13 +33088,20 @@ public:
             std::vector<Entity> source_entities;
             source_entities.reserve(payload.at("entities").size());
             std::set<std::string, std::less<>> source_ids;
+            std::set<std::string, std::less<>> source_catalog_ids;
             for (const auto& value : payload.at("entities")) {
                 auto entity = clipboard_entity_from_json(value);
                 if (!source_ids.insert(entity.id).second) {
                     throw std::invalid_argument("Clipboard contains duplicate entity identities.");
                 }
+                if (entity.type == "assembly_model") source_catalog_ids.insert(entity.id);
                 source_entities.push_back(std::move(entity));
             }
+
+            for (const auto& entity : source_entities)
+                for (const auto& material : architectural_material_source_refs(entity))
+                    if (!source_catalog_ids.contains(material.catalog_id))
+                        throw std::invalid_argument("Clipboard material assignments require an assembly catalog in the copied graph.");
 
             const auto source = authoringSnapshot();
             if(siteCanvas(m_architecturalCanvas))requireSitePublicationCurrent();
@@ -33208,6 +33228,11 @@ public:
                 }
             }
 
+            std::map<std::string, std::string, std::less<>> material_catalog_mapping;
+            for (const auto& entity : source_entities)
+                if (entity.type == "assembly_model") material_catalog_mapping.emplace(entity.id,
+                    reused_catalogs.contains(entity.id) ? entity.id : remap.at(entity.id));
+
             const auto root_ids = payload.value("root_ids", json::array({payload.value("root_id",source_entities.front().id)}));
             if (!root_ids.is_array() || root_ids.empty() || root_ids.size() > kMaximumClipboardEntities)
                 throw std::invalid_argument("Clipboard selection roots are invalid.");
@@ -33247,7 +33272,7 @@ public:
                 if(entity.type==kAnnotationEntityType) {
                     // Model references and owner-local identities are separate
                     // namespaces, even if their strings happen to be equal.
-                    remap_entity_references(entity,remap);
+                    remap_entity_references(entity,remap,&material_catalog_mapping);
                     for(const auto* collection:{"labels","symbols"}) {
                         auto& records=entity.properties.at("state").at(collection);
                         const auto& originals=original.properties.at("state").at(collection);
@@ -33265,7 +33290,7 @@ public:
                         if(child!=children.end())overrides[index]["target_id"]=child->second;
                     }
                 } else if(entity.type!="assembly_model") {
-                    remap_entity_references(entity, remap);
+                    remap_entity_references(entity, remap, &material_catalog_mapping);
                 }
                 if (entity.type == "measurement_linework")
                     entity.extensions["measurement_linework_copy_scope"] = {{"version",1}};

@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 wall/slab layer material copying — source implementation
+
+Clipboard dependency collection and reference remapping now include each typed
+wall/slab layer material assignment as well as the architectural object's root
+assignment. The shared codec validates the saved layer stack with canonical-first
+thickness lookup and a count limit before decoding. Remapping patches only
+catalog owner IDs; raw thickness values, layer ordering/IDs, local material IDs,
+assignment extras and opaque object data remain intact.
+
+Detached paste requires an actual assembly catalog owner in its payload for
+every material assignment and builds a separate catalog mapping. Geometry-local
+IDs with equal spelling cannot capture catalog references. Same-project clones
+retain their existing catalog owners. Minimal clipboard catalogs keep the source
+catalog dialect, including supported raw unchanged rows. The existing reviewed
+single-command paste admits the complete candidate before publication.
+
+Root source review covered missing/wrong-role catalog owners, layer-only and
+mixed root/layer assignments, canonical/legacy thickness precedence, ordinary
+clone callers, reused catalogs and local/global identity collisions. Independent
+source review approved the frozen scope with no concrete remaining P1/P2 finding.
+Scoped `git diff --check` passed. No build, test, new test, probe, script,
+native job, launch, package or installation has run. These source changes remain
+uncompiled and runtime-unverified; the installed candidate is unchanged. Complete
+catalog/assembly transport, including unused rows, embedded instances and opaque
+catalog metadata, remains an exchange implementation gap.
+
 ### October 10 physical-room DXF transfer — source implementation
 
 Source implementation is underway in the shared DXF mapper, isolated import
@@ -53,13 +79,9 @@ typed entity/layer assignments, then stage reviewed catalog identities before
 final Document admission. IFC material representation alone does not implement
 that authoring graph. This remains implementation work, not an external wait.
 
-A separate source correction is in progress for material copying. Clipboard
-dependency collection currently sees root assignments but omits wall/slab layer
-assignments. A shared typed inventory/remapper has been implemented and reviewed
-by root; desktop collection and remapping still need integration. External
-catalog IDs must change through explicit mappings; material and layer IDs remain
-local. This correction does not substitute minimal clipboard catalogs for the
-complete editable catalog transport required above.
+The separate material-copy correction is recorded above. It does not substitute
+minimal clipboard catalogs for the complete editable catalog transport required
+here.
 
 ### October 9 physical-room source copies
 
