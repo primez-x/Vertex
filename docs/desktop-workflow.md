@@ -898,12 +898,17 @@ a surviving callout cannot be removed until that callout is removed or retargete
 All changes stay detached inside the dialog until **OK** commits the complete
 layout as one Document command; **Cancel** discards the staged layout.
 
-Schedule placements are capacity-aware in every shared output path. When a
-placement cannot show all revision-bound rows, the renderer reserves a final
-warning row with the omitted count and asks the user to enlarge the placement;
-when the body has no row capacity, the same notice is appended to the schedule
-heading. Rows are never silently discarded, and an adequately sized placement
-does not emit a false overflow warning.
+Ordinary schedule placements print every projected field, including fields
+present only in later rows, alongside the mark and object identity. Column
+widths reflect their content, and headers and values wrap at the sheet's paper
+text size. Each printed row includes all of its fields. When the placement
+cannot show every complete row, it reserves space for the omitted count and
+asks the user to enlarge the placement. A placement too narrow for its columns
+reports the required minimum width; one too short for headers and the warning
+shows the capacity notice in its frame. If even the notice cannot fit, output
+stops with the sheet and placement identity and an instruction to enlarge the
+schedule. The shared selected-sheet and drawing-set output paths use this same
+layout.
 
 The registered **Appraisal area summary** schedule is read-only and recalculates
 from stored appraisal declarations, deductions and measurement-boundary geometry

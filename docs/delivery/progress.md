@@ -14,6 +14,32 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete coordinated schedule-field source implementation
+
+Ordinary coordinated-sheet schedules now render the full live projected schema
+instead of only the first two sorted cells. Columns include fields present only
+in later rows, retain mark and object identity, and use the same value formatter
+as Schedules. Content-weighted widths, wrapped headers and values, device-bound
+paper typography and measured row heights replace the fixed single-line rows.
+Only complete rows are printed. Insufficient width or height produces an
+explicit capacity notice with required width or omitted-row count; no field
+subset silently stands in for an object's complete row. If the notice itself
+cannot fit, output is refused with the sheet and placement identity and an
+instruction to enlarge it, rather than succeeding with a blank warning box.
+
+Selected-sheet and drawing-set print, PDF and preview retain their shared
+renderer and actual captured document projection. The dedicated appraisal
+summary, viewport scales, title blocks, revisions and source fingerprints are
+unchanged. No project format or persisted layout changes were introduced.
+
+Independent source review identified and corrected the reserved mark column
+duplication and capacity-notice clipping, then approved the corrected source.
+Root integration review retains the shared formatter and restores painter state
+on the controlled refusal. Scoped `git diff --check` passed. No builds,
+tests, probes, scripts, native jobs, launches, packages or installations ran.
+Compilation, typography and physical output remain unverified; the installed
+candidate is unchanged. Production acceptance remains open.
+
 ### October 9 appraisal dimensions and selected-frame source corrections
 
 The full appraisal report and its PDF audit now read identified editable edges

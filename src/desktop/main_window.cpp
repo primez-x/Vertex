@@ -3266,6 +3266,187 @@ QString schedule_kind_text(ScheduleRowKind kind) {
     return QStringLiteral("Unknown");
 }
 
+bool render_sheet_schedule(QPainter& painter, const QRectF& bounds, double paper_scale,
+                          const QString& heading, const std::vector<const ScheduleRow*>& rows,
+                          QString& error) {
+    // Use the complete projected schema, including columns that occur only in
+    // later rows. Layout is presentation-only; values retain the dialog's
+    // formatter and the captured document projection.
+    std::set<std::string> names;
+    for (const auto* row : rows)
+        for (const auto& [column, cell] : row->cells) {
+            (void)cell;
+            // The projection's reserved mark cell mirrors row.mark, which
+            // already has its identity column.
+            if (column != "mark") names.insert(column);
+        }
+    const std::vector<std::string> columns(names.begin(), names.end());
+    QStringList headers{QStringLiteral("Mark"), QStringLiteral("Object ID")};
+    for (const auto& column : columns) headers.push_back(QString::fromStdString(column));
+    const auto values = [&](const ScheduleRow& row) {
+        QStringList result{QString::fromStdString(row.mark), QString::fromStdString(row.object_id)};
+        for (const auto& column : columns) {
+            const auto cell = row.cells.find(column);
+            result.push_back(cell == row.cells.end() ? QString{} : schedule_value_text(cell->second.value));
+        }
+        return result;
+    };
+
+    painter.save();
+    painter.setClipRect(bounds);
+    painter.fillRect(bounds, Qt::white);
+    const auto font = sheet_text_font(8.0, paper_scale);
+    painter.setFont(font);
+    const QFontMetricsF metrics(font, painter.device());
+    auto header_font = font;
+    header_font.setBold(true);
+    const QFontMetricsF header_metrics(header_font, painter.device());
+    const auto padding = std::max(1.0, paper_scale);
+    const int text_flags = Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap | Qt::TextWrapAnywhere;
+    const auto text_height = [&](const QString& text, double width, const QFontMetricsF& measure) {
+        return std::max(measure.height(), measure.boundingRect(
+            QRectF(0, 0, std::max(1.0, width), 1e9), text_flags, text).height());
+    };
+    const auto border = QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6));
+    const auto notice = [&](const QString& message) {
+        const auto text_bounds = bounds.adjusted(padding, padding, -padding, -padding);
+        const auto fits = [&](const QString& text) {
+            if (text_bounds.width() <= 0 || text_bounds.height() <= 0) return false;
+            const auto measured = metrics.boundingRect(
+                QRectF(0, 0, text_bounds.width(), 1e9), text_flags, text);
+            return measured.width() <= text_bounds.width() &&
+                   std::max(metrics.height(), measured.height()) <= text_bounds.height();
+        };
+        auto text = heading + QLatin1Char('\n') + message;
+        if (!fits(text)) text = message;
+        if (!fits(text)) {
+            error = QStringLiteral("Placement is too small to display its capacity notice. "
+                                   "Enlarge the schedule: %1").arg(message);
+            return false;
+        }
+        painter.fillRect(bounds, QColor(255, 248, 230));
+        painter.setFont(font);
+        painter.setPen(QColor(151, 94, 18));
+        painter.drawText(text_bounds, text_flags, text);
+        painter.setPen(border);
+        painter.drawRect(bounds);
+        return true;
+    };
+
+    const auto column_count = static_cast<std::size_t>(headers.size());
+    const auto minimum_width = std::max(4.0 * paper_scale,
+        std::max(metrics.maxWidth(), header_metrics.maxWidth()) + 2.0 * padding);
+    if (bounds.width() < minimum_width * static_cast<double>(column_count)) {
+        const auto shown = notice(QStringLiteral("%1 columns need at least %2 mm width - widen schedule")
+            .arg(static_cast<qulonglong>(column_count))
+            .arg(minimum_width * static_cast<double>(column_count) / paper_scale, 0, 'f', 1));
+        painter.restore();
+        return shown;
+    }
+    std::vector<double> preferred(column_count, minimum_width);
+    const auto measure_values = [&](const QStringList& texts) {
+        for (std::size_t index = 0; index < column_count; ++index)
+            preferred[index] = std::max(preferred[index], std::min(40.0 * paper_scale,
+                metrics.horizontalAdvance(texts[static_cast<qsizetype>(index)]) + 2.0 * padding));
+    };
+    measure_values(headers);
+    for (const auto* row : rows) measure_values(values(*row));
+    double extra_weight = 0;
+    for (const auto width : preferred) extra_weight += width - minimum_width;
+    const auto extra_width = bounds.width() - minimum_width * static_cast<double>(column_count);
+    std::vector<double> widths(column_count, minimum_width);
+    for (std::size_t index = 0; index < column_count; ++index)
+        widths[index] += extra_weight > 0
+            ? extra_width * (preferred[index] - minimum_width) / extra_weight
+            : extra_width / static_cast<double>(column_count);
+
+    const auto heading_height = text_height(heading, bounds.width() - 2.0 * padding, header_metrics) + 2.0 * padding;
+    double column_height = header_metrics.height() + 2.0 * padding;
+    for (std::size_t index = 0; index < column_count; ++index)
+        column_height = std::max(column_height, text_height(headers[static_cast<qsizetype>(index)],
+            widths[index] - 2.0 * padding, header_metrics) + 2.0 * padding);
+    const auto body_top = bounds.top() + heading_height + column_height;
+    struct PrintedRow { QStringList texts; double height; };
+    std::vector<PrintedRow> visible;
+    double body_height = 0;
+    for (const auto* row : rows) {
+        auto texts = values(*row);
+        double height = metrics.height() + 2.0 * padding;
+        for (std::size_t index = 0; index < column_count; ++index)
+            height = std::max(height, text_height(texts[static_cast<qsizetype>(index)],
+                widths[index] - 2.0 * padding, metrics) + 2.0 * padding);
+        if (body_top + body_height + height > bounds.bottom()) break;
+        body_height += height;
+        visible.push_back({std::move(texts), height});
+    }
+    const bool overflow = visible.size() != rows.size();
+    auto overflow_message = [&](std::size_t count) {
+        return QStringLiteral("%1 additional rows - enlarge schedule").arg(static_cast<qulonglong>(count));
+    };
+    double footer_height = 0;
+    if (overflow) {
+        // Recompute after retiring rows: the count itself may wrap differently.
+        // Never print a partial object's fields under a successful-looking row.
+        for (;;) {
+            footer_height = text_height(overflow_message(rows.size() - visible.size()),
+                bounds.width() - 2.0 * padding, metrics) + 2.0 * padding;
+            if (visible.empty() || body_top + body_height + footer_height <= bounds.bottom()) break;
+            body_height -= visible.back().height;
+            visible.pop_back();
+        }
+        if (body_top + footer_height > bounds.bottom()) {
+            const auto shown = notice(overflow_message(rows.size()));
+            painter.restore();
+            return shown;
+        }
+    } else if (rows.empty() && body_top + metrics.height() + 2.0 * padding > bounds.bottom()) {
+        const auto shown = notice(QStringLiteral("No rows"));
+        painter.restore();
+        return shown;
+    }
+    const auto draw_cells = [&](double top, double height, const QStringList& texts, bool header) {
+        double left = bounds.left();
+        painter.setFont(header ? header_font : font);
+        for (std::size_t index = 0; index < column_count; ++index) {
+            const QRectF cell(left, top, widths[index], height);
+            painter.setPen(QPen(QColor(196, 203, 211), std::max(1.0, paper_scale * 0.35)));
+            painter.drawRect(cell);
+            painter.setPen(QColor(35, 41, 48));
+            painter.drawText(cell.adjusted(padding, padding, -padding, -padding), text_flags,
+                             texts[static_cast<qsizetype>(index)]);
+            left += widths[index];
+        }
+    };
+    painter.fillRect(QRectF(bounds.left(), bounds.top(), bounds.width(), heading_height + column_height),
+                     QColor(229, 235, 241));
+    painter.setFont(header_font);
+    painter.setPen(QColor(35, 41, 48));
+    painter.drawText(QRectF(bounds.left() + padding, bounds.top() + padding,
+        bounds.width() - 2.0 * padding, heading_height - 2.0 * padding), text_flags, heading);
+    draw_cells(bounds.top() + heading_height, column_height, headers, true);
+    double top = body_top;
+    for (const auto& row : visible) {
+        draw_cells(top, row.height, row.texts, false);
+        top += row.height;
+    }
+    painter.setFont(font);
+    if (overflow) {
+        const QRectF footer(bounds.left(), top, bounds.width(), footer_height);
+        painter.fillRect(footer, QColor(255, 248, 230));
+        painter.setPen(QColor(151, 94, 18));
+        painter.drawText(footer.adjusted(padding, padding, -padding, -padding), text_flags,
+                         overflow_message(rows.size() - visible.size()));
+    } else if (rows.empty()) {
+        painter.setPen(QColor(50, 57, 65));
+        painter.drawText(QRectF(bounds.left() + padding, top + padding,
+            bounds.width() - 2.0 * padding, metrics.height()), text_flags, QStringLiteral("No rows"));
+    }
+    painter.setPen(border);
+    painter.drawRect(bounds);
+    painter.restore();
+    return true;
+}
+
 std::string appraisal_category_label(AppraisalAreaCategory category) {
     switch (category) {
     case AppraisalAreaCategory::none: return "Unassigned";
@@ -35957,81 +36138,15 @@ public:
                     render_appraisal_summary_schedule(painter,schedule_rect,paper_scale,rows,m_metric_units);
                     continue;
                 }
-                painter.save();
-                painter.setClipRect(schedule_rect);
-                painter.fillRect(schedule_rect, Qt::white);
-                painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
-                painter.drawRect(schedule_rect);
-                const auto header_height = std::max(12.0, 16.0 * paper_scale);
-                painter.fillRect(QRectF(schedule_rect.left(), schedule_rect.top(),
-                                        schedule_rect.width(), header_height),
-                                 QColor(229, 235, 241));
-                painter.setPen(QColor(35, 41, 48));
-                painter.setFont(sheet_text_font(8.0, paper_scale));
-                const auto row_height = std::max(10.0, 14.0 * paper_scale);
-                const auto available_rows = std::max(0, static_cast<int>(
-                    std::floor((schedule_rect.height() - header_height) / row_height)));
-                const auto schedule_overflow = !rows.empty() &&
-                    rows.size() > static_cast<std::size_t>(available_rows);
-                const auto data_rows = schedule_overflow
-                    ? std::max(0, available_rows - 1) : available_rows;
-                const auto omitted_rows = schedule_overflow
-                    ? static_cast<int>(rows.size()) - data_rows : 0;
-                const auto overflow_message = QStringLiteral("%1 additional rows - enlarge schedule")
-                    .arg(omitted_rows);
-                if (schedule_overflow && available_rows == 0)
-                    heading += QStringLiteral("  •  ") + overflow_message;
-                const auto header_text_height = std::max(1.0,
-                    std::min(header_height, schedule_rect.height()));
-                const auto header_alignment = schedule_rect.height() < header_height
-                    ? Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap
-                    : Qt::AlignLeft | Qt::AlignVCenter;
-                painter.drawText(QRectF(schedule_rect.left() + 4.0 * paper_scale,
-                                        schedule_rect.top(), schedule_rect.width() - 8.0 * paper_scale,
-                                        header_text_height), header_alignment, heading);
-                for (int index = 0; index < data_rows; ++index) {
-                    const QRectF row_rect(schedule_rect.left(), schedule_rect.top() + header_height +
-                                               static_cast<double>(index) * row_height,
-                                           schedule_rect.width(), row_height);
-                    painter.setPen(QPen(QColor(196, 203, 211), std::max(1.0, paper_scale * 0.35)));
-                    painter.drawLine(row_rect.bottomLeft(), row_rect.bottomRight());
-                    painter.setPen(QColor(50, 57, 65));
-                    QString text;
-                    if (index < static_cast<int>(rows.size())) {
-                        const auto& row = *rows[static_cast<std::size_t>(index)];
-                        const auto& cells = row.cells;
-                        text = QStringLiteral("%1  %2")
-                                   .arg(QString::fromStdString(row.mark),
-                                        QString::fromStdString(row.object_id));
-                        int appended = 0;
-                        for (const auto& [column, cell] : cells) {
-                            if (appended++ == 2) break;
-                            text += QStringLiteral("  %1: %2")
-                                        .arg(QString::fromStdString(column),
-                                             schedule_value_text(cell.value));
-                        }
-                    }
-                    if (text.isEmpty() && index == 0) text = QStringLiteral("No rows");
-                    painter.drawText(row_rect.adjusted(4.0 * paper_scale, 0.0,
-                                                       -4.0 * paper_scale, 0.0),
-                                     Qt::AlignLeft | Qt::AlignVCenter, text);
+                QString capacity_error;
+                if (!render_sheet_schedule(painter, schedule_rect, paper_scale, heading, rows,
+                                           capacity_error)) {
+                    painter.restore();
+                    setError(QStringLiteral("Sheet output blocked: schedule %1 on sheet %2: %3")
+                        .arg(QString::fromStdString(placement.id),
+                             QString::fromStdString(sheet.number), capacity_error));
+                    return false;
                 }
-                if (schedule_overflow && available_rows > 0) {
-                    const QRectF overflow_rect(schedule_rect.left(),
-                                               schedule_rect.top() + header_height +
-                                                   static_cast<double>(data_rows) * row_height,
-                                               schedule_rect.width(), row_height);
-                    painter.fillRect(overflow_rect, QColor(255, 248, 230));
-                    painter.setPen(QPen(QColor(151, 94, 18),
-                                        std::max(1.0, paper_scale * 0.35)));
-                    painter.drawLine(overflow_rect.bottomLeft(), overflow_rect.bottomRight());
-                    painter.setFont(sheet_text_font(7.0, paper_scale));
-                    painter.drawText(overflow_rect.adjusted(4.0 * paper_scale, 0.0,
-                                                             -4.0 * paper_scale, 0.0),
-                                     Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
-                                     overflow_message);
-                }
-                painter.restore();
             }
 
             // Cross-sheet callouts are persisted page annotations. Render the
