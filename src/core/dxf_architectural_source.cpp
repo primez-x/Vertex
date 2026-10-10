@@ -144,13 +144,9 @@ Entity remap_native_dxf_independent_assembly_source(const Entity& source,
     const std::map<std::string, std::string, std::less<>>& catalogs) {
     const auto catalog_id = owner_id(source.properties.at("assembly_catalog_id"));
     const std::map<std::string, std::string> mapping{{source.id, bodies.at(source.id)}, {catalog_id, catalogs.at(catalog_id)}};
-    auto result = remap_independent_assembly_instance(source, mapping);
-    // The existing adapter validates the exact root/catalog mapping. Retain
-    // raw numbers, dialect and opaque instance fields in this source contract.
-    result.properties = source.properties;
-    result.properties["assembly_catalog_id"] = catalogs.at(catalog_id);
-    result.properties["instance"]["id"] = result.id;
-    return result;
+    // The shared adapter validates both sides and patches only owner IDs.
+    // Raw instance numbers, dialect and row order survive every caller.
+    return remap_independent_assembly_instance(source, mapping);
 }
 
 void remap_native_dxf_architectural_source_dependencies(Entity& source,

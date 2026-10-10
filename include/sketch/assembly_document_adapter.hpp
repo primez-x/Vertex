@@ -48,8 +48,11 @@ using EmbeddedAssemblyPresentationIds =
 // Resolves only the exact currently generated ID; persisted IDs take precedence.
 [[nodiscard]] std::optional<AssemblyDocumentInstance> resolve_embedded_assembly_presentation(
     const AssemblyDocumentEntities& entities, std::string_view render_id);
-// Only the adapter's envelope fields are replaced. Document context and opaque
-// properties/extensions remain on the source entity.
+// Existing instances must pass the closed codec; unchanged typed values retain
+// raw numeric forms, optional fields, v2 dialect and surviving path-row order.
+// Changed values use the canonical codec, including removal of optional defaults.
+// An absent instance permits creation; duplication may supply a fresh Entity.id.
+// Document context and opaque properties/extensions remain on the source entity.
 [[nodiscard]] Entity encode_document_assembly_instance(const Entity& source,
     const AssemblyDocumentInstance& value);
 [[nodiscard]] AssemblyDocumentInstance decode_document_assembly_instance(const Entity& entity);
@@ -133,8 +136,9 @@ inline constexpr std::size_t assembly_catalog_transport_node_limit = 1'000'000;
 // source first; catalogs contain no legacy instances or host references.
 [[nodiscard]] AssemblyDocumentEntities assembly_clipboard_dependencies(
     const DocumentSnapshot& source, const std::vector<std::string>& root_entity_ids);
-// Only document/root/catalog identities are remapped; local identities and
-// opaque properties/extensions are retained. Both mappings must be present.
+// Validates before/after patching only Entity.id, instance.id and the catalog
+// reference. Raw dialect, row order, numeric forms, local identities and opaque
+// properties/extensions are retained. Both mappings must be present.
 [[nodiscard]] Entity remap_independent_assembly_instance(const Entity& source,
     const std::map<std::string, std::string>& identity_mapping);
 struct AssemblyDocumentTypeUpdateImpact {

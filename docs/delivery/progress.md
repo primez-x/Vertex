@@ -14,6 +14,52 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 source-kit input completeness — manifest correction
+
+The current tracked tree contained 1,889 files, while the explicit source-kit
+allowlist contained 1,720. The 169 omitted inputs included architectural
+editing/removal/phase modules and dialogs, the new architectural DXF codec and
+seven door/opening SVGs. They are now explicitly listed with the existing source
+and fixture categories. JSON inspection found 1,889 declared tracked paths with
+no omissions, extras or duplicates. Local scratch and generated content remains
+outside the manifest. No source kit or package was generated; this is manifest
+completeness, not corresponding-source or offline-rebuild qualification.
+
+A focused read of pending measured-line cancellation found no new mouse defect:
+stationary right-click clears pending input without adding geometry or removing
+already committed segments. That path remains intact. Architectural phase
+exchange discovery confirms that the existing physical proof carries registries
+as source evidence, while destination authoring transfer is still incomplete.
+Closing that gap requires actual complete registry rosters and baseline,
+demolition/proposal and active-alternative relationships, plus qualified roof
+join registry references. Pruning inactive or unselected owners would change the
+source design and cannot substitute for complete authoring transfer.
+
+### October 10 independent assembly edit preservation — source integration
+
+Source review identified that the shared independent-instance writer replaces
+the saved instance with its canonical encoding even for fields an edit does not
+change. The shared writer now validates saved and target instances and retains
+unchanged transform components, optional field presence, quantity values and
+nested overrides by their unique part paths. Surviving rows keep authored order;
+new rows follow canonical order. Intended changes and removals use the target
+codec. Existing v2 dialect remains intact, creation without a saved instance
+still works, and clones may supply a new outer ID before writing their inner ID.
+
+Identity-only remapping now validates both sides and patches only the document
+root, nested instance ID and catalog owner reference. DXF uses this shared
+contract directly, removing its separate raw-property restoration. Independent
+source review found two ordinary move/transform call sites that still rewrote
+whole transforms; both now use the shared writer as well. The strict closed
+independent-instance schema remains authoritative. No unsupported fields are
+being introduced. Compilation, interaction, history and storage replay remain
+unverified; the installed candidate is unchanged.
+
+Integrated root source review and a narrow independent re-review approved the
+corrected writer and both transform callers with no further actionable finding.
+Scoped diff checks and registry/allowlist JSON inspection passed. No build, test,
+new test, probe, script, native job, launch, package or installation ran.
+
 ### October 10 additional architectural DXF families — source integration
 
 V8 source work extends catalog-bearing cohorts to slabs, roofs, stairs, railings,

@@ -1584,6 +1584,18 @@ Version-six transforms may carry this factor on roots, parts and nested override
 Independent instance two allows the same optional transform factor. Earlier
 enclosing schemas keep their closed fields and reject the new field, even one.
 
+The shared independent-instance writer validates both saved and proposed forms.
+An edit preserves unchanged raw transform components, optional field presence,
+quantity values and nested override records, matching rows by their unique part
+paths. Surviving rows keep their saved order; new paths follow canonical order.
+Changed values use the target codec, so cleared transforms/overrides and changed
+optional defaults are removed correctly. Existing v2 instances retain that
+dialect. Identity-only copies/remaps patch the document root, nested instance ID
+and catalog owner reference without rewriting local type/part IDs or values.
+Creation without an existing instance and clones with a new outer identity use
+the same validated writer. This preservation correction is source-reviewed;
+compilation and storage/interaction replay remain unverified.
+
 The existing `scale` applies to XY. Actual Z scale is `scale * vertical_scale`;
 an absent factor in earlier schemas is one. Y reflection precedes yaw, then
 translation. Composition multiplies corresponding scales; hosted legacy-solid

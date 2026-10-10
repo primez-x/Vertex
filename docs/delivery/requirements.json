@@ -11451,7 +11451,7 @@
         "binding": null
       },
       "qualification_history": [],
-      "delivery_notes": null,
+      "delivery_notes": "2026-10-10 source-only handoff correction: packaging/source-kit-allowlist.json now explicitly covers all 1,889 current tracked paths. It adds 169 omitted source/header/dialog and SVG inputs, including the architectural DXF codec and seven door/opening assets. JSON inspection found no missing paths, extras or duplicates, and scoped diff checks passed. No generator, source-kit composition, build, test, package or installation ran. Corresponding dependency sources, notices/SBOM, candidate binding, clean offline rebuild and final handoff remain unqualified; historical evidence and all acceptance bindings are unchanged. See docs/delivery/component-qualification.md and docs/delivery/progress.md.",
       "source_snapshot": {
         "id": "OPS-PACK-002",
         "area": "packaging",

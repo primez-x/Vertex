@@ -31,6 +31,84 @@ void local_identifier(const std::string& value) {
     require(!value.empty() && !std::all_of(value.begin(), value.end(),
         [](unsigned char c) { return std::isspace(c); }), "assembly identifier/name must not be blank");
 }
+void retain_assembly_transform_source(nlohmann::json& encoded, const nlohmann::json& raw,
+    const AssemblyTransform& before, const AssemblyTransform& after) {
+    auto& translation = encoded.at("translation_m");
+    const auto& original = raw.at("translation_m");
+    if (before.translation_m.x == after.translation_m.x) translation[0] = original[0];
+    if (before.translation_m.y == after.translation_m.y) translation[1] = original[1];
+    if (before.translation_m.z == after.translation_m.z) translation[2] = original[2];
+    if (before.rotation_radians == after.rotation_radians)
+        encoded["rotation_radians"] = raw.at("rotation_radians");
+    if (before.scale == after.scale) encoded["scale"] = raw.at("scale");
+    // Start with the canonical target so changed optional defaults disappear.
+    // Only unchanged typed values retain the original presence/representation.
+    if (before.mirrored_y == after.mirrored_y) {
+        if (raw.contains("mirrored_y")) encoded["mirrored_y"] = raw.at("mirrored_y");
+        else encoded.erase("mirrored_y");
+    }
+    if (before.vertical_scale == after.vertical_scale) {
+        if (raw.contains("vertical_scale")) encoded["vertical_scale"] = raw.at("vertical_scale");
+        else encoded.erase("vertical_scale");
+    }
+}
+template<class T> void retain_assembly_override_source(nlohmann::json& encoded,
+    const nlohmann::json& raw, const T& before, const T& after) {
+    if (before.property_overrides == after.property_overrides)
+        encoded["property_overrides"] = raw.at("property_overrides");
+    if (before.material_overrides == after.material_overrides)
+        encoded["material_overrides"] = raw.at("material_overrides");
+    for (const auto& [key, quantity] : after.quantity_overrides) {
+        const auto previous = before.quantity_overrides.find(key);
+        if (previous == before.quantity_overrides.end()) continue;
+        const auto& original = raw.at("quantity_overrides").at(key);
+        if (previous->second == quantity) encoded.at("quantity_overrides").at(key) = original;
+        else if (previous->second.value == quantity.value)
+            encoded.at("quantity_overrides").at(key).at("value") = original.at("value");
+    }
+}
+nlohmann::json retain_independent_assembly_instance_source(const nlohmann::json& raw,
+    const AssemblyInstance& before, nlohmann::json encoded) {
+    // Both sides have passed the closed independent codec. JSON numeric equality
+    // cannot distinguish authored integer/float forms; compare decoded values.
+    const auto after = decode_assembly_instance(encoded);
+    if (before.id == after.id) encoded["id"] = raw.at("id");
+    if (before.type_id == after.type_id) encoded["type_id"] = raw.at("type_id");
+    if (raw.at("schema") == "sketch.assembly-instance.v2") encoded["schema"] = raw.at("schema");
+    retain_assembly_transform_source(encoded.at("root_transform"), raw.at("root_transform"),
+        *before.root_transform, *after.root_transform);
+    retain_assembly_override_source(encoded, raw, before, after);
+
+    using Path = std::vector<std::string>;
+    std::map<Path, const AssemblyPathOverride*> previous, current;
+    std::map<Path, const nlohmann::json*> generated;
+    for (const auto& row : before.nested_overrides) previous.emplace(row.part_path, &row);
+    for (const auto& row : after.nested_overrides) current.emplace(row.part_path, &row);
+    for (const auto& row : encoded.at("nested_overrides"))
+        generated.emplace(row.at("part_path").get<Path>(), &row);
+    auto retained = nlohmann::json::array();
+    // The decoder sorts by path, so positions are not identities. Surviving rows
+    // retain authored source order; new paths follow the canonical target order.
+    for (const auto& original : raw.at("nested_overrides")) {
+        const auto path = original.at("part_path").get<Path>();
+        const auto found = current.find(path);
+        if (found == current.end()) continue;
+        const auto& old = *previous.at(path);
+        const auto& replacement = *found->second;
+        auto row = *generated.at(path);
+        row["part_path"] = original.at("part_path");
+        retain_assembly_override_source(row, original, old, replacement);
+        if (old.transform == replacement.transform) row["transform"] = original.at("transform");
+        else if (old.transform && replacement.transform)
+            retain_assembly_transform_source(row.at("transform"), original.at("transform"),
+                *old.transform, *replacement.transform);
+        retained.push_back(std::move(row));
+    }
+    for (const auto& row : encoded.at("nested_overrides"))
+        if (!previous.contains(row.at("part_path").get<Path>())) retained.push_back(row);
+    encoded["nested_overrides"] = std::move(retained);
+    return encoded;
+}
 struct ArchitecturalMaterialReferenceSite {
     // Absence identifies the root properties.material_assignment envelope.
     std::optional<std::size_t> layer_index;
@@ -680,13 +758,22 @@ Entity encode_document_assembly_instance(const Entity& source, const AssemblyDoc
     require(value.instance.root_transform.has_value() && !value.instance.placement,
         "independent assembly instance requires root_transform and forbids host placement");
     Entity result = source;
-    result.properties["version"] = 1;
-    result.properties["form"] = "independent_assembly_instance";
+    auto encoded = encode_assembly_instance(value.instance);
+    if (source.properties.contains("instance")) {
+        const auto& raw = source.properties.at("instance");
+        const auto before = decode_assembly_instance(raw);
+        // Duplication callers have already changed Entity.id. Validate the saved
+        // envelope against its original root before authoring the new identity.
+        auto original = source;
+        original.id = before.id;
+        (void)decode_document_assembly_instance(original);
+        encoded = retain_independent_assembly_instance_source(raw, before, std::move(encoded));
+    } else {
+        result.properties["version"] = 1;
+        result.properties["form"] = "independent_assembly_instance";
+    }
     result.properties["assembly_catalog_id"] = value.assembly_catalog_id;
-    result.properties["instance"] = encode_assembly_instance(value.instance);
-    if (source.properties.contains("instance") && source.properties.at("instance").is_object() &&
-        source.properties.at("instance").value("schema", nlohmann::json{}) == "sketch.assembly-instance.v2")
-        result.properties.at("instance")["schema"] = "sketch.assembly-instance.v2";
+    result.properties["instance"] = std::move(encoded);
     (void)decode_document_assembly_instance(result);
     return result;
 }
@@ -784,7 +871,7 @@ AssemblyDocumentEntities assembly_clipboard_dependencies(const DocumentSnapshot&
 }
 Entity remap_independent_assembly_instance(const Entity& source,
     const std::map<std::string, std::string>& identity_mapping) {
-    auto value = decode_document_assembly_instance(source);
+    const auto value = decode_document_assembly_instance(source);
     const auto root = identity_mapping.find(source.id);
     const auto catalog_id = identity_mapping.find(value.assembly_catalog_id);
     require(root != identity_mapping.end() && catalog_id != identity_mapping.end(),
@@ -793,9 +880,10 @@ Entity remap_independent_assembly_instance(const Entity& source,
     require(root->second != catalog_id->second, "assembly root and catalog mapping collide");
     Entity result = source;
     result.id = root->second;
-    value.instance.id = result.id;
-    value.assembly_catalog_id = catalog_id->second;
-    return encode_document_assembly_instance(result, value);
+    result.properties.at("instance").at("id") = result.id;
+    result.properties.at("assembly_catalog_id") = catalog_id->second;
+    (void)decode_document_assembly_instance(result);
+    return result;
 }
 std::vector<AssemblyDocumentTypeUpdateImpact> preview_document_assembly_type_update(
     const AssemblyDocumentEntities& entities, const std::string& catalog_id, AssemblyType replacement) {

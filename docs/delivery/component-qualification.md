@@ -6,6 +6,21 @@ not licensing clearance or production acceptance. Existing authorization to
 include the supplied artwork remains recorded; this audit introduces no new
 permission gate or publication action.
 
+## Tracked source-kit inventory correction (2026-10-10)
+
+The explicit source-kit allowlist now includes all 1,889 current tracked paths.
+The correction adds 169 omitted implementation and artwork inputs, including
+architectural editing/removal/phase modules, desktop dialogs, the architectural
+DXF codec and seven door/opening SVG assets. Each addition is an existing tracked
+path, classified by the current source-kit policy; untracked and generated files
+are not enrolled. JSON inspection found no missing paths, extras or duplicates.
+
+This corrects the manifest input only. No generator, source-kit composition,
+build, package, installation or runtime qualification ran. The historical source
+kit receipts below remain bound to their original payloads. Complete dependency
+sources, notices/SBOM, exact final candidate binding and an offline rebuild remain
+required before distribution qualification.
+
 ## Precision dependency source overlay (2026-10-09)
 
 The precision target explicitly selects Boost Multiprecision 1.92.0 for the

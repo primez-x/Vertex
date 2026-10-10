@@ -1063,11 +1063,9 @@ EntityState apply_operations(const DocumentSnapshot& source,
                 const AssemblyTransform outer{{movement.x, movement.y, movement.z},
                     movement.rotation_z_radians, movement.scale};
                 value.instance.root_transform = compose_assembly_transform(outer, *value.instance.root_transform);
-                // Only placement changes; retain raw override/provenance
-                // records rather than re-encoding the whole instance.
-                found->second.properties.at("instance")["root_transform"] =
-                    encode_assembly_transform(*value.instance.root_transform);
-                (void)decode_document_assembly_instance(found->second);
+                // The shared writer preserves untouched placement components
+                // and override records while applying the intended transform.
+                found->second = encode_document_assembly_instance(found->second, value);
             } else if (can_recognize_building_entity_type(found->second.type)) {
                 found->second = transform_building_entity(entities, found->second, *operation.transform);
             } else if (const auto transformed =
@@ -2108,8 +2106,7 @@ ApplyEntityChanges architectural_group_transform_command(const DocumentSnapshot&
                     movement.rotation_z_radians,movement.scale};
                 root=compose_assembly_transform(outer,root);
             }
-            after.properties.at("instance")["root_transform"] = encode_assembly_transform(root);
-            (void)decode_document_assembly_instance(after);
+            after = encode_document_assembly_instance(after, value);
         } else {
             after = transform_building_entity(source.entities(), before, movement, horizontal, vertical);
         }

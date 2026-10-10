@@ -679,6 +679,18 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/09_doors/door-french-double.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/09_doors/door-garage-double.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/09_doors/door-garage-single.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/09_doors/door-garage.svg"
     },
     {
@@ -707,11 +719,23 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/09_doors/door-hinged-exterior.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/09_doors/door-hinged-interior.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/09_doors/door-pocket.svg"
     },
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/09_doors/door-sliding-glass.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/09_doors/door-sliding.svg"
     },
     {
       "category": "fixtures",
@@ -968,6 +992,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/16_walls_openings/arched-opening.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/16_walls_openings/cased-opening.svg"
     },
     {
       "category": "fixtures",
@@ -3127,7 +3155,15 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/architectural_object_removal.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/architectural_schedule.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/architectural_selection_removal.hpp"
     },
     {
       "category": "source",
@@ -3271,6 +3307,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/constraint_phase_scope.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/constraint_tolerances.hpp"
     },
     {
@@ -3331,6 +3371,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/desktop/physical_wall_phase_room_review_dialog.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/desktop/physical_wall_room_review_dialog.hpp"
     },
     {
@@ -3340,6 +3384,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/site_placement_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/stair_dependency_review_dialog.hpp"
     },
     {
       "category": "source",
@@ -3391,6 +3439,18 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/drawing_removal_command.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/drawing_selection_removal.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/dxf_architectural_source.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/dxf_exchange.hpp"
     },
     {
@@ -3432,6 +3492,10 @@
     {
       "category": "source",
       "path": "include/sketch/hosted_opening_plan.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/hosted_opening_removal.hpp"
     },
     {
       "category": "source",
@@ -3479,6 +3543,22 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/mixed_phase_wall_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/mixed_wall_opening_removal.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/mixed_wall_removal.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/model_copy_composition.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/model_phases.hpp"
     },
     {
@@ -3495,7 +3575,15 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/opening_architectural_removal.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/opening_assembly.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/opening_host_geometry.hpp"
     },
     {
       "category": "source",
@@ -3511,11 +3599,159 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/phase_constraint_authoring.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_coordinated_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_hosted_opening_capture.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_hosted_opening_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_hosted_opening_family_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_hosted_opening_rehost.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_opening_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_form_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_opening_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_pose_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_profile_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_replacement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_resize.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_transform.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_roof_uniform_transform.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_slab_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_slab_profile_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_slab_replacement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_stair_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_stair_demolition_retirement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_stair_replacement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_structural_replacement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_canvas_projection.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_canvas_proposal.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_demolition.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_demolition_authoring.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_profile_capture.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_profile_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_replacement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_replacement_authoring.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_replacement_command.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/phase_wall_replacement_request.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/physical_clear_kernel.hpp"
     },
     {
       "category": "source",
       "path": "include/sketch/physical_room_dimension_source.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_room_split_ids.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_wall_phase.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_wall_phase_review.hpp"
     },
     {
       "category": "source",
@@ -3527,7 +3763,15 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/physical_wall_room_merge.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/physical_wall_room_review.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_wall_room_split.hpp"
     },
     {
       "category": "source",
@@ -3560,6 +3804,10 @@
     {
       "category": "source",
       "path": "include/sketch/plan_axis_resize.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/presentation_transform.hpp"
     },
     {
       "category": "source",
@@ -3623,7 +3871,23 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/roof_clone.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/roof_entity_codec.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/roof_join_phase_ownership.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/roof_join_semantics.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/roof_removal.hpp"
     },
     {
       "category": "source",
@@ -3659,7 +3923,27 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/sheet_view_restriction_migration.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/site_frame.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/slab_clone.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/slab_geometry_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/slab_hosted_geometry_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/slab_layer_stack_edit.hpp"
     },
     {
       "category": "source",
@@ -3671,11 +3955,43 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/stair_clone.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/stair_compound_edit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/stair_edit_dependencies.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/stair_identity_history.hpp"
     },
     {
       "category": "source",
+      "path": "include/sketch/stair_object_edit.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/stair_semantics.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/stair_transform.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/structural_clone.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/structural_hosted_components.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/structural_object_edit.hpp"
     },
     {
       "category": "source",
@@ -3727,7 +4043,19 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/wall_join_removal.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/wall_layer_stack_edit.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/wall_measurement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/wall_merge.hpp"
     },
     {
       "category": "source",
@@ -4167,7 +4495,19 @@
     },
     {
       "category": "source",
+      "path": "src/architecture/physical_wall_room_merge.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/physical_wall_room_split.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/architecture/plan_axis_resize.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/roof_entity_codec.cpp"
     },
     {
       "category": "source",
@@ -4208,6 +4548,14 @@
     {
       "category": "source",
       "path": "src/core/architectural_footprint_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/architectural_object_removal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/architectural_selection_removal.cpp"
     },
     {
       "category": "source",
@@ -4311,6 +4659,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/constraint_phase_scope.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/constraint_wall_edit.cpp"
     },
     {
@@ -4340,6 +4692,18 @@
     {
       "category": "source",
       "path": "src/core/door_operation.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/drawing_removal_command.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/drawing_selection_removal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/dxf_architectural_source.cpp"
     },
     {
       "category": "source",
@@ -4383,6 +4747,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/hosted_opening_removal.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/ifc_project_exchange.cpp"
     },
     {
@@ -4415,6 +4783,22 @@
     },
     {
       "category": "source",
+      "path": "src/core/mixed_phase_wall_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/mixed_wall_opening_removal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/mixed_wall_removal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/model_copy_composition.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/model_phases.cpp"
     },
     {
@@ -4427,7 +4811,15 @@
     },
     {
       "category": "source",
+      "path": "src/core/opening_architectural_removal.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/opening_assembly.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/opening_host_geometry.cpp"
     },
     {
       "category": "source",
@@ -4447,11 +4839,151 @@
     },
     {
       "category": "source",
+      "path": "src/core/phase_constraint_authoring.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_coordinated_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_hosted_opening_capture.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_hosted_opening_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_hosted_opening_family_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_hosted_opening_rehost.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_opening_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_form_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_opening_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_pose_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_profile_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_replacement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_resize.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_transform.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_roof_uniform_transform.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_slab_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_slab_profile_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_slab_replacement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_stair_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_stair_demolition_retirement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_stair_replacement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_structural_replacement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_canvas_proposal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_demolition_authoring.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_profile_capture.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_profile_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_replacement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_replacement_authoring.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_replacement_command.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_wall_replacement_request.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/physical_clear_kernel.cpp"
     },
     {
       "category": "source",
       "path": "src/core/physical_room_dimension_source.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/physical_wall_phase.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/physical_wall_phase_review.cpp"
     },
     {
       "category": "source",
@@ -4496,6 +5028,10 @@
     {
       "category": "source",
       "path": "src/core/pinc_symbol_counterparts.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/presentation_transform.cpp"
     },
     {
       "category": "source",
@@ -4563,7 +5099,27 @@
     },
     {
       "category": "source",
+      "path": "src/core/roof_clone.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/roof_derivation_cache.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/roof_derivation_cache.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/roof_join_phase_ownership.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/roof_join_semantics.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/roof_removal.cpp"
     },
     {
       "category": "source",
@@ -4595,7 +5151,27 @@
     },
     {
       "category": "source",
+      "path": "src/core/sheet_view_restriction_migration.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/site_frame.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/slab_clone.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/slab_geometry_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/slab_hosted_geometry_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/slab_layer_stack_edit.cpp"
     },
     {
       "category": "source",
@@ -4607,7 +5183,43 @@
     },
     {
       "category": "source",
+      "path": "src/core/stair_clone.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/stair_compound_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/stair_edit_dependencies.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/stair_object_edit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/stair_retirement_groups.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/stair_semantics.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/stair_transform.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/structural_clone.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/structural_hosted_components.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/structural_object_edit.cpp"
     },
     {
       "category": "source",
@@ -4647,7 +5259,19 @@
     },
     {
       "category": "source",
+      "path": "src/core/wall_join_removal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/wall_layer_stack_edit.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/wall_measurement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/wall_merge.cpp"
     },
     {
       "category": "source",
@@ -4799,6 +5423,22 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/horizontal_layer_stack_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/horizontal_layer_stack_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/horizontal_profile_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/horizontal_profile_dialog.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/hosted_opening_dialog.cpp"
     },
     {
@@ -4808,6 +5448,14 @@
     {
       "category": "source",
       "path": "src/desktop/main_window.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/phase_wall_canvas_projection.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/physical_wall_phase_room_review_dialog.cpp"
     },
     {
       "category": "source",
@@ -4883,6 +5531,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/stair_dependency_review_dialog.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/symbol_svg_palette.cpp"
     },
     {
@@ -4892,6 +5544,30 @@
     {
       "category": "source",
       "path": "src/desktop/text_library_panel.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/toolbar_svg_icon.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/toolbar_svg_icon.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/wall_layer_stack_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/wall_layer_stack_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/wall_profile_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/wall_profile_dialog.hpp"
     },
     {
       "category": "source",
