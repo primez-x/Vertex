@@ -257,7 +257,9 @@ public:
     // captured and detached-stage history authority under command envelope45.
     // v177 adds closed phase-demolition ordinary selection to mixed removal,
     // preserving both original and staged phase destinations through history.
-    static constexpr std::uint32_t format_version = 177;
+    // v178 adds complete hosted-opening and wall/room-review ordinary deletion
+    // to mixed skylight commands, preserving explicit roots and typed proofs.
+    static constexpr std::uint32_t format_version = 178;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

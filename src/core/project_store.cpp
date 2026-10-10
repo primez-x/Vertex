@@ -583,8 +583,12 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_constraint_changes) {
             required = std::max(required, 8U);
             const auto& command = *revision.boundary_constraint_changes;
-            if (command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null())
-                required=std::max(required,command.mixed_selection_removal_intent.value("version",1)==2 ? 177U : 176U);
+            if (command.ordinary_selection_removal_completion || !command.ordinary_selection_removal_intent.is_null())
+                required=std::max(required,178U);
+            if (command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null()) {
+                const auto dialect=command.mixed_selection_removal_intent.value("version",1);
+                required=std::max(required,dialect>=3 ? 178U : dialect==2 ? 177U : 176U);
+            }
             if (command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null())
                 required=std::max(required,
                     command.phase_constraint_authoring_completion || !command.phase_constraint_authoring_intent.is_null() ? 146U : 145U);
@@ -2923,6 +2927,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 175 &&
          sqlite3_column_int(user_version.get(), 0) != 176 &&
          sqlite3_column_int(user_version.get(), 0) != 177 &&
+         sqlite3_column_int(user_version.get(), 0) != 178 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3645,6 +3650,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=178)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 178 for mixed hosted-opening and reviewed wall deletion with skylights and its retained history");
         if (required_format>=177)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 177 for mixed phase-demolition and skylight removal and its retained history");
         if (required_format>=176)

@@ -51,6 +51,7 @@
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
 #include "sketch/drawing_selection_removal.hpp"
 #include "sketch/mixed_selection_removal.hpp"
+#include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/phase_constraint_authoring.hpp"
 #include "sketch/phase_coordinated_demolition.hpp"
 #include "sketch/phase_opening_demolition.hpp"
@@ -2629,6 +2630,31 @@ static bool has_wall_group_scale(const ApplyBoundaryConstraintChanges& command) 
 static bool has_mixed_selection_removal(const ApplyBoundaryConstraintChanges& command) {
     return command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null();
 }
+static bool has_ordinary_selection_removal(const ApplyBoundaryConstraintChanges& command) {
+    return command.ordinary_selection_removal_completion || !command.ordinary_selection_removal_intent.is_null();
+}
+static void validate_ordinary_selection_removal_mode(const ApplyBoundaryConstraintChanges& command) {
+    if (!command.ordinary_selection_removal_completion || command.ordinary_selection_removal_intent.is_null())
+        throw std::invalid_argument("Ordinary selection removal requires its retained semantic authority");
+    auto ordinary=command;
+    ordinary.ordinary_selection_removal_completion=false;
+    ordinary.ordinary_selection_removal_intent=nullptr;
+    const auto empty=nlohmann::json{{"version",1},{"kind","apply_boundary_constraint_changes"},
+        {"expected_revision",command.expected_revision},{"message",command.message},
+        {"entity_changes",nlohmann::json::array()},{"boundary_edits",nlohmann::json::array()}};
+    if (command_to_json(Command{ordinary})!=empty)
+        throw std::invalid_argument("Ordinary selection removal cannot borrow another edit, asset or raw geometry authority");
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    const auto canonical=validate_completed_ordinary_selection_removal_intent(command.ordinary_selection_removal_intent);
+    if (canonical.dump()!=command.ordinary_selection_removal_intent.dump())
+        throw std::invalid_argument("Ordinary selection removal must retain its canonical source intent");
+    if (canonical.at("base_command").at("expected_revision")!=command.expected_revision ||
+        canonical.at("base_command").at("message")!=command.message)
+        throw std::invalid_argument("Ordinary selection removal source revision or message does not match its envelope");
+#else
+    throw std::invalid_argument("Ordinary selection removal requires the production constraint authoring engine");
+#endif
+}
 static void validate_mixed_selection_removal_mode(const ApplyBoundaryConstraintChanges& command) {
     if (!command.mixed_selection_removal_completion || command.mixed_selection_removal_intent.is_null())
         throw std::invalid_argument("Mixed selection removal requires its retained semantic authority");
@@ -3069,9 +3095,9 @@ static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const Apply
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==34) result.push_back(proof.at("phase_constraint_authoring_intent"));
-        // Forty-five's child proof is bound to its staged snapshot, rather
-        // than this outer command's original source. Its helper owns replay.
-        else if (version==45) return;
+        // Removal envelopes own full snapshot-bound replay. Forty-five's child
+        // is staged; forty-six grants no new phase or borrowed source authority.
+        else if (version==45 || version==46) return;
         // The new independent removal is one validated outer enclosure;
         // preserve the historical child walk's existing depth allowance.
         else if (version==41 || version==42) self(self,proof.at("proof"),depth);
@@ -3430,8 +3456,8 @@ struct PhaseConstraintLifetimeProofs {
 };
 static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const ApplyBoundaryConstraintChanges& command) {
     // Unlike original-source authority, retained identity ownership includes a
-    // strict forty-five ordinary and child proofs bound to their stages. Never use this walk
-    // for outer source binding, phase policy or semantic replay.
+    // strict removal selections and forty-five's child bound to its stage.
+    // Never use this walk for source binding, phase policy or semantic replay.
     const auto encoded=command_to_json(Command{command});
     PhaseConstraintLifetimeProofs result;
     const auto visit=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->void {
@@ -3439,6 +3465,15 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (proof.at("kind")!="apply_boundary_constraint_changes") return;
         const auto version=proof.at("version").get<int>();
         if (version==34) result.phase_proofs.push_back(proof.at("phase_constraint_authoring_intent"));
+        else if (version==46) {
+            const auto intent=validate_completed_ordinary_selection_removal_intent(proof.at("ordinary_selection_removal_intent"));
+            const auto ordinary=ordinary_selection_removal_authority(
+                decode_ordinary_selection_removal_intent(intent.at("selection")));
+            for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
+                (void)original;
+                result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
+            }
+        }
         else if (version==45) {
             const auto intent=validate_mixed_selection_removal_intent(proof.at("mixed_selection_removal_intent"));
             if (intent.at("version")==2) {
@@ -3450,6 +3485,17 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
                 if (ordinary.at("version")!=34 || !phase || !phase->phase_constraint_authoring_completion)
                     throw std::invalid_argument("Retained mixed removal ordinary command lacks pure phase authoring authority");
                 result.phase_proofs.push_back(phase->phase_constraint_authoring_intent);
+            } else if (intent.at("version")==3) {
+                // The completed ordinary envelope reserves its own original-stage
+                // identities without supplying outer source or phase authority.
+                if (intent.at("ordinary_command").at("version")==46)
+                    self(self,intent.at("ordinary_command"),depth);
+                const auto ordinary=ordinary_selection_removal_authority(
+                    decode_ordinary_selection_removal_intent(intent.at("ordinary")));
+                for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
+                    (void)original;
+                    result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
+                }
             } else {
                 const auto ordinary=decode_architectural_drawing_removal_intent(intent.at("ordinary"));
                 for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
@@ -4277,6 +4323,12 @@ static std::map<std::string, Entity, std::less<>> replay_retained_wall_merge(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_ordinary_selection_removal(command)) {
+        // Complete snapshot replay owns both deletion stages and final state.
+        try { validate_ordinary_selection_removal_mode(command); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
+        return;
+    }
     if (has_mixed_selection_removal(command)) {
         // Only the snapshot-aware live/retained path reconstructs this mode.
         // Its stages admit their own constraints before the final state check.
@@ -5936,6 +5988,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false,
     bool active_phase_constraints = false,
     const std::map<std::string,Entity,std::less<>>* original_dimension_source = nullptr) {
+    if (has_ordinary_selection_removal(command))
+        document_error(DocumentErrorCode::invalid_entity,"Ordinary selection removal requires complete snapshot-aware replay");
     if (has_mixed_selection_removal(command))
         document_error(DocumentErrorCode::invalid_entity,"Mixed selection removal requires complete snapshot-aware replay");
     if (has_wall_group_scale(command)) {
@@ -7827,6 +7881,21 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_ordinary_selection_removal(typed)) {
+                try {
+                    validate_ordinary_selection_removal_mode(typed);
+                    if (typed.message.size()>1024 || !is_valid_utf8_without_nul(typed.message))
+                        throw std::invalid_argument("Ordinary selection removal message is invalid");
+                    auto encoded=nlohmann::json{{"version",46},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"ordinary_selection_removal_completion",true},
+                        {"ordinary_selection_removal_intent",typed.ordinary_selection_removal_intent}};
+                    if (encoded.dump().size()>1024*1024)
+                        throw std::invalid_argument("Ordinary selection removal exceeds the persisted proof budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
             if (has_mixed_selection_removal(typed)) {
                 try {
                     validate_mixed_selection_removal_mode(typed);
@@ -8303,7 +8372,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version")<1 || value.at("version")>45) ||
+            (value.at("version")<1 || value.at("version")>46) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -8424,6 +8493,22 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==46) {
+                command_exact_fields(value,{"version","kind","expected_revision","message",
+                    "ordinary_selection_removal_completion","ordinary_selection_removal_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized ordinary selection removal");
+                if (value.dump().size()>1024*1024 || !value.at("ordinary_selection_removal_completion").is_boolean() ||
+                    !value.at("ordinary_selection_removal_completion").get<bool>() || !value.at("message").is_string())
+                    throw std::invalid_argument("Ordinary selection removal marker, message or proof budget is invalid");
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=command_revision(value.at("expected_revision"),"Ordinary selection removal revision");
+                result.message=value.at("message").get<std::string>();
+                result.ordinary_selection_removal_completion=true;
+                result.ordinary_selection_removal_intent=value.at("ordinary_selection_removal_intent");
+                if (command_to_json(Command{result}).dump()!=value.dump())
+                    throw std::invalid_argument("Ordinary selection removal requires its canonical closed envelope");
+                return result;
+            }
             if (value.at("version")==45) {
                 command_exact_fields(value,{"version","kind","expected_revision","message",
                     "mixed_selection_removal_completion","mixed_selection_removal_intent"},
@@ -9424,6 +9509,7 @@ Command complete_selection_command(const DocumentSnapshot& source, const Command
 
 Revision Document::apply(const Command& command) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    OrdinarySelectionRemovalReplayScope ordinary_selection_removal_replay_scope;
     MixedSelectionRemovalReplayScope mixed_selection_removal_replay_scope;
 #endif
     if (!editable_) {
@@ -9532,7 +9618,10 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
-                if (has_mixed_selection_removal(typed_command)) {
+                if (has_ordinary_selection_removal(typed_command)) {
+                    (void)command_to_json(Command{typed_command});
+                    next_active_policy=source_active_policy;
+                } else if (has_mixed_selection_removal(typed_command)) {
                     // Validate the exclusive mode before examining any sibling
                     // field or granting active-design policy to this event.
                     (void)command_to_json(Command{typed_command});
@@ -9582,7 +9671,15 @@ Revision Document::apply(const Command& command) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                 dimension_source=room_dimension_original_source(history_,history_.size(),current.entities,typed_command);
 #endif
-                if (has_mixed_selection_removal(typed_command)) {
+                if (has_ordinary_selection_removal(typed_command)) {
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                    try { next.entities=replay_completed_ordinary_selection_removal(snapshot(),typed_command.ordinary_selection_removal_intent); }
+                    catch (const DocumentError&) { throw; }
+                    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+#else
+                    document_error(DocumentErrorCode::invalid_entity,"Ordinary selection removal requires the production constraint authoring engine");
+#endif
+                } else if (has_mixed_selection_removal(typed_command)) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     try { next.entities=replay_mixed_selection_removal(snapshot(),typed_command.mixed_selection_removal_intent); }
                     catch (const DocumentError&) { throw; }
@@ -9597,7 +9694,7 @@ Revision Document::apply(const Command& command) {
                 }
                 next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                if (has_mixed_selection_removal(typed_command) || !phase_constraint_authoring_proofs(typed_command).empty() || has_complete_wall_join_deletion_proof(typed_command))
+                if (has_ordinary_selection_removal(typed_command) || has_mixed_selection_removal(typed_command) || !phase_constraint_authoring_proofs(typed_command).empty() || has_complete_wall_join_deletion_proof(typed_command))
                     validate_phase_constraint_fresh_lifetime(current.entities,next.entities,history_,history_.size(),typed_command);
 #endif
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
@@ -9810,6 +9907,7 @@ void Document::update_editability() {
 
 Document Document::restore(DocumentSnapshot snapshot) {
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    OrdinarySelectionRemovalReplayScope ordinary_selection_removal_replay_scope;
     MixedSelectionRemovalReplayScope mixed_selection_removal_replay_scope;
 #endif
     if (!is_valid_identifier(snapshot.document_id_)) {
@@ -9905,6 +10003,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             has_phase_constraint_authoring(*record.boundary_constraint_changes) ||
             has_disto_measurement_completion(*record.boundary_constraint_changes) || has_selection_completion(*record.boundary_constraint_changes) ||
             has_curve_construction_completion(*record.boundary_constraint_changes) ||
+            has_ordinary_selection_removal(*record.boundary_constraint_changes) ||
             has_mixed_selection_removal(*record.boundary_constraint_changes) ||
             has_wall_group_scale(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
@@ -10115,7 +10214,28 @@ Document Document::restore(DocumentSnapshot snapshot) {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     dimension_source=room_dimension_original_source(snapshot.history(),index,previous.entities,proof);
 #endif
-                    if (has_mixed_selection_removal(proof)) {
+                    if (has_ordinary_selection_removal(proof)) {
+                        (void)command_to_json(Command{proof});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+                        // Replay only the admitted ancestry with the exact captured
+                        // save authority; the full future history cannot be a source.
+                        auto prefix=snapshot;
+                        prefix.history_=std::make_shared<const std::vector<RevisionRecord>>(
+                            snapshot.history().begin(),snapshot.history().begin()+index);
+                        prefix.revision_=previous.revision;
+                        prefix.saved_revision_=ordinary_selection_removal_source_saved_revision(proof.ordinary_selection_removal_intent);
+                        if (prefix.saved_revision_ && *prefix.saved_revision_>prefix.revision_)
+                            throw std::invalid_argument("Ordinary selection removal captured save revision is outside its source prefix");
+                        prefix.named_revisions_=expected_names;
+                        prefix.editable_=true;
+                        prefix.read_only_reason_.clear();
+                        if (prefix.uses_active_phase_constraints()!=active_policies.at(index-1))
+                            throw std::invalid_argument("Ordinary selection removal source policy differs from its admitted ancestry");
+                        expected.entities=replay_completed_ordinary_selection_removal(prefix,proof.ordinary_selection_removal_intent);
+#else
+                        throw std::invalid_argument("Ordinary selection removal requires the production constraint authoring engine");
+#endif
+                    } else if (has_mixed_selection_removal(proof)) {
                         (void)command_to_json(Command{proof});
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         // Build only the already admitted source prefix. Forking
@@ -10140,10 +10260,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     } else expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets,
                         proof,true,active_policies.at(index-1),dimension_source);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                    if (has_mixed_selection_removal(proof) || !phase_constraint_authoring_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
+                    if (has_ordinary_selection_removal(proof) || has_mixed_selection_removal(proof) || !phase_constraint_authoring_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
                         validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);
 #endif
-                    if (!has_mixed_selection_removal(proof)) expected.assets = boundary_constraint_assets(previous.assets, proof);
+                    if (!has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof))
+                        expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
                         wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) :
                         proof.wall_merge ? wall_merge_validation_source(previous.entities,expected.entities,*proof.wall_merge) :

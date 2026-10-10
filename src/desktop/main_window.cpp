@@ -77,6 +77,7 @@
 #include "sketch/architectural_selection_removal.hpp"
 #include "sketch/architectural_drawing_removal.hpp"
 #include "sketch/mixed_selection_removal.hpp"
+#include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/phase_removal_selection.hpp"
 #include "sketch/architectural_object_removal.hpp"
 #include "sketch/slab_layer_stack_edit.hpp"
@@ -33089,8 +33090,12 @@ public:
             if (!prepared) throw std::invalid_argument("The selected openings have no actual removal source.");
             command=*prepared;
         }
-        if (hasIndependentDrawingRemoval(drawing_intent))
-            command=complete_drawing_removal_command(source,command,drawing_intent);
+        if (hasIndependentDrawingRemoval(drawing_intent)) {
+            OrdinarySelectionRemovalIntent ordinary;
+            ordinary.openings=intent;
+            ordinary.drawing=drawing_intent;
+            command=prepare_completed_ordinary_selection_removal(source,ordinary,command);
+        }
         require_current();
         PreparedSelectionRemoval details;
         details.opening_intent=intent;
@@ -33406,6 +33411,8 @@ public:
             prepared.message=message;
             command=std::move(prepared);
         }
+        const auto ordinary_geometry_proof=proof.is_null()
+            ? encode_physical_wall_deletion_review_proof(source,command) : proof;
         const auto candidate=preview_physical_wall_room_review_geometry(source,command,proof);
         const auto primary_wall=intent.wall_ids.front();
         const auto groups=affectedPhysicalWallRoomGroups(source,candidate.entities(),primary_wall,true);
@@ -33417,14 +33424,19 @@ public:
             if (!prepared) { clearError();refreshInspector(); }
             return false;
         }
-        if (hasIndependentDrawingRemoval(drawing_intent))
-            final=complete_drawing_removal_command(source,*final,drawing_intent);
+        if (hasIndependentDrawingRemoval(drawing_intent)) {
+            OrdinarySelectionRemovalIntent ordinary;
+            ordinary.wall_ids=intent.wall_ids;
+            ordinary.wall_geometry_proof=ordinary_geometry_proof;
+            ordinary.drawing=drawing_intent;
+            final=prepare_completed_ordinary_selection_removal(source,ordinary,*final);
+        }
         require_current();
         PreparedSelectionRemoval details;
         if (!opening_ids.empty()) details.wall_opening_intent=opening_intent;
         else details.wall_intent=intent;
         if (hasIndependentDrawingRemoval(drawing_intent)) details.drawing_intent=drawing_intent;
-        details.geometry_proof=proof;
+        details.geometry_proof=ordinary_geometry_proof;
         return finalizeSelectionRemoval(*final,prepared,clipboard,clipboard_text,std::move(details));
     }
 
@@ -33580,6 +33592,7 @@ public:
             auto deletion=prepare_physical_walls_deletion(source,wall_ids,true,true,additional,true);
             if (cut) deletion.message = "Cut walls and attached objects";
             const Command command = std::move(deletion);
+            details.geometry_proof=encode_physical_wall_deletion_review_proof(source,command);
             const auto candidate = preview_physical_wall_room_review_geometry(source, command);
             const auto primary_wall_id = authority.ordinary_selection.contains(authority.context.selected_id)
                 ? authority.context.selected_id.toStdString() : wall_ids.front();
@@ -34388,6 +34401,38 @@ public:
         const auto source=selectedRoofOpeningCohortSource(false);
         if (!source->is_editable()) throw std::invalid_argument("This document is read-only.");
         const auto authority=captureSourceEditAuthority(*source);
+        // Normalize the complete displayed ordinary roster against the captured
+        // source before preparation can open a review. Child hosts and derived
+        // cleanup never supply selection authority.
+        ArchitecturalDrawingRemovalIntent selected;
+        const auto annotations=annotation_selection_owners(*source,ordinary_selection);
+        const auto aliases=embedded_assembly_presentation_ids(source->entities());
+        std::set<QString> unique;
+        for (const auto& id:ordinary_selection) {
+            if (!unique.insert(id).second)
+                throw std::invalid_argument("The mixed deletion selection contains duplicate ordinary identities.");
+            const auto wanted=id.toStdString();
+            if (captureIndependentDrawingRemoval(*source,id,selected.drawing)) continue;
+            if (annotations.contains(wanted))
+                throw std::invalid_argument("The selected annotation no longer has its actual source row. The selection has been preserved.");
+            if (const auto actual=source->entities().find(wanted);actual!=source->entities().end()) {
+                selected.architectural.object_ids.push_back(wanted);
+                continue;
+            }
+            const auto* binding=canvas_embedded_assembly_binding(*source,wanted);
+            if (!binding || !*binding->geometric)
+                throw std::invalid_argument("The selected ordinary identity has no actual object or geometric component source. The selection has been preserved.");
+            const auto key=std::pair{binding->value.assembly_catalog_id,binding->value.instance.id};
+            if (aliases.at(key)!=wanted)
+                throw std::invalid_argument("The selected component no longer has its captured presentation identity.");
+            selected.architectural.components.push_back(key);
+        }
+        std::sort(selected.architectural.object_ids.begin(),selected.architectural.object_ids.end());
+        std::sort(selected.architectural.components.begin(),selected.architectural.components.end());
+        if (std::adjacent_find(selected.architectural.components.begin(),selected.architectural.components.end())!=
+            selected.architectural.components.end())
+            throw std::invalid_argument("The mixed deletion selection repeats one qualified component. The selection has been preserved.");
+        if (hasIndependentDrawingRemoval(selected.drawing)) canonicalIndependentDrawingRemoval(selected.drawing);
         const auto prepared=prepareOrdinarySelectionRemoval(*source);
         if (!prepared) { clearError();refreshInspector();return false; }
         prepared->require_current();
@@ -34395,49 +34440,49 @@ public:
             targets!=m_selected_roof_openings)
             throw std::invalid_argument("The project or mixed selection changed during deletion. Select the objects again.");
         std::optional<ArchitecturalSelectionRemovalIntent> phase_ordinary;
+        std::optional<OrdinarySelectionRemovalIntent> ordinary;
         if (!prepared->architectural_drawing_intent) {
-            const auto* phase=std::get_if<ApplyBoundaryConstraintChanges>(&prepared->command);
-            if (!phase || !phase->phase_constraint_authoring_completion)
-                throw std::invalid_argument("This mixed deletion still requires complete hosted-opening, wall/room or unsupported phase removal integration. The selection has been preserved.");
-            // The retained demolition proof supplies explicit roots only. The
-            // displayed ordinary roster must independently name every root or
-            // actual qualified row; internal child hosts and derived closure
-            // never enter this comparison.
-            phase_ordinary=phase_removal_selection_authority(*source,*phase);
-            ArchitecturalSelectionRemovalIntent selected;
-            const auto annotations=annotation_selection_owners(*source,ordinary_selection);
-            const auto aliases=embedded_assembly_presentation_ids(source->entities());
-            std::set<QString> unique;
-            for (const auto& id:ordinary_selection) {
-                if (!unique.insert(id).second)
-                    throw std::invalid_argument("The mixed deletion selection contains duplicate ordinary identities.");
-                const auto wanted=id.toStdString();
-                DrawingSelectionRemovalIntent drawing;
-                if (annotations.contains(wanted) || captureIndependentDrawingRemoval(*source,id,drawing))
-                    throw std::invalid_argument("Mixed phase demolition with selected drawing or annotation objects is not yet available. The selection has been preserved.");
-                if (const auto actual=source->entities().find(wanted);actual!=source->entities().end()) {
-                    selected.object_ids.push_back(wanted);
-                    continue;
+            if (prepared->opening_intent || !prepared->hosted_opening_ids.empty()) {
+                ordinary.emplace();
+                if (prepared->opening_intent) ordinary->openings=prepared->opening_intent;
+                else {
+                    ordinary->openings.emplace();
+                    ordinary->openings->opening_ids=prepared->hosted_opening_ids;
                 }
-                const auto* binding=canvas_embedded_assembly_binding(*source,wanted);
-                if (!binding || !*binding->geometric)
-                    throw std::invalid_argument("The selected ordinary identity has no actual object or geometric component source. The selection has been preserved.");
-                const auto key=std::pair{binding->value.assembly_catalog_id,binding->value.instance.id};
-                if (aliases.at(key)!=wanted)
-                    throw std::invalid_argument("The selected component no longer has its captured presentation identity.");
-                selected.components.push_back(key);
+            } else if (prepared->wall_intent || prepared->wall_opening_intent) {
+                ordinary.emplace();
+                ordinary->wall_ids=prepared->wall_opening_intent
+                    ? prepared->wall_opening_intent->wall_ids : prepared->wall_intent->wall_ids;
+                ordinary->wall_geometry_proof=prepared->geometry_proof;
+                if (ordinary->wall_geometry_proof.is_null())
+                    if (const auto* reviewed=std::get_if<ApplyBoundaryConstraintChanges>(&prepared->command))
+                        ordinary->wall_geometry_proof=reviewed->room_review_geometry_proof;
+            } else {
+                const auto* phase=std::get_if<ApplyBoundaryConstraintChanges>(&prepared->command);
+                if (!phase || command_to_json(prepared->command).at("version")!=34)
+                    throw std::invalid_argument("This mixed deletion still requires unsupported phase or corner-window removal integration. The selection has been preserved.");
+                if (hasIndependentDrawingRemoval(selected.drawing))
+                    throw std::invalid_argument("Mixed phase demolition with selected drawing or annotation objects is not yet available. The selection has been preserved.");
+                phase_ordinary=phase_removal_selection_authority(*source,*phase);
             }
-            std::sort(selected.object_ids.begin(),selected.object_ids.end());
-            std::sort(selected.components.begin(),selected.components.end());
-            if (selected.object_ids!=phase_ordinary->object_ids || selected.components!=phase_ordinary->components)
-                throw std::invalid_argument("The phase demolition proof does not cover the exact ordinary selection. The selection has been preserved.");
+            if (ordinary && prepared->drawing_intent) ordinary->drawing=*prepared->drawing_intent;
         }
+        const auto expected=ordinary ? ordinary_selection_removal_authority(*ordinary)
+            : phase_ordinary ? ArchitecturalDrawingRemovalIntent{*phase_ordinary,{},{}}
+            : *prepared->architectural_drawing_intent;
+        if (selected.architectural.object_ids!=expected.architectural.object_ids ||
+            selected.architectural.components!=expected.architectural.components || selected.drawing!=expected.drawing)
+            throw std::invalid_argument("The removal proof does not cover the exact ordinary selection. The selection has been preserved.");
         std::vector<RoofOpeningGroupMember> members;
         for (const auto& target:targets) members.push_back({target.roof_id.toStdString(),target.opening_id.toStdString()});
-        const auto remaining=phase_ordinary
+        const auto remaining=ordinary
+            ? mixed_selection_removal_remaining_children(*source,*ordinary,members)
+            : phase_ordinary
             ? mixed_selection_removal_remaining_children(*source,*phase_ordinary,members)
             : mixed_selection_removal_remaining_children(*source,*prepared->architectural_drawing_intent,members);
-        const auto stage=phase_ordinary
+        const auto stage=ordinary
+            ? prepare_mixed_selection_removal_stage(*source,*ordinary,prepared->command)
+            : phase_ordinary
             ? prepare_mixed_selection_removal_stage(*source,*phase_ordinary,prepared->command)
             : prepare_mixed_selection_removal_stage(*source,*prepared->architectural_drawing_intent,prepared->command);
         std::optional<Command> children;
@@ -34465,7 +34510,9 @@ public:
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source->revision();command.message="Delete objects and skylights";
         command.mixed_selection_removal_completion=true;
-        command.mixed_selection_removal_intent=phase_ordinary
+        command.mixed_selection_removal_intent=ordinary
+            ? make_mixed_selection_removal_intent(*source,*ordinary,prepared->command,members,children)
+            : phase_ordinary
             ? make_mixed_selection_removal_intent(*source,*phase_ordinary,prepared->command,members,children)
             : make_mixed_selection_removal_intent(*source,*prepared->architectural_drawing_intent,prepared->command,members,children);
         // Complete retained replay is admitted before the single live event.
@@ -56726,7 +56773,9 @@ private:
                             targets.insert(key.first);targets.insert(aliases.at(key));
                         }
                     } else {
-                        const auto ordinary=decode_architectural_drawing_removal_intent(intent.at("ordinary"));
+                        const auto ordinary=intent.at("version")==3
+                            ? ordinary_selection_removal_authority(decode_ordinary_selection_removal_intent(intent.at("ordinary")))
+                            : decode_architectural_drawing_removal_intent(intent.at("ordinary"));
                         targets.insert(ordinary.architectural.object_ids.begin(),ordinary.architectural.object_ids.end());
                         for (const auto& key:ordinary.architectural.components) {
                             targets.insert(key.first);targets.insert(aliases.at(key));
@@ -56739,6 +56788,20 @@ private:
                     for (const auto& child:intent.at("members")) {
                         targets.insert(child.at("roof_id").get<std::string>());
                         targets.insert(child.at("opening_id").get<std::string>());
+                    }
+                }
+                if (value.ordinary_selection_removal_completion || !value.ordinary_selection_removal_intent.is_null()) {
+                    const auto intent=validate_completed_ordinary_selection_removal_intent(value.ordinary_selection_removal_intent);
+                    const auto ordinary=ordinary_selection_removal_authority(
+                        decode_ordinary_selection_removal_intent(intent.at("selection")));
+                    targets.insert(ordinary.architectural.object_ids.begin(),ordinary.architectural.object_ids.end());
+                    const auto aliases=embedded_assembly_presentation_ids(source.entities());
+                    for (const auto& key:ordinary.architectural.components) {
+                        targets.insert(key.first);targets.insert(aliases.at(key));
+                    }
+                    targets.insert(ordinary.drawing.owner_ids.begin(),ordinary.drawing.owner_ids.end());
+                    for (const auto& child:ordinary.drawing.annotations) {
+                        targets.insert(child.owner_id);targets.insert(child.child_id);
                     }
                 }
                 if (value.independent_drawing_removal_completion || !value.independent_drawing_removal_intent.is_null()) {

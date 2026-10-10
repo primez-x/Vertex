@@ -3679,6 +3679,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/ordinary_selection_removal.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/opening_assembly.hpp"
     },
     {
@@ -4960,6 +4964,10 @@
     {
       "category": "source",
       "path": "src/core/opening_architectural_removal.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/ordinary_selection_removal.cpp"
     },
     {
       "category": "source",

@@ -75,7 +75,8 @@ void pure_outer34(const ApplyBoundaryConstraintChanges& c) {
         c.wall_dimension_completion || c.curve_construction_completion || c.disto_measurement_completion || c.disto_measurement ||
         c.independent_drawing_removal_completion || !c.independent_drawing_removal_intent.is_null() ||
         c.wall_group_scale_completion || c.wall_group_scale || c.mixed_selection_removal_completion ||
-        !c.mixed_selection_removal_intent.is_null())
+        !c.mixed_selection_removal_intent.is_null() || c.ordinary_selection_removal_completion ||
+        !c.ordinary_selection_removal_intent.is_null())
         invalid("requires an exclusive complete outer34 demolition command");
     ProofBudget budget;
     budget.reserve(256);

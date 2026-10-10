@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty-four focused drawing and architectural checks below (494 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty-six focused drawing and architectural checks below (496 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3418,6 +3418,18 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-MIXED-REMODEL-DELETE - Remove objects and skylights in a remodeling alternative**
   - Steps: Create a remodeling alternative. Ctrl-select an existing roof and its own skylight, then press Delete. Undo once and redo. Repeat with an existing door, slab, stair or structural object together with a skylight on another roof. Check the existing and proposed views, save and reopen. Try a selection containing a wall whose removal requires a room-review dialog, and another containing a drawing label.
   - Expected: The supported complete selection is removed from the alternative together, while the existing baseline remains intact. Removing a selected roof handles its selected skylight once. One Undo restores the entire change. A combination that is still unavailable preserves every selected item and identifies the missing workflow.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-MIXED-OPENING-DELETE - Delete a door or window together with a skylight**
+  - Steps: Ctrl-select a door or window and a skylight, then press Delete. Repeat with several doors/windows, a furniture component and a drawing label. Inspect the openings left in the walls and roof. Undo once, redo, save and reopen.
+  - Expected: Every selected item is removed together. The walls and roof remain, and their physical openings update. Unselected components and labels retain their positions and appearance. One Undo restores the entire selection and its openings.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-MIXED-WALL-DELETE - Delete a wall and skylight while reviewing affected rooms**
+  - Steps: Select a wall and a skylight, then press Delete. Repeat with a joined wall group containing doors/windows, a separate furniture component and a drawing label. When room review appears, accept the desired room changes. Try again and cancel the review. Undo a completed deletion once, redo, save and reopen.
+  - Expected: Accepted deletion removes the complete selection and applies the chosen room changes together. Attached doors/windows follow their removed wall. A cancelled review changes nothing. Unselected geometry and labels remain intact, and one Undo restores walls, openings, rooms, drawing items and skylights together.
   - Result: Not tested
   - Notes: ______________________________
 

@@ -9,6 +9,11 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/hosted_opening_removal.hpp"
+#include "sketch/opening_architectural_removal.hpp"
+#include "sketch/mixed_wall_removal.hpp"
+#include "sketch/mixed_wall_opening_removal.hpp"
+#include "sketch/physical_wall_room_review.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/sheet_view_restriction_migration.hpp"
@@ -835,5 +840,84 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_architectu
     } catch (const Json::exception& error) {
         reject(std::string("malformed actual/architectural source: ") + error.what());
     }
+}
+namespace {
+Entities deletion_geometry_stage(const Entities& actual,const Json& proof,bool active) {
+    Budget budget;budget.read(proof);
+    if (budget.wire_upper_bound>intent_byte_limit || !proof.is_object() ||
+        !proof.contains("kind") || !proof.at("kind").is_string())
+        reject("deletion geometry requires a bounded explicit typed proof");
+    const auto kind=proof.at("kind").get<std::string>();
+    const auto command=[&]()->Command {
+        if (kind=="physical_wall_deletion") return decode_physical_wall_deletion_review_proof(proof);
+        if (kind=="mixed_wall_deletion") return Command{decode_mixed_wall_deletion_review_proof(proof).command};
+        if (kind=="mixed_wall_opening_deletion") return Command{decode_mixed_wall_opening_deletion_review_proof(proof).command};
+        if (kind=="apply_entity_changes" && proof.at("version")==1) {
+            const auto decoded=command_from_json(proof);
+            if (command_to_json(decoded).dump()!=proof.dump()) reject("single-wall deletion proof is not canonical");
+            return decoded;
+        }
+        reject("unsupported deletion geometry authority");
+    }();
+    const auto* raw=std::get_if<ApplyEntityChanges>(&command);
+    if (!raw || !raw->asset_changes.empty()) reject("deletion geometry must retain an asset-free raw child");
+    auto stage=actual;
+    for (const auto& change:raw->entity_changes) {
+        if (change.kind==EntityChangeKind::erase) stage.erase(change.entity_id);
+        else stage.insert_or_assign(change.entity.id,change.entity);
+    }
+    // This independently rebuilds every attached deletion consequence from the
+    // immutable actual map; raw single-wall proofs cannot carry arbitrary edits.
+    validate_physical_wall_room_deletion_review_source(actual,stage,command,proof,active);
+    return stage;
+}
+} // namespace
+DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_openings(
+    const DrawingSelectionRemovalEntities& actual,const DrawingSelectionRemovalIntent& drawing,
+    const OpeningArchitecturalRemovalIntent& openings,bool active_phase_constraints) {
+    try {
+        (void)replay(actual,actual,drawing,active_phase_constraints);
+        const auto stage=[&] {
+            if (!openings.other.object_ids.empty() || !openings.other.components.empty())
+                return replay_opening_architectural_removal(actual,openings,active_phase_constraints);
+            if (!openings.other.roof_additional_identities.empty()) reject("opening-only removal cannot allocate architectural destinations");
+            const auto candidate=replay_hosted_opening_removal(actual,openings.opening_ids,active_phase_constraints,true);
+            if (!candidate) reject("opening removal requires actual selected semantic openings");
+            return *candidate;
+        }();
+        return replay(actual,stage,drawing,active_phase_constraints,&stage);
+    } catch (const Json::exception& error) { reject(std::string("malformed actual/opening source: ")+error.what()); }
+}
+DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_geometry(
+    const DrawingSelectionRemovalEntities& actual,const DrawingSelectionRemovalIntent& drawing,
+    const nlohmann::json& geometry_proof,bool active_phase_constraints) {
+    try {
+        (void)replay(actual,actual,drawing,active_phase_constraints);
+        const auto stage=deletion_geometry_stage(actual,geometry_proof,active_phase_constraints);
+        return replay(actual,stage,drawing,active_phase_constraints,&stage);
+    } catch (const Json::exception& error) { reject(std::string("malformed actual/deletion source: ")+error.what()); }
+}
+DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_review(
+    const DocumentSnapshot& source,const DrawingSelectionRemovalIntent& drawing,
+    const nlohmann::json& geometry_proof,const Command& pure_room_review_command) {
+    try {
+        const auto active=source.uses_active_phase_constraints();
+        (void)replay(source.entities(),source.entities(),drawing,active);
+        (void)deletion_geometry_stage(source.entities(),geometry_proof,active);
+        const auto wire=command_to_json(pure_room_review_command);
+        const auto version=wire.at("version").get<int>();
+        const auto* review=std::get_if<ApplyBoundaryConstraintChanges>(&pure_room_review_command);
+        if (!review || !review->room_review_completion || !review->room_review_geometry_completion ||
+            review->room_review_geometry_proof.dump()!=geometry_proof.dump() || review->expected_revision!=source.revision() ||
+            (version!=27 && version!=30 && version!=31 && version!=35 && version!=36 && version!=37 &&
+                version!=38 && version!=39 && version!=40))
+            reject("drawing composition requires the exact closed deletion room review");
+        const auto canonical=command_from_json(wire);
+        if (command_to_json(canonical).dump()!=wire.dump()) reject("deletion room review is not canonical");
+        // The complete typed review is independently admitted from the actual
+        // snapshot. Its accepted choices, not a supplied stage, own overrides.
+        const auto stage=Document::preview_command(source,canonical);
+        return replay(source.entities(),stage.entities(),drawing,active,&stage.entities());
+    } catch (const Json::exception& error) { reject(std::string("malformed actual/deletion review source: ")+error.what()); }
 }
 } // namespace sketch

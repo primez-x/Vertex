@@ -14,6 +14,61 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 hosted-opening and reviewed-wall mixed deletion - source integration
+
+The preceding mixed phase-demolition batch is committed and pushed as 8e4f2796.
+The subsequent source adds mixed intent dialect three for hosted doors/windows
+and ordinary wall deletion together with selected skylights. Explicit actual
+roots, qualified components and drawing rows are normalized before preparation
+and compared with the complete retained producer authority. Single-wall legacy
+raw proofs and typed wall-group proofs both retain their original meanings.
+Every claimed wall must match the actual complete wall retirement; raw erase
+lists do not grant selection authority. Accepted room decisions are retained in
+the complete original reviewed command. Explicit roofs still dominate their own
+selected children, while surviving children retain removal-only stage authority.
+
+Independent source review identified a real preparation gap: the earlier generic
+drawing composition could refuse a selected local annotation row when opening
+or wall deletion retired computed component aliases or copied overrides. The
+correction adds exclusive envelope46 to the actual shared ordinary preparation
+path. Its closed source-bound intent retains the typed selection and complete
+drawing-free base. The base is independently replayed and previewed from the
+actual snapshot before narrow drawing composition; arbitrary supplied candidates
+cannot confer annotation override authority. Direct ordinary and mixed deletion
+use the same complete operation. Historical envelope41 and the generic reviewed
+stage API keep their previous meanings.
+
+Envelope46 publishes one event and restores from the admitted original history
+prefix with captured save/named authority. Its revision and message match the
+base command. Operation/thread-local bounded memoization checks every canonical
+and full-source guard before hits and stores only after complete base and drawing
+admission. Final document state/identity/lifetime validation remains. Historical
+reservations traverse direct46 and nested45/46 roof declarations; wall/join
+reservations scan the complete retained intent. Reader178/extraction176 fence
+direct46 and retained/undone dialect-three history. Both helper files are in the
+source kit and the implementation is in CMake.
+
+Independent bounded source review approves this batch after the preparation
+correction, with no remaining concrete P1/P2 findings in the reviewed paths.
+Root inspected the integrated controller, complete base replay, exclusive
+envelope, retained-prefix replay, format floors and source-kit ownership.
+Static comparison preserves all 277 requirement definitions; `git diff --check`
+is clean. Scoped commit, push and exact remote-ref verification back up this
+source batch. These checks do not establish compilation or runtime acceptance.
+
+The manual checklist retains all earlier tasks and adds practical door/window
+and reviewed-wall mixed deletion tasks, for 496 task/result pairs, all Not tested.
+All 277 requirement definitions remain unchanged. Phase33, phase/drawing42,
+coordinated corner-window deletion and unsupported ordinary modes still need
+implementation. Mixed Cut, Copy/Paste/Duplicate, properties and transforms,
+native directional group controls and the other consolidated production scope
+remain required. No builds, tests/new tests, scripts, probes, native jobs, UI
+launches, packages or installations run. Compilation, interactions, history,
+migration and performance are unqualified; serialized cache budgets do not
+measure exact allocator memory. The installed candidate is unchanged and all
+ten production gates remain open. Continue the remaining mixed command lanes
+and the other delivery packages; this source batch is not complete delivery.
+
 ### October 10 mixed phase demolition - source integration
 
 The preceding atomic mixed-deletion batch is committed and pushed as 91e9760c.

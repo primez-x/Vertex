@@ -487,6 +487,11 @@ struct ApplyBoundaryConstraintChanges {
     // This exclusive lane grants no sibling geometry, payload or asset authority.
     nlohmann::json mixed_selection_removal_intent=nullptr;
     bool mixed_selection_removal_completion{};
+    // Envelope forty-six binds completed ordinary hosted/wall removal and
+    // independent drawing retirement to one complete captured source snapshot.
+    // Only the closed selection and its original typed deletion supply authority.
+    nlohmann::json ordinary_selection_removal_intent=nullptr;
+    bool ordinary_selection_removal_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,

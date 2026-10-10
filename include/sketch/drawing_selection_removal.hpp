@@ -7,6 +7,7 @@
 namespace sketch {
 
 struct ArchitecturalSelectionRemovalIntent;
+struct OpeningArchitecturalRemovalIntent;
 
 using DrawingSelectionRemovalEntities = std::map<std::string, Entity, std::less<>>;
 
@@ -68,5 +69,17 @@ struct DrawingSelectionRemovalIntent {
     const DrawingSelectionRemovalIntent& drawing,
     const ArchitecturalSelectionRemovalIntent& architectural,
     bool allow_manufactured_opening_hosts, bool active_phase_constraints);
+
+// These paths reconstruct typed deletion consequences from actual themselves;
+// no caller-supplied candidate grants annotation-override authority.
+[[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_openings(
+    const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
+    const OpeningArchitecturalRemovalIntent& openings, bool active_phase_constraints);
+[[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_geometry(
+    const DrawingSelectionRemovalEntities& actual, const DrawingSelectionRemovalIntent& drawing,
+    const nlohmann::json& geometry_proof, bool active_phase_constraints);
+[[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_review(
+    const DocumentSnapshot& source, const DrawingSelectionRemovalIntent& drawing,
+    const nlohmann::json& geometry_proof, const Command& pure_room_review_command);
 
 } // namespace sketch

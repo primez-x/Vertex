@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/architectural_drawing_removal.hpp"
+#include "sketch/ordinary_selection_removal.hpp"
 #include "sketch/roof_opening_group_edit.hpp"
 
 namespace sketch {
@@ -47,6 +48,20 @@ public:
     const std::vector<RoofOpeningGroupMember>& members);
 [[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
     const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
+    const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
+    const std::optional<Command>& child_command);
+
+// Dialect three composes complete hosted-opening and wall deletion/review
+// producers. Their explicit selection and original accepted room decisions
+// remain independent from actual selected skylight children.
+[[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
+    const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& ordinary,
+    const Command& ordinary_command);
+[[nodiscard]] std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(
+    const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& ordinary,
+    const std::vector<RoofOpeningGroupMember>& members);
+[[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
+    const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& ordinary,
     const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
     const std::optional<Command>& child_command);
 

@@ -1,4 +1,59 @@
-# Vertex project formats v1 through v177
+# Vertex project formats v1 through v178
+
+## Mixed hosted-opening and reviewed wall deletion (v178, source integration)
+
+Reader 178 adds version three of the mixed-removal intent inside envelope 45.
+The eleven outer fields remain unchanged. Its `ordinary` helper is closed
+version one with exactly one mode. `hosted_opening` retains explicit ascending
+`opening_ids`, `other:null` or an architectural-only source intent, and optional
+independent `drawing`. `wall_geometry` retains explicit ascending `wall_ids`,
+the exact original `geometry_proof`, and optional `drawing`. Other architectural
+roots, qualified components and allocated roof destinations come only from
+their closed typed producer intents. The combined explicit roster must equal
+the captured ordinary selection; child host projections grant no authority.
+
+Wall geometry accepts physical deletion31/35/36/38, mixed deletion37/39 and
+mixed wall/opening deletion40. A historical raw-one single-wall proof additionally
+requires exactly one explicitly claimed actual wall and complete actual-source
+producer replay; raw erase rows never define its selection. Original asset-free
+raw commands and exact deletion room-review enclosures27/30/31/35/36/37/38/39/40
+retain their meanings. Enclosure41 may retain their exact independent drawing
+selection. Version30 is admitted only through the actual single-wall raw proof.
+
+Each producer reconstructs the complete geometry from the immutable actual
+source, checks destination lifetime across real history/assets, and previews the
+complete original command. Reviewed room decisions remain intact. Narrow drawing
+composition independently rebuilds the opening/deletion stage or admits the
+complete typed room review from the captured snapshot; it cannot accept arbitrary
+caller-supplied candidates as annotation-override authority. Generic historical
+reviewed-stage behavior is unchanged. The final outer event retains exact
+ordinary/child stage bindings, explicit roof dominance and one-step Undo.
+
+New exclusive command envelope46 handles drawing-composed ordinary removal in
+the actual shared preparation path. It has exactly `version`, `kind`,
+`expected_revision`, `message`, `ordinary_selection_removal_completion:true` and
+`ordinary_selection_removal_intent`. Its closed version-one intent retains
+`selection`, the complete drawing-free `base_command`, full source snapshot,
+authoring and entity digests, and the captured saved revision. The base is raw
+one or the known pure deletion room-review dialects; phase/edit/drawing wrappers
+cannot borrow this authority. The base revision and message equal the envelope.
+Actual-source replay admits the complete base first, then the narrow drawing
+composition. This avoids sending computed component-alias or copied-override
+retirements through the older generic reviewed-stage path. Envelope41 retains
+its original meaning. Direct46 and its use inside mixed45 are fenced by reader178.
+
+Retained46 replay reconstructs the admitted original history prefix and captured
+save bookkeeping. Its operation/thread-local bounded memoization uses the full
+source digest and exact canonical wrapper; every source guard precedes a hit,
+and entries follow complete base and composition admission. Final document
+state/identity/lifetime validation still runs. Serialized cache budgets do not
+measure exact allocator memory, and runtime/performance remain unqualified.
+
+Retained and undone dialect-three history requires reader178/extraction176.
+This source integration does not establish runtime or migration acceptance.
+Phase33, phase/drawing42, coordinated corner-window deletion and other unsupported
+ordinary modes remain required gaps; mixed clipboard/properties/transforms and
+native directional group controls remain unfinished.
 
 ## Mixed phase-demolition and skylight removal (v177, source integration)
 

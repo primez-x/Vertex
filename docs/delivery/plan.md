@@ -227,6 +227,20 @@ polling timeout does not permit restarting it.
    review, independent drawing enclosures, raw hosted-opening and corner-window
    mixed deletion remain required gaps. Existing project command envelopes
    must not acquire broader meanings as a shortcut.
+   The next mixed intent dialect three retains complete hosted-opening and
+   ordinary wall deletion, including exact reviewed room consequences and
+   independent drawing rows. Explicit actual roots are compared before staging;
+   raw single-wall proofs require complete actual-source reconstruction. Narrow
+   typed drawing composition owns its stage independently. Qualify one-step
+   Undo, room decisions, geometry, save/reopen and extraction under
+   reader178/extraction176. Phase33/42 and coordinated corner-window ordinary
+   deletion remain gaps alongside mixed clipboard/properties/transforms.
+   Drawing-composed ordinary hosted/wall preparation now uses exclusive
+   envelope46 with the drawing-free complete base and exact actual-source
+   authority. This covers computed alias/override consequences through the
+   narrow producer rather than the historical generic review path. Qualify
+   direct and mixed publication, retained prefix/save authority and bounded
+   operation-local memoization; unchanged envelope41 keeps its old meaning.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New
