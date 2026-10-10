@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/dxf_exchange.hpp"
+#include "sketch/project_organization.hpp"
 
 #include <cstddef>
 #include <algorithm>
@@ -41,6 +42,30 @@ struct DxfProjectImportResult {
 
     bool complete() const noexcept { return diagnostics.empty(); }
 };
+
+// V5 carries complete exterior WALL-source components. Pending members retain
+// exact direct source context in vertex_dxf_wall_source_context_binding; no
+// destination organization is active until the complete reviewed graph binds.
+[[nodiscard]] nlohmann::json native_dxf_wall_source_dependency_graph(const Entity& entity);
+[[nodiscard]] std::vector<std::string> native_dxf_wall_source_dependency_ids(const Entity& entity);
+// A mapper processing components separately shares this ledger across the
+// complete operation. Work remains charged if a later source proof fails.
+struct NativeDxfWallSourceWorkBudget {
+    std::size_t segments{};
+    std::size_t source_work{};
+};
+void validate_native_dxf_wall_source_groups(const std::vector<Entity>& entities,
+    NativeDxfWallSourceWorkBudget* work_budget = nullptr);
+void validate_native_dxf_wall_source_member(const Entity& entity);
+// Owner identity is changed separately with the boundary owner codec where
+// applicable. Only graph-owned references and membership change here.
+void remap_native_dxf_wall_source_dependency_ids(Entity& entity,
+    const std::map<std::string, std::string, std::less<>>& ids);
+// Contexts must come from the caller's actual staged destination hierarchy and
+// cover every V5 member. This changes the vector atomically on successful proof.
+// Phase references are dropped; retained observations/report digests are inert.
+void bind_native_dxf_wall_source_destinations(std::vector<Entity>& entities,
+    const std::map<std::string, DrawingContext, std::less<>>& actual_contexts);
 
 // V2 carries one standalone boundary, not an appraisal/source dependency graph.
 // Document's generic reference vocabulary does not cover these consumer-owned
@@ -222,6 +247,12 @@ inline void bind_native_dxf_boundary_destination_floor(Entity& entity, const std
 // observation hashes. Those hashes remain source evidence and may become stale.
 inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
     const std::map<std::string, std::string, std::less<>>& ids) {
+    const auto source_marker = entity.extensions.find("vertex_dxf_boundary");
+    if (source_marker != entity.extensions.end() && source_marker->is_object() &&
+        source_marker->value("version", 0) == 5) {
+        remap_native_dxf_wall_source_dependency_ids(entity, ids);
+        return;
+    }
     (void)native_dxf_boundary_dependency_graph(entity);
     const auto marker = entity.extensions.find("vertex_dxf_boundary");
     if (marker != entity.extensions.end() && marker->is_object() &&
@@ -259,9 +290,11 @@ inline void remap_native_dxf_boundary_dependency_ids(Entity& entity,
 
 // Shared broker/desktop admission: markers use current (already fresh) owner
 // IDs, with one identical sorted membership list on every connected member.
-// This validates topology only; the mapper additionally proves each exact plan
-// and complete editable Document before publishing any member.
+// V3/V4 validate topology. V5 additionally proves its bounded complete raw
+// wall-source graph through pending context evidence or reviewed destinations;
+// the mapper proves exact plans and an editable Document before publication.
 inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entities) {
+    validate_native_dxf_wall_source_groups(entities);
     std::map<std::string, const Entity*, std::less<>> owners;
     for (const auto& entity : entities)
         if (!owners.emplace(entity.id, &entity).second) throw std::invalid_argument("duplicate imported identity");
@@ -359,10 +392,12 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
 // appraisal boundary dependencies use V3 member blocks with identical membership
 // and explicit typed links. V4 additionally proves stair footprints' self-floor
 // declarations, retaining the source floor until explicit destination binding.
+// V5 transports complete live exterior wall measurement components, including
+// all active source-wall openings, with matching typed dependency declarations.
 // Ordinary outer/hole curves accompany bounded source
 // properties, classifications and topology. Missing, inactive, cyclic or invalid
-// groups fall back together. Live measurement/physical source graphs are not
-// transported. Imported sloped observations require source reconfirmation.
+// groups fall back together. Physical-room and linework graphs remain
+// unavailable. Imported sloped observations require source reconfirmation.
 // Deduction containment uses the actual area engine in native-geometry builds;
 // core-only builds retain ordinary geometry when that proof is unavailable.
 // Organizational bindings detach on import; unavailable dependent source graphs
@@ -383,6 +418,10 @@ inline void validate_native_dxf_boundary_groups(const std::vector<Entity>& entit
 // require complete matching connected membership and typed appraisal dependency
 // proof. V4 stair declarations detach into an explicit pending floor binding;
 // only the reviewed destination assignment may activate that declaration.
+// V5 requires complete wall-source components and exact source/fresh plans;
+// pending per-member direct context evidence stays detached until the shared
+// destination binder receives actual reviewed hierarchy contexts. Phase registry
+// bindings are withheld and diagnosed; numeric source lineage stays unchanged.
 // Every member is remapped and validated together; original observation hashes
 // remain unchanged and copied sloped ceiling anchors/confirmation are withheld.
 // V2 requires

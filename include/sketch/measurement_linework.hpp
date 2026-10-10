@@ -167,4 +167,12 @@ struct MeasurementLineworkDecodeResult {
 [[nodiscard]] nlohmann::json encode_measurement_linework_model(
     const MeasurementLinework& model);
 
+// Remap only the stroke owner and typed operation owners in a supported raw
+// model. Local child IDs, receipts, numeric JSON, operations and extensions
+// remain unchanged. Both models must strictly decode/replay with exactly the
+// same geometry and receipts. Invalid owners, child collisions, unsupported
+// versions or malformed models throw without modifying the source.
+[[nodiscard]] nlohmann::json remap_measurement_linework_owner_identity(
+    const nlohmann::json& source_model, const std::string& new_stroke_id);
+
 }  // namespace sketch

@@ -38027,6 +38027,15 @@ public:
                 }
                 return std::string("0");
             };
+            const auto wall_source_member = [](const Entity& entity) {
+                const auto marker = entity.extensions.find("vertex_dxf_boundary");
+                return marker != entity.extensions.end() && marker->is_object() &&
+                    marker->value("version", 0) == 5;
+            };
+            const auto native_member = [&](const Entity& entity) {
+                return entity.extensions.contains("vertex_dxf_boundary") &&
+                    (can_recognize_boundary_entity_type(entity.type) || wall_source_member(entity));
+            };
             for (const auto& candidate : mapped.entities) {
                 if (candidate.type == kAnnotationEntityType) {
                     const auto state = decode_annotation_entity(candidate);
@@ -38159,6 +38168,11 @@ public:
                         {"layer_id", layer_id}, {"created_layer", false}, {"editable_item_count", count}});
                 }
             }
+            // Derive destinations from the real hierarchy, including reviewed
+            // new layers. Source graph bindings cannot supply fake containers.
+            const auto reviewed_hierarchy = Document::preview_command(source,
+                ApplyEntityChanges{source.revision(), changes, {}, "Preview DXF destination layers"});
+            const auto reviewed_organization = organize_project(reviewed_hierarchy);
             for (const auto& candidate : mapped.entities) {
                 if (candidate.type != "opening") continue;
                 const auto host_id = candidate.properties.value("wall_id", std::string{});
@@ -38175,19 +38189,24 @@ public:
             validate_native_dxf_boundary_groups(mapped.entities);
             std::map<std::string, const Entity*, std::less<>> native_boundaries;
             for (const auto& candidate : mapped.entities)
-                if (can_recognize_boundary_entity_type(candidate.type) &&
-                    candidate.extensions.contains("vertex_dxf_boundary"))
+                if (native_member(candidate))
                     native_boundaries.emplace(candidate.id, &candidate);
             for (const auto& [id, candidate] : native_boundaries) {
                 const auto& destination = destinations.at(source_layer(*candidate));
-                for (const auto& dependency_id : native_dxf_boundary_dependency_ids(*candidate)) {
+                const auto dependencies = wall_source_member(*candidate)
+                    ? native_dxf_wall_source_dependency_ids(*candidate) : native_dxf_boundary_dependency_ids(*candidate);
+                for (const auto& dependency_id : dependencies) {
                     const auto dependency = native_boundaries.find(dependency_id);
                     if (dependency == native_boundaries.end())
-                        throw std::invalid_argument("An imported appraisal area has a missing boundary dependency.");
+                        throw std::invalid_argument("An imported CAD group has a missing linked object.");
                     if (destination.floor_id != destinations.at(source_layer(*dependency->second)).floor_id)
-                        throw std::invalid_argument("Appraisal area CAD layer '" + source_layer(*candidate) +
-                            "' and deduction CAD layer '" + source_layer(*dependency->second) +
+                        throw std::invalid_argument("Linked CAD layers '" + source_layer(*candidate) +
+                            "' and '" + source_layer(*dependency->second) +
                             "' must be assigned to the same floor. Review their destinations.");
+                    if (wall_source_member(*candidate) && candidate->properties.contains("wall_measurement_source") &&
+                        dependency->second->type == "wall" &&
+                        destination.layer_id != destinations.at(source_layer(*dependency->second)).layer_id)
+                        throw std::invalid_argument("A measured exterior and its source walls must be assigned to the same drawing layer.");
                 }
             }
             std::vector<std::string> imported_boundary_ids;
@@ -38235,15 +38254,17 @@ public:
             }
             std::string selected_import_layer;
             std::vector<Entity> imported_native_boundaries;
+            std::map<std::string, DrawingContext, std::less<>> imported_wall_source_contexts;
             for (const auto& candidate : mapped.entities) {
                 if (candidate.type == kAnnotationEntityType) continue;
                 const auto identity = identities.find(candidate.id);
                 if (identity == identities.end())
                     throw std::invalid_argument("DXF mapping produced an unsupported native entity.");
                 auto imported = candidate;
-                if (can_recognize_boundary_entity_type(candidate.type) &&
-                    candidate.extensions.contains("vertex_dxf_boundary")) {
-                    imported = remap_boundary_owner_identity(candidate, identity->second);
+                if (native_member(candidate)) {
+                    if (can_recognize_boundary_entity_type(candidate.type))
+                        imported = remap_boundary_owner_identity(candidate, identity->second);
+                    else imported.id = identity->second;
                     remap_native_dxf_boundary_dependency_ids(imported, identities);
                 } else {
                     imported.id = identity->second;
@@ -38257,17 +38278,31 @@ public:
                         dimension["annotation_id"] = remapped->second;
                 }
                 const auto& destination = destinations.at(source_layer(candidate));
-                imported.properties["floor_id"] = destination.floor_id;
-                imported.properties["layer_id"] = destination.layer_id;
-                if (can_recognize_boundary_entity_type(imported.type) &&
-                    imported.extensions.contains("vertex_dxf_boundary"))
-                    bind_native_dxf_boundary_destination_floor(imported, destination.floor_id);
+                if (wall_source_member(imported)) {
+                    const auto context = reviewed_organization.drawing_context(destination.layer_id);
+                    if (!context || !context->complete() || context->floor_id != destination.floor_id)
+                        throw std::invalid_argument("The reviewed DXF destination has no complete drawing context.");
+                    imported_wall_source_contexts.emplace(imported.id, *context);
+                } else {
+                    imported.properties["floor_id"] = destination.floor_id;
+                    imported.properties["layer_id"] = destination.layer_id;
+                    if (native_member(imported))
+                        bind_native_dxf_boundary_destination_floor(imported, destination.floor_id);
+                }
                 if (selected_import_layer.empty()) selected_import_layer = destination.layer_id;
                 imported_boundary_ids.push_back(imported.id);
-                if (can_recognize_boundary_entity_type(imported.type) &&
-                    imported.extensions.contains("vertex_dxf_boundary"))
+                if (native_member(imported))
                     imported_native_boundaries.push_back(imported);
                 changes.push_back(EntityChange::upsert(std::move(imported)));
+            }
+            bind_native_dxf_wall_source_destinations(imported_native_boundaries, imported_wall_source_contexts);
+            for (auto& change : changes) {
+                if (change.kind != EntityChangeKind::upsert || !wall_source_member(change.entity)) continue;
+                const auto bound = std::find_if(imported_native_boundaries.begin(), imported_native_boundaries.end(),
+                    [&](const auto& member) { return member.id == change.entity.id; });
+                if (bound == imported_native_boundaries.end())
+                    throw std::invalid_argument("A reviewed DXF wall-source member is missing from the final group.");
+                change.entity = *bound;
             }
             validate_native_dxf_boundary_groups(imported_native_boundaries);
             if (merged_annotations) {

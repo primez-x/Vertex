@@ -14,6 +14,48 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 exterior wall-source DXF transfer
+
+The current source batch adds V5 connected exterior measurement groups with
+their actual source walls, complete active hosted-opening inventory and linked
+deduction/ceiling boundaries. Exact source and detached analytical plans,
+identical membership and typed dependency declarations precede native
+activation. Validation checks complete closure, incoming consumers, source
+currentness, deduction cycles/containment and bounded geometry/work. Reached
+unsupported physical-room or measured-line relationships refuse the complete
+component instead of activating a partial dependency graph.
+
+Detached groups retain pending source/destination context bindings and each
+wall's declared opening inventory through isolated response validation and both
+identity remaps. Desktop destination review derives real hierarchy contexts,
+binds direct and captured wall contexts together, then rechecks currentness
+before one atomic import. Baselines, thickness, kernel, origin outline, ordered
+translations, local topology and older retained provenance remain unchanged.
+Absolute vertical placement is supported; level/material/assembly dependencies
+remain explicit transport gaps. Source phases are diagnosed, not automatically
+assigned to destination phases. Appraisal observations/report hashes are not
+refreshed. Existing V1/V2/V3/V4 contracts remain unchanged.
+
+A separate raw measured-stroke owner helper strictly decodes/replays supported
+schemas and changes only the owner and typed operation owners. It preserves raw
+numeric values, local child IDs, receipts and history. This prepares complete
+measured-line transfer; it is not yet connected to that workflow and does not
+close the exchange gap. Physical-room transfer remains open as well.
+
+Independent source review identified a per-component replay allowance that
+could multiply expensive work across a single broker response. The shared
+validator now preflights all V5 components against one cumulative geometry and
+source/containment-work allowance before invoking expensive checks. Mapper and
+export operations share a ledger across their separate source/detached component
+checks; failed expensive proofs remain charged and components exceeding the
+remaining allowance fall back before replay. Integrated root and independent
+source review approved the corrected implementation; scoped `git diff --check`
+passed and requirements JSON parsed with acceptance flags unchanged. No build,
+test, new test, probe, script, native job, launch, package or installation has
+run. Compilation, runtime import/copy behavior, numerical replay, history/reopen
+and external-consumer round trips remain unverified. Installed candidate and
+historical acceptance bindings are unchanged; production acceptance stays open.
+
 ### October 9 typed source copies and DXF stair floor binding
 
 The current source batch adds shared typed wall and measured-line source

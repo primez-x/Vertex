@@ -5113,6 +5113,40 @@ reporting hashes. V1/V2/V3 carrier contracts and project container/history
 schemas remain unchanged. Full source-graph transport and external round trips
 remain open; V4 is uncompiled and runtime unverified.
 
+Version-5 DXF groups add connected exterior wall-source measurement boundaries,
+source walls and hosted openings to the existing deduction/ceiling graph. The
+wire dependency graph adds `wall_source_ids` and `wall_id`; each member carries
+the same sorted `member_ids`. Boundary depictions remain `BOUNDARY_PLAN_V1`;
+walls use `WALL_PLAN_V1`, ordinary openings use `OPENING_PLAN_V1`, and
+manufactured openings retain `MANUFACTURED_PLAN_V1`. Import admission requires
+exact source and detached analytical plans, complete hosted-opening closure,
+bounded whole-group validation and current exterior measurement sources.
+Mapper/export calls share cumulative work across independent components;
+isolated response validation preflights all components before expensive checks.
+Failed expensive proofs remain charged, and exhausted components retain ordinary
+geometry rather than receive another replay allowance.
+
+All detached members carry exactly
+`extensions.vertex_dxf_wall_source_context_binding: {version: 1,
+source_context: {...}, destination_context: null}`. Context fields are limited
+to direct `property_id`, `building_id`, `floor_id`, `layer_id` and `phase_id`.
+Each wall additionally carries
+`extensions.vertex_dxf_wall_source_hosted_openings: {version: 1,
+opening_ids: [...]}` with sorted fresh opening identities. These are runtime
+admission extensions rebuilt from the wire declaration, not trusted inbound
+source extensions. Native markers are exactly `{version: 5,
+depiction: "BOUNDARY_PLAN_V1", member_ids: [...]}` for all member types.
+
+Reviewed destinations come from the actual hierarchy. Final context binding
+updates direct context and captured source-wall context together, then rechecks
+the complete graph before atomic publication. Historical source evidence,
+numeric lineage, local topology and observation/report confirmations are
+preserved. Phase ownership requires separate review; level-driven placement,
+material/assembly links, measured-line sources and physical-room sources remain
+untransported gaps. Valid context-free absolute vertical placement is retained.
+V1/V2/V3/V4 and project container/history schemas remain unchanged. V5 is
+uncompiled and runtime unverified.
+
 DXF straight lengths use aligned `DIMENSION`; curved segment and physical-wall
 axis lengths use `ARC_DIMENSION` with their actual circular centre and extension
 points. Clockwise source arcs reverse their endpoint order for the DXF CCW

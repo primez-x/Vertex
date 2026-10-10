@@ -216,7 +216,8 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
     const auto& marker = entity.extensions.at("vertex_dxf_boundary");
     if (!marker.is_object() || !marker.contains("version") ||
         !marker.at("version").is_number_integer()) reject();
-    const bool floor_group = marker.at("version") == 4;
+    const bool wall_source_group = marker.at("version") == 5;
+    const bool floor_group = marker.at("version") == 4 || wall_source_group;
     const bool dependency_group = marker.at("version") == 3 || floor_group;
     if (dependency_group) {
         fields(marker, {"version", "depiction", "member_ids"});
@@ -228,6 +229,8 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
         if (marker.at("version") != 2) reject();
     }
     if (entity.extensions.contains("vertex_dxf_stair_floor_binding") && !floor_group) reject();
+    if (entity.extensions.contains("vertex_dxf_wall_source_context_binding") && !wall_source_group) reject();
+    if (entity.extensions.contains("vertex_dxf_wall_source_hosted_openings")) reject();
     if (floor_group) {
         // The isolated worker supplies a detached graph. Only the desktop's
         // reviewed destination may establish an active floor relationship.
@@ -239,10 +242,17 @@ inline void validate_native_dxf_boundary(const Entity& entity, GeometryBudget& b
                 !binding->at("destination_floor_id").is_null()) reject();
         }
     }
+    if (wall_source_group) {
+        if (entity.properties.contains("phase_id")) reject();
+        const auto binding = entity.extensions.find("vertex_dxf_wall_source_context_binding");
+        if (binding == entity.extensions.end() || !binding->is_object() ||
+            !binding->contains("destination_context") || !binding->at("destination_context").is_null()) reject();
+        try { validate_native_dxf_wall_source_member(entity); } catch (...) { reject(); }
+    }
     if (marker.at("depiction") != "BOUNDARY_PLAN_V1" ||
         entity.extensions.contains("physical_wall_room") ||
-        (dependency_group ? native_dxf_boundary_has_untransported_source_links(entity)
-                          : native_dxf_boundary_has_untransported_links(entity))) reject();
+        (!wall_source_group && (dependency_group ? native_dxf_boundary_has_untransported_source_links(entity)
+                                                : native_dxf_boundary_has_untransported_links(entity)))) reject();
     const auto& properties = entity.properties;
     const char* key = properties.contains("boundary_model_version") ? "segments" :
         properties.contains("boundary") ? "boundary" : "segments";
@@ -527,6 +537,9 @@ inline void validate(const ProjectImportCandidate& result) {
             !entity.properties.is_object() || !entity.extensions.is_object()) reject();
         const bool native_dxf_boundary = result.kind == ProjectImportKind::dxf &&
             can_recognize_boundary_entity_type(entity.type) && entity.extensions.contains("vertex_dxf_boundary");
+        const bool native_dxf_wall_source = result.kind == ProjectImportKind::dxf &&
+            entity.extensions.contains("vertex_dxf_boundary") && entity.extensions.at("vertex_dxf_boundary").is_object() &&
+            entity.extensions.at("vertex_dxf_boundary").value("version", 0) == 5;
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
         const bool dxf = entity.type == "annotation_state" || native_dxf_boundary;
         const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
@@ -534,6 +547,17 @@ inline void validate(const ProjectImportCandidate& result) {
             entity.type == "stair" || entity.type == "railing";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
+        if (native_dxf_wall_source && !native_dxf_boundary) {
+            if (entity.type != "wall" && entity.type != "opening") reject();
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"})
+                if (entity.properties.contains(key)) reject();
+            const auto binding = entity.extensions.find("vertex_dxf_wall_source_context_binding");
+            if (binding == entity.extensions.end() || !binding->is_object() ||
+                !binding->contains("destination_context") || !binding->at("destination_context").is_null()) reject();
+            try { validate_native_dxf_wall_source_member(entity); } catch (...) { reject(); }
+        } else if (!native_dxf_boundary &&
+            (entity.extensions.contains("vertex_dxf_wall_source_context_binding") ||
+             entity.extensions.contains("vertex_dxf_wall_source_hosted_openings"))) reject();
         if (native_dxf_boundary) {
             validate_native_dxf_boundary(entity, geometry_budget);
         } else if (entity.type == "boundary") {
@@ -546,6 +570,7 @@ inline void validate(const ProjectImportCandidate& result) {
         } else if (entity.type == "annotation_state") {
             try { validate_annotation_entity(entity); } catch (...) { reject(); }
         } else if (entity.type == "wall") {
+            if (native_dxf_wall_source) geometry_budget.charge(1);
             if (!walls.emplace(entity.id, wall(entity)).second) reject();
         } else if (entity.type == "slab") {
             validate_slab(entity, geometry_budget);

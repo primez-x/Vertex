@@ -228,6 +228,35 @@ source-bound rooms still require complete transport; source-only remapping
 helpers do not close that exchange gap. V4 is uncompiled and runtime unverified;
 external round trips and production acceptance remain open.
 
+### Exterior wall-source groups (2026-10-09, source implementation)
+
+Version 5 transports connected exterior measurement boundaries, their source
+walls, hosted openings, deductions and ceiling dependencies as one complete
+group. Every member declares identical sorted membership and an exact typed
+dependency graph. Walls also declare their complete hosted-opening inventory.
+Source and detached native plans must exactly match the analytical DXF drawing;
+the source walls must reproduce the retained measured boundary before activation.
+Missing, stale, duplicate, overlapping or unsupported dependencies prevent native
+activation of the entire component and retain ordinary geometry with diagnostics.
+Geometry and source/containment work use a cumulative operation allowance across
+independent components; expensive failed proofs remain charged. A component
+exceeding the remaining allowance falls back before source replay.
+
+Detached members carry a pending direct-context binding. Desktop destination
+review obtains the actual property/building/floor/layer context from the real
+hierarchy, then binds the group atomically and rechecks measurement currentness.
+Only declared context and entity identities change: captured baselines,
+thickness, kernels, origin outlines, translation history and local topology
+remain intact. Absolute vertical placement is retained; level, material and
+assembly dependencies are not yet transported. Source phases are diagnosed and
+retained as evidence rather than silently bound to destination phases. Older
+source provenance and appraisal observation/report hashes are not refreshed.
+
+V1/V2/V3/V4 contracts remain unchanged. Complete measured-line and physical-room
+source graphs remain open, including mixed components that require them. V5 is
+uncompiled and runtime unverified; external consumer fidelity and production
+acceptance remain open.
+
 IFC now uses one actual project's linked length-unit assignment for every core
 editable reconstruction, including legacy axes and swept solids. Orphan metre
 declarations cannot authorize a wall, slab or opening. Recognized nonlength

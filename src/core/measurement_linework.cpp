@@ -728,6 +728,46 @@ MeasurementLineworkDecodeResult decode_measurement_linework_model(const Json& en
     return {std::move(model), std::nullopt, inspected.version, inspected.replay_version, {}};
 }
 
+Json remap_measurement_linework_owner_identity(const Json& source_model,
+                                              const std::string& new_stroke_id) {
+    const auto original = decode_measurement_linework_model(source_model);
+    if (!original.supported()) invalid("cannot remap unsupported measurement linework model");
+    require_identifier(new_stroke_id, "measurement linework stroke_id");
+    const auto before = replay_measurement_linework(*original.model);
+    for (const auto& edge : original.model->edges) {
+        if (new_stroke_id == edge.segment_id || new_stroke_id == edge.start_vertex_id ||
+            new_stroke_id == edge.end_vertex_id) {
+            invalid("measurement linework remapped owner collides with a local child identity");
+        }
+    }
+    if (new_stroke_id == original.model->stroke_id) return source_model;
+
+    // Work on the original JSON rather than re-encoding immutable authoring
+    // evidence. The strict decode above proves these schema-owned paths.
+    Json result = source_model;
+    result.at("stroke_id") = new_stroke_id;
+    if (original.model->schema_version >= measurement_linework_schema_version_v3) {
+        for (auto& operation : result.at("operations")) {
+            const auto type = operation.at("type").get<std::string>();
+            if (type == "edit") {
+                operation.at("edit").at("boundary_id") = new_stroke_id;
+            } else if (type == "vertex_batch") {
+                for (auto& edit : operation.at("edits"))
+                    edit.at("boundary_id") = new_stroke_id;
+            }
+        }
+    }
+    const auto remapped = decode_measurement_linework_model(result);
+    if (!remapped.supported()) invalid("remapped measurement linework model is unsupported");
+    const auto after = replay_measurement_linework(*remapped.model);
+    if (after.stroke_id != new_stroke_id || before.replay_version != after.replay_version ||
+        !same_point(before.anchor, after.anchor) || before.closed != after.closed ||
+        before.edges != after.edges || before.receipts != after.receipts) {
+        invalid("measurement linework owner remap changed replay geometry or receipts");
+    }
+    return result;
+}
+
 Json encode_measurement_linework_model(const MeasurementLinework& model) {
     const auto replay = replay_measurement_linework(model);
     Json segments = Json::array();
