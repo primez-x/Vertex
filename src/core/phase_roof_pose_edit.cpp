@@ -197,7 +197,9 @@ TopoDS_Shape resolved_shape(const Entities& source, const std::string& id) {
     if (found == source.end() || found->first != found->second.id || found->second.type != "roof")
         invalid("Roof pose source join member is missing or inconsistent");
     validate_roof_pose_source_entity(found->second);
-    return make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second)));
+    const auto object = decode_roof_entity(resolve_vertical_placement(source, found->second));
+    (void)make_roof_shape(object);
+    return make_roof_structure_shape(object);
 }
 std::vector<RoofJoin> affected_joins(const Entities& source, const Ids& targets,
     const ConstraintPhaseScope& scope) {
@@ -233,6 +235,7 @@ void admit_joins(const Entities& source, const std::vector<RoofJoin>& joins) {
         std::vector<TopoDS_Shape> members;
         members.reserve(join.roof_ids.size());
         for (const auto& id : join.roof_ids) members.push_back(resolved_shape(source, id));
+        validate_roof_join_skylights(join, source);
         (void)make_roof_join(join, members);
     }
 }

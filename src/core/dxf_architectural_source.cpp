@@ -558,6 +558,7 @@ Boundary native_dxf_architectural_source_plan(const Entity& source,
     }
     if (source.type == "roof_join") {
         const auto join = parse_roof_join(source.properties, source.id);
+        validate_roof_join_skylights(join, authored);
         std::vector<TopoDS_Shape> shapes;
         for (const auto& id : join.roof_ids) {
             const auto& roof = authored.at(id);

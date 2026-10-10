@@ -3,6 +3,7 @@
 #include "sketch/architectural_workflow_contract.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/roof_entity_codec.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
 #include "sketch/constraint_phase_scope.hpp"
@@ -13,6 +14,8 @@
 #include "sketch/opening_host_geometry.hpp"
 #include "sketch/terrain_surface.hpp"
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRep_Builder.hxx>
+#include <TopoDS_Compound.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <gp_Ax1.hxx>
@@ -618,6 +621,22 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
         std::vector<PreparedNativeMaterialRegion> material_regions;
         std::string appearance_content;
         try {
+            const auto append_skylights = [&](const RoofObject& roof, TopoDS_Compound& compound, BRep_Builder& builder) {
+                std::visit([&](const auto& value) {
+                    for (const auto& opening : value.openings) {
+                        if (!opening.skylight) continue;
+                        if (cancelled && cancelled()) throw std::runtime_error("Skylight preparation cancelled");
+                        PreparedNativeMaterialRegion fill;
+                        fill.source_id = opening.id;
+                        fill.shape = make_roof_skylight_shape(roof, opening.id);
+                        fill.color = Quantity_Color(.95, .95, .95, Quantity_TOC_RGB);
+                        fill.gross_volume = fill.net_volume = solid_volume(fill.shape);
+                        appearance_content.append(fill.source_id).append(":skylight-white").push_back('\0');
+                        builder.Add(compound, fill.shape);
+                        material_regions.push_back(std::move(fill));
+                    }
+                }, roof);
+            };
             if (geometry_entity.type == "wall") {
                 Wall wall;
                 if (!read_document_wall(geometry_entity, hosted, wall, parse_error)) {
@@ -649,8 +668,10 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 shape = make_wall_join(join, source_walls);
             } else if (geometry_entity.type == "roof_join") {
                 const auto join = parse_roof_join(geometry_entity.properties, id);
+                validate_roof_join_skylights(join, entities);
                 std::vector<TopoDS_Shape> source_roofs;
                 std::vector<Entity> source_entities;
+                std::vector<RoofObject> roof_objects;
                 source_roofs.reserve(join.roof_ids.size());
                 for (const auto& roof_id : join.roof_ids) {
                     if (cancelled && cancelled()) return std::nullopt;
@@ -661,8 +682,8 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     const auto resolved_source = resolve_vertical_placement(snapshot,
                                                                              source->second);
                     source_entities.push_back(resolved_source);
-                    source_roofs.push_back(make_building_shape(
-                        decode_building_entity(resolved_source)));
+                    roof_objects.push_back(decode_roof_entity(resolved_source));
+                    source_roofs.push_back(make_roof_structure_shape(roof_objects.back()));
                 }
                 const auto partition = make_roof_join_partition(join, source_roofs);
                 shape = partition.shape;
@@ -701,6 +722,12 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     if (cancelled && cancelled()) return std::nullopt;
                     material_regions.push_back(std::move(prepared));
                 }
+                TopoDS_Compound complete;
+                BRep_Builder builder;
+                builder.MakeCompound(complete);
+                builder.Add(complete, shape);
+                for (const auto& roof : roof_objects) append_skylights(roof, complete, builder);
+                shape = complete;
             } else if (geometry_entity.type == "slab") {
                 Slab slab;
                 if (!read_document_slab(geometry_entity, slab, parse_error)) {
@@ -720,6 +747,27 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     continue;
                 }
                 shape = make_room_volume(room);
+            } else if (geometry_entity.type == "roof") {
+                const auto roof = decode_roof_entity(geometry_entity);
+                shape = make_roof_shape(roof);
+                const bool skylights = std::visit([](const auto& value) {
+                    return std::any_of(value.openings.begin(), value.openings.end(), [](const auto& opening) { return opening.skylight.has_value(); });
+                }, roof);
+                if (skylights) {
+                    PreparedNativeMaterialRegion body;
+                    body.source_id = geometry_entity.id;
+                    body.shape = make_roof_structure_shape(roof);
+                    body.color = presentation_color;
+                    body.material_color = material_color;
+                    body.gross_volume = body.net_volume = solid_volume(body.shape);
+                    material_regions.push_back(std::move(body));
+                    TopoDS_Compound complete;
+                    BRep_Builder builder;
+                    builder.MakeCompound(complete);
+                    builder.Add(complete, material_regions.front().shape);
+                    append_skylights(roof, complete, builder);
+                    shape = complete;
+                }
             } else {
                 shape = make_building_shape(decode_building_entity(geometry_entity), entities);
             }

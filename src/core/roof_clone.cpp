@@ -330,7 +330,9 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                 validate_roof_uniform_transform_source_entity(found->second);
                 if (found->second.properties.contains("material_assignment"))
                     admit_assignment(source, found->second.properties.at("material_assignment"));
-                shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second))));
+                const auto object = decode_roof_entity(resolve_vertical_placement(source, found->second));
+                (void)make_roof_shape(object);
+                shapes.emplace(id, make_roof_structure_shape(object));
             }
         };
         for (const auto& id : roofs) {
@@ -377,6 +379,7 @@ Derivation derive(const RoofCloneEntities& source, const std::vector<std::string
                     reject("affected join spans inactive, foreign or different-phase owners: " + id);
                 admit_roof(roof); members.push_back(shapes.at(roof));
             }
+            validate_roof_join_skylights(join, source);
             (void)make_roof_join(join, members);
             if (join.material_assignment) admit_assignment(source, entity.properties.at("material_assignment"));
             if (std::all_of(join.roof_ids.begin(), join.roof_ids.end(), [&](const auto& roof) { return roofs.contains(roof); })) {
@@ -700,6 +703,7 @@ RoofCloneResult replay_roof_clone(const RoofCloneEntities& source, const RoofClo
                         resolve_vertical_placement(result.entities, result.entities.at(roof)))));
                 members.push_back(copied_shapes.at(roof));
             }
+            validate_roof_join_skylights(join, result.entities);
             (void)make_roof_join(join, members);
         }
         if (plan.include_hosted_instances) {

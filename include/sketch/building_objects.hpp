@@ -84,12 +84,19 @@ struct Beam {
 // returned prism thickness is measured normal to the sloped panel.
 // A vertical through-opening defined in the roof's horizontal local frame.
 // X/Y locate its lower-left corner; width/depth are horizontal projections.
+struct RoofSkylight {
+    double frame_width{0.06};
+    double curb_height{0.15};
+    double glazing_thickness{0.024};
+};
+
 struct RoofOpening {
     std::string id;
     double x{};
     double y{};
     double width{};
     double depth{};
+    std::optional<RoofSkylight> skylight;
 };
 
 struct SlopedRoofPanel {
@@ -146,5 +153,14 @@ struct HipRoof {
 };
 
 [[nodiscard]] TopoDS_Shape make_hip_roof(const HipRoof& roof);
+
+// Primitive roof builders above return only the cut roof material. These
+// builders return a fixed skylight's curb, frame and glazing, with normal
+// height/thickness and frame widths measured on the host plane. The footprint
+// stays strictly inside its vertical opening. The opening must belong to a
+// host already validated by its primitive builder.
+[[nodiscard]] TopoDS_Shape make_roof_skylight(const SlopedRoofPanel& roof, const RoofOpening& opening);
+[[nodiscard]] TopoDS_Shape make_roof_skylight(const GableRoof& roof, const RoofOpening& opening);
+[[nodiscard]] TopoDS_Shape make_roof_skylight(const HipRoof& roof, const RoofOpening& opening);
 
 }  // namespace sketch

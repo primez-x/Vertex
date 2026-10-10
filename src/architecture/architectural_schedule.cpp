@@ -6,6 +6,7 @@
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/roof_entity_codec.hpp"
 
 #include <Standard_Failure.hxx>
 #include <TopoDS_Iterator.hxx>
@@ -767,6 +768,13 @@ BuildingObject effective_building_object(const DocumentSnapshot& document, const
     return decode_building_entity(resolve_vertical_placement(document, entity));
 }
 
+TopoDS_Shape building_quantity_shape(const DocumentSnapshot& document, const Entity& entity,
+                                    const BuildingObject& object) {
+    if (entity.type == "roof")
+        return make_roof_structure_shape(decode_roof_entity(resolve_vertical_placement(document, entity)));
+    return make_building_shape(object, document.entities());
+}
+
 std::vector<ScheduleSourceRef> building_geometry_sources(const DocumentSnapshot& document,
     const Entity& entity, const BuildingObject& object) {
     std::vector<ScheduleSourceRef> sources{{entity.id, "geometry"}};
@@ -952,7 +960,7 @@ void append_building_rows(const DocumentSnapshot& document,
                     add_layout_quantity(record, "side", std::string(rail->host->side == StairRailingSide::left ? "left" : "right"));
                 }
             }
-            const auto shape = make_building_shape(object, document.entities());
+            const auto shape = building_quantity_shape(document, entity, object);
             const auto volume = solid_volume(shape);
             if (!std::isfinite(volume) || volume <= 0.0)
                 throw std::invalid_argument("building solid volume must be positive and finite");
@@ -961,7 +969,45 @@ void append_building_rows(const DocumentSnapshot& document,
                 {{id, "geometry"}},
                 "Net volume calculated from the canonical building solid"});
             geometry_sources[id] = building_geometry_sources(document, entity, object);
+            std::vector<ScheduleRecord> skylights;
+            if (entity.type == "roof") {
+                const auto roof = decode_roof_entity(resolve_vertical_placement(document, entity));
+                std::visit([&](const auto& host) {
+                    for (const auto& opening : host.openings) {
+                        if (!opening.skylight) continue;
+                        if (document.entities().contains(opening.id) || geometry_sources.contains(opening.id))
+                            throw std::invalid_argument("skylight schedule child identity collides with another source");
+                        ScheduleRecord child;
+                        child.object_id = opening.id;
+                        child.kind = ScheduleRowKind::building;
+                        child.mark = "SK-" + opening.id;
+                        auto sources = geometry_sources.at(id);
+                        sources.push_back({id, "roof_openings"});
+                        normalize_sources(sources);
+                        const auto add = [&](std::string name, ScheduleValue value, std::string explanation) {
+                            child.calculated.emplace(std::move(name), ScheduleCalculation{
+                                std::move(value), sources, std::move(explanation)});
+                        };
+                        add("type", std::string("roof_skylight"), "Fixed skylight assembly owned by the actual roof opening");
+                        add("host_roof_id", id, "Authoritative roof host identity");
+                        add("opening_id", opening.id, "Authoritative roof-opening child identity");
+                        add("width", ScheduleQuantity{opening.width, ScheduleUnit::metre}, "Horizontal roof-opening mouth width");
+                        add("depth", ScheduleQuantity{opening.depth, ScheduleUnit::metre}, "Horizontal roof-opening mouth depth");
+                        add("frame_width", ScheduleQuantity{opening.skylight->frame_width, ScheduleUnit::metre}, "Authored finite skylight frame width");
+                        add("curb_height", ScheduleQuantity{opening.skylight->curb_height, ScheduleUnit::metre}, "Authored skylight curb height above the roof surface");
+                        add("glazing_thickness", ScheduleQuantity{opening.skylight->glazing_thickness, ScheduleUnit::metre}, "Authored finite skylight glazing thickness");
+                        const auto fill_volume = solid_volume(make_roof_skylight_shape(roof, opening.id));
+                        if (!std::isfinite(fill_volume) || fill_volume <= 0.0)
+                            throw std::invalid_argument("skylight solid volume must be positive and finite");
+                        add("volume", ScheduleQuantity{fill_volume, ScheduleUnit::cubic_metre}, "Finite frame, curb and glazing solid volume; excluded from roof material volume");
+                        geometry_sources[opening.id] = std::move(sources);
+                        skylights.push_back(std::move(child));
+                    }
+                }, roof);
+            }
             records.push_back(std::move(record));
+            records.insert(records.end(), std::make_move_iterator(skylights.begin()),
+                           std::make_move_iterator(skylights.end()));
         } catch (const Standard_Failure& error) {
             projection.diagnostics.push_back(id + ": building schedule unavailable: " +
                 (error.what() ? error.what() : "solid construction failed"));
@@ -1030,12 +1076,14 @@ void append_roof_join_rows(const DocumentSnapshot& document,
                 if (source == document.entities().end() || source->second.type != "roof")
                     throw std::invalid_argument("roof join source roof is missing: " + source_id);
                 sources.push_back(&source->second);
-                shapes.push_back(make_building_shape(effective_building_object(document, source->second)));
+                shapes.push_back(building_quantity_shape(document, source->second,
+                    effective_building_object(document, source->second)));
                 provenance.push_back({source_id, "geometry"});
                 provenance.push_back({source_id, "material_assignment"});
                 append_sources(provenance, building_geometry_sources(document, source->second,
                     effective_building_object(document, source->second)));
             }
+            validate_roof_join_skylights(join, document.entities());
             const auto partition = make_roof_join_partition(join, shapes);
             std::vector<ScheduleRow> rows;
             double gross_total = 0.0;
@@ -1153,7 +1201,7 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
                 shape = make_slab(slab);
             } else if (can_recognize_building_entity_type(entity.type)) {
                 const auto object = effective_building_object(document, entity);
-                shape = make_building_shape(object, document.entities());
+                shape = building_quantity_shape(document, entity, object);
                 append_sources(sources, building_geometry_sources(document, entity, object));
                 normalize_sources(sources);
             } else {

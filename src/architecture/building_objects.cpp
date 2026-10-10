@@ -227,6 +227,163 @@ double checked_pitch_rise(double run, double rise, double pitch, const char* wha
     return rise / run;
 }
 
+struct RoofPlane {
+    double elevation;
+    double x_slope;
+    double y_slope;
+};
+
+RoofPlane skylight_plane(const SlopedRoofPanel& roof, const RoofOpening&) {
+    return {0.0, checked_pitch_rise(roof.run, roof.rise, roof.pitch_radians,
+        "Skylight host pitch and rise must agree", true), 0.0};
+}
+
+RoofPlane skylight_plane(const GableRoof& roof, const RoofOpening& opening) {
+    const auto slope = checked_pitch_rise(roof.span * 0.5, roof.rise,
+        roof.pitch_radians, "Skylight host pitch and rise must agree");
+    if (opening.y + opening.depth < -tolerance) return {roof.rise, 0.0, slope};
+    if (opening.y > tolerance) return {roof.rise, 0.0, -slope};
+    throw std::invalid_argument("A skylight must fit one gable face without touching or crossing the ridge");
+}
+
+RoofPlane skylight_plane(const HipRoof& roof, const RoofOpening& opening) {
+    const auto slope = checked_pitch_rise(roof.span * 0.5, roof.rise,
+        roof.pitch_radians, "Skylight host pitch and rise must agree");
+    const RoofPlane planes[]{{roof.rise, 0.0, slope}, {roof.rise, 0.0, -slope},
+        {slope * roof.length * 0.5, slope, 0.0},
+        {slope * roof.length * 0.5, -slope, 0.0}};
+    const auto clearance = tolerance * std::hypot(1.0, slope);
+    // Each hip face is the domain where its plane is strictly the lowest.
+    // Affine inequalities checked at all four corners cover the entire mouth.
+    for (std::size_t candidate = 0; candidate < 4; ++candidate) {
+        bool fits = true;
+        for (const double x : {opening.x, opening.x + opening.width})
+            for (const double y : {opening.y, opening.y + opening.depth}) {
+                const auto& plane = planes[candidate];
+                const auto height = plane.elevation + plane.x_slope * x + plane.y_slope * y;
+                for (std::size_t other = 0; other < 4; ++other) {
+                    if (candidate == other) continue;
+                    const auto& adjacent = planes[other];
+                    const auto adjacent_height = adjacent.elevation + adjacent.x_slope * x
+                        + adjacent.y_slope * y;
+                    if (!(height + clearance < adjacent_height)) fits = false;
+                }
+            }
+        if (fits) return planes[candidate];
+    }
+    throw std::invalid_argument("A skylight must fit one hip face without touching or crossing hips or ridge");
+}
+
+struct SkylightDimensions {
+    double clearance;
+    double x_frame;
+    double y_frame;
+    double curb_height;
+    double glazing_thickness;
+    double roof_drop;
+};
+
+template<class Roof>
+SkylightDimensions skylight_dimensions(const Roof& roof, const RoofOpening& opening,
+                                      const RoofPlane& plane) {
+    if (!opening.skylight) throw std::invalid_argument("Roof opening has no skylight assembly");
+    finite_derived(opening.x, "Skylight X must be finite");
+    finite_derived(opening.y, "Skylight Y must be finite");
+    positive_dimension(opening.width, "Skylight mouth width must be positive");
+    positive_dimension(opening.depth, "Skylight mouth depth must be positive");
+    const auto& skylight = *opening.skylight;
+    positive_dimension(skylight.frame_width, "Skylight frame width must be positive");
+    nonnegative_dimension(skylight.curb_height, "Skylight curb height must be nonnegative");
+    positive_dimension(skylight.glazing_thickness, "Skylight glazing thickness must be positive");
+    const auto normal_scale = std::hypot(1.0, std::hypot(plane.x_slope, plane.y_slope));
+    const auto clearance = std::max(8.0 * tolerance,
+        std::min(opening.width, opening.depth) * 1e-9);
+    const auto x_frame = skylight.frame_width / std::hypot(1.0, plane.x_slope);
+    const auto y_frame = skylight.frame_width / std::hypot(1.0, plane.y_slope);
+    positive_dimension(x_frame, "Skylight projected frame width is too small");
+    positive_dimension(y_frame, "Skylight projected frame depth is too small");
+    positive_dimension(opening.width - 2.0 * (clearance + x_frame),
+        "Skylight frame leaves no clear glazing width");
+    positive_dimension(opening.depth - 2.0 * (clearance + y_frame),
+        "Skylight frame leaves no clear glazing depth");
+    const auto curb_height = skylight.curb_height * normal_scale;
+    const auto glazing_thickness = skylight.glazing_thickness * normal_scale;
+    const auto roof_drop = roof.thickness * normal_scale;
+    nonnegative_dimension(curb_height, "Skylight curb elevation exceeds the supported range");
+    positive_dimension(glazing_thickness, "Skylight glazing offset exceeds the supported range");
+    positive_dimension(roof_drop, "Skylight host thickness exceeds the supported range");
+    positive_dimension(roof_drop + curb_height, "Skylight curb extent exceeds the supported range");
+    return {clearance, x_frame, y_frame, curb_height, glazing_thickness, roof_drop};
+}
+
+template<class Roof>
+void validate_skylights(const Roof& roof) {
+    for (const auto& opening : roof.openings)
+        if (opening.skylight) {
+            const auto plane = skylight_plane(roof, opening);
+            (void)skylight_dimensions(roof, opening, plane);
+        }
+}
+
+template<class Roof>
+TopoDS_Shape build_skylight(const Roof& roof, const RoofOpening& opening) {
+    const auto plane = skylight_plane(roof, opening);
+    const auto dimensions = skylight_dimensions(roof, opening, plane);
+    const auto frame = horizontal_frame(roof.orientation_radians, "Skylight host orientation is invalid");
+    const auto x0 = opening.x + dimensions.clearance;
+    const auto y0 = opening.y + dimensions.clearance;
+    const auto x1 = opening.x + opening.width - dimensions.clearance;
+    const auto y1 = opening.y + opening.depth - dimensions.clearance;
+    const auto ix0 = x0 + dimensions.x_frame;
+    const auto iy0 = y0 + dimensions.y_frame;
+    const auto ix1 = x1 - dimensions.x_frame;
+    const auto iy1 = y1 - dimensions.y_frame;
+    double expected_volume = 0.0;
+    return build_solid([&] {
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        const auto slab = [&](double left, double bottom, double right, double top,
+                              double offset, double height) {
+            positive_dimension(right - left, "Skylight member width is invalid");
+            positive_dimension(top - bottom, "Skylight member depth is invalid");
+            positive_dimension(height, "Skylight member height is invalid");
+            const auto p = [&](double x, double y) {
+                return local_point(point(roof.base_position), frame.along, x, frame.across, y,
+                    plane.elevation + plane.x_slope * x + plane.y_slope * y + offset);
+            };
+            const auto member = make_prism({p(left, bottom), p(right, bottom),
+                p(right, top), p(left, top)}, gp_Vec(0.0, 0.0, height),
+                "Skylight member construction failed");
+            const auto volume = (right - left) * (top - bottom) * height;
+            const auto actual_volume = solid_volume(member);
+            if (!std::isfinite(volume) || !std::isfinite(actual_volume) ||
+                volume <= tolerance * tolerance * tolerance ||
+                std::abs(actual_volume - volume) > std::max(tolerance * tolerance * tolerance,
+                    volume * 1e-7))
+                throw std::invalid_argument("Skylight member volume does not match its bounded dimensions");
+            expected_volume += volume;
+            builder.Add(compound, member);
+        };
+        const auto ring = [&](double offset, double height) {
+            // Four disjoint rectangular domains share faces without overlap.
+            slab(x0, y0, x1, iy0, offset, height);
+            slab(x0, iy1, x1, y1, offset, height);
+            slab(x0, iy0, ix0, iy1, offset, height);
+            slab(ix1, iy0, x1, iy1, offset, height);
+        };
+        ring(-dimensions.roof_drop, dimensions.roof_drop + dimensions.curb_height);
+        ring(dimensions.curb_height, dimensions.glazing_thickness);
+        slab(ix0, iy0, ix1, iy1, dimensions.curb_height, dimensions.glazing_thickness);
+        const auto actual_volume = solid_volume(compound);
+        if (!std::isfinite(expected_volume) || !std::isfinite(actual_volume) ||
+            std::abs(actual_volume - expected_volume) > std::max(tolerance * tolerance * tolerance,
+                expected_volume * 1e-7))
+            throw std::invalid_argument("Skylight assembly volume is invalid");
+        return TopoDS_Shape(compound);
+    }, "Skylight assembly construction failed");
+}
+
 TopoDS_Shape cut_roof_openings(TopoDS_Shape shape, const std::vector<RoofOpening>& openings,
                                const Vec3& base, double orientation, double xmin, double ymin,
                                double xmax, double ymax, double thickness) {
@@ -558,6 +715,7 @@ TopoDS_Shape make_sloped_roof_panel(const SlopedRoofPanel& panel) {
     const double slope = checked_pitch_rise(panel.run, panel.rise,
                                             panel.pitch_radians,
                                             "Roof panel pitch and rise must agree", true);
+    validate_skylights(panel);
     const auto frame = horizontal_frame(panel.orientation_radians,
                                         "Roof panel orientation is invalid");
     const gp_Pnt base = point(panel.base_position);
@@ -589,6 +747,7 @@ TopoDS_Shape make_gable_roof(const GableRoof& roof) {
     const double slope = checked_pitch_rise(half_span, roof.rise,
                                             roof.pitch_radians,
                                             "Gable roof pitch and rise must agree");
+    validate_skylights(roof);
     const auto frame = horizontal_frame(roof.orientation_radians,
                                         "Gable roof orientation is invalid");
     const gp_Pnt base = point(roof.base_position);
@@ -662,6 +821,7 @@ TopoDS_Shape make_hip_roof(const HipRoof& roof) {
         throw std::invalid_argument("Hip roof length must be at least its span");
     const auto slope = checked_pitch_rise(roof.span * 0.5, roof.rise,
         roof.pitch_radians, "Hip roof pitch and rise must agree");
+    validate_skylights(roof);
     const auto frame = horizontal_frame(roof.orientation_radians,
         "Hip roof orientation is invalid");
     const auto a = roof.length * 0.5 + roof.overhang;
@@ -702,6 +862,18 @@ TopoDS_Shape make_hip_roof(const HipRoof& roof) {
         make_compound(west_panel, east_panel, "Hip end construction failed"),
         "Hip roof construction failed"), roof.openings, roof.base_position, roof.orientation_radians,
         -roof.length * 0.5, -roof.span * 0.5, roof.length * 0.5, roof.span * 0.5, roof.thickness);
+}
+
+TopoDS_Shape make_roof_skylight(const SlopedRoofPanel& roof, const RoofOpening& opening) {
+    return build_skylight(roof, opening);
+}
+
+TopoDS_Shape make_roof_skylight(const GableRoof& roof, const RoofOpening& opening) {
+    return build_skylight(roof, opening);
+}
+
+TopoDS_Shape make_roof_skylight(const HipRoof& roof, const RoofOpening& opening) {
+    return build_skylight(roof, opening);
 }
 
 }  // namespace sketch

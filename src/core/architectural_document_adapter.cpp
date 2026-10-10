@@ -2,6 +2,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/roof_entity_codec.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_solid.hpp"
@@ -430,6 +431,11 @@ BuildingObject transform_building_object(BuildingObject object,
                     opening.y *= transform.scale;
                     opening.width *= transform.scale;
                     opening.depth *= transform.scale;
+                    if (opening.skylight) {
+                        opening.skylight->frame_width *= transform.scale;
+                        opening.skylight->curb_height *= transform.scale;
+                        opening.skylight->glazing_thickness *= transform.scale;
+                    }
                 }
             } else if constexpr (std::is_same_v<Object, GableRoof> ||
                                  std::is_same_v<Object, HipRoof>) {
@@ -449,6 +455,11 @@ BuildingObject transform_building_object(BuildingObject object,
                     opening.y *= transform.scale;
                     opening.width *= transform.scale;
                     opening.depth *= transform.scale;
+                    if (opening.skylight) {
+                        opening.skylight->frame_width *= transform.scale;
+                        opening.skylight->curb_height *= transform.scale;
+                        opening.skylight->glazing_thickness *= transform.scale;
+                    }
                 }
             }
             return value;
@@ -1189,6 +1200,7 @@ ApplyEntityChanges make_candidate_command(const DocumentSnapshot& source, const 
                     const auto effective = resolve_vertical_placement(preview, preview.entities().at(member_id));
                     members.push_back(make_building_shape(decode_building_entity(effective)));
                 }
+                validate_roof_join_skylights(join, preview.entities());
                 (void)make_roof_join(join, members);
             }
         }
@@ -1504,6 +1516,7 @@ ApplyEntityChanges architectural_join_create_command(const DocumentSnapshot& sou
             const auto resolved = resolve_vertical_placement(source, source.entities().at(member_id));
             roofs.push_back(make_building_shape(decode_building_entity(resolved)));
         }
+        validate_roof_join_skylights(RoofJoin{join_id, member_ids}, source.entities());
         (void)make_roof_join(RoofJoin{join_id, member_ids}, roofs);
     }
     auto entity = Entity::create(join_type, properties);

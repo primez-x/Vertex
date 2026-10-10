@@ -106,7 +106,9 @@ std::map<std::string, TopoDS_Shape, std::less<>> admit_roofs_and_joins(
         if (entity.type != "roof") reject("affected source owner is not an actual roof: " + id);
         validate_roof_uniform_transform_source_entity(entity);
         if (entity.properties.contains("material_assignment")) admit_assignment(source, entity.properties.at("material_assignment"));
-        shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, entity))));
+        const auto object = decode_roof_entity(resolve_vertical_placement(source, entity));
+        (void)make_roof_shape(object);
+        shapes.emplace(id, make_roof_structure_shape(object));
     }
     for (const auto& id : joins) {
         const auto& entity = source.at(id);
@@ -118,6 +120,7 @@ std::map<std::string, TopoDS_Shape, std::less<>> admit_roofs_and_joins(
             if (!shapes.contains(roof)) reject("join member is not an actual roof: " + roof);
             members.push_back(shapes.at(roof));
         }
+        validate_roof_join_skylights(join, source);
         (void)make_roof_join(join, members);
     }
     return shapes;

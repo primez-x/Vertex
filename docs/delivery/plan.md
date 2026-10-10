@@ -119,9 +119,12 @@ polling timeout does not permit restarting it.
    output. Qualify the separate awning and double-hung source operations,
    including their angle/independent sash controls, complete physical assemblies,
    normal-side handing, visible SVG entries, schedules, history and export.
-   Corner windows still require coordinated multi-host semantics. The skylight
-   catalog entry still routes through a wall opening and needs roof-hosted
-   geometry/placement; the roof-opening model already provides a cut foundation.
+   Corner windows still require coordinated multi-host semantics. Qualify the
+   roof-hosted fixed skylight source across both catalog entries, actual sloped
+   frame/glazing, roster editing, scaling/resizing, cloning/removal, phases,
+   history, material quantities and separate IFC roof/window relationships.
+   Individual skylight canvas grips and surface-aware placement preview remain
+   workflow gaps; roof selection and Openings currently provide explicit edits.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

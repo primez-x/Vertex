@@ -1014,12 +1014,71 @@ Entity mesh_metadata(const Entity& entity, std::string_view role) {
     return retained;
 }
 
+bool roof_has_skylights(const Json& properties) {
+    const auto openings = properties.find("roof_openings");
+    return openings != properties.end() && openings->is_array() &&
+        std::any_of(openings->begin(), openings->end(), [](const Json& row) {
+            return row.is_object() && row.contains("skylight");
+        });
+}
+
+Json export_roof_skylights(const Entity& roof, int product, ExportContext& context,
+    std::vector<IfcProjectDiagnostic>& diagnostics) {
+    Json manifest = Json::array();
+    if (!roof_has_skylights(roof.properties)) return manifest;
+    require(roof.properties.at("version") == 3);
+    const auto& openings = roof.properties.at("roof_openings");
+    require(openings.size() <= 256);
+    // Bound complete child construction before repeated decoding/booleans.
+    context.native_work.charge(openings.size() * 20);
+    for (const auto& row : openings) if (row.contains("skylight")) {
+        context.native_work.charge(openings.size() * 3);
+        for (int i = 0; i < 3; ++i) context.native_work.charge_cross(openings.size());
+    }
+    for (const auto& row : openings) {
+        if (!row.contains("skylight")) continue;
+        const auto id = row.at("id").get<std::string>();
+        const auto key = roof.id + ":" + id;
+        const auto void_shape = mesh_shape(ifc_native_roof_void_mesh(roof, id,
+            context.limits.max_mesh_vertices - context.mesh_vertices,
+            context.limits.max_mesh_triangles - context.mesh_triangles), context);
+        const auto void_product = context.builder.add("IFCOPENINGELEMENT",
+            context.root("roof-void:" + key, id) + ",$," + ref(context.placement) + "," +
+            ref(void_shape) + ",$,.OPENING.");
+        context.builder.add("IFCRELVOIDSELEMENT", context.root("roof-voids:" + key, "") +
+            "," + ref(product) + "," + ref(void_product));
+        const auto fill_shape = mesh_shape(ifc_native_roof_skylight_mesh(roof, id,
+            context.limits.max_mesh_vertices - context.mesh_vertices,
+            context.limits.max_mesh_triangles - context.mesh_triangles), context);
+        // IFC4 defines SKYLIGHT for a window in a sloped building element.
+        // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcwindowtypeenum.htm
+        // Overall dimensions are optional: the physical sloped body is exact,
+        // while the authored aperture dimensions measure the horizontal plan.
+        const auto fill_product = context.builder.add("IFCWINDOW",
+            context.root("roof-skylight:" + key, id + " skylight") + ",$," + ref(context.placement) +
+            "," + ref(fill_shape) + ",$,$,$,.SKYLIGHT.,.SINGLE_PANEL.,$");
+        context.builder.add("IFCRELFILLSELEMENT", context.root("roof-fills:" + key, "") +
+            "," + ref(void_product) + "," + ref(fill_product));
+        context.contain(fill_product);
+        for (const auto& [child_product, role] :
+            {std::pair{void_product, "roof_void"}, std::pair{fill_product, "roof_skylight"}}) {
+            Entity child{key, "ifc_reference", Json::object()};
+            child = mesh_metadata(child, role);
+            child.properties["_vertex_ifc_roof_child"] = {{"version",1},{"roof_product",product},{"opening",row}};
+            retain_properties(child, child_product, context, diagnostics);
+        }
+        manifest.push_back({{"opening_id",id},{"void_product",void_product},{"fill_product",fill_product}});
+    }
+    return manifest;
+}
+
 void export_native_join(const DocumentSnapshot& document, const Entity& entity,
     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
     const auto checkpoint = context.builder.checkpoint();
     const auto ordinal = context.ordinal, vertices = context.mesh_vertices,
         triangles = context.mesh_triangles, metadata_bytes = context.retained_metadata_charge;
     const auto diagnostic_count = diagnostics.size();
+    const auto contained_before = context.contained_products;
     try {
         context.builder.bounded_add(true);
         const bool walls = entity.type == "wall_join";
@@ -1109,6 +1168,14 @@ void export_native_join(const DocumentSnapshot& document, const Entity& entity,
         const auto product = context.builder.add(walls ? "IFCWALL" : "IFCROOF",
             context.root(entity.id, entity.id) + ",$," + ref(context.placement) + "," + ref(shape) + ",$,.NOTDEFINED.");
         auto retained = mesh_metadata(entity, entity.type);
+        if (!walls) {
+            Json children = Json::array();
+            for (const auto& roof : resolved) {
+                const auto manifest = export_roof_skylights(roof, product, context, diagnostics);
+                if (!manifest.empty()) children.push_back({{"roof_id",roof.id},{"openings",manifest}});
+            }
+            if (!children.empty()) retained.properties["_vertex_ifc_roof_join_skylights"] = std::move(children);
+        }
         retained.properties["_vertex_ifc_join"] = {{"version", 1}, {"native_entity", {
             {"id", entity.id}, {"type", entity.type}, {"required", entity.required},
             {"properties", entity.properties}, {"extensions", entity.extensions}}},
@@ -1169,6 +1236,7 @@ void export_native_join(const DocumentSnapshot& document, const Entity& entity,
         context.builder.rollback(checkpoint);
         context.ordinal = ordinal; context.mesh_vertices = vertices; context.mesh_triangles = triangles;
         context.retained_metadata_charge = metadata_bytes;
+        context.contained_products = contained_before;
         diagnostics.resize(diagnostic_count);
         add_diagnostic(diagnostics, entity.id, entity.type,
             std::string_view(error.what()) == "ifc_mesh_budget_exceeded" ||
@@ -1390,7 +1458,15 @@ void export_native_stair_or_railing(const DocumentSnapshot& document, const Enti
 
 void export_native_roof_or_room(const DocumentSnapshot& document, const Entity& entity,
     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+    const auto checkpoint = context.builder.checkpoint();
+    const auto ordinal = context.ordinal, vertices = context.mesh_vertices,
+        triangles = context.mesh_triangles, metadata_bytes = context.retained_metadata_charge;
+    const auto products_before = context.product_ids;
+    const auto contained_before = context.contained_products;
+    const auto diagnostic_count = diagnostics.size();
+    const bool manufactured = entity.type == "roof" && roof_has_skylights(entity.properties);
     try {
+        if (manufactured) context.builder.bounded_add(true);
         const bool roof = entity.type == "roof";
         auto meshes = roof
             ? ifc_native_roof_mesh(entity, context.limits.max_mesh_vertices - context.mesh_vertices,
@@ -1407,6 +1483,10 @@ void export_native_roof_or_room(const DocumentSnapshot& document, const Entity& 
         if (roof) context.contain(product);
         else context.aggregate(context.storey, product, "storey-space:" + entity.id);
         auto retained = mesh_metadata(entity, roof ? "roof" : "room");
+        if (roof && roof_has_skylights(entity.properties)) {
+            retained.properties["_vertex_ifc_mesh"]["version"] = 2;
+            retained.properties["_vertex_ifc_roof_openings"] = export_roof_skylights(entity, product, context, diagnostics);
+        }
         const auto& authored = document.entities().at(entity.id);
         auto extensions = authored.extensions;
         auto authored_properties = authored.properties;
@@ -1419,6 +1499,7 @@ void export_native_roof_or_room(const DocumentSnapshot& document, const Entity& 
             if (source.is_object() && source.contains("extensions") && source.at("extensions").is_object()) {
                 auto prior_active = *prior;
                 prior_active.erase("_vertex_ifc_mesh"); prior_active.erase("_vertex_ifc_entity");
+                prior_active.erase("_vertex_ifc_roof_openings");
                 detach_native_context(prior_active);
                 auto current_active = authored.properties;
                 // Import assigns a destination hierarchy without changing the
@@ -1452,7 +1533,16 @@ void export_native_roof_or_room(const DocumentSnapshot& document, const Entity& 
         retained.properties["_vertex_ifc_entity"] = {{"version",1},{"type",entity.type},
             {"required",authored_required},{"properties",std::move(authored_properties)},{"extensions",std::move(extensions)}};
         retain_properties(retained, product, context, diagnostics);
+        if (manufactured) require(diagnostics.size() == diagnostic_count);
+        context.builder.bounded_add(checkpoint.bounded);
     } catch (const std::exception& error) {
+        if (manufactured) {
+            context.builder.rollback(checkpoint);
+            context.ordinal = ordinal; context.mesh_vertices = vertices; context.mesh_triangles = triangles;
+            context.retained_metadata_charge = metadata_bytes;
+            context.product_ids = products_before; context.contained_products = contained_before;
+            diagnostics.resize(diagnostic_count);
+        }
         add_diagnostic(diagnostics, entity.id, entity.type,
             std::string_view(error.what()) == "ifc_mesh_budget_exceeded"
                 ? "native_mesh_budget_exceeded" : "native_roof_or_room_geometry_not_representable");
@@ -2686,7 +2776,8 @@ std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parse
 bool native_mesh_role(const Json& properties, std::string_view role) {
     const auto tag = properties.find("_vertex_ifc_mesh");
     return tag != properties.end() && tag->is_object() && tag->contains("version") &&
-        tag->at("version").is_number_integer() && tag->at("version") == 1 &&
+        tag->at("version").is_number_integer() &&
+        (tag->at("version") == 1 || (role == "roof" && tag->at("version") == 2)) &&
         tag->contains("role") && tag->at("role").is_string() &&
         tag->at("role").get<std::string>() == role && tag->contains("max_deviation_m") &&
         tag->at("max_deviation_m").is_number() && tag->at("max_deviation_m").get<double>() ==
@@ -2733,7 +2824,16 @@ struct NativeReconstructionLedger {
             const auto& p = candidate.properties;
             const auto form = p.at("form").get<std::string>();
             charge(form == "sloped_roof_panel" ? 1 : form == "gable_roof" ? 2 : 4);
-            if (p.contains("roof_openings")) charge(p.at("roof_openings").size() * 4);
+            if (p.contains("roof_openings")) {
+                charge(p.at("roof_openings").size() * 4);
+                for (const auto& opening : p.at("roof_openings")) if (opening.contains("skylight")) {
+                    charge(20);
+                    // Repeated regeneration keeps each charge within the
+                    // individual row ceiling and uses the shared total ledger.
+                    for (int i = 0; i < 3; ++i) geometry.charge(p.at("roof_openings").size());
+                    for (int i = 0; i < 3; ++i) geometry.charge_cross(p.at("roof_openings").size());
+                }
+            }
         } else {
             const auto charge_boundary = [&](const Json& boundary) {
                 charge(boundary.size());
@@ -2761,6 +2861,81 @@ struct NativeReconstructionLedger {
         return storage;
     }
 };
+
+struct NativeRoofRelations {
+    std::map<int, std::vector<std::pair<int, int>>> void_parents;
+    std::map<int, std::vector<int>> roof_voids;
+    std::map<int, std::vector<std::pair<int, int>>> void_fills;
+    std::map<int, std::size_t> fill_use;
+};
+
+bool proved_roof_skylights(const ParsedStep& parsed, const StepRecord& record,
+    const Json& metadata, const Entity& candidate, const std::map<int, Json>& all_metadata,
+    const std::map<int, std::vector<IfcNativeMesh>>& all_meshes, const NativeRoofRelations& relations,
+    std::size_t& count, const IfcExchangeLimits& limits, std::size_t storage, std::set<int>& consumed) {
+    const bool skylights = roof_has_skylights(candidate.properties);
+    const auto host_voids = relations.roof_voids.find(record.id);
+    const auto& tag = metadata.at("_vertex_ifc_mesh");
+    // Historical roof body proof cannot authorize manufactured fills injected
+    // into its metadata; v2 explicitly requires the complete child proof.
+    if (!skylights) return tag.at("version") == 1 && !metadata.contains("_vertex_ifc_roof_openings") &&
+        (host_voids == relations.roof_voids.end() || host_voids->second.empty());
+    if (tag.at("version") != 2 || !metadata.contains("_vertex_ifc_roof_openings")) return false;
+    const auto& manifest = metadata.at("_vertex_ifc_roof_openings");
+    if (!manifest.is_array() || manifest.size() > 256) return false;
+    if (host_voids == relations.roof_voids.end() || host_voids->second.size() != manifest.size()) return false;
+    std::set<int> declared_voids;
+    for (const auto& entry : manifest) {
+        if (!entry.is_object() || !entry.contains("void_product") || !entry.at("void_product").is_number_integer() ||
+            !declared_voids.insert(entry.at("void_product").get<int>()).second) return false;
+    }
+    for (const auto id : host_voids->second) if (!declared_voids.contains(id)) return false;
+    std::size_t index = 0;
+    for (const auto& row : candidate.properties.at("roof_openings")) {
+        if (!row.contains("skylight")) continue;
+        if (index >= manifest.size()) return false;
+        const auto& entry = manifest[index++];
+        if (!entry.is_object() || entry.size() != 3 || !entry.contains("opening_id") ||
+            entry.at("opening_id") != row.at("id") || !entry.contains("void_product") ||
+            !entry.at("void_product").is_number_integer() || !entry.contains("fill_product") ||
+            !entry.at("fill_product").is_number_integer()) return false;
+        const auto void_id = entry.at("void_product").get<int>(), fill_id = entry.at("fill_product").get<int>();
+        const auto* void_record = find_record(parsed, void_id);
+        const auto* fill_record = find_record(parsed, fill_id);
+        if (!void_record || void_record->type != "IFCOPENINGELEMENT" || !fill_record || fill_record->type != "IFCWINDOW" ||
+            !relations.void_parents.contains(void_id) || relations.void_parents.at(void_id).size() != 1 ||
+            relations.void_parents.at(void_id).front().first != record.id ||
+            !relations.void_fills.contains(void_id) || relations.void_fills.at(void_id).size() != 1 ||
+            relations.void_fills.at(void_id).front().first != fill_id || !relations.fill_use.contains(fill_id) ||
+            relations.fill_use.at(fill_id) != 1 || consumed.contains(void_id) || consumed.contains(fill_id)) return false;
+        for (const auto& [id, role] : {std::pair{void_id,"roof_void"}, std::pair{fill_id,"roof_skylight"}}) {
+            if (!all_metadata.contains(id) || !all_meshes.contains(id) || !native_mesh_role(all_metadata.at(id), role)) return false;
+            const auto& child_metadata = all_metadata.at(id);
+            const auto child = child_metadata.find("_vertex_ifc_roof_child");
+            if (child == child_metadata.end() || !child->is_object() || child->size() != 3 ||
+                !child->contains("version") || !child->at("version").is_number_integer() || child->at("version") != 1 ||
+                !child->contains("roof_product") || !child->at("roof_product").is_number_integer() ||
+                child->at("roof_product") != record.id || !child->contains("opening") || child->at("opening") != row) return false;
+        }
+        const auto void_fields = split_top_level(void_record->args, count, limits);
+        const auto fill_fields = split_top_level(fill_record->args, count, limits);
+        if (void_fields.size() != 9 || void_fields[4] != "$" || void_fields[7] != "$" || void_fields[8] != ".OPENING." ||
+            fill_fields.size() != 13 || fill_fields[4] != "$" || fill_fields[7] != "$" || fill_fields[8] != "$" ||
+            fill_fields[9] != "$" || fill_fields[10] != ".SKYLIGHT." || fill_fields[11] != ".SINGLE_PANEL." ||
+            fill_fields[12] != "$") return false;
+        const auto id = row.at("id").get<std::string>();
+        // This ceiling includes bounded semantic validation of the full roof
+        // and the fixed planar child; it never resets the file-wide ledger.
+        const auto child_storage = (candidate.properties.at("roof_openings").size() + 16) * 64;
+        if (child_storage > storage ||
+            !matching_meshes(all_meshes.at(void_id), ifc_native_roof_void_mesh(candidate, id, child_storage, child_storage)) ||
+            !matching_meshes(all_meshes.at(fill_id), ifc_native_roof_skylight_mesh(candidate, id, child_storage, child_storage))) return false;
+        consumed.insert(void_id); consumed.insert(fill_id);
+        consumed.insert(relations.void_parents.at(void_id).front().second);
+        consumed.insert(relations.void_fills.at(void_id).front().second);
+    }
+    return index == manifest.size();
+}
 
 std::optional<Entity> reconstructed_native_stair_or_railing(const ParsedStep& parsed,
     const StepRecord& record, const Json& metadata, const std::vector<IfcNativeMesh>& meshes,
@@ -2840,7 +3015,9 @@ std::optional<Entity> reconstructed_native_stair_or_railing(const ParsedStep& pa
 
 std::optional<Entity> reconstructed_native_roof_or_room(const ParsedStep& parsed,
     const StepRecord& record, const Json& metadata, const std::vector<IfcNativeMesh>& meshes,
-    std::size_t& count, const IfcExchangeLimits& limits, NativeReconstructionLedger& ledger) {
+    std::size_t& count, const IfcExchangeLimits& limits, NativeReconstructionLedger& ledger,
+    const std::map<int, Json>& all_metadata, const std::map<int, std::vector<IfcNativeMesh>>& all_meshes,
+    const NativeRoofRelations& relations, std::set<int>& consumed) {
     const bool roof = record.type == "IFCROOF";
     if (!native_mesh_role(metadata, roof ? "roof" : "room")) return std::nullopt;
     ledger.begin_attempt();
@@ -2858,6 +3035,7 @@ std::optional<Entity> reconstructed_native_roof_or_room(const ParsedStep& parsed
     auto properties = metadata;
     properties.erase("_vertex_ifc_mesh");
     properties.erase("_vertex_ifc_entity");
+    properties.erase("_vertex_ifc_roof_openings");
     auto authored_properties = source->at("properties");
     auto resolved_properties = properties;
     const auto placement = authored_properties.find("vertical_placement");
@@ -2889,6 +3067,9 @@ std::optional<Entity> reconstructed_native_roof_or_room(const ParsedStep& parsed
     const auto expected = roof ? ifc_native_roof_mesh(candidate, storage, storage)
                                : ifc_native_room_mesh(candidate, storage, storage);
     if (!matching_meshes(meshes, expected)) return std::nullopt;
+    auto admitted_children = consumed;
+    if (roof && !proved_roof_skylights(parsed, record, metadata, candidate, all_metadata, all_meshes,
+        relations, count, limits, storage, admitted_children)) return std::nullopt;
     // A resolved world-space import has no reconstructed native level graph.
     // Preserve its original placement/context in the source envelope, while
     // avoiding a second application of that level offset in the imported model.
@@ -2897,6 +3078,7 @@ std::optional<Entity> reconstructed_native_roof_or_room(const ParsedStep& parsed
     // Retained metadata cannot bypass the ordinary document boundary (for
     // example reserved extensions or unsupported/dangling active references).
     if (!Document::create({candidate}).snapshot().is_editable()) return std::nullopt;
+    if (roof) consumed = std::move(admitted_children);
     return candidate;
 }
 
@@ -3227,6 +3409,23 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     }
     if (!supported_units) add_diagnostic(result.diagnostics, {}, "PROJECT", "length_units_not_reconstructed");
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    NativeRoofRelations roof_relations;
+    for (const auto& relation : parsed.records) {
+        if (relation.type != "IFCRELVOIDSELEMENT" && relation.type != "IFCRELFILLSELEMENT") continue;
+        const auto fields = split_top_level(relation.args, argument_count, limits);
+        require(fields.size() == 6);
+        const auto a = reference(fields[4]), b = reference(fields[5]);
+        require(a && b);
+        if (relation.type == "IFCRELVOIDSELEMENT") {
+            roof_relations.void_parents[*b].push_back({*a,relation.id});
+            roof_relations.roof_voids[*a].push_back(*b);
+        }
+        else {
+            roof_relations.void_fills[*a].push_back({*b,relation.id});
+            ++roof_relations.fill_use[*b];
+        }
+    }
+    std::map<int, std::set<int>> admitted_roof_children;
     // Decode stairs first regardless of STEP order. A rail can only bind to a
     // geometrically proved stair through one actual unambiguous IFC aggregate.
     std::map<int, std::vector<int>> aggregate_parents;
@@ -3313,6 +3512,19 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                          {"ifc_vertex_properties", metadata == metadata_by_id.end() ? Json::object() : metadata->second}}});
                 continue;
             }
+            if (metadata_by_id.contains(record.id) &&
+                metadata_by_id.at(record.id).contains("_vertex_ifc_roof_child")) {
+                // A nested roof fill/void has no independent editable route.
+                // Until its owning roof passes the whole product proof keep
+                // both the foreign body and semantic provenance inert.
+                result.entities.push_back(Entity{"ifc-" + std::to_string(record.id), "ifc_reference",
+                    Json{{"ifc_name",product_string(record,2,argument_count,limits)},{"ifc_type",record.type}}, false,
+                    Json{{"ifc_source",{{"record_id",record.id},{"record_type",record.type},{"arguments",record.args}}},
+                        {"ifc_vertex_properties",metadata_by_id.at(record.id)}}});
+                add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                    "roof_skylight_semantics_not_reconstructed");
+                continue;
+            }
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
             if (admitted_stairs.contains(record.id) || admitted_rails.contains(record.id)) {
                 auto candidate = admitted_stairs.contains(record.id) ? admitted_stairs.at(record.id) : admitted_rails.at(record.id);
@@ -3328,8 +3540,11 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 bool reconstructed = false;
                 if (supported_units && meshes_by_id.contains(record.id) && metadata_by_id.contains(record.id)) {
                     try {
+                        std::set<int> consumed;
                         if (auto candidate = reconstructed_native_roof_or_room(parsed, record,
-                            metadata_by_id.at(record.id), meshes_by_id.at(record.id), argument_count, limits, native_ledger)) {
+                            metadata_by_id.at(record.id), meshes_by_id.at(record.id), argument_count, limits, native_ledger,
+                            metadata_by_id, meshes_by_id, roof_relations, consumed)) {
+                            if (!consumed.empty()) admitted_roof_children.emplace(record.id,std::move(consumed));
                             const auto& native = metadata_by_id.at(record.id);
                             auto context = native;
                             if (detach_native_context(context) ||
@@ -3836,16 +4051,36 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     } catch (const std::exception&) {
         // A cross-product child/host collision must not escape as an active
         // native graph. Preserve every implicated native carrier as source.
-        for (auto& entity : result.entities) if (entity.type == "stair" || entity.type == "railing") {
+        for (auto& entity : result.entities) if (entity.type == "stair" || entity.type == "railing" ||
+            (entity.type == "roof" && roof_has_skylights(entity.properties))) {
             const auto source = entity.extensions.at("ifc_source");
             const auto metadata = entity.extensions.at("ifc_vertex_properties");
+            const bool roof = entity.type == "roof";
             entity.type = "ifc_reference";
             entity.properties = {{"ifc_name",entity.id},{"ifc_type",source.at("record_type")}};
             entity.extensions = {{"ifc_source",source},{"ifc_vertex_properties",metadata}};
             add_diagnostic(result.diagnostics,"#"+std::to_string(source.at("record_id").get<int>()),
-                source.at("record_type").get<std::string>(),"native_stair_or_railing_detached_graph_inconsistent");
+                source.at("record_type").get<std::string>(), roof ?
+                    "native_roof_detached_graph_inconsistent" : "native_stair_or_railing_detached_graph_inconsistent");
         }
     }
+    std::set<int> consumed_roof_children;
+    for (const auto& roof : result.entities) {
+        if (roof.type != "roof") continue;
+        const auto record_id = roof.extensions.at("ifc_source").at("record_id").get<int>();
+        if (admitted_roof_children.contains(record_id)) {
+            const auto& children = admitted_roof_children.at(record_id);
+            consumed_roof_children.insert(children.begin(),children.end());
+        }
+    }
+    std::erase_if(result.entities, [&](const Entity& entity) {
+        return consumed_roof_children.contains(entity.extensions.at("ifc_source").at("record_id").get<int>());
+    });
+    std::erase_if(result.diagnostics, [&](const IfcProjectDiagnostic& diagnostic) {
+        return std::any_of(consumed_roof_children.begin(),consumed_roof_children.end(),[&](int id) {
+            return diagnostic.source_id == "#" + std::to_string(id);
+        });
+    });
 #endif
     result.source_retention_required = !result.diagnostics.empty();
     return result;

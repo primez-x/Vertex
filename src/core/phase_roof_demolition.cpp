@@ -102,6 +102,7 @@ void admit_roofs_and_joins(const RoofDemolitionEntities& source, const Ids& roof
             admit_material_assignment(source, source.at(id).properties.at("material_assignment"));
         std::vector<TopoDS_Shape> members;
         for (const auto& roof : join.roof_ids) members.push_back(shape(roof));
+        validate_roof_join_skylights(join, source);
         (void)make_roof_join(join, members);
     }
 }

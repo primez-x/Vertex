@@ -107,8 +107,8 @@ void require_schema_version(const Json& properties, bool roof) {
     }
     try {
         const bool supported = value.is_number_unsigned()
-            ? (value.get<std::uint64_t>() == 1 || (roof && value.get<std::uint64_t>() == 2))
-            : (value.get<std::int64_t>() == 1 || (roof && value.get<std::int64_t>() == 2));
+            ? (value.get<std::uint64_t>() == 1 || (roof && (value.get<std::uint64_t>() == 2 || value.get<std::uint64_t>() == 3)))
+            : (value.get<std::int64_t>() == 1 || (roof && (value.get<std::int64_t>() == 2 || value.get<std::int64_t>() == 3)));
         if (!supported) {
             invalid("Unsupported building entity schema version");
         }
@@ -320,11 +320,11 @@ TopoDS_Shape make_building_shape(const BuildingObject& object) {
             } else if constexpr (std::is_same_v<Object, Railing>) {
                 return make_railing(value);
             } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
-                return make_sloped_roof_panel(value);
+                return make_roof_shape(RoofObject{value});
             } else if constexpr (std::is_same_v<Object, GableRoof>) {
-                return make_gable_roof(value);
+                return make_roof_shape(RoofObject{value});
             } else {
-                return make_hip_roof(value);
+                return make_roof_shape(RoofObject{value});
             }
         },
         object);

@@ -92,7 +92,7 @@ Entity opaque_remainder(Entity entity, bool include_hosted_instances = false) {
     auto& p = entity.properties;
     if (entity.type == "roof") {
         const bool known_schema = p.contains("version") && p.at("version").is_number_integer() &&
-            (p.at("version") == 1 || p.at("version") == 2);
+            (p.at("version") == 1 || p.at("version") == 2 || p.at("version") == 3);
         const bool known_form = p.contains("form") && (p.at("form") == "sloped_roof_panel" ||
             p.at("form") == "gable_roof" || p.at("form") == "hip_roof");
         if (!known_schema || !known_form) return entity;
@@ -154,7 +154,9 @@ void admit_roofs_and_joins(const PhaseRoofReplacementEntities& source, const Ids
             const auto found = source.find(id);
             if (found == source.end() || found->second.type != "roof") reject("join source is not an actual roof: " + id);
             validate_roof_uniform_transform_source_entity(found->second);
-            shapes.emplace(id, make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second))));
+            const auto object = decode_roof_entity(resolve_vertical_placement(source, found->second));
+            (void)make_roof_shape(object);
+            shapes.emplace(id, make_roof_structure_shape(object));
         }
         return shapes.at(id);
     };
@@ -163,6 +165,7 @@ void admit_roofs_and_joins(const PhaseRoofReplacementEntities& source, const Ids
         const auto join = parse_roof_join(source.at(id).properties, id);
         std::vector<TopoDS_Shape> members;
         for (const auto& roof : join.roof_ids) members.push_back(shape(roof));
+        validate_roof_join_skylights(join, source);
         (void)make_roof_join(join, members);
     }
 }
@@ -384,7 +387,7 @@ PhaseRoofReplacementPlan inspect_phase_roof_replacement_plan(
                 // admitted below when the roof belongs to this replacement.
                 const auto& p = entity.properties;
                 const bool known_schema = p.contains("version") && p.at("version").is_number_integer() &&
-                    (p.at("version") == 1 || p.at("version") == 2);
+                    (p.at("version") == 1 || p.at("version") == 2 || p.at("version") == 3);
                 if (known_schema && p.contains("roof_openings")) {
                     const auto& roster = p.at("roof_openings");
                     if (!roster.is_array() || roster.size() > 256) reject("retained roof opening roster is unsupported");

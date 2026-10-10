@@ -5,6 +5,7 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/building_objects.hpp"
 #include "sketch/project_import_worker.hpp"
+#include "sketch/roof_entity_codec.hpp"
 
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepAlgoAPI_Common.hxx>
@@ -263,10 +264,13 @@ IfcNativeJoinMesh ifc_native_roof_join_mesh(const RoofJoin& join,
         if (cuts > 256 || cuts > std::min(vertices, triangles) / 64)
             throw std::invalid_argument("ifc_mesh_budget_exceeded");
     }
+    std::vector<RoofObject> skylight_cohort;
     for (const auto& id : join.roof_ids) {
         const auto source = std::find_if(roofs.begin(), roofs.end(), [&](const Entity& roof) { return roof.id == id; });
-        shapes.push_back(make_building_shape(decode_building_entity(*source)));
+        skylight_cohort.push_back(decode_roof_entity(*source));
+        shapes.push_back(make_roof_structure_shape(skylight_cohort.back()));
     }
+    validate_roof_skylight_cohort(skylight_cohort);
     return join_mesh(make_roof_join_partition(join, shapes), vertices, triangles);
 }
 
@@ -309,7 +313,47 @@ std::vector<IfcNativeMesh> ifc_native_roof_mesh(const Entity& roof,
     if (cuts > 256) throw std::invalid_argument("ifc_mesh_budget_exceeded");
     if (vertices < 24 + cuts * 16 || triangles < 12 + cuts * 16)
         throw std::invalid_argument("ifc_mesh_budget_exceeded");
-    return tessellate(make_building_shape(decode_building_entity(roof)), vertices, triangles);
+    return tessellate(make_roof_structure_shape(decode_roof_entity(roof)), vertices, triangles);
+}
+
+namespace {
+void roof_child_preflight(const Entity& roof, std::size_t vertices, std::size_t triangles) {
+    if (roof.type != "roof" || !roof.properties.contains("roof_openings") ||
+        !roof.properties.at("roof_openings").is_array())
+        throw std::invalid_argument("ifc_native_roof_openings_invalid");
+    const auto count = roof.properties.at("roof_openings").size();
+    // Reserve analytical opening validation and a bounded planar fill/void
+    // allowance before decoding or running any roof boolean operation.
+    if (count > 256 || count + 16 > std::min(vertices, triangles) / 64)
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+}
+}
+
+std::vector<IfcNativeMesh> ifc_native_roof_void_mesh(const Entity& roof,
+    const std::string& opening_id, std::size_t vertices, std::size_t triangles) {
+    roof_child_preflight(roof, vertices, triangles);
+    auto without = roof;
+    auto& openings = without.properties.at("roof_openings");
+    const auto opening = std::find_if(openings.begin(), openings.end(), [&](const auto& row) {
+        return row.is_object() && row.contains("id") && row.at("id") == opening_id;
+    });
+    if (opening == openings.end()) throw std::invalid_argument("ifc_native_roof_opening_missing");
+    openings.erase(opening);
+    // Difference yields the real pitched roof cavity, including eaves and
+    // thickness, instead of a fabricated rectangular wall or bounding box.
+    const auto original = make_roof_structure_shape(decode_roof_entity(without));
+    const auto cut = make_roof_structure_shape(decode_roof_entity(roof));
+    BRepAlgoAPI_Cut removed(original, cut); removed.Build();
+    if (!removed.IsDone() || removed.HasErrors() || removed.Shape().IsNull() ||
+        !BRepCheck_Analyzer(removed.Shape()).IsValid())
+        throw std::invalid_argument("ifc_native_roof_void_invalid");
+    return tessellate(removed.Shape(), vertices, triangles);
+}
+
+std::vector<IfcNativeMesh> ifc_native_roof_skylight_mesh(const Entity& roof,
+    const std::string& opening_id, std::size_t vertices, std::size_t triangles) {
+    roof_child_preflight(roof, vertices, triangles);
+    return tessellate(make_roof_skylight_shape(decode_roof_entity(roof), opening_id), vertices, triangles);
 }
 
 std::vector<IfcNativeMesh> ifc_native_room_mesh(const Entity& room,

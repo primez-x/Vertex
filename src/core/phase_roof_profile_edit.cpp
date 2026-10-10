@@ -412,6 +412,11 @@ Entity normalize_equivalent_roof_inputs(const Entity& original,const Entity& can
             if (rows.at(index).at("id")!=before.at(index).at("id")) continue;
             for (const auto* key:{"x_m","y_m","width_m","depth_m"})
                 retain_equal_number(rows.at(index).at(key),before.at(index).at(key));
+            // A canonical re-encoding of a retained skylight must not acquire
+            // profile-edit authority through a JSON number representation.
+            if (rows.at(index).contains("skylight") && before.at(index).contains("skylight"))
+                for (const auto* key : {"frame_width_m", "curb_height_m", "glazing_thickness_m"})
+                    retain_equal_number(rows.at(index).at("skylight").at(key), before.at(index).at("skylight").at(key));
         }
     }
     for (const auto& dimension : dimensions) {

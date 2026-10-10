@@ -1,4 +1,59 @@
-# Vertex project formats v1 through v167
+# Vertex project formats v1 through v168
+
+## Roof-hosted fixed skylights (v168, source integration)
+
+Native reader 168 and JSON/assets extraction 166 carry roof schema 3. Its
+`roof_openings` roster retains stable child IDs and horizontal local
+`x_m`, `y_m`, `width_m`, `depth_m`. A skylight row additionally owns an exact
+four-key `skylight` object: `version:1`, positive finite `frame_width_m` and
+`glazing_thickness_m`, and nonnegative finite `curb_height_m`. Schemas 1/2
+reject this owned key. Schema 3 permits plain cuts and an empty roster, and
+existing schema 3 stays 3 after removal. Fresh empty roofs still encode as 1;
+nonempty plain cuts encode as 2.
+
+The mouth remains a vertical through-cut. Its frame width is measured along
+the roof face; curb/glazing dimensions are normal to that face. Finite curb,
+frame and glazing solids follow the actual slope and stay inside the cut.
+Gable/hip skylights must remain on one planar face without crossing or touching
+a ridge/hip. Invalid dimensions, missing glazing clearance, touching/overlapping
+cuts or an insufficient footprint refuse admission. Structure-only geometry
+keeps roof material quantities distinct from the complete roof/fill assembly.
+
+Opening edit v2 retains the four v1 root keys; each upsert has exactly
+`opening_id`, `x`, `y`, `width`, `depth`, `skylight_edit`. A null
+`skylight_edit` retains the current profile. Otherwise its exact one-key object
+`{"value":...}` contains a strict profile to add/change, or JSON null to remove
+the fill while retaining the cut. Actual schema-3 roster edits require v2.
+Composite roof edit v7 keeps the ten v6 keys, permits a Boolean hosted
+coordination flag, and requires a nested opening v2; historical composites
+v1-v6 reject that new authority. Independent replay preserves opaque row data,
+unchanged numerical representations, exact mouth quantities and captured source.
+
+Profile edits update existing measurement receipt cores while preserving their
+annotation metadata. Clearing a profile on a retained cut removes those cores
+and keeps opaque remnants; later re-addition and scaling retain core-free
+remnants. Deleting a whole cut refuses remaining child or indexed annotation
+metadata that would otherwise lose its owner. Future or malformed receipt
+cores remain protected rather than becoming editable metadata.
+
+Uniform-transform and plan-resize derivation archives use v2 for schema-3
+source frames; archive v1 keeps its schema-1/2 meaning. Uniform scaling changes
+mouth, frame, curb and glass together. Plan resizing changes horizontal mouth
+dimensions while retaining construction dimensions; rigid moves/reflections
+retain those dimensions. Clone/removal/phase operations retain the stable child
+identity contract. Reader floors include retained, nested and undone proofs,
+and recognized v2 archives even after the live skylight has been removed.
+
+IFC exports roof structure and actual skylight windows separately, with actual
+removed-roof voids and fill relationships. Native roof mesh proof v2 requires
+body, void, fill and unambiguous relationship agreement before activating the
+nested profile; historical proof v1 cannot activate it. Failed children remain
+inert carriers. Joined-roof import retains its existing foreign-carrier
+contract. Classification follows the [IFC4 skylight definition](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcwindowtypeenum.htm).
+
+V168 retains the v161 payload tables. This source batch has not been compiled
+or runtime-qualified; geometry, rendering, interaction, history/migration and
+independent output consumption remain open.
 
 ## Awning and double-hung windows (v167, source integration)
 

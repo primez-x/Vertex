@@ -330,7 +330,9 @@ TopoDS_Shape resolved_shape(const Entities& source, const std::string& id) {
     if (found == source.end() || found->first != found->second.id || found->second.type != "roof")
         invalid("Roof rigid transform actual source roof is missing or inconsistent");
     validate_roof_rigid_transform_source_entity(found->second);
-    return make_roof_shape(decode_roof_entity(resolve_vertical_placement(source, found->second)));
+    const auto object = decode_roof_entity(resolve_vertical_placement(source, found->second));
+    (void)make_roof_shape(object);
+    return make_roof_structure_shape(object);
 }
 std::vector<RoofJoin> affected_joins(const Entities& source, const Ids& targets, const ConstraintPhaseScope& scope) {
     const auto qualified_cohorts = phase_qualified_roof_join_cohort_ids(source);
@@ -363,6 +365,7 @@ void admit_joins(const Entities& source, const std::vector<RoofJoin>& joins) {
     for (const auto& join : joins) {
         std::vector<TopoDS_Shape> members;
         for (const auto& id : join.roof_ids) members.push_back(resolved_shape(source, id));
+        validate_roof_join_skylights(join, source);
         (void)make_roof_join(join, members);
     }
 }

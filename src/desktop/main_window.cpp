@@ -79,6 +79,7 @@
 #include "sketch/phase_wall_canvas_projection.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/roof_entity_codec.hpp"
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/building_view_projection.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -2630,10 +2631,13 @@ const std::vector<SymbolDefinition>& desktop_placeable_symbol_catalog() {
 
 bool is_hosted_opening_symbol(const SymbolDefinition& definition) {
     return definition.category == "09_doors" || definition.category == "10_windows" ||
+        definition.id == "svg-v2-24_roof_site-skylight" ||
         definition.id == "svg-v2-16_walls_openings-cased-opening";
 }
 
 QString catalog_opening_kind(const SymbolDefinition& definition) {
+    if (definition.id == "svg-v2-10_windows-skylight" || definition.id == "svg-v2-24_roof_site-skylight")
+        return QStringLiteral("skylight");
     if (definition.category == "10_windows") return QStringLiteral("window");
     if (definition.id == "svg-v2-16_walls_openings-cased-opening") return QStringLiteral("opening");
     return QStringLiteral("door");
@@ -5760,6 +5764,7 @@ void retain_roof_plan_corner_handles(CanvasEntity& entity, Revision revision, bo
 
 TopoDS_Shape document_roof_join_shape(const DocumentSnapshot& snapshot, const Entity& entity) {
     const auto join = parse_roof_join(entity.properties, entity.id);
+    validate_roof_join_skylights(join, snapshot.entities());
     std::vector<TopoDS_Shape> roofs;
     roofs.reserve(join.roof_ids.size());
     for (const auto& id : join.roof_ids) {
@@ -31852,14 +31857,14 @@ public:
         QDialog dialog(owner);
         dialog.setObjectName("roofOpeningsDialog");
         dialog.setWindowTitle("Roof openings");
-        dialog.resize(600, 360);
+        dialog.resize(900, 400);
         auto* layout = new QVBoxLayout(&dialog);
-        auto* help = new QLabel("Vertical through-openings. X/Y are local to the roof footprint; width/depth are horizontal distances.", &dialog);
+        auto* help = new QLabel("X/Y locate the lower-left corner in the roof footprint; width/depth are horizontal distances. Skylight frames and glazing follow one roof face. Frame, curb and glazing dimensions are measured on/normal to that face.", &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
-        auto* table = new QTableWidget(0, 4, &dialog);
+        auto* table = new QTableWidget(0, 8, &dialog);
         table->setObjectName("roofOpeningsTable");
-        table->setHorizontalHeaderLabels({"X", "Y", "Width", "Depth"});
+        table->setHorizontalHeaderLabels({"X", "Y", "Width", "Depth", "Type", "Frame", "Curb", "Glazing"});
         table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
         table->setSelectionBehavior(QAbstractItemView::SelectRows);
         layout->addWidget(table);
@@ -31901,6 +31906,21 @@ public:
                 item->setData(Qt::UserRole + 2, value);
                 table->setItem(row, column, item);
             }
+            auto* kind = new QComboBox(table);
+            kind->addItems({QStringLiteral("Cut only"), QStringLiteral("Skylight")});
+            const bool skylight = entry.contains("skylight");
+            kind->setCurrentIndex(skylight ? 1 : 0);
+            table->setCellWidget(row, 4, kind);
+            const auto profile = entry.value("skylight", json{{"version", 1}, {"frame_width_m", .06}, {"curb_height_m", .15}, {"glazing_thickness_m", .024}});
+            const std::array names{"frame_width_m", "curb_height_m", "glazing_thickness_m"};
+            for (int column = 5; column < 8; ++column) {
+                const auto value = profile.at(names[column - 5]).get<double>();
+                const auto text = QString::fromStdString(json(value).dump()) + QStringLiteral(" m");
+                auto* item = new QTableWidgetItem(text);
+                item->setData(Qt::UserRole + 1, text);
+                item->setData(Qt::UserRole + 2, value);
+                table->setItem(row, column, item);
+            }
         };
         for (const auto& entry : original->properties.value("roof_openings", json::array())) append(entry);
         auto* error = new QLabel(&dialog);
@@ -31910,6 +31930,8 @@ public:
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
         auto* add = buttons->addButton("Add opening", QDialogButtonBox::ActionRole);
         add->setObjectName("addRoofOpening");
+        auto* add_skylight = buttons->addButton("Add skylight", QDialogButtonBox::ActionRole);
+        add_skylight->setObjectName("addRoofSkylight");
         auto* remove = buttons->addButton("Remove selected", QDialogButtonBox::ActionRole);
         remove->setObjectName("removeRoofOpening");
         layout->addWidget(buttons);
@@ -31925,12 +31947,19 @@ public:
             std::sort(indices.rbegin(), indices.rend());
             for (const auto row : indices) table->removeRow(row);
         });
+        QObject::connect(add_skylight, &QPushButton::clicked, &dialog, [&] {
+            if (table->rowCount() >= 256) { error->setText("A roof supports at most 256 openings."); return; }
+            append({{"id", QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString()},
+                {"x_m", .5}, {"y_m", .5}, {"width_m", .9}, {"depth_m", 1.2},
+                {"skylight", {{"version", 1}, {"frame_width_m", .06}, {"curb_height_m", .15}, {"glazing_thickness_m", .024}}}});
+        });
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
             try {
                 if (!modalContextUnchanged(context)) throw std::invalid_argument("Roof editing context changed. Reopen the openings editor.");
                 RoofOpeningEditIntent intent;
                 intent.roof_id=original->id;
+                intent.uses_skylight_schema = original->properties.at("version") == 3;
                 const auto before=original->properties.value("roof_openings",json::array());
                 std::map<std::string,const json*,std::less<>> original_rows;
                 for (const auto& row:before) original_rows.emplace(row.at("id").get<std::string>(),&row);
@@ -31967,7 +31996,24 @@ public:
                         if (fresh || quantity.metres!=existing->second->at(keys[column]).get<double>())
                             upsert.*members[column]=RoofOpeningQuantityInput{quantity,default_unit};
                     }
-                    if (std::any_of(members.begin(),members.end(),[&](const auto member) { return (upsert.*member).has_value(); }))
+                    const auto* kind = qobject_cast<QComboBox*>(table->cellWidget(row, 4));
+                    if (!kind) throw std::invalid_argument("Opening type control is unavailable.");
+                    const bool was_skylight = !fresh && existing->second->contains("skylight");
+                    if (kind->currentIndex() == 1) {
+                        json profile{{"version", 1}};
+                        const std::array names{"frame_width_m", "curb_height_m", "glazing_thickness_m"};
+                        for (int column = 5; column < 8; ++column) {
+                            const auto* item = table->item(row, column);
+                            const auto key = names[column - 5];
+                            const auto text = item->text().trimmed();
+                            const auto value = text == item->data(Qt::UserRole + 1).toString()
+                                ? item->data(Qt::UserRole + 2).toDouble() : parse_quantity(text.toStdString(), default_unit).metres;
+                            profile[key] = was_skylight && existing->second->at("skylight").at(key).get<double>() == value
+                                ? existing->second->at("skylight").at(key) : json(value);
+                        }
+                        if (!was_skylight || profile != existing->second->at("skylight")) upsert.skylight = std::move(profile);
+                    } else if (was_skylight) upsert.skylight = json(nullptr);
+                    if (upsert.skylight || std::any_of(members.begin(),members.end(),[&](const auto member) { return (upsert.*member).has_value(); }))
                         intent.upserts.push_back(std::move(upsert));
                 }
                 for (const auto& [id,row]:original_rows) { (void)row;if (!retained.contains(id)) intent.removed_opening_ids.push_back(id); }
@@ -42015,7 +42061,13 @@ public:
             return false;
         }
         if (!captureOpeningPlacement()) return false;
-        const bool window = definition.category == "10_windows";
+        const bool skylight = catalog_opening_kind(definition) == QStringLiteral("skylight");
+        if (skylight && siteCanvas(m_architecturalCanvas)) {
+            clearPlanOpeningPlacement();
+            setError(QStringLiteral("Place skylights in a horizontal floor plan on a visible roof."));
+            return false;
+        }
+        const bool window = definition.category == "10_windows" && !skylight;
         m_pending_opening_kind = catalog_opening_kind(definition);
         m_pending_opening_symbol_id = QString::fromStdString(definition.id);
         m_pending_opening_door_operation = catalog_door_operation(definition);
@@ -42084,6 +42136,20 @@ public:
         m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
         m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
         m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
+        auto* opening_form = qobject_cast<QFormLayout*>(m_opening_draw_fields->layout());
+        if (auto* label = qobject_cast<QLabel*>(opening_form->labelForField(m_opening_draw_height)))
+            label->setText(skylight ? QStringLiteral("Depth") : QStringLiteral("Height"));
+        m_opening_draw_height->setAccessibleName(skylight ? QStringLiteral("Horizontal skylight depth") : QStringLiteral("Height"));
+        opening_form->setRowVisible(m_opening_draw_sill, !skylight);
+        for (auto* field : {m_skylight_draw_frame, m_skylight_draw_curb, m_skylight_draw_glazing})
+            opening_form->setRowVisible(field, skylight);
+        if (skylight) {
+            m_opening_draw_width->setText(QString::fromStdString(json(definition.width_metres * scale).dump()) + QStringLiteral(" m"));
+            m_opening_draw_height->setText(QString::fromStdString(json(definition.depth_metres * scale).dump()) + QStringLiteral(" m"));
+            m_skylight_draw_frame->setText(QString::fromStdString(json(0.06 * scale).dump()) + QStringLiteral(" m"));
+            m_skylight_draw_curb->setText(QString::fromStdString(json(0.15 * scale).dump()) + QStringLiteral(" m"));
+            m_skylight_draw_glazing->setText(QString::fromStdString(json(0.024 * scale).dump()) + QStringLiteral(" m"));
+        }
         {
             const QSignalBlocker blocker(m_opening_style);
             m_opening_style->clear();
@@ -42099,7 +42165,9 @@ public:
         m_opening_draw_fields->show();
         m_wall_draw_fields->hide();
         m_architecture_hint->show();
-        m_architecture_hint->setText(QStringLiteral("%1 • click an existing wall to place. Esc cancels.")
+        m_architecture_hint->setText((skylight
+            ? QStringLiteral("%1 • click a roof face to place. Esc cancels.")
+            : QStringLiteral("%1 • click an existing wall to place. Esc cancels."))
             .arg(QString::fromStdString(definition.name)));
         syncToolControls();
         clearError();
@@ -42799,14 +42867,14 @@ public:
                     const auto detail = lastError();
                     cancelTool();
                     const auto message = detail.isEmpty()
-                        ? QStringLiteral("This catalog opening needs a host wall. Nothing was placed.")
+                        ? QStringLiteral("This opening needs a suitable visible host. Nothing was placed.")
                         : QStringLiteral("Hosted opening rejected: %1").arg(detail);
                     setError(message);
                     if (m_symbol_library_status) m_symbol_library_status->setText(message);
                     return;
                 }
                 if (m_symbol_library_status)
-                    m_symbol_library_status->setText(QStringLiteral("Hosted %1 placed in the wall.")
+                    m_symbol_library_status->setText(QStringLiteral("%1 placed in its host.")
                         .arg(QString::fromStdString(definition->name)));
                 return;
             }
@@ -50494,6 +50562,11 @@ private:
                     m_opening_draw_width->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("0.9 m"));
                     m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
                     m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
+                    auto* form = qobject_cast<QFormLayout*>(m_opening_draw_fields->layout());
+                    if (auto* label = qobject_cast<QLabel*>(form->labelForField(m_opening_draw_height))) label->setText(QStringLiteral("Height"));
+                    m_opening_draw_height->setAccessibleName(QStringLiteral("Height"));
+                    form->setRowVisible(m_opening_draw_sill, true);
+                    for (auto* field : {m_skylight_draw_frame, m_skylight_draw_curb, m_skylight_draw_glazing}) form->setRowVisible(field, false);
                     const QSignalBlocker blocker(m_opening_style);
                     m_opening_style->clear();
                     m_opening_style->addItem(QStringLiteral("Bare doorway"));
@@ -50546,6 +50619,13 @@ private:
         m_opening_draw_width = dimension_field(opening_form, QStringLiteral("Width"), "openingDrawWidth", QStringLiteral("0.9 m"));
         m_opening_draw_height = dimension_field(opening_form, QStringLiteral("Height"), "openingDrawHeight", QStringLiteral("2.1 m"));
         m_opening_draw_sill = dimension_field(opening_form, QStringLiteral("Sill"), "openingDrawSill", QStringLiteral("0 m"));
+        m_skylight_draw_frame = dimension_field(opening_form, QStringLiteral("Frame"), "skylightDrawFrame", QStringLiteral("60 mm"));
+        m_skylight_draw_curb = dimension_field(opening_form, QStringLiteral("Curb height"), "skylightDrawCurb", QStringLiteral("150 mm"));
+        m_skylight_draw_glazing = dimension_field(opening_form, QStringLiteral("Glazing"), "skylightDrawGlazing", QStringLiteral("24 mm"));
+        for (auto* field : {m_skylight_draw_frame, m_skylight_draw_curb, m_skylight_draw_glazing}) {
+            opening_form->setRowVisible(field, false);
+            QObject::connect(field, &QLineEdit::textChanged, owner, [this] { resetOpeningPlacementHover(); });
+        }
         for (auto* field:{m_opening_draw_width,m_opening_draw_height,m_opening_draw_sill})
             QObject::connect(field,&QLineEdit::textChanged,owner,[this] { resetOpeningPlacementHover(); });
         m_opening_draw_travel = new QDoubleSpinBox(m_opening_draw_fields);
@@ -60900,7 +60980,112 @@ private:
         return captured;
     }
 
+    void updateSkylightPlacement(Vec2 displayed_point, bool commit) {
+        BoundaryDraftPreview preview;
+        try {
+            requirePlanOpeningPlacementCurrent();
+            const auto source = m_plan_opening_source;
+            const auto context = requireDrawingContext(*source);
+            if (!context || !context->complete()) throw std::invalid_argument("Choose a complete drawing layer.");
+            const auto model = m_plan_opening_frame ? unproject_plan_point(displayed_point, *m_plan_opening_frame) : displayed_point;
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto width = parse_quantity(m_opening_draw_width->text().toStdString(), unit);
+            const auto depth = parse_quantity(m_opening_draw_height->text().toStdString(), unit);
+            if (width.metres <= 0 || depth.metres <= 0) throw std::invalid_argument("Skylight width and depth must be positive.");
+            const auto profile = json{{"version", 1},
+                {"frame_width_m", parse_quantity(m_skylight_draw_frame->text().toStdString(), unit).metres},
+                {"curb_height_m", parse_quantity(m_skylight_draw_curb->text().toStdString(), unit).metres},
+                {"glazing_thickness_m", parse_quantity(m_skylight_draw_glazing->text().toStdString(), unit).metres}};
+            auto* canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            std::optional<Entity> host;
+            Vec2 local;
+            std::set<std::string> seen;
+            for (const auto& visible : canvas->entities()) {
+                if ((visible.type != QStringLiteral("roof") && visible.type != QStringLiteral("roof_join")) || !visible.presentation_key.isEmpty()) continue;
+                std::vector<std::string> owners{visible.id.toStdString()};
+                if (visible.type == QStringLiteral("roof_join")) {
+                    const auto joined = source->entities().find(visible.id.toStdString());
+                    if (joined == source->entities().end() || joined->second.type != "roof_join") continue;
+                    owners = parse_roof_join(joined->second.properties, joined->first).roof_ids;
+                }
+                for (const auto& owner_id : owners) {
+                if (!seen.insert(owner_id).second) continue;
+                const auto found = source->entities().find(owner_id);
+                if (found == source->entities().end() || found->second.type != "roof" ||
+                    read_string(found->second.properties, "layer_id") != std::optional{context->layer_id} ||
+                    read_string(found->second.properties, "floor_id") != std::optional{context->floor_id}) continue;
+                // Cropped presentations only authorize their visible plan extent.
+                if (visible.segments.empty()) continue;
+                const auto extent = boundary_bounds(visible.segments);
+                if (displayed_point.x < extent.minimum.x || displayed_point.x > extent.maximum.x ||
+                    displayed_point.y < extent.minimum.y || displayed_point.y > extent.maximum.y) continue;
+                const auto& p = found->second.properties;
+                const auto& base = p.at("base_position_m");
+                const auto angle = p.at("orientation_rad").get<double>();
+                const auto dx = model.x - base.at(0).get<double>(), dy = model.y - base.at(1).get<double>();
+                auto x = dx * std::cos(angle) + dy * std::sin(angle) - width.metres * .5;
+                auto y = -dx * std::sin(angle) + dy * std::cos(angle) - depth.metres * .5;
+                const auto step = canvas->placementLengthIncrementMetres();
+                if (step > 0 && std::isfinite(step)) { x = std::round(x / step) * step; y = std::round(y / step) * step; }
+                const bool panel = p.at("form") == "sloped_roof_panel";
+                const auto along = p.at(panel ? "run_m" : "length_m").get<double>();
+                const auto span = p.at("span_m").get<double>();
+                const auto xmin = panel ? 0.0 : -along * .5, ymin = panel ? 0.0 : -span * .5;
+                if (x < xmin || y < ymin || x + width.metres > xmin + along || y + depth.metres > ymin + span) continue;
+                if (host) throw std::invalid_argument("More than one roof is under this point. Hide the other roof before placing.");
+                host = found->second;
+                local = {x, y};
+                }
+            }
+            if (!host) throw std::invalid_argument("Choose a visible roof face on the active layer with room for the skylight.");
+            const auto& p = host->properties;
+            const auto& base = p.at("base_position_m");
+            const auto angle = p.at("orientation_rad").get<double>();
+            const auto to_view = [&](double x, double y) {
+                Vec2 world{base.at(0).get<double>() + x * std::cos(angle) - y * std::sin(angle),
+                    base.at(1).get<double>() + x * std::sin(angle) + y * std::cos(angle)};
+                return m_plan_opening_frame ? project_plan_point(world, *m_plan_opening_frame) : world;
+            };
+            const std::array corners{to_view(local.x, local.y), to_view(local.x + width.metres, local.y),
+                to_view(local.x + width.metres, local.y + depth.metres), to_view(local.x, local.y + depth.metres)};
+            for (std::size_t i = 0; i < corners.size(); ++i) preview.segments.push_back({corners[i], corners[(i + 1) % corners.size()], 0.0});
+            preview.instruction = QStringLiteral("Click to place skylight • %1 × %2").arg(format_length(width.metres, m_metric_units), format_length(depth.metres, m_metric_units));
+            if (commit) {
+                RoofOpeningEditIntent intent;
+                intent.roof_id = host->id;
+                intent.uses_skylight_schema = true;
+                RoofOpeningUpsertIntent row;
+                row.opening_id = new_id("skylight");
+                row.x = RoofOpeningQuantityInput{parse_quantity(json(local.x).dump() + " m", Unit::metre), Unit::metre};
+                row.y = RoofOpeningQuantityInput{parse_quantity(json(local.y).dump() + " m", Unit::metre), Unit::metre};
+                row.width = RoofOpeningQuantityInput{width, unit};
+                row.depth = RoofOpeningQuantityInput{depth, unit};
+                row.skylight = profile;
+                intent.upserts.push_back(std::move(row));
+                const auto candidate = replay_roof_opening_entity(*host, intent);
+                requirePlanOpeningPlacementCurrent();
+                const auto previous = m_selected_id;
+                const auto previous_ids = m_selected_ids;
+                m_selected_id = id_from(host->id);
+                m_selected_ids = {m_selected_id};
+                const auto placed = commitBuildingObject(candidate, source->revision(), true);
+                if (placed.isEmpty()) { m_selected_id = previous; m_selected_ids = previous_ids; throw std::invalid_argument(lastError().toStdString()); }
+                setTool(CanvasTool::select);
+                m_architecture_hint->setText(QStringLiteral("Skylight placed. Select the roof and open Openings to edit or remove it."));
+                return;
+            }
+        } catch (const std::exception& error) {
+            preview.segments.clear();
+            preview.instruction = QString::fromUtf8(error.what());
+            if (commit) setError(preview.instruction);
+        }
+        m_architecture_hint->setText(preview.instruction);
+        m_measurementCanvas->setBoundaryDraftPreview(preview);
+        m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
+    }
+
     void updateOpeningPlacement(Vec2 point, bool commit) {
+        if (m_pending_opening_kind == QStringLiteral("skylight")) { updateSkylightPlacement(point, commit); return; }
         BoundaryDraftPreview preview;
         preview.instruction = QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
         const auto displayed_point=point;
@@ -66162,6 +66347,9 @@ private:
     QLineEdit* m_opening_draw_width{};
     QLineEdit* m_opening_draw_height{};
     QLineEdit* m_opening_draw_sill{};
+    QLineEdit* m_skylight_draw_frame{};
+    QLineEdit* m_skylight_draw_curb{};
+    QLineEdit* m_skylight_draw_glazing{};
     QComboBox* m_opening_style{};
     QDoubleSpinBox* m_opening_draw_travel{};
     QLabel* m_opening_draw_travel_label{};

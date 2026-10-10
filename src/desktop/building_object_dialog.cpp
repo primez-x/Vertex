@@ -1678,6 +1678,8 @@ private:
         auto receipts = original_roof_opening_receipts;
         roof_opening_intent = {};
         if (original_entity) roof_opening_intent.roof_id = original_entity->id;
+        if (original_entity && original_entity->properties.at("version") == 3)
+            roof_opening_intent.uses_skylight_schema = true;
         // Bind each row to the actual original child identity, independently of
         // display roles and receipt JSON. An untouched new row still needs inputs.
         std::map<std::string, const json*, std::less<>> original_rows;
@@ -1746,7 +1748,13 @@ private:
             if (std::any_of(roof_opening_inputs.begin(), roof_opening_inputs.end(),
                             [&](const auto member) { return (upsert.*member).has_value(); }))
                 roof_opening_intent.upserts.push_back(std::move(upsert));
-            openings.push_back({id, values[0], values[1], values[2], values[3]});
+            RoofOpening opening{id, values[0], values[1], values[2], values[3]};
+            if (const auto original = original_rows.find(id); original != original_rows.end() && original->second->contains("skylight")) {
+                const auto& profile = original->second->at("skylight");
+                opening.skylight = RoofSkylight{profile.at("frame_width_m").get<double>(),
+                    profile.at("curb_height_m").get<double>(), profile.at("glazing_thickness_m").get<double>()};
+            }
+            openings.push_back(std::move(opening));
             entries.push_back(std::move(entry));
         }
         auto original_entries = json::array();

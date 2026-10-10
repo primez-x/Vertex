@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace sketch {
@@ -57,6 +58,14 @@ inline constexpr double ifc_native_mesh_deviation_m = 0.001;
 // Entity placement must already have been resolved exactly once by the caller.
 [[nodiscard]] std::vector<IfcNativeMesh> ifc_native_roof_mesh(
     const Entity& roof, std::size_t vertex_budget, std::size_t triangle_budget);
+// Roof body remains structure only; manufactured skylights and the actual
+// removed roof volume are separate IFC occurrences, never wall openings.
+[[nodiscard]] std::vector<IfcNativeMesh> ifc_native_roof_void_mesh(
+    const Entity& roof, const std::string& opening_id,
+    std::size_t vertex_budget, std::size_t triangle_budget);
+[[nodiscard]] std::vector<IfcNativeMesh> ifc_native_roof_skylight_mesh(
+    const Entity& roof, const std::string& opening_id,
+    std::size_t vertex_budget, std::size_t triangle_budget);
 [[nodiscard]] std::vector<IfcNativeMesh> ifc_native_room_mesh(
     const Entity& room, std::size_t vertex_budget, std::size_t triangle_budget);
 

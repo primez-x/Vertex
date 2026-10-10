@@ -2,6 +2,7 @@
 
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/roof_entity_codec.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/phase_roof_resize.hpp"
@@ -496,6 +497,7 @@ void validate_dependent_geometry(const DocumentSnapshot& source,
             std::vector<TopoDS_Shape> shapes;
             for (const auto& member : join.roof_ids)
                 shapes.push_back(entity_shape(resolve_vertical_placement(preview,preview.entities().at(member))));
+            validate_roof_join_skylights(join, preview.entities());
             (void)make_roof_join(join,shapes);
         }
     }

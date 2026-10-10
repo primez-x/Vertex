@@ -16,12 +16,17 @@ struct RoofOpeningUpsertIntent {
     std::optional<RoofOpeningQuantityInput> y;
     std::optional<RoofOpeningQuantityInput> width;
     std::optional<RoofOpeningQuantityInput> depth;
+    // Disengaged retains the actual profile; engaged null removes it. An
+    // engaged object authors the strict version-one skylight profile.
+    std::optional<nlohmann::json> skylight;
 };
 
 struct RoofOpeningEditIntent {
     std::string roof_id;
     std::vector<RoofOpeningUpsertIntent> upserts;
     std::vector<std::string> removed_opening_ids;
+    // Retain an explicitly decoded v2 proof even when every profile is retained.
+    bool uses_skylight_schema{false};
 };
 
 // Strict version 1: exactly version, roof_id, upserts, removed_opening_ids.
@@ -29,6 +34,10 @@ struct RoofOpeningEditIntent {
 // existing scalar. A new identity requires all four quantities. Coordinates
 // permit signed/zero input; width/depth are positive and native fit is required.
 // A nonnull field has exactly quantity (strict quantity receipt), default_unit.
+// Strict v2 retains the four top-level fields and adds skylight_edit to every
+// upsert. null retains; exactly {value:null} removes; {value:profile} authors.
+// Profile has exactly version:1, frame_width_m, curb_height_m,
+// glazing_thickness_m. Schema-three roster edits require v2, including removals.
 [[nodiscard]] nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& intent);
 [[nodiscard]] RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& value);
 

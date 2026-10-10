@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus seven focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus eight focused door/window checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3184,6 +3184,17 @@ them Blocked / missing until testing a candidate that contains them.
 - [ ] **WINDOW-DOUBLE-HUNG - Move each sash independently**
   - Steps: Draw a straight wall and drag Window Double Hung onto it. Try Lower open at 0, 50 and 100 percent while Upper open stays zero, then reverse the roles and try both at 50 percent. Double-click Properties, reverse the lower track side, edit dimensions, and change layout to Fixed and back. Inspect plan/3D/elevation, the window schedule, undo/redo, save/reopen and IFC output.
   - Expected: Two full-width glazed sashes use separate depth tracks. The lower rises and the upper lowers independently, each by half the clear height at 100 percent. They can pass behind one another without sharing material. The schedule identifies Double hung, two panes, both open percentages and lower track side. Layout changes clear irrelevant movement fields and invalid track/frame dimensions are refused without mutation.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Additional roof skylight check
+
+This source addition is not yet included in the installed candidate. Mark it
+Blocked / missing until testing a candidate that contains it.
+
+- [ ] **WINDOW-SKYLIGHT - Place and edit a skylight on a roof**
+  - Steps: Create a sloped roof and choose Skylight from either Windows or Roof/site in Library. Drag it onto a visible roof face on the active layer, then try click placement. Enter width/depth, frame, curb and glazing dimensions. Select the roof, open Openings, move the cut with X/Y, resize it, change Skylight to Cut only and back, add another skylight and remove it. Inspect plan/3D/section and schedules. Move, mirror, uniformly scale and copy the roof; undo/redo and save/reopen. Repeat on one face of gable and hip roofs; try crossing a ridge, overlapping cuts and excessive frame width. Export a plan and IFC.
+  - Expected: Both library entries create a roof cut with a slope-following frame and glazing. Uniform scaling changes all physical dimensions; footprint resizing preserves construction dimensions. Rejected cuts or profiles leave the project unchanged. Schedules distinguish roof material from skylight volume, and IFC has a separate roof, skylight window, actual void and fill relationship. History and copying retain the child profile. Current individual canvas grips are missing; use roof Openings for edits.
   - Result: Not tested
   - Notes: ______________________________
 

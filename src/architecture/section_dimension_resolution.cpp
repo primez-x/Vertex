@@ -2,6 +2,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/roof_entity_codec.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
@@ -130,6 +131,7 @@ TopoDS_Shape source_shape(const DocumentSnapshot& source, const Entity& input,
     }
     if (input.type == "roof_join") {
         const auto join = parse_roof_join(input.properties, input.id);
+        validate_roof_join_skylights(join, source.entities());
         std::vector<TopoDS_Shape> roofs;
         for (const auto& id : join.roof_ids) require_active_source(source, id, scope);
         for (const auto& id : join.roof_ids) {

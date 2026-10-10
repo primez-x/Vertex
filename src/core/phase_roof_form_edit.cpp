@@ -306,6 +306,9 @@ Entity normalize_equivalent_roof_form_inputs(const Entity& original, const Entit
             if (before_rows->at(index).at("id") != after_rows.at(index).at("id")) continue;
             for (const auto* key : {"x_m", "y_m", "width_m", "depth_m"})
                 retain_equal_number(after_rows.at(index).at(key), before_rows->at(index).at(key));
+            if (after_rows.at(index).contains("skylight") && before_rows->at(index).contains("skylight"))
+                for (const auto* key : {"frame_width_m", "curb_height_m", "glazing_thickness_m"})
+                    retain_equal_number(after_rows.at(index).at("skylight").at(key), before_rows->at(index).at("skylight").at(key));
         }
     }
     return normalized;

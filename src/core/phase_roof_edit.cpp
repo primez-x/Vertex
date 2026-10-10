@@ -146,8 +146,11 @@ void admit_cohorts(const Entities& entities, const Ids& targets, const Ids& resi
             if (uniform) validate_roof_uniform_transform_source_entity(entities.at(member));
             else if (resize) validate_roof_plan_resize_source_entity(entities.at(member));
             else validate_roof_profile_source_entity(entities.at(member));
-            members.push_back(make_roof_shape(decode_roof_entity(resolve_vertical_placement(entities, entities.at(member)))));
+            const auto object = decode_roof_entity(resolve_vertical_placement(entities, entities.at(member)));
+            (void)make_roof_shape(object);
+            members.push_back(make_roof_structure_shape(object));
         }
+        validate_roof_join_skylights(join, entities);
         (void)make_roof_join(join, members);
     }
 }
@@ -390,6 +393,14 @@ nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent) {
         if (!result.contains("uniform_transform")) result["uniform_transform"] = nullptr;
         result["coordinate_world_hosted_geometry"] = true;
     }
+    // Skylight roster authority is explicit at both proof boundaries. Earlier
+    // composite versions cannot silently borrow the newer nested contract.
+    if (intent.openings && result.at("openings").at("version") == 2) {
+        result["version"] = 7;
+        for (const auto* key : {"form", "transform", "resize", "uniform_transform"})
+            if (!result.contains(key)) result[key] = nullptr;
+        result["coordinate_world_hosted_geometry"] = intent.coordinate_world_hosted_geometry;
+    }
     if (result.dump().size() > proof_limit) invalid("Roof edit proof byte budget exceeded");
     return result;
 }
@@ -398,23 +409,30 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
         !value.at("version").is_number_integer() ||
         !value.contains("roof_id") || !value.contains("profile") || !value.contains("openings") || !value.contains("pose") ||
         value.dump().size() > proof_limit) invalid("Roof edit fields or proof budget are invalid");
-    const bool coordinated = value.at("version") == 6;
+    const bool skylights = value.at("version") == 7;
+    const bool extended = value.at("version") == 6 || skylights;
+    const bool coordinated = extended && value.contains("coordinate_world_hosted_geometry") &&
+        value.at("coordinate_world_hosted_geometry") == true;
     const bool conversion = value.at("version") == 2 ||
-        (coordinated && value.contains("form") && !value.at("form").is_null());
+        (extended && value.contains("form") && !value.at("form").is_null());
     const bool rigid_transform = value.at("version") == 3 ||
-        (coordinated && value.contains("transform") && !value.at("transform").is_null());
+        (extended && value.contains("transform") && !value.at("transform").is_null());
     const bool plan_resize = value.at("version") == 4 ||
-        (coordinated && value.contains("resize") && !value.at("resize").is_null());
+        (extended && value.contains("resize") && !value.at("resize").is_null());
     const bool uniform_transform = value.at("version") == 5 ||
-        (coordinated && value.contains("uniform_transform") && !value.at("uniform_transform").is_null());
-    if (coordinated) {
+        (extended && value.contains("uniform_transform") && !value.at("uniform_transform").is_null());
+    if (extended) {
         if (value.size() != 10 || !value.contains("form") ||
             !value.contains("transform") || !value.contains("uniform_transform") ||
             !value.contains("resize") ||
             !value.contains("coordinate_world_hosted_geometry") ||
             !value.at("coordinate_world_hosted_geometry").is_boolean() ||
-            value.at("coordinate_world_hosted_geometry") != true)
-            invalid("Roof hosted coordination requires exactly ten version-six fields and a true coordination flag");
+            (!skylights && !coordinated))
+            invalid("Roof extended edit requires exactly ten fields and an admitted coordination flag");
+        if (skylights && (value.at("openings").is_null() ||
+            !value.at("openings").is_object() || !value.at("openings").contains("version") ||
+            value.at("openings").at("version") != 2))
+            invalid("Roof version-seven edit requires version-two opening authority");
     } else if (uniform_transform) {
         if (value.size() != 9 || !value.contains("form") || !value.at("form").is_null() ||
             !value.contains("transform") || !value.at("transform").is_null() ||
@@ -448,6 +466,8 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
     if (conversion) result.form = decode_roof_form_edit_intent(value.at("form"));
     if (!value.at("profile").is_null()) result.profile = decode_roof_profile_edit_intent(value.at("profile"));
     if (!value.at("openings").is_null()) result.openings = decode_roof_opening_edit_intent(value.at("openings"));
+    if (!skylights && result.openings && result.openings->uses_skylight_schema)
+        invalid("Historical roof composite proofs cannot author skylights");
     if (!value.at("pose").is_null()) result.pose = decode_roof_pose_edit_intent(value.at("pose"));
     (void)encode_roof_edit_intent(result);
     return result;

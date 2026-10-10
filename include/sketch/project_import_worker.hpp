@@ -407,7 +407,7 @@ inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
     validate_native_context(entity);
     const auto& p = entity.properties;
     if (!p.contains("version") || !p.at("version").is_number_integer() ||
-        (p.at("version") != 1 && p.at("version") != 2) || !p.contains("form")) reject();
+        (p.at("version") != 1 && p.at("version") != 2 && p.at("version") != 3) || !p.contains("form")) reject();
     const auto form = text(p.at("form"), false);
     const bool panel = form == "sloped_roof_panel";
     if (!panel && form != "gable_roof" && form != "hip_roof") reject();
@@ -477,6 +477,85 @@ inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
         const auto clearance = thickness + tolerance;
         if (!std::isfinite(right) || !std::isfinite(top) || x < xmin + clearance || y < ymin + clearance ||
             right > xmax - clearance || top > ymax - clearance) reject();
+        if (cut.contains("skylight")) {
+            if (p.at("version") != 3) reject();
+            const auto& profile = cut.at("skylight");
+            fields(profile, {"version", "frame_width_m", "curb_height_m", "glazing_thickness_m"});
+            if (!profile.at("version").is_number_integer() || profile.at("version") != 1) reject();
+            const auto frame_width = number(profile, "frame_width_m", true);
+            const auto curb = number(profile, "curb_height_m");
+            const auto glazing = number(profile, "glazing_thickness_m", true);
+            if (frame_width > 1e6 || curb < 0 || curb > 1e6 || glazing > 1e6) reject();
+            // The native fill manufactures two four-piece rectangular rings
+            // and one glazing prism. Charge all nine four-edge profiles before
+            // face fitting or any downstream native solid reconstruction.
+            budget.charge(9 * 4);
+            struct Plane { double elevation, x_slope, y_slope; };
+            Plane plane{0, slope, 0};
+            if (form == "gable_roof") {
+                if (top < -tolerance) plane = {rise, 0, slope};
+                else if (y > tolerance) plane = {rise, 0, -slope};
+                else reject();
+            } else if (form == "hip_roof") {
+                const std::array<Plane, 4> planes{{{rise, 0, slope}, {rise, 0, -slope},
+                    {slope * length * .5, slope, 0}, {slope * length * .5, -slope, 0}}};
+                const auto face_clearance = tolerance * std::hypot(1.0, slope);
+                bool found = false;
+                // A hip face is strictly the lowest of four affine planes.
+                // All mouth corners must belong to the same plane; these
+                // inequalities cover the entire rectangular mouth.
+                for (std::size_t candidate = 0; candidate < planes.size(); ++candidate) {
+                    bool fits = true;
+                    for (const auto corner_x : {x, right})
+                        for (const auto corner_y : {y, top}) {
+                            const auto& face = planes[candidate];
+                            const auto height = face.elevation + face.x_slope * corner_x + face.y_slope * corner_y;
+                            for (std::size_t other = 0; other < planes.size(); ++other) {
+                                if (candidate == other) continue;
+                                const auto& adjacent = planes[other];
+                                const auto adjacent_height = adjacent.elevation + adjacent.x_slope * corner_x +
+                                    adjacent.y_slope * corner_y;
+                                if (!(height + face_clearance < adjacent_height)) fits = false;
+                            }
+                        }
+                    if (fits) { plane = planes[candidate]; found = true; break; }
+                }
+                if (!found) reject();
+            }
+            const auto fill_clearance = std::max(8.0 * tolerance, std::min(width, depth) * 1e-9);
+            const auto x_frame = frame_width / std::hypot(1.0, plane.x_slope);
+            const auto y_frame = frame_width / std::hypot(1.0, plane.y_slope);
+            const auto positive_dimension = [&](double value) {
+                if (!std::isfinite(value) || value <= tolerance || value > 1e6) reject();
+            };
+            positive_dimension(x_frame);
+            positive_dimension(y_frame);
+            positive_dimension(width - 2 * (fill_clearance + x_frame));
+            positive_dimension(depth - 2 * (fill_clearance + y_frame));
+            const auto fill_normal_scale = std::hypot(1.0, std::hypot(plane.x_slope, plane.y_slope));
+            const auto curb_height = curb * fill_normal_scale;
+            const auto glazing_thickness = glazing * fill_normal_scale;
+            const auto roof_drop = thickness * fill_normal_scale;
+            if (!std::isfinite(curb_height) || curb_height < 0 || curb_height > 1e6) reject();
+            positive_dimension(glazing_thickness);
+            positive_dimension(roof_drop);
+            positive_dimension(roof_drop + curb_height);
+            // Bound actual manufactured vertices after the roof pose, including
+            // the below-surface curb and the above-surface glazing extent.
+            const auto orientation = number(p, "orientation_rad");
+            const auto cosine = std::cos(orientation), sine = std::sin(orientation);
+            const auto& base = p.at("base_position_m");
+            for (const auto corner_x : {x + fill_clearance, right - fill_clearance})
+                for (const auto corner_y : {y + fill_clearance, top - fill_clearance}) {
+                    const auto world_x = base[0].get<double>() + cosine * corner_x - sine * corner_y;
+                    const auto world_y = base[1].get<double>() + sine * corner_x + cosine * corner_y;
+                    const auto surface_z = base[2].get<double>() + plane.elevation +
+                        plane.x_slope * corner_x + plane.y_slope * corner_y;
+                    for (const auto coordinate : {world_x, world_y, surface_z - roof_drop,
+                        surface_z + curb_height + glazing_thickness})
+                        if (!std::isfinite(coordinate) || std::abs(coordinate) > 1e9) reject();
+                }
+        }
         for (const auto& prior : previous)
             if (x <= prior.right + tolerance && right >= prior.x - tolerance &&
                 y <= prior.top + tolerance && top >= prior.y - tolerance) reject();

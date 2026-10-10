@@ -7,6 +7,7 @@
 #include "sketch/assembly_document_adapter.hpp"
 #include "sketch/assembly_geometry.hpp"
 #include "sketch/building_plan_projection.hpp"
+#include "sketch/roof_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "sketch/document_wall.hpp"
@@ -175,6 +176,7 @@ TopoDS_Shape coordinated_shape(const Entities& entities,const std::string& id) {
     }
     if (entity.type=="roof_join") {
         const auto join=parse_roof_join(entity.properties,id);
+        validate_roof_join_skylights(join, entities);
         std::vector<TopoDS_Shape> shapes;
         for (const auto& member:join.roof_ids) {
             if (entities.at(member).type!="roof") throw std::invalid_argument("Coordinated canvas join has a non-roof member.");

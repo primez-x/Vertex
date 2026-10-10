@@ -14,6 +14,59 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 roof-hosted skylights - source integration
+
+Both Windows and Roof/site skylight catalog entries now route through an actual
+roof opening rather than a wall fill or decorative symbol. Plan drag/click
+placement uses the captured source, active floor/layer, roof-local coordinates
+and practical grid increments; visible joined-roof presentations resolve their
+actual members. The roof Openings editor exposes cut/skylight type, mouth
+position/dimensions, frame, curb and glazing. The ordinary building-object editor
+retains the same profile and new proof authority during roster edits.
+
+Roof schema 3 owns a strict version-one physical profile. The finite curb,
+frame and glazing follow one actual roof face and stay inside the vertical cut;
+gable/hip ridge crossings, insufficient glazing room and invalid cuts refuse.
+Opening proof v2 and composite v7 preserve older contracts, captured source,
+unchanged numbers, opaque data, quantities and reversible history. Uniform and
+plan-resize archives v2 retain schema-3 frames; uniform scaling changes physical
+dimensions, while footprint resizing retains construction dimensions. Native
+reader 168/extraction 166 follows retained/nested/undone proofs and archives.
+
+Schedules expose per-child dimensions/volume and keep roof quantities
+structure-only. Native preparation separates roof material from white skylight
+regions. IFC produces actual roof voids and separate skylight windows with
+fill relationships; native activation requires the complete body/child/host
+relationship proof. Failed child carriers stay inert. Joined-roof import retains
+its existing foreign-carrier contract.
+
+Independent source review identified missing joined placement, mixed material
+regions, cross-roof fill/void interference, analytical worker admission, an
+ordinary-editor proof mismatch, incomplete IFC host-void roster admission and
+stale retained profile receipts. Corrections address these source paths. Shared
+cohort admission checks real fill/cavity intersections against other roof
+members with bounded Boolean work, rather than relying on bounding boxes alone.
+The final bounded independent review closed the original source findings after
+receipt lifecycle corrections. Root added the final whole-cut deletion guard:
+retained-cut profile clearing preserves annotation remnants, but whole-cut
+deletion refuses remaining child/indexed annotations instead of orphaning them.
+Uniform scaling preserves core-free profile remnants after re-addition while
+future or malformed receipt cores still refuse. This is source integration
+evidence only; neither review supplies compilation or runtime acceptance.
+
+No builds, tests, new tests, scripts/probes, native jobs, UI launches, packages
+or installations ran. Static source/diff/JSON inspection is not compilation or
+runtime acceptance. The installed candidate remains unchanged. Geometry,
+interaction, rendered appearance, history/migration, kernel performance and
+independently consumed output remain unqualified; all ten gates remain open.
+The checklist retains 450 original scenarios plus eight focused door/window
+checks, and the visible SVG count remains 366.
+
+Next implementation gaps include individual skylight canvas grips and
+surface-aware preview, plus coordinated multi-host corner windows. The full
+delivery plan and unresolved external prerequisites remain binding; no overall
+completion percentage or ETA follows from this batch.
+
 ### October 10 awning and double-hung windows - source integration
 
 Named awning and double-hung entries now select distinct physical mechanisms
@@ -44,10 +97,11 @@ and performance, rendered appearance, history/migration and independently
 consumed IFC remain unqualified. The installed candidate is unchanged and all
 ten production gates remain open.
 
-Next concrete source gaps are coordinated multi-host corner windows and actual
-roof-hosted skylight geometry/placement. The complete remaining plan and external
-prerequisites remain binding. This batch does not establish an overall
-completion percentage or ETA.
+At this checkpoint the next concrete source gaps were coordinated multi-host
+corner windows and roof-hosted skylights. The newer source batch above adds the
+skylight model/placement with explicit remaining canvas and qualification work.
+The complete plan and external prerequisites remain binding. This batch does
+not establish an overall completion percentage or ETA.
 
 ### October 10 five-pane bow windows - source integration
 

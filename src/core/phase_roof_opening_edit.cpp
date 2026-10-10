@@ -27,6 +27,10 @@ constexpr std::size_t opening_limit = 256;
 constexpr std::size_t collection_limit = 4096;
 constexpr std::size_t expression_limit = 4096;
 constexpr std::size_t proof_limit = 1024 * 1024;
+struct SkylightDimension { const char* scalar; bool positive; };
+constexpr std::array skylight_dimensions{
+    SkylightDimension{"frame_width_m", true}, SkylightDimension{"curb_height_m", false},
+    SkylightDimension{"glazing_thickness_m", true}};
 
 [[noreturn]] void invalid(const char* reason) { throw std::invalid_argument(reason); }
 void keys(const Json& value, std::initializer_list<const char*> expected) {
@@ -58,6 +62,26 @@ bool exact(const Entity& left, const Entity& right) {
 double number(const Json& value) {
     if (!value.is_number() || !std::isfinite(value.get<double>())) invalid("Roof opening scalar must be finite");
     return value.get<double>();
+}
+void skylight_profile(const Json& value) {
+    keys(value, {"version", "frame_width_m", "curb_height_m", "glazing_thickness_m"});
+    if (!version_one(value.at("version"))) invalid("Roof skylight profile version is unsupported");
+    if (number(value.at("frame_width_m")) <= default_geometry_tolerance_metres ||
+        number(value.at("curb_height_m")) < 0.0 ||
+        number(value.at("glazing_thickness_m")) <= default_geometry_tolerance_metres)
+        invalid("Roof skylight profile dimensions are outside their admitted range");
+}
+bool same_skylight(const Json* before, const Json* after) {
+    if (!before || !after) return !before && !after;
+    skylight_profile(*before);
+    skylight_profile(*after);
+    for (const auto* key : {"frame_width_m", "curb_height_m", "glazing_thickness_m"})
+        if (number(before->at(key)) != number(after->at(key))) return false;
+    return true;
+}
+bool skylight_schema(const RoofOpeningEditIntent& intent) {
+    return intent.uses_skylight_schema || std::any_of(intent.upserts.begin(), intent.upserts.end(),
+        [](const auto& upsert) { return upsert.skylight.has_value(); });
 }
 const char* unit_name(Unit value) {
     switch (value) {
@@ -132,7 +156,7 @@ constexpr std::array dimensions{
     Dimension{"width", "width_m", true, &RoofOpeningUpsertIntent::width},
     Dimension{"depth", "depth_m", true, &RoofOpeningUpsertIntent::depth}};
 bool any(const RoofOpeningUpsertIntent& value) {
-    return std::any_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
+    return value.skylight || std::any_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
 }
 bool all(const RoofOpeningUpsertIntent& value) {
     return std::all_of(dimensions.begin(), dimensions.end(), [&](const auto& d) { return (value.*(d.member)).has_value(); });
@@ -180,6 +204,20 @@ bool known_receipt(const Json& value) {
         invalid("Roof opening indexed receipt version is invalid");
     return version_one(*version);
 }
+bool receipt_core(const Json& value, bool raw = false) {
+    if (!value.is_object()) return true;
+    for (const auto* key : {"version", "original_expression", raw ? "default_unit" : "entered_unit"})
+        if (value.contains(key)) return true;
+    const auto rational = field(value, "exact_metres");
+    return rational && (!rational->is_object() || rational->contains("numerator") || rational->contains("denominator"));
+}
+void erase_receipt_core(Json& value, bool raw) {
+    for (const auto* key : {"version", "original_expression", raw ? "default_unit" : "entered_unit"}) value.erase(key);
+    if (auto rational = value.find("exact_metres"); rational != value.end()) {
+        rational->erase("numerator"); rational->erase("denominator");
+        if (rational->empty()) value.erase(rational);
+    }
+}
 bool known_raw(const Json& value) {
     if (!value.is_object()) return false;
     const auto version = field(value, "version");
@@ -202,10 +240,62 @@ RoofOpeningQuantityInput raw_input(const Json& value, double metres, bool positi
     if (admitted.metres != metres) invalid("Roof opening child receipt is stale");
     return {admitted, default_unit};
 }
+RoofOpeningQuantityInput numeric_input(double metres, bool positive) {
+    std::array<char, 64> buffer{};
+    // Start with the full double precision. Some redundant decimal tails need
+    // a denominator beyond int64; admit a shorter spelling only if it returns
+    // exactly the same actual scalar, never a rounded replacement.
+    for (int precision = 17; precision > 0; --precision) {
+        const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
+            metres, std::chars_format::general, precision);
+        if (converted.ec != std::errc{}) continue;
+        try {
+            RoofOpeningQuantityInput result{parse_quantity(std::string(buffer.data(), converted.ptr) + " m", Unit::metre), Unit::metre};
+            if (result.quantity.metres != metres) continue;
+            (void)input(result, positive);
+            return result;
+        } catch (const std::invalid_argument&) { /* Try the next exact bounded spelling. */ }
+          catch (const std::overflow_error&) { /* The rational may reduce at shorter precision. */ }
+    }
+    invalid("Roof skylight scalar has no exact bounded metre input");
+}
+void write_raw_core(Json& receipt, const RoofOpeningQuantityInput& value) {
+    receipt["original_expression"] = value.quantity.original_expression;
+    receipt["default_unit"] = unit_name(value.default_unit);
+    if (!receipt.contains("exact_metres")) receipt["exact_metres"] = Json::object();
+    if (!receipt.at("exact_metres").is_object()) invalid("Roof opening receipt rational must be an object");
+    receipt["exact_metres"]["numerator"] = value.quantity.exact_metres.numerator;
+    receipt["exact_metres"]["denominator"] = value.quantity.exact_metres.denominator;
+}
 void admit(const Entity& entity) {
     validate_roof_profile_source_entity(entity);
     const auto rows = roster(entity);
     const auto children = positions(rows);
+    if (const auto values = field(entity.properties, "quantity_entries")) {
+        if (!values->is_object() || values->size() > collection_limit) invalid("Roof opening quantity_entries budget exceeded");
+        constexpr std::string_view prefix = "/roof_openings/";
+        for (const auto& [pointer, receipt] : values->items()) {
+            const std::string_view path(pointer);
+            if (!path.starts_with(prefix)) continue;
+            const auto tail = path.substr(prefix.size());
+            const auto slash = tail.find('/');
+            if (slash == std::string_view::npos) continue;
+            const auto suffix = tail.substr(slash + 1);
+            const auto dimension = std::find_if(skylight_dimensions.begin(), skylight_dimensions.end(),
+                [&](const auto& d) { return suffix == std::string("skylight/") + d.scalar; });
+            if (dimension == skylight_dimensions.end() || !receipt_core(receipt) || !known_receipt(receipt)) continue;
+            const auto token = tail.substr(0, slash);
+            std::size_t index = 0;
+            const auto parsed = std::from_chars(token.data(), token.data() + token.size(), index);
+            if (token.empty() || (token.size() > 1 && token.front() == '0') || parsed.ec != std::errc{} ||
+                parsed.ptr != token.data() + token.size() || index >= rows.size())
+                invalid("Roof skylight indexed receipt has no existing child index");
+            const auto profile = field(rows.at(index), "skylight");
+            if (!profile) invalid("Roof skylight indexed receipt is dangling");
+            if (quantity(receipt, dimension->positive, false).metres != number(profile->at(dimension->scalar)))
+                invalid("Roof skylight indexed receipt is stale");
+        }
+    }
     const auto extension = field(entity.extensions, "roof_opening_input");
     if (!extension || !known_extension(*extension)) return;
     const auto entries = field(*extension, "entries");
@@ -220,10 +310,21 @@ void admit(const Entity& entity) {
         for (const auto& d : dimensions) {
             const auto raw = field(receipts, d.scalar);
             if (!raw) continue;
-            if (!known_raw(*raw)) continue;
+            if (!known_raw(*raw) || !receipt_core(*raw, true)) continue;
             const auto child = children.find(id);
             if (child == children.end()) invalid("Roof opening child receipt is dangling");
             (void)raw_input(*raw, number(rows.at(child->second).at(d.scalar)), d.positive);
+        }
+        const auto profile_receipts = field(receipts, "skylight");
+        if (!profile_receipts || !known_raw(*profile_receipts)) continue;
+        for (const auto& d : skylight_dimensions) {
+            const auto raw = field(*profile_receipts, d.scalar);
+            if (!raw || !known_raw(*raw) || !receipt_core(*raw, true)) continue;
+            const auto child = children.find(id);
+            if (child == children.end()) invalid("Roof skylight child receipt is dangling");
+            const auto profile = field(rows.at(child->second), "skylight");
+            if (!profile) invalid("Roof skylight child receipt has no existing profile");
+            (void)raw_input(*raw, number(profile->at(d.scalar)), d.positive);
         }
     }
 }
@@ -249,12 +350,31 @@ void write_child_receipt(Entity& entity, const std::string& id, const Dimension&
     auto receipt = child->find(dimension.scalar);
     if (receipt == child->end()) { (*child)[dimension.scalar] = Json::object(); receipt = child->find(dimension.scalar); }
     else if (!known_raw(*receipt)) invalid("Roof opening edit cannot replace an opaque future child receipt");
-    (*receipt)["original_expression"] = value.quantity.original_expression;
-    (*receipt)["default_unit"] = unit_name(value.default_unit);
-    if (!receipt->contains("exact_metres")) (*receipt)["exact_metres"] = Json::object();
-    if (!receipt->at("exact_metres").is_object()) invalid("Roof opening receipt rational must be an object");
-    (*receipt)["exact_metres"]["numerator"] = value.quantity.exact_metres.numerator;
-    (*receipt)["exact_metres"]["denominator"] = value.quantity.exact_metres.denominator;
+    write_raw_core(*receipt, value);
+}
+void edit_skylight_receipts(Entity& entity, const std::string& id, const Json* before, const Json* after) {
+    const auto extension = entity.extensions.find("roof_opening_input");
+    if (extension == entity.extensions.end()) return;
+    if (!known_extension(*extension)) invalid("Roof skylight edit cannot affect an opaque input envelope");
+    auto& entries = extension->at("entries");
+    const auto child = entries.find(id);
+    if (child == entries.end()) return;
+    if (!known_raw(*child)) invalid("Roof skylight edit cannot affect an opaque child input envelope");
+    const auto receipts = child->find("skylight");
+    if (receipts == child->end()) return;
+    if (!known_raw(*receipts)) invalid("Roof skylight edit cannot affect an opaque profile input envelope");
+    for (const auto& d : skylight_dimensions) {
+        if (before && after && number(before->at(d.scalar)) == number(after->at(d.scalar))) continue;
+        const auto raw = receipts->find(d.scalar);
+        if (raw == receipts->end()) continue;
+        if (!known_raw(*raw)) invalid("Roof skylight edit cannot affect a future child receipt");
+        if (after && receipt_core(*raw, true)) write_raw_core(*raw, numeric_input(number(after->at(d.scalar)), d.positive));
+        else if (!after) {
+            erase_receipt_core(*raw, true);
+            if (raw->empty()) receipts->erase(raw);
+        }
+    }
+    if (receipts->empty()) child->erase(receipts);
 }
 void remove_child_receipt(Entity& entity, const std::string& id) {
     const auto extension = entity.extensions.find("roof_opening_input");
@@ -266,6 +386,18 @@ void remove_child_receipt(Entity& entity, const std::string& id) {
         for (const auto& d : dimensions)
             if (const auto receipt = field(*child, d.scalar); receipt && !known_raw(*receipt))
                 invalid("Roof opening removal cannot erase a future child receipt");
+        edit_skylight_receipts(entity, id, nullptr, nullptr);
+        for (const auto& d : dimensions) {
+            const auto receipt = child->find(d.scalar);
+            if (receipt == child->end()) continue;
+            auto residue = *receipt;
+            erase_receipt_core(residue, true);
+            if (!residue.empty()) invalid("Roof opening receipt annotation metadata requires resolution before deleting its child");
+            child->erase(receipt);
+        }
+        child->erase("version"); // The admitted version-one child envelope is owned.
+        if (!child->empty())
+            invalid("Roof opening child annotation metadata requires resolution before deleting its child");
         entries.erase(id);
     }
 }
@@ -303,6 +435,49 @@ void merge_quantity_core(Json& raw, const RoofOpeningQuantityInput& value, bool 
     for (const auto* key : {"version", "original_expression", "entered_unit"}) raw[key] = encoded.at(key);
     for (const auto* key : {"numerator", "denominator"}) raw["exact_metres"][key] = encoded.at("exact_metres").at(key);
 }
+void normalize_unchanged_skylight_receipts(Entity& candidate, const Entity& source,
+    const std::string& id, std::size_t old_index, std::size_t new_index, const SkylightDimension& d, double metres) {
+    const auto before_child = child_receipts(source, id), after_child = child_receipts(candidate, id);
+    const auto before = before_child ? field(*before_child, "skylight") : nullptr;
+    const auto after = after_child ? field(*after_child, "skylight") : nullptr;
+    const auto old_raw = before && known_raw(*before) ? field(*before, d.scalar) : nullptr;
+    const auto new_raw = after && known_raw(*after) ? field(*after, d.scalar) : nullptr;
+    if (new_raw && (!old_raw || !exact(*old_raw, *new_raw))) {
+        const auto entered = raw_input(*new_raw, metres, d.positive);
+        auto permitted = old_raw ? *old_raw : Json::object();
+        if (!known_raw(permitted)) invalid("Equivalent roof skylight input cannot rewrite a future child receipt");
+        write_raw_core(permitted, entered);
+        if (!exact(*new_raw, permitted)) invalid("Equivalent roof skylight input cannot change opaque quantity metadata");
+        auto& entries = candidate.extensions.at("roof_opening_input").at("entries");
+        auto& child = entries.at(id);
+        auto& profile = child.at("skylight");
+        if (old_raw) profile[d.scalar] = *old_raw;
+        else profile.erase(d.scalar);
+        if (profile.empty() && !before) child.erase("skylight");
+        if (child.empty() && !before_child) entries.erase(id);
+        if (entries.empty() && !source.extensions.contains("roof_opening_input")) candidate.extensions.erase("roof_opening_input");
+    }
+    const auto old_values = field(source.properties, "quantity_entries"), new_values = field(candidate.properties, "quantity_entries");
+    const auto suffix = "/skylight/" + std::string(d.scalar);
+    const auto old_pointer = "/roof_openings/" + std::to_string(old_index) + suffix;
+    const auto new_pointer = "/roof_openings/" + std::to_string(new_index) + suffix;
+    const auto old_receipt = old_values ? field(*old_values, old_pointer) : nullptr;
+    const auto new_receipt = new_values ? field(*new_values, new_pointer) : nullptr;
+    if (!new_receipt || (old_receipt && exact(*old_receipt, *new_receipt))) return;
+    if (!known_receipt(*new_receipt)) invalid("Equivalent roof skylight input cannot rewrite a future indexed receipt");
+    const auto entered_quantity = quantity(*new_receipt, d.positive, false);
+    if (entered_quantity.metres != metres) invalid("Equivalent roof skylight indexed receipt is stale");
+    const RoofOpeningQuantityInput entered{entered_quantity, entered_quantity.entered_unit};
+    auto permitted = old_receipt ? *old_receipt : Json::object();
+    if (old_receipt && receipt_core(*old_receipt) && !known_receipt(*old_receipt))
+        invalid("Equivalent roof skylight input cannot rewrite a future indexed receipt");
+    merge_quantity_core(permitted, entered, d.positive);
+    if (!exact(*new_receipt, permitted)) invalid("Equivalent roof skylight input cannot change opaque indexed metadata");
+    auto& values = candidate.properties.at("quantity_entries");
+    if (old_receipt) values[new_pointer] = *old_receipt;
+    else values.erase(new_pointer);
+    if (values.empty() && !source.properties.contains("quantity_entries")) candidate.properties.erase("quantity_entries");
+}
 // Indexed authority follows a source child identity, never its incidental new
 // index. Opaque row pointers cannot move or silently acquire a new binding.
 void indexed_receipts(const Entity& source, Entity& result, const RoofOpeningEditIntent& intent,
@@ -330,27 +505,49 @@ void indexed_receipts(const Entity& source, Entity& result, const RoofOpeningEdi
         const auto retained = remaining.find(id);
         const auto suffix = slash == std::string_view::npos ? std::string_view{} : tail.substr(slash + 1);
         const auto dimension = std::find_if(dimensions.begin(), dimensions.end(), [&](const auto& d) { return suffix == d.scalar; });
-        if (dimension == dimensions.end()) {
+        const auto profile_dimension = std::find_if(skylight_dimensions.begin(), skylight_dimensions.end(),
+            [&](const auto& d) { return suffix == std::string("skylight/") + d.scalar; });
+        if (dimension == dimensions.end() && profile_dimension == skylight_dimensions.end()) {
             if (retained == remaining.end() || retained->second != index || !exact(before.at(index), after.at(retained->second)))
                 invalid("Roof opening edit cannot affect an opaque indexed row pointer");
             rebuilt[pointer] = receipt; continue;
         }
-        const bool understood = known_receipt(receipt);
-        const bool scalar_changed = retained != remaining.end() &&
-            number(before.at(index).at(dimension->scalar)) != number(after.at(retained->second).at(dimension->scalar));
+        const bool profile_receipt = profile_dimension != skylight_dimensions.end();
+        const auto old_profile = profile_receipt ? field(before.at(index), "skylight") : nullptr;
+        const auto new_profile = profile_receipt && retained != remaining.end()
+            ? field(after.at(retained->second), "skylight") : nullptr;
+        const bool scalar_removed = retained == remaining.end() || (profile_receipt && old_profile && !new_profile);
+        const bool scalar_changed = retained != remaining.end() && (profile_receipt
+            ? (((old_profile == nullptr) != (new_profile == nullptr)) || (old_profile && new_profile &&
+                number(old_profile->at(profile_dimension->scalar)) != number(new_profile->at(profile_dimension->scalar))))
+            : number(before.at(index).at(dimension->scalar)) != number(after.at(retained->second).at(dimension->scalar)));
+        // Core-free remnants retain annotations under the same child identity.
+        const bool has_core = receipt_core(receipt);
+        const bool understood = !has_core || known_receipt(receipt);
         if (!understood) {
-            if (retained == remaining.end() || retained->second != index || scalar_changed)
+            if (scalar_removed || retained->second != index || scalar_changed)
                 invalid("Roof opening edit cannot affect a future indexed receipt");
             rebuilt[pointer] = receipt; continue;
         }
-        if (retained == remaining.end()) continue; // Only declared removals can reach this branch.
         auto raw = receipt;
-        if (scalar_changed) {
-            const auto value = authored_input(intent, id, *dimension);
-            if (!value) invalid("Roof opening changed scalar lacks exact authored input");
-            merge_quantity_core(raw, *value, dimension->positive);
+        if (scalar_removed) {
+            if (has_core) erase_receipt_core(raw, false);
+            if (retained == remaining.end()) {
+                if (!raw.empty()) invalid("Roof opening indexed annotation metadata requires resolution before deleting its child");
+                continue;
+            }
+            if (raw.empty()) continue;
+        } else if (scalar_changed && has_core) {
+            if (profile_receipt) {
+                const auto value = numeric_input(number(new_profile->at(profile_dimension->scalar)), profile_dimension->positive);
+                merge_quantity_core(raw, value, profile_dimension->positive);
+            } else {
+                const auto value = authored_input(intent, id, *dimension);
+                if (!value) invalid("Roof opening changed scalar lacks exact authored input");
+                merge_quantity_core(raw, *value, dimension->positive);
+            }
         }
-        const auto destination = std::string(prefix) + std::to_string(retained->second) + "/" + dimension->scalar;
+        const auto destination = std::string(prefix) + std::to_string(retained->second) + "/" + std::string(suffix);
         if (rebuilt.contains(destination)) invalid("Roof opening indexed receipt remap collision");
         rebuilt[destination] = std::move(raw);
     }
@@ -369,15 +566,23 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
     (void)identity(intent.roof_id);
     if (intent.upserts.size() > opening_limit || intent.removed_opening_ids.size() > opening_limit ||
         (intent.upserts.empty() && intent.removed_opening_ids.empty())) invalid("Roof opening edit roster budget is invalid");
-    Json result{{"version", 1}, {"roof_id", intent.roof_id}, {"upserts", Json::array()}, {"removed_opening_ids", Json::array()}};
+    const bool profiles = skylight_schema(intent);
+    Json result{{"version", profiles ? 2 : 1}, {"roof_id", intent.roof_id}, {"upserts", Json::array()}, {"removed_opening_ids", Json::array()}};
     Ids children;
     for (const auto& upsert : intent.upserts) {
         (void)identity(upsert.opening_id);
-        if (!children.insert(upsert.opening_id).second || !any(upsert)) invalid("Roof opening edit has a duplicate or empty upsert");
+        if (!children.insert(upsert.opening_id).second || (!profiles && !any(upsert))) invalid("Roof opening edit has a duplicate or empty upsert");
         Json entry{{"opening_id", upsert.opening_id}};
         for (const auto& d : dimensions) {
             const auto& value = upsert.*(d.member);
             entry[d.wire] = value ? input(*value, d.positive) : Json(nullptr);
+        }
+        if (profiles) {
+            entry["skylight_edit"] = nullptr;
+            if (upsert.skylight) {
+                if (!upsert.skylight->is_null()) skylight_profile(*upsert.skylight);
+                entry["skylight_edit"] = Json{{"value", *upsert.skylight}};
+            }
         }
         result["upserts"].push_back(std::move(entry));
     }
@@ -392,19 +597,29 @@ nlohmann::json encode_roof_opening_edit_intent(const RoofOpeningEditIntent& inte
 RoofOpeningEditIntent decode_roof_opening_edit_intent(const nlohmann::json& value) {
     if (value.dump().size() > proof_limit) invalid("Roof opening edit proof byte budget exceeded");
     keys(value, {"version", "roof_id", "upserts", "removed_opening_ids"});
-    if (!version_one(value.at("version"))) invalid("Roof opening edit version is unsupported");
+    const bool profiles = (value.at("version").is_number_integer() || value.at("version").is_number_unsigned()) &&
+        value.at("version") == 2;
+    if (!profiles && !version_one(value.at("version"))) invalid("Roof opening edit version is unsupported");
     const auto& upserts = value.at("upserts");
     const auto& removed = value.at("removed_opening_ids");
     if (!upserts.is_array() || !removed.is_array() || upserts.size() > opening_limit || removed.size() > opening_limit)
         invalid("Roof opening edit arrays exceed the roster budget");
     RoofOpeningEditIntent result;
     result.roof_id = identity(value.at("roof_id"));
+    result.uses_skylight_schema = profiles;
     for (const auto& entry : upserts) {
-        keys(entry, {"opening_id", "x", "y", "width", "depth"});
+        if (profiles) keys(entry, {"opening_id", "x", "y", "width", "depth", "skylight_edit"});
+        else keys(entry, {"opening_id", "x", "y", "width", "depth"});
         RoofOpeningUpsertIntent upsert;
         upsert.opening_id = identity(entry.at("opening_id"));
         for (const auto& d : dimensions)
             if (!entry.at(d.wire).is_null()) upsert.*(d.member) = input(entry.at(d.wire), d.positive);
+        if (profiles && !entry.at("skylight_edit").is_null()) {
+            const auto& edit = entry.at("skylight_edit");
+            keys(edit, {"value"});
+            if (!edit.at("value").is_null()) skylight_profile(edit.at("value"));
+            upsert.skylight = edit.at("value");
+        }
         result.upserts.push_back(std::move(upsert));
     }
     for (const auto& id : removed) result.removed_opening_ids.push_back(identity(id));
@@ -415,6 +630,8 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
     (void)encode_roof_opening_edit_intent(intent);
     if (source.id != intent.roof_id) invalid("Roof opening edit target differs from actual source identity");
     admit(source);
+    if (source.properties.at("version") == 3 && !skylight_schema(intent))
+        invalid("Schema-three roof opening edits require version-two proof authority");
     const auto before = roster(source);
     const auto children = positions(before);
     Ids removed(intent.removed_opening_ids.begin(), intent.removed_opening_ids.end());
@@ -446,12 +663,27 @@ Entity stage_roof_opening_entity(const Entity& source, const RoofOpeningEditInte
             write_child_receipt(result, upsert.opening_id, d, *value);
             changed = true;
         }
+        if (upsert.skylight) {
+            const auto before_profile = field(row, "skylight");
+            const auto after_profile = upsert.skylight->is_null() ? nullptr : &*upsert.skylight;
+            if (!same_skylight(before_profile, after_profile)) {
+                edit_skylight_receipts(result, upsert.opening_id, before_profile, after_profile);
+                if (after_profile && before_profile) {
+                    for (const auto* key : {"frame_width_m", "curb_height_m", "glazing_thickness_m"})
+                        if (number(before_profile->at(key)) != number(after_profile->at(key)))
+                            row["skylight"][key] = after_profile->at(key);
+                } else if (after_profile) row["skylight"] = *after_profile;
+                else row.erase("skylight");
+                changed = true;
+            }
+        }
     }
     if (!changed) return source;
     for (const auto& id : removed) remove_child_receipt(result, id);
-    // Schema two remains two even for the last removal. Schema one is upgraded
-    // only when an actual new child was authored, never for a scalar no-op.
-    result.properties["version"] = 2;
+    // Retain schema three even after the last profile/removal. Older schemas
+    // promote only when an actual child/profile was authored, never for a no-op.
+    const bool has_profile = std::any_of(after.begin(), after.end(), [](const auto& row) { return row.contains("skylight"); });
+    result.properties["version"] = source.properties.at("version") == 3 || has_profile ? 3 : 2;
     result.properties["roof_openings"] = after;
     indexed_receipts(source, result, intent, before, after);
     return result;
@@ -477,6 +709,8 @@ std::vector<std::string> new_roof_opening_identity_ids(const Entities& source,
         const auto found = source.find(intent.roof_id);
         if (found == source.end() || found->first != found->second.id) invalid("Roof opening target is missing or inconsistent");
         admit(found->second);
+        if (found->second.properties.at("version") == 3 && !skylight_schema(intent))
+            invalid("Schema-three roof opening edits require version-two proof authority");
         const auto children = positions(roster(found->second));
         for (const auto& id : intent.removed_opening_ids)
             if (!children.contains(id)) invalid("Roof opening removal requires an actual existing child");
@@ -523,6 +757,14 @@ Entity normalize_equivalent_roof_opening_inputs(const Entity& original, const En
             normalized.properties["roof_openings"][index][d.scalar]=before.at(old->second).at(d.scalar);
             normalize_unchanged_child_receipt(normalized,original,id,d,metres);
         }
+        const auto old_profile = field(before.at(old->second), "skylight"), new_profile = field(after.at(index), "skylight");
+        if (old_profile && new_profile)
+            for (const auto& d : skylight_dimensions) {
+                const double metres = number(new_profile->at(d.scalar));
+                if (number(old_profile->at(d.scalar)) != metres) continue;
+                normalized.properties["roof_openings"][index]["skylight"][d.scalar] = old_profile->at(d.scalar);
+                normalize_unchanged_skylight_receipts(normalized, original, id, old->second, index, d, metres);
+            }
     }
     return normalized;
 }
@@ -537,6 +779,7 @@ std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& origi
     const auto old_positions = positions(before), new_positions = positions(after);
     RoofOpeningEditIntent intent;
     intent.roof_id = original.id;
+    intent.uses_skylight_schema = original.properties.at("version") == 3 || candidate.properties.at("version") == 3;
     for (const auto& row : before) {
         const auto id = row.at("id").get<std::string>();
         if (!new_positions.contains(id)) intent.removed_opening_ids.push_back(id);
@@ -554,6 +797,10 @@ std::optional<RoofOpeningEditIntent> infer_roof_opening_edit(const Entity& origi
             }
             upsert.*(d.member) = captured_input(candidate, id, d, metres);
         }
+        const auto before_profile = old == old_positions.end() ? nullptr : field(before.at(old->second), "skylight");
+        const auto after_profile = field(row, "skylight");
+        if (!same_skylight(before_profile, after_profile))
+            upsert.skylight = after_profile ? *after_profile : Json(nullptr);
         if (any(upsert)) intent.upserts.push_back(std::move(upsert));
     }
     if (intent.upserts.empty() && intent.removed_opening_ids.empty()) return std::nullopt;

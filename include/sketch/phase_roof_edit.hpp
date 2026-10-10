@@ -43,6 +43,9 @@ struct RoofEditIntent {
 // edits keep type-owned profile dimensions and fixed local offsets from the
 // roof base, following only its admitted base/yaw change. Form/pitch changes
 // do not infer roof-surface anchoring. Explicit uniform transforms still scale.
+// Skylight roster edits use strict version seven with the same ten keys as
+// version six and a boolean coordination flag. Its openings component must be
+// version two; historical composite versions cannot admit that new authority.
 [[nodiscard]] nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent);
 [[nodiscard]] RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value);
 
