@@ -854,6 +854,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     src/core/phase_roof_pose_edit.cpp src/core/phase_roof_form_edit.cpp src/core/phase_roof_transform.cpp
     src/core/phase_roof_uniform_transform.cpp
     src/core/phase_roof_resize.cpp src/core/phase_roof_edit.cpp src/core/roof_derivation_cache.cpp
+    src/core/roof_opening_group_edit.cpp
     src/architecture/plan_axis_resize.cpp
     src/core/roof_clone.cpp
     src/core/phase_roof_demolition.cpp src/core/roof_removal.cpp

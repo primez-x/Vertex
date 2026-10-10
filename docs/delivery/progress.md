@@ -14,6 +14,58 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 skylight group clipboard and transforms - source integration
+
+The group selection and atomic Properties/deletion batch is committed and pushed
+as 6bcaa426; exact local and remote identities match. Current source work closes
+group clipboard and direct plan transform gaps. Separate writers own actual-
+source group math and canvas interaction; root owns controller, command/preview
+integration, CMake, documentation and Git.
+
+Pure group operations retain every actual roof host, transform reference centres
+about a common world XY pivot, add the common physical facet angle, and scale
+physical on-face width/depth using each final facet's reference scales.
+Construction profile dimensions retain their individual values. Complete replay
+admits the roster once; changed fields receive exact quantity inputs, while
+identity operations author nothing. Plan body drags, uniform corner scale and
+45-degree-snapped rotation/Shift fine controls render complete admitted mouths
+and manufactured outlines. Captured cohort/source, camera, size/DPR, navigation,
+focus, serial and exact release proposal fence asynchronous results.
+
+Clipboard version two captures bounded passive source members; version one
+remains supported for individual skylights. Group Copy/Cut/Duplicate and Paste
+retain relative world XY centre offsets, physical face sizes, individual facet
+angles, construction profiles and opaque row/receipt content. Root reserves new
+IDs against current and retained/undone history; replay additionally checks all
+passive source rosters and the complete batch. Source roof envelopes never become
+active imported roofs. Placement requires the exact completed manufactured
+preview at the chosen destination. One source-bound prepared command owns the
+whole transform/placement, existing alternative replacement/remapping, room
+review and history. Cancellation or a stale/invalid proposal cannot publish a
+partial group.
+
+Mixed ordinary-object/child selection, nonuniform group scaling and direct 3D
+child movement/rotation/scale remain implementation gaps. Shared plan controls
+do not complete those workflows. Next source work must provide actual 3D child
+controls and mixed semantic selection/commands, while retaining the full plan.
+
+All implementation ownership returned. Independent source review found reversed
+rotation in reflected plans, unrotated crop checks and stale placement reuse
+after focus/leave. Corrections convert the pointer angle through the view basis,
+admit actual rotated mouth corners and require the current placement serial and
+pending status. Focus, modal and application deactivation retire that serial.
+The focused re-review accepted these corrections with no remaining concrete
+P1/P2 finding in the bounded source scope. Root reviewed integration and the
+source-only evidence; scoped commit, push and exact remote verification back up
+this batch. Acceptance and installed evidence do not change.
+No native project reader-floor change is introduced by existing intent batches
+or the transient clipboard version. The manual list retains 450 original tasks
+plus thirty-eight focused tasks (488 total), with group transform and transfer
+tasks Not tested. No builds, tests/new tests, probes, native jobs, UI launches,
+packages or installations run. Compilation, native admission, input/preview,
+history/alternatives, output and recovery remain unverified. Installed evidence
+and acceptance are unchanged; all ten production gates remain open.
+
 ### October 10 skylight group selection and commands - source integration
 
 The actual native child picking batch is committed and pushed as b7152b7e.

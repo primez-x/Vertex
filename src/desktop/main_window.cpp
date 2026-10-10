@@ -86,6 +86,7 @@
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/roof_entity_codec.hpp"
+#include "sketch/roof_opening_group_edit.hpp"
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/building_view_projection.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -6106,6 +6107,10 @@ class MainWindow::Impl {
         std::string configuration;
         double station_increment{};
         bool placement{};
+        bool group{};
+        std::vector<CanvasRoofOpeningTarget> targets;
+        std::vector<CanvasRoofOpeningControls> initial_controls;
+        std::vector<RoofOpeningGroupClone> clones;
     };
     struct RoofOpeningCanvasResult {
         Boundary boundary;
@@ -6113,6 +6118,8 @@ class MainWindow::Impl {
         CanvasRoofOpeningTarget target;
         std::optional<CanvasRoofOpeningFrame> frame;
         bool no_op{};
+        std::vector<CanvasRoofOpeningTarget> targets;
+        std::vector<CanvasRoofOpeningControls> controls;
     };
     struct PendingRoofOpeningCanvasPreview {
         std::shared_ptr<const RoofOpeningCanvasCapture> capture;
@@ -6120,6 +6127,8 @@ class MainWindow::Impl {
         RoofOpeningEditIntent intent;
         std::optional<CanvasRoofOpeningEdit> gesture;
         std::shared_ptr<RoofOpeningCanvasResult> result;
+        std::optional<CanvasRoofOpeningGroupEdit> group_gesture;
+        Vec2 group_placement_anchor;
     };
     struct VisibleOpeningHost {
         Entity owner;
@@ -33840,6 +33849,21 @@ public:
                 return beginCornerWindowClone(std::move(transfer), std::move(catalogs));
             }
             if (payload.is_object() && payload.value("format", "") == kRoofOpeningClipboardFormat) {
+                if (payload.value("version",0)==2) {
+                    if (payload.size()!=3 || !payload.contains("members") || !payload.at("members").is_array() ||
+                        payload.at("members").size()<2 || payload.at("members").size()>kMaximumClipboardEntities)
+                        throw std::invalid_argument("Clipboard skylight group has an unsupported contract.");
+                    std::vector<RoofOpeningCloneSource> clones;
+                    for (const auto& member:payload.at("members")) {
+                        if (!member.is_object() || member.size()!=2 || !member.contains("roof") ||
+                            !member.contains("opening_id") || !member.at("opening_id").is_string())
+                            throw std::invalid_argument("Clipboard skylight group member is invalid.");
+                        auto roof=clipboard_entity_from_json(member.at("roof"),true);
+                        if (roof.type!="roof") throw std::invalid_argument("Clipboard skylight owner must be a roof.");
+                        clones.push_back({std::move(roof),member.at("opening_id").get<std::string>()});
+                    }
+                    return beginRoofOpeningGroupClone(std::move(clones));
+                }
                 if (payload.size()!=4 || payload.value("version",0)!=1 ||
                     !payload.contains("roof") || !payload.contains("opening_id") ||
                     !payload.at("opening_id").is_string())
@@ -42638,6 +42662,7 @@ public:
         m_pending_roof_opening_clone.reset();
         m_pending_roof_opening_clone_row.reset();
         m_pending_roof_opening_clone_digest.clear();
+        m_pending_roof_opening_group_clones.clear();
         m_plan_opening_source.reset();
         m_plan_opening_authority.reset();
         m_plan_opening_frame.reset();
@@ -42743,6 +42768,7 @@ public:
         m_pending_roof_opening_clone.reset();
         m_pending_roof_opening_clone_row.reset();
         m_pending_roof_opening_clone_digest.clear();
+        m_pending_roof_opening_group_clones.clear();
         for (auto* field : {m_skylight_draw_frame,m_skylight_draw_curb,m_skylight_draw_glazing})
             field->setEnabled(true);
         const bool skylight = catalog_opening_kind(definition) == QStringLiteral("skylight");
@@ -53325,6 +53351,17 @@ private:
             return commitRoofOpeningGesture(canvas,edit,serial);
         });
         canvas->setRoofOpeningEditCanceled([this] { cancelRoofOpeningCanvasPreview(); });
+        canvas->setRoofOpeningGroupEditStarted([this,canvas](std::vector<CanvasRoofOpeningTarget> targets) {
+            try { captureRoofOpeningGroupGesture(canvas,std::move(targets)); }
+            catch (const std::exception& error) { cancelRoofOpeningCanvasPreview(); setError(QString::fromUtf8(error.what())); }
+        });
+        canvas->setRoofOpeningGroupPreviewRequested([this,canvas](CanvasRoofOpeningGroupEdit edit,std::uint64_t serial) {
+            return previewRoofOpeningGroupGesture(canvas,std::move(edit),serial);
+        });
+        canvas->setRoofOpeningGroupEditRequested([this,canvas](CanvasRoofOpeningGroupEdit edit,std::uint64_t serial) {
+            return commitRoofOpeningGroupGesture(canvas,edit,serial);
+        });
+        canvas->setRoofOpeningGroupEditCanceled([this] { cancelRoofOpeningCanvasPreview(); });
         const auto overlap_selection=[this,canvas](bool starting,QStringList ids,
             std::vector<CanvasRoofOpeningTarget> children) {
             try {
@@ -62442,7 +62479,9 @@ private:
                 if (m_pending_opening_kind!=QStringLiteral("skylight") || capture->configuration!=openingPlacementConfiguration() ||
                     capture->station_increment!=capture->canvas->placementLengthIncrementMetres()) return false;
             } else {
-                if (m_selected_roof_opening!=std::optional{capture->target} || m_selected_ids.size()!=1 || m_selected_id!=capture->target.roof_id) return false;
+                if (capture->group) {
+                    if (m_selected_roof_openings!=capture->targets) return false;
+                } else if (m_selected_roof_opening!=std::optional{capture->target} || m_selected_ids.size()!=1 || m_selected_id!=capture->target.roof_id) return false;
                 if (fullSnapshotDigest(*captureCanvasGeometrySource(capture->canvas))!=fullSnapshotDigest(*capture->source)) return false;
             }
             const auto& viewport=capture->viewport;
@@ -62457,10 +62496,101 @@ private:
         if (!roofOpeningCaptureCurrent(request.capture) || !request.result) return false;
         const auto* canvas=request.capture->canvas.data();
         return request.capture->placement ? canvas->componentPlacementPreviewPending() && canvas->componentPlacementPreviewSerial()==request.serial
+            : request.capture->group ? canvas->roofOpeningGroupPreviewPending() && canvas->roofOpeningGroupPreviewSerial()==request.serial
             : canvas->roofOpeningPreviewPending() && canvas->roofOpeningPreviewSerial()==request.serial;
     }
 
+    void startRoofOpeningGroupCanvasPreview(PendingRoofOpeningCanvasPreview request) {
+        m_roof_opening_preview_sequence=m_roof_opening_preview_queue.enqueue(
+            [request](const RegenerationCancellationToken& cancellation) {
+                const auto& capture=*request.capture;
+                if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
+                std::vector<RoofEditIntent> edits;
+                if (capture.placement) {
+                    RoofOpeningGroupClonePlacement placement{capture.clones,capture.target.roof_id.toStdString(),request.group_placement_anchor};
+                    edits.push_back(prepare_roof_opening_group_clone_placement(capture.source->entities(),placement));
+                } else {
+                    if (!request.group_gesture) throw std::invalid_argument("The skylight group gesture is missing.");
+                    const auto& gesture=*request.group_gesture;
+                    RoofOpeningGroupTransform transform;
+                    for (const auto& target:capture.targets) transform.members.push_back({target.roof_id.toStdString(),target.opening_id.toStdString()});
+                    transform.world_pivot=capture.view ? unproject_plan_point(gesture.pivot,capture.view->frame) : gesture.pivot;
+                    transform.world_translation=gesture.translation;
+                    transform.rotation_radians=gesture.rotation_radians;
+                    if (capture.view) {
+                        const auto right=plan_view_right(capture.view->frame),up=plan_view_up(capture.view->frame);
+                        transform.world_translation={gesture.translation.x*right.x+gesture.translation.y*up.x,
+                            gesture.translation.x*right.y+gesture.translation.y*up.y};
+                        const auto determinant=right.x*up.y-right.y*up.x;
+                        if (!std::isfinite(determinant) || std::abs(determinant)<1e-9)
+                            throw std::invalid_argument("Skylight group rotation needs a horizontal plan basis.");
+                        transform.rotation_radians=gesture.rotation_radians*std::copysign(1.0,determinant);
+                    }
+                    transform.uniform_scale=gesture.uniform_scale;
+                    edits=prepare_roof_opening_group_transform(capture.source->entities(),transform);
+                }
+                const auto physical=edits.empty() ? capture.source->entities() : replay_roof_edit_entities(capture.source->entities(),edits);
+                auto actual=physical;
+                auto targets=capture.targets;
+                request.result->no_op=physical==capture.source->entities();
+                if (!request.result->no_op) {
+                    const auto command=sourceDerivedRoofMathEditCommand(*capture.source,physical,edits,
+                        capture.placement ? "Paste skylights" : "Transform skylights");
+                    request.result->prepared=std::make_shared<PreparedCanvasEdit>();
+                    const auto candidate=prepareCanvasEdit(*capture.source,command,capture.edit_source,*request.result->prepared);
+                    actual=candidate.entities();
+                    for (auto& target:targets) {
+                        target.roof_id=id_from(alternativeReplacementTargetID(command,target.roof_id.toStdString()));
+                        target.opening_id=id_from(alternativeReplacementTargetID(command,target.opening_id.toStdString()));
+                    }
+                }
+                Boundary boundary;
+                std::vector<CanvasRoofOpeningControls> controls;
+                for (std::size_t index=0;index<targets.size();++index) {
+                    if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
+                    const auto& target=targets[index];
+                    const auto roof=decode_roof_entity(resolve_vertical_placement(actual,actual.at(target.roof_id.toStdString())));
+                    const auto frame=roofOpeningCanvasFrame(roof,target.opening_id.toStdString(),capture.view);
+                    if (capture.view && capture.view->crop) {
+                        const auto& crop=*capture.view->crop;
+                        std::visit([&](const auto& object) {
+                            const auto child=std::find_if(object.openings.begin(),object.openings.end(),[&](const auto& opening) {
+                                return opening.id==target.opening_id.toStdString();
+                            });
+                            if (child==object.openings.end()) throw std::invalid_argument("The skylight mouth is missing.");
+                            const auto mouth=roof_opening_plan_frame(object,*child);
+                            const auto c=std::cos(object.orientation_radians),s=std::sin(object.orientation_radians);
+                            for (const auto signs:{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}}) {
+                                const Vec2 local{mouth.center.x+mouth.along.x*signs.x*child->width*.5+mouth.across.x*signs.y*child->depth*.5,
+                                    mouth.center.y+mouth.along.y*signs.x*child->width*.5+mouth.across.y*signs.y*child->depth*.5};
+                                const auto point=project_plan_point({object.base_position.x+c*local.x-s*local.y,
+                                    object.base_position.y+s*local.x+c*local.y},capture.view->frame);
+                                if (point.x<crop.min_horizontal_m || point.x>crop.max_horizontal_m ||
+                                    point.y<crop.min_vertical_m || point.y>crop.max_vertical_m)
+                                    throw std::invalid_argument("The complete skylight group must stay inside this plan's crop.");
+                            }
+                        },roof);
+                    }
+                    const auto shape=make_roof_skylight_shape(roof,target.opening_id.toStdString());
+                    auto path=capture.view ? project_architectural_view_shape(shape,BuildingViewKind::plan,*capture.view).value_or(Boundary{})
+                        : project_building_shape_plan(shape);
+                    if (path.empty()) throw std::invalid_argument("A skylight is outside this plan's visible crop or depth.");
+                    boundary.insert(boundary.end(),path.begin(),path.end());
+                    if (!capture.placement) controls.push_back({capture.targets[index],frame,capture.initial_controls[index].presentation_owner_id});
+                }
+                if (!cancellation.is_cancelled()) {
+                    request.result->boundary=std::move(boundary);
+                    request.result->targets=std::move(targets);
+                    request.result->controls=std::move(controls);
+                }
+                return RegenerationReceipt{capture.source->revision(),{}};
+            });
+        m_running_roof_opening_preview=std::move(request);
+        m_roof_opening_preview_timer->start();
+    }
+
     void startRoofOpeningCanvasPreview(PendingRoofOpeningCanvasPreview request) {
+        if (request.capture->group) { startRoofOpeningGroupCanvasPreview(std::move(request)); return; }
         m_roof_opening_preview_sequence=m_roof_opening_preview_queue.enqueue(
             [request](const RegenerationCancellationToken& cancellation) {
                 const auto& capture=*request.capture;
@@ -62515,7 +62645,8 @@ private:
             auto request=std::move(*m_running_roof_opening_preview); m_running_roof_opening_preview.reset();
             if (!roofOpeningRequestCurrent(request)) continue;
             const bool admitted=completion.succeeded() && completion.receipt->source_revision==request.capture->source->revision() &&
-                !request.result->boundary.empty() && (request.capture->placement || request.result->frame.has_value());
+                !request.result->boundary.empty() && (request.capture->placement ||
+                    (request.capture->group ? request.result->controls.size()==request.capture->targets.size() : request.result->frame.has_value()));
             QString message;
             if (!admitted) {
                 message=QStringLiteral("The skylight does not fit here.");
@@ -62528,10 +62659,17 @@ private:
             if (request.capture->placement) {
                 std::optional<CanvasEntity> ink;
                 if (admitted) { CanvasEntity item; item.id=QStringLiteral("skylight-placement-preview"); item.type=QStringLiteral("roof_skylight"); item.segments=request.result->boundary; ink=std::move(item); }
+                if (admitted && request.capture->group) m_ready_roof_opening_preview=request;
                 if (canvas->completeComponentPlacementPreview(request.serial,std::move(ink))) {
                     BoundaryDraftPreview draft; draft.instruction=admitted ? QStringLiteral("Click to place skylight") : message;
                     canvas->setBoundaryDraftPreview(draft); m_architecture_hint->setText(draft.instruction);
-                }
+                } else if (request.capture->group) m_ready_roof_opening_preview.reset();
+            } else if (request.capture->group) {
+                if (admitted && request.group_gesture) m_ready_roof_opening_preview=request;
+                if (!canvas->completeRoofOpeningGroupPreview(request.serial,
+                    admitted ? request.result->controls : std::vector<CanvasRoofOpeningControls>{},
+                    admitted ? request.result->boundary : Boundary{},admitted)) m_ready_roof_opening_preview.reset();
+                if (!admitted) setError(message);
             } else {
                 // Publish the ready command before completing the canvas serial:
                 // completion can finish a release waiting for this exact result.
@@ -62550,6 +62688,71 @@ private:
             if (roofOpeningRequestCurrent(request)) startRoofOpeningCanvasPreview(std::move(request));
         }
         if (!m_running_roof_opening_preview && !m_pending_roof_opening_preview) m_roof_opening_preview_timer->stop();
+    }
+
+    void captureRoofOpeningGroupGesture(PlanCanvas* canvas,std::vector<CanvasRoofOpeningTarget> targets) {
+        cancelRoofOpeningCanvasPreview();
+        if (targets.size()<2 || targets!=m_selected_roof_openings)
+            throw std::invalid_argument("Select the skylight group before dragging it.");
+        const auto source=captureCanvasGeometrySource(canvas,targets.front().source_revision);
+        RoofOpeningCanvasCapture capture;
+        capture.canvas=canvas; capture.source=source; capture.targets=targets; capture.group=true;
+        capture.view=boundaryVertexViewContext(canvas,*source);
+        if (capture.view && !std::isinf(capture.view->depth.far_depth_m))
+            throw std::invalid_argument("Use an uncut horizontal plan for skylight group grips.");
+        for (const auto& target:targets) {
+            (void)roofCanvasChild(*source,target);
+            const auto& controls=canvas->roofOpeningControls();
+            const auto found=std::find_if(controls.begin(),controls.end(),[&](const auto& item) { return item.target==target; });
+            if (found==controls.end()) throw std::invalid_argument("Every selected skylight needs its complete visible mouth for group grips.");
+            capture.initial_controls.push_back(*found);
+        }
+        capture.authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
+        capture.edit_source=captureCanvasEditSource();
+        capture.viewport={canvas,canvas->viewCenter(),canvas->viewScale(),canvas->size(),canvas->devicePixelRatioF(),canvas->navigationGeneration(),canvas->hasFocus()};
+        m_roof_opening_capture=std::make_shared<RoofOpeningCanvasCapture>(std::move(capture));
+    }
+
+    std::optional<Boundary> previewRoofOpeningGroupGesture(PlanCanvas* canvas,CanvasRoofOpeningGroupEdit gesture,std::uint64_t serial) {
+        try {
+            const auto capture=m_roof_opening_capture;
+            if (!roofOpeningCaptureCurrent(capture) || !capture->group || capture->placement || capture->canvas!=canvas || gesture.targets!=capture->targets)
+                throw std::invalid_argument("The skylight group source changed. Start the drag again.");
+            if (!std::isfinite(gesture.pivot.x) || !std::isfinite(gesture.pivot.y) ||
+                !std::isfinite(gesture.translation.x) || !std::isfinite(gesture.translation.y) ||
+                !std::isfinite(gesture.rotation_radians) || std::abs(gesture.rotation_radians)>std::numbers::pi ||
+                !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0)
+                throw std::invalid_argument("The skylight group transform needs finite geometry and a positive scale.");
+            if (!canvas->markRoofOpeningGroupPreviewPending(serial)) return std::nullopt;
+            PendingRoofOpeningCanvasPreview request;
+            request.capture=capture; request.serial=serial; request.group_gesture=std::move(gesture);
+            request.result=std::make_shared<RoofOpeningCanvasResult>();
+            queueRoofOpeningCanvasPreview(std::move(request));
+            return std::nullopt;
+        } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return std::nullopt; }
+    }
+
+    bool commitRoofOpeningGroupGesture(PlanCanvas* canvas,const CanvasRoofOpeningGroupEdit& gesture,std::uint64_t serial) {
+        try {
+            const auto ready=m_ready_roof_opening_preview;
+            if (!ready || !ready->group_gesture || !ready->capture->group || ready->capture->placement ||
+                ready->serial!=serial || ready->capture->canvas!=canvas || !roofOpeningCaptureCurrent(ready->capture))
+                throw std::invalid_argument("The exact skylight group preview changed. Start the drag again.");
+            const auto& admitted=*ready->group_gesture;
+            if (gesture.targets!=admitted.targets || gesture.pivot.x!=admitted.pivot.x || gesture.pivot.y!=admitted.pivot.y ||
+                gesture.translation.x!=admitted.translation.x || gesture.translation.y!=admitted.translation.y ||
+                gesture.rotation_radians!=admitted.rotation_radians || gesture.uniform_scale!=admitted.uniform_scale)
+                throw std::invalid_argument("The skylight group release differs from its admitted preview.");
+            if (!ready->result->no_op) publishPreparedCanvasEdit(ready->result->prepared,ready->capture->edit_source);
+            auto targets=ready->result->targets;
+            for (auto& target:targets) target.source_revision=authoringSnapshot().revision();
+            cancelRoofOpeningCanvasPreview();
+            m_selected_ids.clear();
+            for (const auto& target:targets) if (!m_selected_ids.contains(target.roof_id)) m_selected_ids.push_back(target.roof_id);
+            m_selected_id=targets.empty() ? QString{} : targets.back().roof_id;
+            setRoofOpeningSelectionState(std::move(targets),false);
+            clearError(); refresh(); return true;
+        } catch (const std::exception& error) { cancelRoofOpeningCanvasPreview(); setError(QString::fromUtf8(error.what())); return false; }
     }
 
     void captureRoofOpeningGesture(PlanCanvas* canvas, CanvasRoofOpeningTarget target) {
@@ -62713,25 +62916,31 @@ private:
 
     bool copyRoofOpeningSelection(bool cut) {
         try {
-            if (m_selected_roof_openings.size()>1)
-                throw std::invalid_argument("Grouped skylight Copy/Cut and placement are not yet available. Select one skylight to copy it.");
-            if (!m_selected_roof_opening) return false;
-            const auto target=*m_selected_roof_opening;
-            const auto source=selectedRoofOpeningSource(cut);
+            if (m_selected_roof_openings.empty()) return false;
+            const auto targets=m_selected_roof_openings;
+            const auto source=selectedRoofOpeningCohortSource(cut);
             const auto authority=captureSourceEditAuthority(*source);
-            (void)roofCanvasChild(*source,target);
-            const RoofOpeningCloneSource clone{source->entities().at(target.roof_id.toStdString()),target.opening_id.toStdString()};
-            (void)validatedRoofOpeningCloneRow(clone);
-            const auto payload=json{{"format",std::string(kRoofOpeningClipboardFormat)},{"version",1},
-                {"roof",clipboard_entity_json(clone.roof)},{"opening_id",clone.opening_id}}.dump();
+            json members=json::array();
+            for (const auto& target:targets) {
+                (void)roofCanvasChild(*source,target);
+                const RoofOpeningCloneSource clone{source->entities().at(target.roof_id.toStdString()),target.opening_id.toStdString()};
+                (void)validatedRoofOpeningCloneRow(clone);
+                members.push_back(json{{"roof",clipboard_entity_json(clone.roof)},{"opening_id",clone.opening_id}});
+            }
+            if (members.size()>kMaximumClipboardEntities)
+                throw std::invalid_argument("The skylight group exceeds the clipboard member limit.");
+            const auto payload=targets.size()==1 ?
+                json{{"format",std::string(kRoofOpeningClipboardFormat)},{"version",1},
+                    {"roof",members.front().at("roof")},{"opening_id",members.front().at("opening_id")}}.dump() :
+                json{{"format",std::string(kRoofOpeningClipboardFormat)},{"version",2},{"members",std::move(members)}}.dump();
             if (payload.size()>kMaximumClipboardBytes)
                 throw std::invalid_argument("The skylight clipboard payload exceeds the local size limit.");
             auto* clipboard=QGuiApplication::clipboard();
             if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
-            if (!sourceEditAuthorityCurrent(authority,cut) || m_selected_roof_opening!=std::optional{target})
+            if (!sourceEditAuthorityCurrent(authority,cut) || m_selected_roof_openings!=targets)
                 throw std::invalid_argument("The skylight source or selection changed. Select it again.");
             if (m_roof_opening_native_selection &&
-                fullSnapshotDigest(*selectedRoofOpeningSource(cut))!=fullSnapshotDigest(*source))
+                fullSnapshotDigest(*selectedRoofOpeningCohortSource(cut))!=fullSnapshotDigest(*source))
                 throw std::invalid_argument("The displayed skylight changed. Select it again.");
             if (cut && !deleteRoofOpeningSelection()) return false;
             clipboard->setText(QString::fromUtf8(payload.data(),static_cast<int>(payload.size())),QClipboard::Clipboard);
@@ -62773,6 +62982,43 @@ private:
             auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
             canvas->setFocus(); clearError(); return true;
         } catch (const std::exception& error) { setError(QStringLiteral("Paste skylight: %1").arg(QString::fromUtf8(error.what()))); return false; }
+    }
+
+    bool beginRoofOpeningGroupClone(std::vector<RoofOpeningCloneSource> sources) {
+        try {
+            if (sources.size()<2 || sources.size()>kMaximumClipboardEntities)
+                throw std::invalid_argument("Choose a bounded group of at least two skylights.");
+            std::set<std::pair<std::string,std::string>> identities;
+            std::map<std::string,Entity,std::less<>> owners;
+            std::vector<RoofOpeningGroupClone> clones;
+            json members=json::array();
+            auto occupied=retainedSlabIdentityNames(authoringSnapshot(),true);
+            for (const auto& source:sources) {
+                occupied.insert(source.roof.id);
+                if (source.roof.properties.contains("roof_openings"))
+                    for (const auto& row:source.roof.properties.at("roof_openings"))
+                        if (row.is_object() && row.contains("id") && row.at("id").is_string()) occupied.insert(row.at("id").get<std::string>());
+            }
+            for (const auto& source:sources) {
+                (void)validatedRoofOpeningCloneRow(source);
+                if (!identities.insert({source.roof.id,source.opening_id}).second)
+                    throw std::invalid_argument("The copied skylight group repeats a child.");
+                if (const auto previous=owners.find(source.roof.id);previous!=owners.end() && previous->second!=source.roof)
+                    throw std::invalid_argument("The copied group contains conflicting roof sources.");
+                owners.insert_or_assign(source.roof.id,source.roof);
+                auto fresh=new_id("skylight");
+                while (!occupied.insert(fresh).second) fresh=new_id("skylight");
+                clones.push_back({source,std::move(fresh)});
+                members.push_back(json{{"roof",clipboard_entity_json(source.roof)},{"opening_id",source.opening_id}});
+            }
+            (void)roof_opening_group_clone_anchor_world(clones);
+            if (!beginRoofOpeningClone(sources.front())) return false;
+            m_pending_roof_opening_group_clones=std::move(clones);
+            m_pending_roof_opening_clone_digest=digest_text(members.dump());
+            for (auto* field:{m_opening_draw_width,m_opening_draw_height}) field->setReadOnly(true);
+            m_architecture_hint->setText(QStringLiteral("Click a roof face to place %1 skylights. Right-click or Esc cancels.").arg(sources.size()));
+            resetOpeningPlacementHover(); clearError(); return true;
+        } catch (const std::exception& error) { setError(QStringLiteral("Paste skylights: %1").arg(QString::fromUtf8(error.what()))); return false; }
     }
 
     bool applyRoofOpeningCanvasIntent(const std::shared_ptr<const DocumentSnapshot>& source,
@@ -62955,18 +63201,12 @@ private:
             QMenu menu(owner);
             auto* heading=menu.addAction(group ? QStringLiteral("%1 skylights").arg(captured.size()) : QStringLiteral("Skylight")); heading->setEnabled(false);
             auto* properties=menu.addAction(QStringLiteral("Properties…"));
-            auto* copy=menu.addAction(QStringLiteral("Copy skylight"));
-            auto* cut=menu.addAction(QStringLiteral("Cut skylight"));
-            auto* duplicate=menu.addAction(QStringLiteral("Duplicate skylight…"));
+            auto* copy=menu.addAction(group ? QStringLiteral("Copy skylights") : QStringLiteral("Copy skylight"));
+            auto* cut=menu.addAction(group ? QStringLiteral("Cut skylights") : QStringLiteral("Cut skylight"));
+            auto* duplicate=menu.addAction(group ? QStringLiteral("Duplicate skylights…") : QStringLiteral("Duplicate skylight…"));
             auto* remove=menu.addAction(group ? QStringLiteral("Delete skylights") : QStringLiteral("Delete skylight"));
             auto* roof=menu.addAction(group ? QStringLiteral("Select roofs") : QStringLiteral("Select roof"));
             for (auto* action:{properties,cut,duplicate,remove}) action->setEnabled(source->is_editable());
-            if (group) {
-                for (auto* action:{copy,cut,duplicate}) {
-                    action->setEnabled(false);
-                    action->setToolTip(QStringLiteral("Grouped clipboard placement is not yet available."));
-                }
-            }
             const auto action=menu.exec(global_position);
             if (!sourceEditAuthorityCurrent(authority,false) || m_selected_roof_openings!=captured) {
                 setError(QStringLiteral("The skylight source or selection changed. Reopen its menu.")); return;
@@ -62979,8 +63219,12 @@ private:
             if (action==properties) showRoofOpeningQuickProperties();
             else if (action==copy) (void)copyRoofOpeningSelection(false);
             else if (action==cut) (void)copyRoofOpeningSelection(true);
-            else if (action==duplicate && !group) (void)beginRoofOpeningClone({source->entities().at(captured.front().roof_id.toStdString()),
-                captured.front().opening_id.toStdString()});
+            else if (action==duplicate) {
+                std::vector<RoofOpeningCloneSource> clones;
+                for (const auto& target:captured) clones.push_back({source->entities().at(target.roof_id.toStdString()),target.opening_id.toStdString()});
+                if (group) (void)beginRoofOpeningGroupClone(std::move(clones));
+                else (void)beginRoofOpeningClone(std::move(clones.front()));
+            }
             else if (action==remove) (void)deleteRoofOpeningSelection();
             else if (action==roof) {
                 QStringList ids;
@@ -63074,7 +63318,111 @@ private:
         } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); }
     }
 
+    void updateSkylightGroupPlacement(Vec2 displayed_point,bool commit) {
+        auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        BoundaryDraftPreview preview;
+        try {
+            requirePlanOpeningPlacementCurrent();
+            if (m_pending_roof_opening_group_clones.size()<2)
+                throw std::invalid_argument("The copied skylight group changed. Paste again.");
+            const auto source=m_plan_opening_source;
+            const auto context=requireDrawingContext(*source);
+            if (!context || !context->complete()) throw std::invalid_argument("Choose a complete drawing layer.");
+            const auto view=boundaryVertexViewContext(canvas,*source);
+            if (view && !std::isinf(view->depth.far_depth_m))
+                throw std::invalid_argument("Use an uncut horizontal plan to place the skylight group.");
+            auto model=m_plan_opening_frame ? unproject_plan_point(displayed_point,*m_plan_opening_frame) : displayed_point;
+            std::optional<Entity> host;
+            Vec2 anchor;
+            std::set<std::string> seen;
+            for (const auto& visible:canvas->entities()) {
+                if ((visible.type!=QStringLiteral("roof") && visible.type!=QStringLiteral("roof_join")) ||
+                    !visible.presentation_key.isEmpty() || visible.segments.empty()) continue;
+                const auto extent=boundary_bounds(visible.segments);
+                if (displayed_point.x<extent.minimum.x || displayed_point.x>extent.maximum.x ||
+                    displayed_point.y<extent.minimum.y || displayed_point.y>extent.maximum.y) continue;
+                std::vector<std::string> owners{visible.id.toStdString()};
+                if (visible.type==QStringLiteral("roof_join"))
+                    owners=parse_roof_join(source->entities().at(visible.id.toStdString()).properties,visible.id.toStdString()).roof_ids;
+                for (const auto& id:owners) {
+                    if (!seen.insert(id).second) continue;
+                    const auto found=source->entities().find(id);
+                    if (found==source->entities().end() || found->second.type!="roof" ||
+                        read_string(found->second.properties,"layer_id")!=std::optional{context->layer_id} ||
+                        read_string(found->second.properties,"floor_id")!=std::optional{context->floor_id}) continue;
+                    const auto& p=found->second.properties;
+                    const auto yaw=p.at("orientation_rad").get<double>();
+                    const auto& base=p.at("base_position_m");
+                    const auto dx=model.x-base.at(0).get<double>(),dy=model.y-base.at(1).get<double>();
+                    Vec2 local{dx*std::cos(yaw)+dy*std::sin(yaw),-dx*std::sin(yaw)+dy*std::cos(yaw)};
+                    const auto step=canvas->placementLengthIncrementMetres();
+                    if (std::isfinite(step) && step>0.0) {
+                        local.x=std::round(local.x/step)*step; local.y=std::round(local.y/step)*step;
+                    }
+                    try {
+                        const auto roof=decode_roof_entity(found->second);
+                        (void)std::visit([&](const auto& object) { return roof_opening_reference_surface_scales(object,local); },roof);
+                    } catch (const std::exception&) { continue; }
+                    if (host) throw std::invalid_argument("More than one roof is under this point. Hide the other roof before placing.");
+                    host=found->second;
+                    anchor={base.at(0).get<double>()+local.x*std::cos(yaw)-local.y*std::sin(yaw),
+                        base.at(1).get<double>()+local.x*std::sin(yaw)+local.y*std::cos(yaw)};
+                }
+            }
+            if (!host) throw std::invalid_argument("Choose a visible roof face on the active layer for the skylight group.");
+            const auto matching=[&](const PendingRoofOpeningCanvasPreview& request,bool pending) {
+                return request.capture && request.capture->group && request.capture->placement &&
+                    request.capture->target.roof_id==id_from(host->id) && roofOpeningCaptureCurrent(request.capture) &&
+                    request.serial==canvas->componentPlacementPreviewSerial() &&
+                    canvas->componentPlacementPreviewPending()==pending &&
+                    request.group_placement_anchor.x==anchor.x && request.group_placement_anchor.y==anchor.y;
+            };
+            if (commit) {
+                const auto ready=m_ready_roof_opening_preview;
+                if (!ready || !matching(*ready,false) || !ready->result || !ready->result->prepared ||
+                    ready->serial!=canvas->componentPlacementPreviewSerial())
+                    throw std::invalid_argument("Wait for the complete skylight group preview at this point, then click to place it.");
+                publishPreparedCanvasEdit(ready->result->prepared,ready->capture->edit_source);
+                auto targets=ready->result->targets;
+                for (auto& target:targets) target.source_revision=authoringSnapshot().revision();
+                setTool(CanvasTool::select);
+                m_selected_ids.clear();
+                for (const auto& target:targets) if (!m_selected_ids.contains(target.roof_id)) m_selected_ids.push_back(target.roof_id);
+                m_selected_id=targets.empty() ? QString{} : targets.back().roof_id;
+                setRoofOpeningSelectionState(std::move(targets),false);
+                clearError(); refresh(); return;
+            }
+            if (m_ready_roof_opening_preview && matching(*m_ready_roof_opening_preview,false)) return;
+            if (m_running_roof_opening_preview && matching(*m_running_roof_opening_preview,true)) return;
+            if (m_pending_roof_opening_preview && matching(*m_pending_roof_opening_preview,true)) return;
+            cancelRoofOpeningCanvasPreview();
+            RoofOpeningCanvasCapture capture;
+            capture.canvas=canvas; capture.source=source; capture.authority=m_plan_opening_authority;
+            capture.edit_source=captureCanvasEditSource(); capture.view=view;
+            capture.target={id_from(host->id),{},source->revision()}; capture.group=true; capture.placement=true;
+            capture.clones=m_pending_roof_opening_group_clones;
+            for (const auto& clone:capture.clones) capture.targets.push_back({id_from(host->id),id_from(clone.opening_id),source->revision()});
+            capture.configuration=openingPlacementConfiguration(); capture.station_increment=canvas->placementLengthIncrementMetres();
+            capture.viewport={canvas,canvas->viewCenter(),canvas->viewScale(),canvas->size(),canvas->devicePixelRatioF(),canvas->navigationGeneration(),canvas->hasFocus()};
+            m_roof_opening_capture=std::make_shared<RoofOpeningCanvasCapture>(std::move(capture));
+            PendingRoofOpeningCanvasPreview request;
+            request.capture=m_roof_opening_capture; request.serial=canvas->beginComponentPlacementPreview();
+            request.group_placement_anchor=anchor; request.result=std::make_shared<RoofOpeningCanvasResult>();
+            queueRoofOpeningCanvasPreview(std::move(request));
+            preview.instruction=QStringLiteral("Checking roof fit for %1 skylights").arg(m_pending_roof_opening_group_clones.size());
+        } catch (const std::exception& error) {
+            preview.instruction=QString::fromUtf8(error.what());
+            // A click before admission keeps the live proposal; the next click
+            // can place its exact completion. Invalid hover retires prior ink.
+            if (commit) setError(preview.instruction);
+            else { cancelRoofOpeningCanvasPreview(); canvas->clearComponentPlacementPreview(); }
+        }
+        m_architecture_hint->setText(preview.instruction);
+        canvas->setBoundaryDraftPreview(std::move(preview));
+    }
+
     void updateSkylightPlacement(Vec2 displayed_point, bool commit) {
+        if (!m_pending_roof_opening_group_clones.empty()) { updateSkylightGroupPlacement(displayed_point,commit); return; }
         BoundaryDraftPreview preview;
         try {
             requirePlanOpeningPlacementCurrent();
@@ -68598,6 +68946,7 @@ private:
     bool m_roof_opening_native_selection{};
     bool m_native_selection_sync_deferred{};
     std::optional<RoofOpeningCloneSource> m_pending_roof_opening_clone;
+    std::vector<RoofOpeningGroupClone> m_pending_roof_opening_group_clones;
     std::optional<CornerWindowTransfer> m_pending_corner_window_clone;
     std::vector<Entity> m_pending_corner_window_catalogs;
     std::optional<json> m_pending_roof_opening_clone_row;

@@ -178,10 +178,15 @@ polling timeout does not permit restarting it.
    context, atomic multi-roof deletion and common on-face dimensions/rotation/
    construction edits. Source-bound batch commands retain baseline/proposed
    replacement, child remapping and one undo. Joined presentation provenance
-   distinguishes child-only hits from independent owner boundaries. Mixed
-   owner/child selection, grouped clipboard/paste, shared direct group transforms
-   and direct 3D child movement/rotation/scale controls remain implementation
-   gaps. Properties, plan grips and safe refusals do not complete those workflows.
+   distinguishes child-only hits from independent owner boundaries. Qualify the
+   subsequent actual-source group movement/common-pivot rotation/uniform corner
+   scale and complete manufactured plan preview/release protocol. Qualify group
+   clipboard version two, Copy/Cut/Duplicate and exact-preview roof-face Paste,
+   retaining passive sources, physical facet sizes/angles, fresh history-safe
+   identities and atomic baseline/proposed replacement. Mixed owner/child
+   selection, nonuniform group scaling and direct 3D child movement/rotation/scale
+   controls remain implementation gaps. Plan grips, Properties and safe refusals
+   do not complete those workflows.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

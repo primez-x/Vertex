@@ -295,6 +295,30 @@ v1/v2, composite v1-v7 and authoring v1-v16 retain their codecs. Storage keeps
 the v161 payload tables. Compilation, runtime, history/migration and output
 qualification remain outstanding under source-only implementation.
 
+Clipboard version 2 carries a skylight cohort with exactly `format`, `version`,
+and `members`. `members` is a bounded array with at least two rows, each exactly
+`roof` (the same passive five-field entity envelope) and `opening_id`. Duplicate
+source children and conflicting envelopes for the same roof refuse. Copy/Cut
+never import those roof envelopes as active entities. Fresh destination IDs are
+reserved against current and retained/undone history; transfer replay additionally
+checks every passive source roster and the complete batch. Version 1 remains the
+single-child contract. This transient exchange form does not change the native
+document reader floor.
+
+Group placement maps the source reference-centre centroid to the clicked roof
+anchor, retaining relative world XY centre offsets. Each destination facet
+supplies the reference scales needed to preserve physical on-face width/depth;
+each source physical facet angle and construction profile are retained. Group
+transforms keep each actual roof host, transform reference centres about a common
+world XY pivot, add the common physical facet angle and uniformly scale on-face
+width/depth. Construction profile dimensions remain unchanged, as in individual
+width/depth resizing. Native admission validates the complete final roster.
+One source-derived command owns the full edit or placement, including alternative
+replacement/remapping and history. Manufactured previews carry complete actual
+child controls; neither a bounding rectangle nor a pending worker result grants
+commit authority. Nonuniform group scaling and direct 3D child grips are separate
+unfinished workflows. Compilation/runtime qualification remains outstanding.
+
 ## Roof-hosted fixed skylights (v168, source integration)
 
 Native reader 168 and JSON/assets extraction 166 carry roof schema 3. Its

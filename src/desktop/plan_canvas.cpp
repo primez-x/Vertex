@@ -841,7 +841,7 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
     if (m_touch_active || m_gesture_button != Qt::NoButton ||
-        m_opening_width_handle || m_roof_opening_capture || m_vertex_move_handle || m_move_release_pending ||
+        m_opening_width_handle || m_roof_opening_capture || !m_roof_opening_group_capture.empty() || m_vertex_move_handle || m_move_release_pending ||
         m_transform_frame_start) resetGesture();
     else {
         ++m_opening_width_preview_serial;
@@ -852,6 +852,7 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     }
     resetTouchInput();
     m_roof_opening_controls.clear();
+    ++m_roof_opening_controls_generation;
     // Logical children survive projection changes. Only newly published,
     // exactly revision-matching controls can capture an edit afterward.
     m_entities = std::move(entities);
@@ -994,7 +995,7 @@ void PlanCanvas::setSelectionFilter(CanvasSelectionFilter filter) {
     if (m_gesture_button == Qt::RightButton || m_left_gesture == LeftGesture::marquee ||
         m_left_gesture == LeftGesture::canvas_pan || m_left_gesture == LeftGesture::object_move ||
         m_left_gesture == LeftGesture::generated_label_move ||
-        m_transform_frame_start || m_roof_opening_capture) {
+        m_transform_frame_start || m_roof_opening_capture || !m_roof_opening_group_capture.empty()) {
         resetGesture();
         resetTouchInput();
     }
@@ -1024,7 +1025,7 @@ void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
     };
     const bool cancel_gesture = (m_gesture_button != Qt::NoButton || m_move_release_pending ||
          m_opening_width_handle || m_vertex_move_handle || m_opening_move_active ||
-         m_transform_frame_start) &&
+         m_transform_frame_start || !m_roof_opening_group_capture.empty()) &&
         selectedIds() != entity_ids;
     if (cancel_gesture) resetGesture();
     for (auto& entity : m_entities) {
@@ -1100,7 +1101,7 @@ void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // A captured projection depends on the source annotations as well as the
     // geometry, even when a replacement retains every annotation identity.
-    if (m_touch_active || m_gesture_button != Qt::NoButton || m_opening_width_handle || m_roof_opening_capture || m_vertex_move_handle || m_move_release_pending ||
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_opening_width_handle || m_roof_opening_capture || !m_roof_opening_group_capture.empty() || m_vertex_move_handle || m_move_release_pending ||
         m_transform_frame_start) resetGesture();
     else {
         ++m_opening_width_preview_serial;
@@ -1136,7 +1137,7 @@ void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
 }
 
 void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
-    if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_transform_frame_start) resetGesture();
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_transform_frame_start || !m_roof_opening_group_capture.empty()) resetGesture();
     resetTouchInput();
     m_references = std::move(references);
     invalidateRetainedPresentation();
@@ -1145,7 +1146,7 @@ void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
 }
 
 void PlanCanvas::setReferenceGrids(std::vector<CanvasReferenceGrid> grids) {
-    if (m_touch_active) resetGesture();
+    if (m_touch_active || !m_roof_opening_group_capture.empty()) resetGesture();
     resetTouchInput();
     m_reference_grids = std::move(grids);
     invalidateRetainedPresentation();
@@ -1153,13 +1154,13 @@ void PlanCanvas::setReferenceGrids(std::vector<CanvasReferenceGrid> grids) {
 }
 
 void PlanCanvas::setBoundaryPreview(std::vector<Vec2> points) {
-    if (!points.empty() && m_generated_label_move_identity) resetGesture();
+    if (!points.empty() && (m_generated_label_move_identity || !m_roof_opening_group_capture.empty())) resetGesture();
     m_boundary_preview = std::move(points);
     update();
 }
 
 void PlanCanvas::setWallPreview(std::optional<WallDraftPreview> wall) {
-    if (wall && m_generated_label_move_identity) resetGesture();
+    if (wall && (m_generated_label_move_identity || !m_roof_opening_group_capture.empty())) resetGesture();
     m_wall_preview = std::move(wall);
     update();
 }
@@ -1170,12 +1171,13 @@ void PlanCanvas::setDrawingWitnesses(std::vector<DrawingWitness> witnesses) {
 }
 
 void PlanCanvas::setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> preview) {
-    if (preview && m_generated_label_move_identity) resetGesture();
+    if (preview && (m_generated_label_move_identity || !m_roof_opening_group_capture.empty())) resetGesture();
     m_boundary_draft_preview = std::move(preview);
     update();
 }
 
 void PlanCanvas::setComponentPlacementPreview(std::optional<CanvasEntity> preview) {
+    if (preview && !m_roof_opening_group_capture.empty()) resetGesture();
     ++m_component_placement_preview_serial;
     m_component_placement_preview_pending = false;
     if (preview) preview->selected = false;
@@ -1192,6 +1194,7 @@ void PlanCanvas::clearComponentPlacementPreview() {
 }
 
 std::uint64_t PlanCanvas::beginComponentPlacementPreview() {
+    if (!m_roof_opening_group_capture.empty()) resetGesture();
     ++m_component_placement_preview_serial;
     m_component_placement_preview_pending = true;
     m_component_placement_preview.reset();
@@ -1459,7 +1462,7 @@ void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_s
     clearComponentPlacementPreview();
     // Hosted station captures belong to the pressed view. Navigation must
     // invalidate a drag or released pending admission before it can reappear.
-    if (m_opening_move_active || m_generated_label_move_identity || m_roof_opening_capture) resetGesture();
+    if (m_opening_move_active || m_generated_label_move_identity || m_roof_opening_capture || !m_roof_opening_group_capture.empty()) resetGesture();
     ++m_navigation_generation;
     m_pending_dimension_space_tap.reset();
     const auto callback = m_navigation_changed;
@@ -2997,7 +3000,8 @@ bool PlanCanvas::drawingCommandIdle() const noexcept {
         !m_transform_release_pending && !m_transform_preview_pending && !m_transform_frame_start &&
         !m_vertex_move_handle && !m_boundary_vertex_preview_pending &&
         !m_opening_width_handle && !m_opening_width_preview_pending && !m_roof_opening_capture &&
-        !m_roof_opening_preview_pending && !m_roof_opening_release_pending;
+        !m_roof_opening_preview_pending && !m_roof_opening_release_pending && m_roof_opening_group_capture.empty() &&
+        !m_roof_opening_group_pending && !m_roof_opening_group_release_pending;
 }
 
 void PlanCanvas::setDrawingTextRequested(std::function<bool(const QString&)> callback) {
@@ -3016,19 +3020,24 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::Show) {
         const auto* dialog = qobject_cast<QDialog*>(watched);
         if (dialog && dialog->isModal()) {
+            clearComponentPlacementPreview();
             resetPerformanceMeasurements();
             resetGesture();
             resetTouchInput();
         }
     } else if ((event->type() == QEvent::WindowBlocked ||
                 event->type() == QEvent::WindowDeactivate) && watched == window()) {
+        clearComponentPlacementPreview();
         resetPerformanceMeasurements();
         resetGesture();
         resetTouchInput();
     } else if (event->type() == QEvent::ApplicationStateChange && watched == qApp &&
-               QApplication::applicationState() != Qt::ApplicationActive && m_roof_opening_capture) {
+               QApplication::applicationState() != Qt::ApplicationActive &&
+               (m_roof_opening_capture || !m_roof_opening_group_capture.empty() ||
+                m_component_placement_preview || m_component_placement_preview_pending)) {
         // A released preview still owns typed authority without a mouse grab.
         // Application deactivation must retire it even before window/focus events.
+        clearComponentPlacementPreview();
         resetGesture();
         resetTouchInput();
         resetTabletInput();
@@ -3043,7 +3052,7 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::StyleChange:
     case QEvent::ScreenChangeInternal:
     case QEvent::DevicePixelRatioChange:
-        if (m_generated_label_move_identity || m_roof_opening_capture) resetGesture();
+        if (m_generated_label_move_identity || m_roof_opening_capture || !m_roof_opening_group_capture.empty()) resetGesture();
         if (event->type() == QEvent::ScreenChangeInternal ||
             event->type() == QEvent::DevicePixelRatioChange) ++m_navigation_generation;
         // System metrics can change while serialized QFont values remain equal.
@@ -3056,6 +3065,7 @@ bool PlanCanvas::event(QEvent* event) {
         // queued admission still owns the gesture. Retire that authority, not
         // the drawing draft, and release keys whose key-up may go elsewhere.
         m_space_pan_armed = false;
+        clearComponentPlacementPreview();
         resetGesture();
         resetTouchInput();
         resetTabletInput();
@@ -3350,6 +3360,42 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         return;
     }
     if (selectionInteractionEnabled()) {
+        const auto group_grip=roofOpeningGroupHandleAt(position);
+        const auto group_frame=selectedRoofOpeningGroupFrame();
+        if (!m_pressed_generated_label && group_frame &&
+            (group_grip || roofOpeningGroupContains(position)) &&
+            m_roof_opening_group_preview_requested && m_roof_opening_group_edit_requested) {
+            m_left_gesture=LeftGesture::roof_opening_group_edit;
+            for (const auto& target:m_selected_roof_openings) {
+                const auto found=std::find_if(m_roof_opening_controls.begin(),m_roof_opening_controls.end(),
+                    [&](const auto& item) { return item.target==target; });
+                if (found==m_roof_opening_controls.end()) { resetGesture(); return; }
+                m_roof_opening_group_capture.push_back(*found);
+            }
+            m_roof_opening_group_frame=group_frame;
+            m_roof_opening_group_handle=group_grip.value_or(Vec2{});
+            m_roof_opening_group_press_model=toModel(position,rect());
+            const auto delta=m_roof_opening_group_press_model-group_frame->center;
+            m_roof_opening_group_press_angle=std::atan2(delta.y,delta.x);
+            m_roof_opening_group_press_radius=std::hypot(delta.x,delta.y);
+            if (group_grip && m_roof_opening_group_press_radius<=1e-12) { resetGesture(); return; }
+            m_roof_opening_group_view_center=m_view_center;
+            m_roof_opening_group_view_scale=m_scale;
+            m_roof_opening_group_view_size=size();
+            m_roof_opening_group_view_dpr=devicePixelRatioF();
+            m_roof_opening_group_controls_generation=m_roof_opening_controls_generation;
+            m_roof_opening_group_navigation_generation=m_navigation_generation;
+            m_roof_opening_group_started=true;
+            const auto serial=m_roof_opening_group_serial;
+            const auto callback=m_roof_opening_group_started_callback;
+            const QPointer<PlanCanvas> guard(this);
+            try { if (callback) callback(m_selected_roof_openings); }
+            catch (...) { if (guard) resetGesture(); return; }
+            if (!guard || serial!=m_roof_opening_group_serial || !roofOpeningGroupCaptureCurrent()) return;
+            setCursor(group_grip && group_grip->x==2.0 ? Qt::CrossCursor :
+                group_grip ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
+            return;
+        }
         const auto grip=roofOpeningHandleAt(position);
         const auto child=grip && selectedRoofOpeningControls()
             ? std::optional<CanvasRoofOpeningControls>{*selectedRoofOpeningControls()}
@@ -3376,8 +3422,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                 setCursor(grip && grip->x==2.0 && grip->y==2.0 ? Qt::CrossCursor :
                     grip ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
             } else {
-                // Cohort body drags navigate until a real group child command
-                // exists. They never enter the owner's movement/transform path.
+                // An incomplete or unavailable child edit stays out of owner
+                // movement/transform paths.
                 m_pressed_roof_opening=child->target;
                 m_left_gesture=LeftGesture::canvas_pan;
                 m_pan_start=position;
@@ -3575,7 +3621,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
         return;
     }
     m_last_mouse_position = position;
-    if (m_move_release_pending || m_transform_release_pending || m_vertex_release_pending || m_roof_opening_release_pending) return;
+    if (m_move_release_pending || m_transform_release_pending || m_vertex_release_pending || m_roof_opening_release_pending || m_roof_opening_group_release_pending) return;
     if (m_gesture_button == Qt::RightButton && !m_right_dragging &&
         (position - m_right_start).manhattanLength() >= QApplication::startDragDistance()) {
         m_right_dragging = true;
@@ -3594,6 +3640,15 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             m_left_dragging = true;
             m_panning = true;
             setCursor(Qt::ClosedHandCursor);
+        }
+    } else if (m_left_gesture == LeftGesture::roof_opening_group_edit) {
+        if (!m_left_dragging &&
+            (position-m_left_start).manhattanLength()>=QApplication::startDragDistance()) m_left_dragging=true;
+        if (m_left_dragging) {
+            const QPointer<PlanCanvas> guard(this);
+            updateRoofOpeningGroupPreview(position,modifiers);
+            if (!guard) return;
+            update();
         }
     } else if (m_left_gesture == LeftGesture::roof_opening_edit) {
         if (!m_left_dragging &&
@@ -3853,6 +3908,18 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         return;
     }
     if (button == Qt::LeftButton) {
+        if (m_left_gesture==LeftGesture::roof_opening_group_edit) {
+            const QPointer<PlanCanvas> guard(this);
+            if (!m_roof_opening_group_pointer || *m_roof_opening_group_pointer!=position ||
+                m_roof_opening_group_fine!=(modifiers.testFlag(Qt::ShiftModifier) ||
+                    (m_roof_opening_group_handle.x!=2.0 && !m_snap_enabled))) pointerMove(position,modifiers);
+            if (!guard || m_left_gesture!=LeftGesture::roof_opening_group_edit) return;
+            if (!roofOpeningGroupCaptureCurrent() || !m_left_dragging) { resetGesture(); return; }
+            m_roof_opening_group_release_pending=true;
+            m_gesture_button=Qt::NoButton;
+            if (!m_roof_opening_group_pending) finishRoofOpeningGroupPreview(m_roof_opening_group_serial);
+            return;
+        }
         if (m_left_gesture==LeftGesture::roof_opening_edit) {
             const QPointer<PlanCanvas> guard(this);
             if (!m_roof_opening_preview_pointer || *m_roof_opening_preview_pointer!=position ||
@@ -4206,6 +4273,20 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::resetGesture() {
+    const auto group_canceled=m_roof_opening_group_started
+        ? m_roof_opening_group_canceled : std::function<void()>{};
+    m_roof_opening_group_started=false;
+    ++m_roof_opening_group_serial;
+    m_roof_opening_group_capture.clear();
+    m_roof_opening_group_frame.reset();
+    m_roof_opening_group_edit.reset();
+    m_roof_opening_group_boundary.reset();
+    m_roof_opening_group_pointer.reset();
+    m_roof_opening_group_preview_controls.clear();
+    m_roof_opening_group_valid=false;
+    m_roof_opening_group_pending=false;
+    m_roof_opening_group_requesting=false;
+    m_roof_opening_group_release_pending=false;
     const auto roof_opening_canceled=m_roof_opening_edit_started
         ? m_roof_opening_edit_canceled : std::function<void()>{};
     m_roof_opening_edit_started=false;
@@ -4335,6 +4416,7 @@ void PlanCanvas::resetGesture() {
     // All gesture state is retired before cancellation can refresh the scene.
     if (generated_label_canceled) { try { generated_label_canceled(); } catch (...) {} }
     if (roof_opening_canceled) { try { roof_opening_canceled(); } catch (...) {} }
+    if (group_canceled) { try { group_canceled(); } catch (...) {} }
 }
 
 void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
@@ -5561,8 +5643,9 @@ bool valid_roof_opening_frame(const CanvasRoofOpeningFrame& frame) {
 }
 
 void PlanCanvas::setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> controls) {
-    if (m_roof_opening_capture || m_pressed_roof_opening) resetGesture();
+    if (m_roof_opening_capture || m_pressed_roof_opening || !m_roof_opening_group_capture.empty()) resetGesture();
     ++m_roof_opening_preview_serial;
+    ++m_roof_opening_controls_generation;
     std::erase_if(controls, [](const auto& control) {
         return control.target.roof_id.isEmpty() || control.target.opening_id.isEmpty() ||
             !valid_roof_opening_frame(control.frame);
@@ -5594,7 +5677,7 @@ void PlanCanvas::setSelectedRoofOpenings(std::vector<CanvasRoofOpeningTarget> ta
     }
     if (admitted==m_selected_roof_openings) return;
     // Retire both child capture and any generic edit that preceded publication.
-    if (m_gesture_button!=Qt::NoButton || m_roof_opening_capture || m_pressed_roof_opening ||
+    if (m_gesture_button!=Qt::NoButton || m_roof_opening_capture || !m_roof_opening_group_capture.empty() || m_pressed_roof_opening ||
         m_move_release_pending || m_transform_frame_start || m_opening_width_handle || m_vertex_move_handle)
         resetGesture();
     ++m_roof_opening_preview_serial;
@@ -5648,6 +5731,252 @@ void PlanCanvas::setRoofOpeningEditRequested(
 void PlanCanvas::setRoofOpeningEditCanceled(std::function<void()> callback) {
     if (m_roof_opening_capture) resetGesture();
     m_roof_opening_edit_canceled = std::move(callback);
+}
+
+void PlanCanvas::setRoofOpeningGroupEditStarted(
+    std::function<void(std::vector<CanvasRoofOpeningTarget>)> callback) {
+    if (!m_roof_opening_group_capture.empty()) resetGesture();
+    m_roof_opening_group_started_callback=std::move(callback);
+}
+
+void PlanCanvas::setRoofOpeningGroupPreviewRequested(
+    std::function<std::optional<Boundary>(CanvasRoofOpeningGroupEdit,std::uint64_t)> callback) {
+    if (!m_roof_opening_group_capture.empty()) resetGesture();
+    m_roof_opening_group_preview_requested=std::move(callback);
+}
+
+void PlanCanvas::setRoofOpeningGroupEditRequested(
+    std::function<bool(CanvasRoofOpeningGroupEdit,std::uint64_t)> callback) {
+    if (!m_roof_opening_group_capture.empty()) resetGesture();
+    m_roof_opening_group_edit_requested=std::move(callback);
+}
+
+void PlanCanvas::setRoofOpeningGroupEditCanceled(std::function<void()> callback) {
+    if (!m_roof_opening_group_capture.empty()) resetGesture();
+    m_roof_opening_group_canceled=std::move(callback);
+}
+
+std::optional<CanvasRoofOpeningFrame> PlanCanvas::roofOpeningGroupFrame(
+    const std::vector<CanvasRoofOpeningControls>& controls) const {
+    if (controls.size()<2 || controls.size()!=m_selected_roof_openings.size()) return std::nullopt;
+    for (std::size_t i=0;i<controls.size();++i)
+        if (controls[i].target!=m_selected_roof_openings[i] || !valid_roof_opening_frame(controls[i].frame))
+            return std::nullopt;
+    // Use the first actual member's projected mouth direction. After rotation
+    // a republished cohort retains that member-derived orientation, including
+    // changes of facet projection; no cached synthetic transform survives.
+    const auto basis=roof_opening_basis(controls.front().frame).first;
+    const auto angle=std::atan2(basis.y,basis.x);
+    const Vec2 along{std::cos(angle),std::sin(angle)}, across{-along.y,along.x};
+    double left=std::numeric_limits<double>::infinity(), right=-left;
+    double bottom=left, top=-left;
+    for (const auto& control:controls) {
+        const auto [member_along,member_across]=roof_opening_basis(control.frame);
+        for (const auto signs:{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}}) {
+            const auto vertex=control.frame.center+
+                member_along*(signs.x*control.frame.width_metres*.5)+
+                member_across*(signs.y*control.frame.depth_metres*.5);
+            const auto x=vertex.x*along.x+vertex.y*along.y;
+            const auto y=vertex.x*across.x+vertex.y*across.y;
+            if (!std::isfinite(x) || !std::isfinite(y)) return std::nullopt;
+            left=std::min(left,x);right=std::max(right,x);
+            bottom=std::min(bottom,y);top=std::max(top,y);
+        }
+    }
+    CanvasRoofOpeningFrame frame;
+    frame.center=along*((left+right)*.5)+across*((bottom+top)*.5);
+    frame.rotation_radians=angle;
+    frame.width_metres=right-left;frame.depth_metres=top-bottom;
+    return valid_roof_opening_frame(frame) ? std::optional{frame} : std::nullopt;
+}
+
+std::optional<CanvasRoofOpeningFrame> PlanCanvas::selectedRoofOpeningGroupFrame() const {
+    if (m_selected_roof_openings.size()<2) return std::nullopt;
+    std::vector<CanvasRoofOpeningControls> controls;
+    for (const auto& target:m_selected_roof_openings) {
+        const auto found=std::find_if(m_roof_opening_controls.begin(),m_roof_opening_controls.end(),
+            [&](const auto& item) { return item.target==target; });
+        if (found==m_roof_opening_controls.end()) return std::nullopt;
+        controls.push_back(*found);
+    }
+    return roofOpeningGroupFrame(controls);
+}
+
+std::optional<Vec2> PlanCanvas::roofOpeningGroupHandleAt(QPointF point) const {
+    if (!m_selection_controls_visible || !selectionInteractionEnabled() ||
+        (m_selection_filter!=CanvasSelectionFilter::all && m_selection_filter!=CanvasSelectionFilter::objects) ||
+        m_wall_preview || !m_boundary_preview.empty() || !m_area_class_caption.isEmpty() ||
+        !m_roof_opening_group_preview_requested || !m_roof_opening_group_edit_requested) return std::nullopt;
+    const auto frame=selectedRoofOpeningGroupFrame();
+    if (!frame) return std::nullopt;
+    const auto polygon=roofOpeningFramePolygon(*frame,rect());
+    const std::array<Vec2,4> signs{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}};
+    double nearest=13.0;
+    std::optional<Vec2> hit;
+    for (int i=0;i<4;++i) {
+        const auto delta=point-polygon[i];
+        const auto length=std::hypot(delta.x(),delta.y());
+        if (length<=nearest) { nearest=length;hit=signs[static_cast<std::size_t>(i)]; }
+    }
+    const auto delta=point-roofOpeningRotationHandle(*frame,rect());
+    if (std::hypot(delta.x(),delta.y())<=nearest) return Vec2{2,2};
+    return hit;
+}
+
+bool PlanCanvas::roofOpeningGroupContains(QPointF point) const {
+    if (!m_selection_controls_visible || !selectionInteractionEnabled() ||
+        (m_selection_filter!=CanvasSelectionFilter::all && m_selection_filter!=CanvasSelectionFilter::objects) ||
+        m_wall_preview || !m_boundary_preview.empty() || !m_area_class_caption.isEmpty()) return false;
+    const auto frame=selectedRoofOpeningGroupFrame();
+    if (!frame) return false;
+    const auto local=roofOpeningLocalPoint(point,*frame);
+    return std::abs(local.x)<=frame->width_metres*.5 && std::abs(local.y)<=frame->depth_metres*.5;
+}
+
+bool PlanCanvas::roofOpeningGroupCaptureCurrent() const {
+    if (m_left_gesture!=LeftGesture::roof_opening_group_edit || !m_roof_opening_group_frame ||
+        !m_selection_controls_visible || m_boundary_draft_preview || m_wall_preview ||
+        !m_boundary_preview.empty() || !m_area_class_caption.isEmpty() || m_point_placement_requested ||
+        m_component_placement_preview || m_component_placement_preview_pending || m_symbol_drag_active || m_symbol_drag_preview ||
+        m_roof_opening_group_capture.size()<2 ||
+        m_roof_opening_group_capture.size()!=m_selected_roof_openings.size() ||
+        m_roof_opening_group_controls_generation!=m_roof_opening_controls_generation ||
+        m_roof_opening_group_navigation_generation!=m_navigation_generation ||
+        m_roof_opening_group_view_center.x!=m_view_center.x || m_roof_opening_group_view_center.y!=m_view_center.y ||
+        m_roof_opening_group_view_scale!=m_scale || m_roof_opening_group_view_size!=size() ||
+        m_roof_opening_group_view_dpr!=devicePixelRatioF()) return false;
+    for (std::size_t i=0;i<m_selected_roof_openings.size();++i)
+        if (m_roof_opening_group_capture[i].target!=m_selected_roof_openings[i]) return false;
+    return true;
+}
+
+void PlanCanvas::updateRoofOpeningGroupPreview(QPointF point,Qt::KeyboardModifiers modifiers) {
+    if (!roofOpeningGroupCaptureCurrent() || !m_roof_opening_group_started) { resetGesture();return; }
+    const auto serial=++m_roof_opening_group_serial;
+    m_roof_opening_group_pointer=point;
+    const bool rotating=roof_opening_rotation_handle(m_roof_opening_group_handle);
+    m_roof_opening_group_fine=modifiers.testFlag(Qt::ShiftModifier) || (!rotating && !m_snap_enabled);
+    m_roof_opening_group_valid=false;m_roof_opening_group_pending=false;m_roof_opening_group_requesting=false;
+    m_roof_opening_group_boundary.reset();m_roof_opening_group_preview_controls.clear();
+    CanvasRoofOpeningGroupEdit edit{m_selected_roof_openings,m_roof_opening_group_frame->center};
+    const auto model=toModel(point,rect());
+    const auto delta=model-edit.pivot;
+    const auto step=m_roof_opening_group_fine ? 0.0 : placementLengthIncrementMetres();
+    const auto snap=[&](double value) { return step>0.0 ? std::round(value/step)*step : value; };
+    if (rotating) {
+        edit.rotation_radians=canonical_roof_opening_angle(std::atan2(delta.y,delta.x)-m_roof_opening_group_press_angle);
+        if (!m_roof_opening_group_fine) edit.rotation_radians=std::round(edit.rotation_radians/(pi/4.0))*(pi/4.0);
+        if (std::hypot(delta.x,delta.y)<=1e-12) edit.rotation_radians=std::numeric_limits<double>::quiet_NaN();
+    } else if (m_roof_opening_group_handle.x==0.0 && m_roof_opening_group_handle.y==0.0) {
+        edit.translation={snap(model.x-m_roof_opening_group_press_model.x),snap(model.y-m_roof_opening_group_press_model.y)};
+    } else {
+        // Project onto the pressed radial vector so a corner crossing the
+        // common pivot refuses instead of reflecting or growing again.
+        const auto press=m_roof_opening_group_press_model-edit.pivot;
+        edit.uniform_scale=(delta.x*press.x+delta.y*press.y)/
+            (m_roof_opening_group_press_radius*m_roof_opening_group_press_radius);
+        if (step>0.0) edit.uniform_scale=snap(edit.uniform_scale*m_roof_opening_group_frame->width_metres)/
+            m_roof_opening_group_frame->width_metres;
+    }
+    m_roof_opening_group_edit=edit;
+    if (!std::isfinite(edit.translation.x) || !std::isfinite(edit.translation.y) ||
+        !std::isfinite(edit.rotation_radians) || !std::isfinite(edit.uniform_scale) || edit.uniform_scale<=1e-6 ||
+        !m_roof_opening_group_preview_requested) { update();return; }
+    const auto callback=m_roof_opening_group_preview_requested;
+    const QPointer<PlanCanvas> guard(this);
+    m_roof_opening_group_requesting=true;
+    try { (void)callback(edit,serial); }
+    catch (...) {
+        if (guard && serial==m_roof_opening_group_serial) {
+            m_roof_opening_group_pending=false;m_roof_opening_group_requesting=false;
+            m_roof_opening_group_valid=false;m_roof_opening_group_boundary.reset();
+            m_roof_opening_group_preview_controls.clear();
+            update();
+            if (m_roof_opening_group_release_pending) finishRoofOpeningGroupPreview(serial);
+        }
+        return;
+    }
+    if (!guard || serial!=m_roof_opening_group_serial || !m_roof_opening_group_requesting) return;
+    // A bare returned boundary has no complete manufactured controls and
+    // cannot admit a preview. Inline hosts complete explicitly in callback.
+    m_roof_opening_group_requesting=false;
+    if (!m_roof_opening_group_pending) {
+        m_roof_opening_group_valid=false;
+        if (m_roof_opening_group_release_pending) finishRoofOpeningGroupPreview(serial);
+    }
+    update();
+}
+
+bool PlanCanvas::markRoofOpeningGroupPreviewPending(std::uint64_t serial) {
+    if (serial!=m_roof_opening_group_serial || !m_roof_opening_group_requesting ||
+        !m_roof_opening_group_edit || !roofOpeningGroupCaptureCurrent()) return false;
+    m_roof_opening_group_pending=true;
+    return true;
+}
+
+bool PlanCanvas::completeRoofOpeningGroupPreview(std::uint64_t serial,
+    std::vector<CanvasRoofOpeningControls> admitted_controls,Boundary outline,bool valid) {
+    if (serial!=m_roof_opening_group_serial || (!m_roof_opening_group_pending && !m_roof_opening_group_requesting) ||
+        !m_roof_opening_group_edit) return false;
+    if (!roofOpeningGroupCaptureCurrent()) { resetGesture();return false; }
+    m_roof_opening_group_pending=false;m_roof_opening_group_requesting=false;m_roof_opening_group_valid=false;
+    m_roof_opening_group_boundary.reset();m_roof_opening_group_preview_controls.clear();
+    // Admit every target once, in captured order; presentation owners and
+    // revisions cannot change silently beneath an exact typed child gesture.
+    valid=valid && admitted_controls.size()==m_roof_opening_group_capture.size();
+    if (valid) for (std::size_t i=0;i<admitted_controls.size();++i) {
+        if (admitted_controls[i].target!=m_roof_opening_group_capture[i].target ||
+            admitted_controls[i].presentation_owner_id!=m_roof_opening_group_capture[i].presentation_owner_id ||
+            !valid_roof_opening_frame(admitted_controls[i].frame)) { valid=false;break; }
+    }
+    valid=valid && roofOpeningGroupFrame(admitted_controls).has_value() && !outline.empty() &&
+        std::all_of(outline.begin(),outline.end(),[](const auto& segment) {
+            if (!std::isfinite(segment.start.x) || !std::isfinite(segment.start.y) ||
+                !std::isfinite(segment.end.x) || !std::isfinite(segment.end.y) ||
+                !std::isfinite(segment.sweep_radians) || distance(segment.start,segment.end)<=1e-12) return false;
+            if (segment.sweep_radians==0.0) return true;
+            const auto arc=arc_info(segment);
+            return arc && std::isfinite(arc->center.x) && std::isfinite(arc->center.y) &&
+                std::isfinite(arc->radius) && arc->radius>0.0 && std::isfinite(arc->start_angle);
+        });
+    if (valid) {
+        QPainterPath path;append_boundary_strokes(path,outline);
+        valid=path.elementCount()>1;
+        for (int i=0;valid && i<path.elementCount();++i)
+            valid=std::isfinite(path.elementAt(i).x) && std::isfinite(path.elementAt(i).y);
+        const auto bounds=path.boundingRect();
+        valid=valid && std::isfinite(bounds.left()) && std::isfinite(bounds.top()) &&
+            std::isfinite(bounds.right()) && std::isfinite(bounds.bottom()) && (bounds.width()>0.0 || bounds.height()>0.0);
+    }
+    if (valid) {
+        m_roof_opening_group_preview_controls=std::move(admitted_controls);
+        m_roof_opening_group_boundary=std::move(outline);m_roof_opening_group_valid=true;
+    }
+    update();
+    if (m_roof_opening_group_release_pending) finishRoofOpeningGroupPreview(serial);
+    return true;
+}
+
+void PlanCanvas::finishRoofOpeningGroupPreview(std::uint64_t serial) {
+    if (serial!=m_roof_opening_group_serial || m_roof_opening_group_pending) return;
+    if (!roofOpeningGroupCaptureCurrent()) { resetGesture();return; }
+    const auto edit=m_roof_opening_group_edit;
+    const auto callback=m_roof_opening_group_edit_requested;
+    const bool changed=edit && (edit->translation.x!=0.0 || edit->translation.y!=0.0 ||
+        edit->rotation_radians!=0.0 || edit->uniform_scale!=1.0);
+    const bool admitted=m_roof_opening_group_valid && changed && callback;
+    const QPointer<PlanCanvas> guard(this);
+    m_roof_opening_group_release_pending=false;m_gesture_button=Qt::NoButton;
+    bool accepted=false;
+    if (admitted) {
+        m_roof_opening_group_started=false;
+        try { accepted=callback(*edit,serial); } catch (...) {}
+    }
+    if (!guard) return;
+    const auto canceled=!accepted && admitted && serial==m_roof_opening_group_serial
+        ? m_roof_opening_group_canceled : std::function<void()>{};
+    if (serial==m_roof_opening_group_serial) resetGesture();
+    if (canceled) { try { canceled(); } catch (...) {} }
 }
 
 const CanvasRoofOpeningControls* PlanCanvas::selectedRoofOpeningControls() const {
@@ -5945,12 +6274,14 @@ void PlanCanvas::finishRoofOpeningPreview(std::uint64_t serial) {
 void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewport) const {
     const auto* selected=selectedRoofOpeningControls();
     // Every visible cohort member gets its true projected footprint, with an
-    // empty interior. A group has no synthetic frame, grips, or owner readout.
+    // empty interior. The group renderer bounds complete actual member mouths.
     painter.save();
     painter.setClipRect(viewport,Qt::IntersectClip);
     painter.setRenderHint(QPainter::Antialiasing,true);
     painter.setBrush(Qt::NoBrush);
-    for (const auto& control:m_roof_opening_controls) {
+    const auto& controls=m_roof_opening_group_valid
+        ? m_roof_opening_group_preview_controls : m_roof_opening_controls;
+    for (const auto& control:controls) {
         if (!roofOpeningSelected(control.target)) continue;
         // The single-child renderer owns its admitted preview, so never leave
         // an additional source-mouth outline underneath its moving preview.
@@ -5962,6 +6293,10 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
         painter.drawPolygon(polygon);
     }
     painter.restore();
+    if (m_selected_roof_openings.size()>1) {
+        drawRoofOpeningGroupControls(painter,viewport);
+        return;
+    }
     if (!selected || !m_selection_controls_visible) return;
     const auto frame=m_roof_opening_edit_preview && valid_roof_opening_frame(m_roof_opening_edit_preview->frame)
         ? m_roof_opening_edit_preview->frame : selected->frame;
@@ -6015,6 +6350,54 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
     painter.setBrush(QColor(255,255,255,245)); painter.setPen(QPen(color,1.0));
     painter.drawRoundedRect(readout,4.0,4.0);
     painter.drawText(readout,Qt::AlignCenter,text);
+    painter.restore();
+}
+
+void PlanCanvas::drawRoofOpeningGroupControls(QPainter& painter,const QRectF& viewport) const {
+    if (!m_selection_controls_visible) return;
+    const auto frame=m_roof_opening_group_valid
+        ? roofOpeningGroupFrame(m_roof_opening_group_preview_controls) : selectedRoofOpeningGroupFrame();
+    if (!frame) return;
+    const bool invalid=!m_roof_opening_group_capture.empty() && m_left_dragging &&
+        !m_roof_opening_group_valid && !m_roof_opening_group_pending;
+    const auto color=invalid ? QColor(220,38,38) : QColor(37,99,235);
+    const auto polygon=roofOpeningFramePolygon(*frame,viewport);
+    painter.save();
+    painter.setClipRect(viewport,Qt::IntersectClip);
+    painter.setRenderHint(QPainter::Antialiasing,true);
+    painter.setBrush(Qt::NoBrush);
+    if (m_roof_opening_group_boundary) {
+        QPainterPath path;append_boundary_strokes(path,*m_roof_opening_group_boundary);
+        QTransform transform;
+        const auto origin=toScreen({0,0},viewport);
+        transform.translate(origin.x(),origin.y());transform.scale(m_scale,-m_scale);
+        painter.setPen(QPen(color,2.0));painter.drawPath(transform.map(path));
+    }
+    painter.setPen(QPen(QColor(255,255,255,235),4.0));painter.drawPolygon(polygon);
+    painter.setPen(QPen(color,1.5));painter.drawPolygon(polygon);
+    if (m_roof_opening_group_preview_requested && m_roof_opening_group_edit_requested) {
+        painter.setBrush(QColor(255,255,255));
+        // Only uniform corner scaling is supported. Side grips would distort
+        // rotated in-facet rectangles and cannot express the child command.
+        for (int i=0;i<4;++i) painter.drawRect(QRectF(polygon[i]-QPointF(4,4),QSizeF(8,8)));
+        const auto rotation=roofOpeningRotationHandle(*frame,viewport);
+        painter.drawLine((polygon[2]+polygon[3])*.5,rotation);painter.drawEllipse(rotation,5.0,5.0);
+    }
+    auto readout_font=font();readout_font.setPixelSize(11);painter.setFont(readout_font);
+    auto text=QStringLiteral("%1 skylights  ·  W %2  ×  D %3").arg(static_cast<qulonglong>(m_selected_roof_openings.size())).arg(
+        drawingLengthText(frame->width_metres,m_metric_units),drawingLengthText(frame->depth_metres,m_metric_units));
+    if (m_roof_opening_group_edit && roof_opening_rotation_handle(m_roof_opening_group_handle))
+        text+=QStringLiteral("  ·  %1°").arg(m_roof_opening_group_edit->rotation_radians*180.0/pi,0,'f',1);
+    if (invalid) text+=QStringLiteral("  ·  Invalid");
+    else if (m_roof_opening_group_pending) text+=QStringLiteral("  ·  Previewing");
+    const auto bounds=polygon.boundingRect();
+    const QFontMetricsF metrics(readout_font);const auto width=metrics.horizontalAdvance(text)+16.0;
+    const auto x=std::clamp(bounds.center().x()-width*.5,viewport.left()+4.0,
+        std::max(viewport.left()+4.0,viewport.right()-width-4.0));
+    const auto y=std::min(bounds.bottom()+17.0,viewport.bottom()-12.0);
+    const QRectF readout(x,y-12.0,width,22.0);
+    painter.setBrush(QColor(255,255,255,245));painter.setPen(QPen(color,1.0));
+    painter.drawRoundedRect(readout,4.0,4.0);painter.drawText(readout,Qt::AlignCenter,text);
     painter.restore();
 }
 
@@ -7152,7 +7535,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
                 (m_left_gesture==LeftGesture::object_move || m_left_gesture==LeftGesture::vertex_move ||
                  m_left_gesture==LeftGesture::selection_rotate || m_left_gesture==LeftGesture::selection_resize ||
                  m_left_gesture==LeftGesture::selection_axis_resize || m_left_gesture==LeftGesture::opening_width_resize ||
-                 m_left_gesture==LeftGesture::roof_opening_edit))
+                 m_left_gesture==LeftGesture::roof_opening_edit || m_left_gesture==LeftGesture::roof_opening_group_edit))
                 pointerMove(*m_last_mouse_position,modifiers);
             else if (m_gesture_button==Qt::NoButton) updateCursor(*m_last_mouse_position);
         }
@@ -7286,7 +7669,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         clearComponentPlacementPreview();
         m_drawing_witnesses.clear();
         update();
-        if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_vertex_release_pending || m_transform_frame_start || m_roof_opening_capture) {
+        if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_vertex_release_pending || m_transform_frame_start || m_roof_opening_capture || !m_roof_opening_group_capture.empty()) {
             resetGesture();
             resetTouchInput();
             event->accept();
@@ -7299,7 +7682,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_D && event->modifiers() == Qt::NoModifier &&
-        m_gesture_button == Qt::NoButton && !m_touch_active && !m_move_release_pending && !m_transform_release_pending && !m_roof_opening_capture &&
+        m_gesture_button == Qt::NoButton && !m_touch_active && !m_move_release_pending && !m_transform_release_pending && !m_roof_opening_capture && m_roof_opening_group_capture.empty() &&
         (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall || m_tool == CanvasTool::select)) {
         if (m_precise_input_requested) {
             m_precise_input_requested();
@@ -7352,7 +7735,7 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
                 (m_left_gesture==LeftGesture::object_move || m_left_gesture==LeftGesture::vertex_move ||
                  m_left_gesture==LeftGesture::selection_rotate || m_left_gesture==LeftGesture::selection_resize ||
                  m_left_gesture==LeftGesture::selection_axis_resize || m_left_gesture==LeftGesture::opening_width_resize ||
-                 m_left_gesture==LeftGesture::roof_opening_edit))
+                 m_left_gesture==LeftGesture::roof_opening_edit || m_left_gesture==LeftGesture::roof_opening_group_edit))
                 pointerMove(*m_last_mouse_position,modifiers);
             else if (m_gesture_button==Qt::NoButton) updateCursor(*m_last_mouse_position);
         }
@@ -7377,7 +7760,7 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
 
 void PlanCanvas::resizeEvent(QResizeEvent* event) {
     if (event->oldSize() != event->size()) {
-        if (m_generated_label_move_identity || m_roof_opening_capture) resetGesture();
+        if (m_generated_label_move_identity || m_roof_opening_capture || !m_roof_opening_group_capture.empty()) resetGesture();
         clearSymbolDragPreview();
         clearComponentPlacementPreview();
         ++m_navigation_generation;
@@ -8847,6 +9230,10 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
     } else if (m_opening_move_active && m_left_dragging && m_move_preview_exact &&
         !m_move_preview_valid && !m_move_preview_pending) {
         setCursor(Qt::ForbiddenCursor);
+    } else if (!m_roof_opening_group_capture.empty() && m_left_dragging) {
+        setCursor(!m_roof_opening_group_valid && !m_roof_opening_group_pending ? Qt::ForbiddenCursor :
+            roof_opening_rotation_handle(m_roof_opening_group_handle) ? Qt::CrossCursor :
+            m_roof_opening_group_handle.x==0.0 ? Qt::ClosedHandCursor : Qt::SizeFDiagCursor);
     } else if (m_roof_opening_capture && m_left_dragging) {
         setCursor(!m_roof_opening_preview_valid && !m_roof_opening_preview_pending ? Qt::ForbiddenCursor :
             roof_opening_rotation_handle(m_roof_opening_handle) ? Qt::CrossCursor :
@@ -8858,6 +9245,15 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
+        if (const auto grip=roofOpeningGroupHandleAt(point)) {
+            setCursor(roof_opening_rotation_handle(*grip) ? Qt::CrossCursor : Qt::SizeFDiagCursor);
+            return;
+        }
+        if (roofOpeningGroupContains(point)) {
+            setCursor(m_roof_opening_group_preview_requested && m_roof_opening_group_edit_requested
+                ? Qt::SizeAllCursor : Qt::OpenHandCursor);
+            return;
+        }
         if (const auto grip=roofOpeningHandleAt(point)) {
             setCursor(roof_opening_rotation_handle(*grip) ? Qt::CrossCursor : Qt::SizeFDiagCursor);
             return;
@@ -8914,6 +9310,7 @@ void PlanCanvas::setEntityEditGestureStarted(std::function<void(QString)> callba
 }
 
 void PlanCanvas::setInteractionAdmissionRequested(std::function<bool(bool)> callback) {
+    if (!m_roof_opening_group_capture.empty()) resetGesture();
     m_interaction_admission_requested = std::move(callback);
 }
 
