@@ -316,8 +316,25 @@ width/depth resizing. Native admission validates the complete final roster.
 One source-derived command owns the full edit or placement, including alternative
 replacement/remapping and history. Manufactured previews carry complete actual
 child controls; neither a bounding rectangle nor a pending worker result grants
-commit authority. Nonuniform group scaling and direct 3D child grips are separate
-unfinished workflows. Compilation/runtime qualification remains outstanding.
+commit authority. Nonuniform group scaling remains an unfinished workflow.
+Compilation/runtime qualification remains outstanding.
+
+Direct 3D child/cohort transforms are transient editing state, not new persisted
+roof fields. A neutral native manipulator supplies a common displayed world
+pivot, XY delta, physical face-angle delta and positive uniform size factor.
+Each actual roof's rigid site/building frame converts the pivot and translation
+back to source coordinates. Roof placement and individual construction profile
+dimensions remain unchanged. The complete source-derived command carries the
+existing reader/intent contracts and one history event.
+
+A separately manufactured candidate scene supplies the native preview; it never
+replaces the authoritative displayed-source snapshot. Exact source, cohort,
+camera, size/DPR, navigation, focus and proposal serial remain required at
+release, including releases waiting for manufacture. Alternative previews map
+physical owners and qualified roof-hosted catalog/row presentation aliases into
+their admitted candidate identities while preserving the captured visibility
+mask. Cancellation restores the original scene and permanently retires the
+proposal. This source addition does not change the document reader floor.
 
 ## Roof-hosted fixed skylights (v168, source integration)
 

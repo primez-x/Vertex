@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 direct 3D skylight transforms - source integration
+
+The plan group transform/clipboard batch is committed and pushed as 1ebefe1e;
+the exact remote ref matched local HEAD. This source batch adds typed native
+skylight/cohort controls for XY movement, common-pivot rotation and uniform face
+resizing. The native writer returned the viewport header/implementation; root owns
+the controller, captured-source command preparation, documentation and Git.
+
+The controller captures the actual displayed source and complete typed cohort,
+prepares proposals off the UI thread, converts the common world pivot/delta
+through each actual roof's site/building frame, and replays the complete roster.
+One prepared source-derived command retains existing alternatives, recovery and
+history authority. A neutral native proxy supplies the gesture without deforming
+authoritative fills. Separate native preparation renders a complete manufactured
+candidate as a transient scene, retaining the original published snapshot. Exact
+release waits for the admitted candidate to display and redraw. Unit/zoom magnets
+and 45-degree rotation with Shift fine control expose practical measurements.
+
+Source review corrections separate native publication admission from unrelated
+Site-plan presentation checks, retain complete A/B/A child selection order, and
+map qualified copied roof-hosted assembly aliases into candidate visibility.
+Stale worker failures cannot reject a newer proposal. Failed native rollback
+retains cleanup handles and clears readiness/published input authority until a
+real source publication restores the scene successfully. An explicit restoration
+failure flag permits an unchanged-source refresh to republish; it clears only
+after successful authoritative AIS publication. Independent integrated review
+accepted all six corrections with no remaining concrete P1/P2 in its bounded
+scope. Root reviewed interfaces, authority, lifecycle and source evidence. Scoped
+commit, push and exact remote verification accompany this batch; compilation and
+interaction are not qualified.
+
+Mixed owner/child selection and nonuniform group scaling remain separate source
+gaps. Whole-candidate preview regeneration still needs performance qualification;
+it does not yet provide selective host rebuilding. The complete production scope
+stays active. The manual checklist retains all 450 originals plus forty focused
+tasks (490 total); the new single/group 3D tasks remain Not tested.
+
+No builds, tests/new tests, probes, native jobs, UI launches, packages or
+installations run. The installed candidate is unchanged and all ten production
+gates remain open.
+
 ### October 10 skylight group clipboard and transforms - source integration
 
 The group selection and atomic Properties/deletion batch is committed and pushed

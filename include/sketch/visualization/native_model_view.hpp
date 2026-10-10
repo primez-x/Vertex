@@ -6,6 +6,8 @@
 #include <QSize>
 
 #include <cstddef>
+#include <cstdint>
+#include <cstdint>
 #include <array>
 #include <functional>
 #include <memory>
@@ -30,6 +32,18 @@ struct NativeRoofOpeningTarget {
     QString roof_id;
     QString opening_id;
     bool operator==(const NativeRoofOpeningTarget&) const = default;
+};
+
+// Exact world-space proposal for a typed skylight cohort. The pivot is captured
+// from the displayed fills at press; translation does not include pivot motion
+// caused by rotation or scaling. Hosts retain their authored placements.
+struct NativeRoofOpeningTransform {
+    std::vector<NativeRoofOpeningTarget> targets;
+    std::array<double, 3> pivot_world_m{};
+    std::array<double, 3> translation_world_m{};
+    double rotation_radians{};
+    double uniform_scale{1.0};
+    bool operator==(const NativeRoofOpeningTransform&) const = default;
 };
 
 // A native Open CASCADE viewport for the architectural solids that have a
@@ -71,14 +85,14 @@ public:
     void fitAll();
     // Synchronize complete logical selection; IDs without a displayed solid
     // still count toward multi-selection. The last supplied ID is primary.
-    // Highlights cover valid visible semantic presentations only. Manipulators
-    // require exactly one logical member; this API never emits a callback.
+    // Highlights cover valid visible semantic presentations only. Whole-owner
+    // manipulators require one logical member; typed children share a pivot.
     // Replaces a typed child selection.
     void setSelectedEntities(const QStringList& entity_ids);
     // Backward-compatible replacement with one ID (empty clears selection).
     void setSelectedEntity(const QString& entity_id);
     // Synchronize a single semantic skylight child after its logical owners.
-    // This emits no callback and disables whole-owner transform controls.
+    // This emits no callback and replaces whole-owner controls with child controls.
     void setSelectedRoofOpening(std::optional<NativeRoofOpeningTarget> target);
     // Synchronize the complete typed child cohort while preserving owner IDs.
     // The last distinct valid target is primary. No callback is emitted.
@@ -90,6 +104,20 @@ public:
     void setSemanticSelections(const QStringList& entity_ids,
                                std::vector<NativeRoofOpeningTarget> targets);
     [[nodiscard]] bool transformControlsVisible() const noexcept;
+    std::function<void(std::vector<NativeRoofOpeningTarget>)> onRoofOpeningTransformStarted;
+    std::function<void(NativeRoofOpeningTransform, std::uint64_t)> onRoofOpeningTransformPreviewRequested;
+    std::function<bool(NativeRoofOpeningTransform, std::uint64_t)> onRoofOpeningTransformRequested;
+    std::function<void()> onRoofOpeningTransformCanceled;
+    [[nodiscard]] bool roofOpeningTransformPreviewCurrent(std::uint64_t serial) const noexcept;
+    // Completion admits a candidate for separate asynchronous native geometry
+    // manufacture. It does not publish it as the authoritative scene snapshot.
+    [[nodiscard]] bool completeRoofOpeningTransformPreview(
+        std::uint64_t serial, const DocumentSnapshot& candidate,
+        std::vector<NativeRoofOpeningTarget> remapped_targets,
+        VisibleEntityIds candidate_visible_ids);
+    [[nodiscard]] bool rejectRoofOpeningTransformPreview(std::uint64_t serial, QString message);
+    // Unit changes retire a press-owned proposal before changing its magnet.
+    void setRoofOpeningTransformMetricUnits(bool metric);
     // Export the OCCT framebuffer directly. This deliberately does not use
     // QWidget::grab(), which cannot capture the native OCCT child surface.
     // Qt encodes and atomically writes the captured pixels, avoiding the native

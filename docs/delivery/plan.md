@@ -183,10 +183,14 @@ polling timeout does not permit restarting it.
    scale and complete manufactured plan preview/release protocol. Qualify group
    clipboard version two, Copy/Cut/Duplicate and exact-preview roof-face Paste,
    retaining passive sources, physical facet sizes/angles, fresh history-safe
-   identities and atomic baseline/proposed replacement. Mixed owner/child
-   selection, nonuniform group scaling and direct 3D child movement/rotation/scale
-   controls remain implementation gaps. Plan grips, Properties and safe refusals
-   do not complete those workflows.
+   identities and atomic baseline/proposed replacement. Qualify the subsequent
+   direct 3D child/cohort XY movement, common-pivot rotation and uniform physical
+   face resizing source. Actual native candidate manufacture, exact delayed
+   release, source/camera/focus/selection retirement, practical unit magnets and
+   complete remapped visibility need native interaction qualification. Source
+   aliases for copied roof-hosted assemblies must follow their qualified new
+   catalog/row identities. Mixed owner/child selection and nonuniform group
+   scaling remain implementation gaps; uniform controls do not complete them.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

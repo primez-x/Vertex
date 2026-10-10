@@ -246,6 +246,7 @@ public:
     occ::handle<V3d_View> view;
     occ::handle<AIS_InteractiveContext> context;
     occ::handle<AIS_Manipulator> manipulator;
+    occ::handle<AIS_Shape> roof_transform_proxy;
     occ::handle<WNT_Window> window;
     std::map<std::string, CachedSolid, std::less<>> solids;
     QStringList selected_entity_ids;
@@ -266,6 +267,27 @@ public:
         std::uint64_t navigation_generation{};
     };
     std::optional<SelectionCapture> selection_capture;
+    // Separate transient preparation never changes solids/published_snapshot.
+    NativeGeometryRegenerator roof_preview_regenerator;
+    QTimer* roof_preview_timer{};
+    std::optional<SelectionCapture> roof_transform_capture;
+    std::optional<NativeRoofOpeningTransform> roof_transform_proposal;
+    std::array<double,3> roof_transform_pivot{};
+    std::uint64_t roof_transform_serial{};
+    std::uint64_t roof_candidate_serial{};
+    std::uint64_t roof_presented_serial{};
+    bool roof_restoration_needs_republication{};
+    std::shared_ptr<const DocumentSnapshot> roof_candidate;
+    std::optional<NativeModelView::VisibleEntityIds> roof_candidate_visible_ids;
+    std::vector<NativeRoofOpeningTarget> roof_candidate_targets;
+    std::vector<occ::handle<AIS_Shape>> roof_preview_presentations;
+    std::vector<std::pair<occ::handle<AIS_Shape>,bool>> roof_original_visibility;
+    bool roof_release_pending{};
+    bool roof_committing{};
+    QString roof_transform_feedback;
+    bool roof_transform_metric_units{};
+    double roof_transform_length_step{0.00635};
+    double roof_transform_reference_length{1.0};
 
     struct WheelScroll {
         SelectionCapture context;
@@ -324,6 +346,10 @@ public:
         preparation_timer->setInterval(10);
         QObject::connect(preparation_timer, &QTimer::timeout, widget,
                          [this] { owner->pollGeometryPreparation(); });
+        roof_preview_timer = new QTimer(widget);
+        roof_preview_timer->setInterval(10);
+        QObject::connect(roof_preview_timer, &QTimer::timeout, widget,
+                         [this] { collect_roof_preview(); });
     }
 
     NativeInputPoint input_point(const QPointF& logical_point) const {
@@ -338,6 +364,9 @@ public:
     qreal input_scale() const noexcept { return input_device_pixel_ratio(*owner); }
 
     void navigation_changed() noexcept {
+        // The generation is a permanent fence even if the camera later returns
+        // to identical coordinates. Input handlers retire before navigation;
+        // the preview timer also restores any independently invalidated scene.
         // Do not wrap: at exhaustion selection fails closed rather than letting
         // an old capture become current again. Camera ownership is unchanged.
         if (navigation_generation != std::numeric_limits<std::uint64_t>::max())
@@ -478,11 +507,11 @@ public:
                               : (!geometry_status.isEmpty() ? geometry_status :
                                  (!operation_error.isEmpty() ? operation_error :
                                   (!input_error.isEmpty() ? input_error : export_error)));
-        status_label->setText(text);
-        status_label->setVisible(!text.isEmpty());
+        status_label->setText(text.isEmpty() ? roof_transform_feedback : text);
+        status_label->setVisible(!text.isEmpty() || !roof_transform_feedback.isEmpty());
         status_label->raise();
         auto bounds = owner->rect().adjusted(12, 12, -12, -12);
-        if ((regenerator.is_pending() || !input_error.isEmpty() || !export_error.isEmpty()) &&
+        if ((regenerator.is_pending() || !input_error.isEmpty() || !export_error.isEmpty() || !roof_transform_feedback.isEmpty()) &&
             native_error.isEmpty() && operation_error.isEmpty()) {
             // Keep the valid scene visible during preparation or a recovered
             // input/export failure; a diagnostic must not cover the viewport.
@@ -530,6 +559,9 @@ public:
                 if (newly_prepared) show_status(QString());
                 return;
             }
+            // A failed transient rollback owns native handles until cleanup
+            // actually succeeds. A new source cannot certify that stale scene.
+            if (!restore_roof_preview()) { prepared_geometry.reset(); return; }
 
             // All expensive semantic reconstruction has finished. AIS and its
             // context remain strictly on this widget's thread. Build candidates
@@ -680,6 +712,7 @@ public:
             }
             solids.swap(replacement);
             published_snapshot = std::move(published_source);
+            roof_restoration_needs_republication=false;
             fit_requested = false;
             prepared_geometry.reset();
             metrics.elapsed_ms = std::chrono::duration<double, std::milli>(
@@ -886,22 +919,28 @@ public:
             }
         }
         manipulator_entity_id.reset();
+        if (!roof_transform_proxy.IsNull() && !context.IsNull()) {
+            try { context->Remove(roof_transform_proxy,false); } catch (...) {}
+        }
+        roof_transform_proxy.Nullify();
     }
 
     void attach_manipulator() {
-        if (!selected_roof_openings.empty() || selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
+        if (roof_transform_capture) return;
+        const bool children = !selected_roof_openings.empty();
+        if ((!children && (selected_entity_ids.size() != 1 || !selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id))) ||
             !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
             !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
             detach_manipulator();
             return;
         }
-        const auto found = solids.find(*selected_entity_id);
-        if (found == solids.end() || found->second.presentation.IsNull() ||
-            !context->IsDisplayed(found->second.presentation)) {
+        const auto found = children ? solids.end() : solids.find(*selected_entity_id);
+        if (!children && (found == solids.end() || found->second.presentation.IsNull() ||
+            !context->IsDisplayed(found->second.presentation))) {
             detach_manipulator();
             return;
         }
-        if (manipulator_entity_id == selected_entity_id && !manipulator.IsNull() &&
+        if (!children && manipulator_entity_id == selected_entity_id && !manipulator.IsNull() &&
             manipulator->IsAttached()) return;
 
         detach_manipulator();
@@ -924,19 +963,47 @@ public:
         options.SetAdjustPosition(true).SetAdjustSize(false).SetEnableModes(true);
         auto group = occ::handle<NCollection_HSequence<occ::handle<AIS_InteractiveObject>>>(
             new NCollection_HSequence<occ::handle<AIS_InteractiveObject>>());
-        for (const auto& id : transform_presentation_ids(*selected_entity_id)) {
-            group->Append(solids.at(id).presentation);
-            for (const auto& child : solids.at(id).roof_openings) group->Append(child.presentation);
+        manipulator->SetPart(2, AIS_MM_Translation, !children);
+        if (children) {
+            if (!published_snapshot || !published_snapshot->is_editable() ||
+                !owner->onRoofOpeningTransformPreviewRequested || !owner->onRoofOpeningTransformRequested) return;
+            TopoDS_Compound compound;
+            BRep_Builder builder;
+            builder.MakeCompound(compound);
+            Bnd_Box bounds;
+            for (const auto& target : selected_roof_openings) {
+                const auto child = roof_opening_presentation(target);
+                if (child.IsNull() || child->Shape().IsNull()) return;
+                const auto box = child->BoundingBox().Transformed(child->Transformation());
+                if (box.IsVoid() || box.IsOpen()) return;
+                bounds.Add(box);
+                builder.Add(compound,child->Shape());
+            }
+            const auto low = bounds.CornerMin(), high = bounds.CornerMax();
+            roof_transform_pivot = {(low.X()+high.X())*0.5,(low.Y()+high.Y())*0.5,(low.Z()+high.Z())*0.5};
+            roof_transform_reference_length = std::max({high.X()-low.X(),high.Y()-low.Y(),high.Z()-low.Z()});
+            if (!std::isfinite(roof_transform_reference_length) || roof_transform_reference_length <= 1.0e-9) return;
+            // This undisplayed proxy is the only affine-transformed object.
+            // Actual hosts and fills wait for manufactured candidate geometry.
+            roof_transform_proxy = new AIS_Shape(compound);
+            context->Load(roof_transform_proxy,-1);
+            group->Append(roof_transform_proxy);
+        } else {
+            for (const auto& id : transform_presentation_ids(*selected_entity_id)) {
+                group->Append(solids.at(id).presentation);
+                for (const auto& child : solids.at(id).roof_openings) group->Append(child.presentation);
+            }
         }
         manipulator->Attach(group, options);
-        manipulator_entity_id = selected_entity_id;
+        if (children) context->Display(manipulator,false);
+        if (!children) manipulator_entity_id = selected_entity_id;
         restore_selection_highlights();
         viewer->Redraw();
     }
 
     bool begin_manipulation(const NativeInputPoint point) {
-        if (!selected_roof_openings.empty() || manipulator.IsNull() || !manipulator->IsAttached() ||
-            manipulator_entity_id != selected_entity_id || context.IsNull() || view.IsNull())
+        if (roof_release_pending || manipulator.IsNull() || !manipulator->IsAttached() ||
+            (selected_roof_openings.empty() && manipulator_entity_id != selected_entity_id) || context.IsNull() || view.IsNull())
             return false;
         try {
             context->MoveTo(point.x, point.y, view, false);
@@ -956,19 +1023,28 @@ public:
         return false;
     }
 
-    void preview_manipulation(const NativeInputPoint point) {
+    void preview_manipulation(const NativeInputPoint point, Qt::KeyboardModifiers modifiers = {}) {
         if (manipulator.IsNull() || !manipulator->HasActiveTransformation() || view.IsNull()) return;
+        const QPointer<NativeModelView> guard(owner);
+        const bool child_gesture = roof_transform_capture.has_value();
+        const auto fail = [this,guard,child_gesture](const QString& message) {
+            if (!guard) return;
+            if (child_gesture) {
+                owner->cancelInteraction();
+                if (guard) show_input_error(message);
+            } else show_operation_error(message);
+        };
         try {
             manipulation_transform = manipulator->Transform(point.x, point.y, view);
+            if (roof_transform_capture) request_roof_preview(modifiers);
+            if (!guard) return;
             if (!viewer.IsNull()) viewer->RedrawImmediate();
         } catch (const Standard_Failure& error) {
-            show_operation_error(QStringLiteral("3D transform preview failed: ") +
-                                 exception_text(error));
+            fail(QStringLiteral("3D transform preview failed: ") + exception_text(error));
         } catch (const std::exception& error) {
-            show_operation_error(QStringLiteral("3D transform preview failed: ") +
-                                 exception_text(error));
+            fail(QStringLiteral("3D transform preview failed: ") + exception_text(error));
         } catch (...) {
-            show_operation_error(QStringLiteral("3D transform preview failed: unknown failure"));
+            fail(QStringLiteral("3D transform preview failed: unknown failure"));
         }
     }
 
@@ -1116,6 +1192,232 @@ public:
         int width=0, height=0;
         if (!window.IsNull()) window->Size(width,height);
         return QSize(width,height)==capture.native_size;
+    }
+
+    bool roof_preview_current(std::uint64_t serial) const {
+        return serial != 0 && serial == roof_transform_serial && roof_transform_proposal &&
+            roof_transform_capture && owner->hasFocus() && !QApplication::activeModalWidget() &&
+            selection_current(*roof_transform_capture);
+    }
+
+    bool restore_roof_preview() noexcept {
+        if (roof_preview_presentations.empty() && roof_original_visibility.empty()) {
+            roof_presented_serial=0;
+            return true;
+        }
+        bool restored=!context.IsNull();
+        if (!context.IsNull()) {
+            for (const auto& presentation : roof_preview_presentations)
+                try { context->Remove(presentation,false); } catch (...) { restored=false; }
+            for (const auto& [presentation,visible] : roof_original_visibility)
+                try {
+                    if (visible) context->Display(presentation,false);
+                    else context->Erase(presentation,false);
+                } catch (...) { restored=false; }
+        }
+        roof_presented_serial = 0;
+        try { restore_selection_highlights(); } catch (...) { restored=false; }
+        try { if (!view.IsNull()) view->Redraw(); } catch (...) { restored=false; }
+        if (!restored) {
+            roof_restoration_needs_republication=true;
+            geometry_prepared=false;
+            published_snapshot.reset();
+            // Preserve rollback handles for the next real source publication.
+            // Readiness and input authority stay false until cleanup succeeds.
+            operation_error=QStringLiteral("The 3D preview could not restore the displayed scene. Refresh the project view before editing.");
+            try { refresh_status_label(); } catch (...) {}
+            return false;
+        }
+        roof_preview_presentations.clear();
+        roof_original_visibility.clear();
+        return true;
+    }
+
+    void retire_roof_transform() noexcept {
+        const bool notify = roof_transform_capture.has_value() && !roof_committing;
+        roof_transform_capture.reset();
+        roof_transform_proposal.reset();
+        roof_release_pending = false;
+        roof_candidate_serial = 0;
+        roof_candidate.reset();
+        roof_candidate_visible_ids.reset();
+        roof_candidate_targets.clear();
+        roof_preview_timer->stop();
+        roof_transform_feedback.clear();
+        (void)restore_roof_preview();
+        try { refresh_status_label(); } catch (...) {}
+        // Clear all ownership before a cancellation observer can reenter.
+        if (notify) {
+            try { const auto callback = owner->onRoofOpeningTransformCanceled; if (callback) callback(); }
+            catch (...) {}
+        }
+    }
+
+    void request_roof_preview(Qt::KeyboardModifiers modifiers) {
+        if (!roof_transform_capture || !selection_current(*roof_transform_capture) ||
+            !owner->hasFocus() || QApplication::activeModalWidget()) {
+            owner->cancelInteraction();
+            return;
+        }
+        const QPointer<NativeModelView> guard(owner);
+        CommitSourceScope source_scope(owner);
+        commit_snapshot = roof_transform_capture->source;
+        if (!owner->admitSceneInput(false) || !guard || !roof_transform_capture) return;
+        if (!manipulation_transform) return;
+        const auto& transform = *manipulation_transform;
+        gp_XYZ axis;
+        double angle = 0.0;
+        if (transform.GetRotation(axis,angle) && axis.Z() < 0.0) angle = -angle;
+        const auto scale = transform.ScaleFactor();
+        constexpr double epsilon = 1.0e-9;
+        if (!std::isfinite(scale) || scale <= 0.0 || !std::isfinite(angle) ||
+            (std::abs(angle) > epsilon && (std::abs(axis.X()) > epsilon || std::abs(axis.Y()) > epsilon ||
+             std::abs(std::abs(axis.Z())-1.0) > epsilon))) {
+            owner->cancelInteraction();
+            return;
+        }
+        auto pivot = gp_Pnt(roof_transform_pivot[0],roof_transform_pivot[1],roof_transform_pivot[2]);
+        const auto moved = pivot.Transformed(transform);
+        NativeRoofOpeningTransform proposal{roof_transform_capture->roof_openings,roof_transform_pivot,
+            {moved.X()-pivot.X(),moved.Y()-pivot.Y(),0.0},angle,scale};
+        if (std::abs(moved.Z()-pivot.Z()) > epsilon ||
+            !std::isfinite(proposal.translation_world_m[0]) || !std::isfinite(proposal.translation_world_m[1])) {
+            owner->cancelInteraction(); return;
+        }
+        constexpr double pi = 3.14159265358979323846;
+        const bool fine = modifiers.testFlag(Qt::ShiftModifier);
+        const auto angle_step = fine ? pi/180.0 : pi/4.0;
+        proposal.rotation_radians = std::round(angle/angle_step)*angle_step;
+        const double step = fine ? (roof_transform_metric_units ? 0.001 : 0.00635) : roof_transform_length_step;
+        for (int i=0;i<2;++i) proposal.translation_world_m[i] =
+            std::round(proposal.translation_world_m[i]/step)*step;
+        if (std::abs(scale-1.0) > epsilon) {
+            const auto length = std::max(step,std::round(roof_transform_reference_length*scale/step)*step);
+            proposal.uniform_scale = length/roof_transform_reference_length;
+            if (!std::isfinite(proposal.uniform_scale) || proposal.uniform_scale <= 0.0) {
+                owner->cancelInteraction(); return;
+            }
+        }
+        if (roof_transform_proposal && *roof_transform_proposal == proposal) return;
+        if (roof_transform_serial == std::numeric_limits<std::uint64_t>::max()) {
+            owner->cancelInteraction(); return;
+        }
+        ++roof_transform_serial;
+        roof_transform_proposal = proposal;
+        roof_candidate_serial = 0;
+        roof_candidate.reset();
+        roof_candidate_visible_ids.reset();
+        roof_candidate_targets.clear();
+        // Never retain an older admitted presentation under a newer proposal.
+        if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
+        const double display_factor = roof_transform_metric_units ? 1.0 : 1.0/0.0254;
+        roof_transform_feedback = QStringLiteral("Skylights: ΔX %1 %5 · ΔY %2 %5 · %3° · size %4 %5 — checking")
+            .arg(proposal.translation_world_m[0]*display_factor,0,'f',3)
+            .arg(proposal.translation_world_m[1]*display_factor,0,'f',3)
+            .arg(proposal.rotation_radians*180.0/pi,0,'f',1)
+            .arg(roof_transform_reference_length*proposal.uniform_scale*display_factor,0,'f',3)
+            .arg(roof_transform_metric_units ? QStringLiteral("m") : QStringLiteral("in"));
+        refresh_status_label();
+        try {
+            const auto callback = owner->onRoofOpeningTransformPreviewRequested;
+            if (callback) callback(proposal,roof_transform_serial);
+        } catch (...) {
+            if (guard) owner->cancelInteraction();
+        }
+    }
+
+    void commit_roof_preview() {
+        if (!roof_release_pending || roof_presented_serial != roof_transform_serial ||
+            !roof_preview_current(roof_transform_serial)) return;
+        const auto proposal = *roof_transform_proposal;
+        const auto serial = roof_transform_serial;
+        const auto source = roof_transform_capture->source;
+        const QPointer<NativeModelView> guard(owner);
+        CommitSourceScope source_scope(owner);
+        commit_snapshot = source;
+        if (!owner->admitSceneInput(false) || !guard || !roof_preview_current(serial)) return;
+        const auto callback = owner->onRoofOpeningTransformRequested;
+        // One release invokes exactly one commit observer, including refusal.
+        roof_release_pending = false;
+        roof_committing = true;
+        bool accepted = false;
+        try { if (callback) accepted = callback(proposal,serial); } catch (...) {}
+        if (!guard) return;
+        roof_committing = false;
+        owner->cancelInteraction();
+        if (!guard) return;
+        if (!accepted) show_input_error(QStringLiteral("Skylight transform was refused. Start again."));
+    }
+
+    void collect_roof_preview() noexcept {
+        const QPointer<NativeModelView> guard(owner);
+        // A retired native request can fail while a newer pointer proposal is
+        // still awaiting its root candidate. Its failure owns only the bound
+        // candidate serial, never the newest gesture/proposal serial.
+        const auto collecting_serial=roof_candidate_serial;
+        try {
+            if (roof_transform_capture && (!owner->hasFocus() || QApplication::activeModalWidget() ||
+                !selection_current(*roof_transform_capture))) { owner->cancelInteraction(); return; }
+            auto prepared = roof_preview_regenerator.take_completed();
+            if (!roof_preview_regenerator.is_pending() && !roof_transform_capture) roof_preview_timer->stop();
+            if (!prepared || !roof_candidate || !roof_preview_current(roof_candidate_serial)) return;
+            const auto serial = roof_candidate_serial;
+            if (prepared->revision != roof_candidate->revision() || prepared->visible_ids != roof_candidate_visible_ids ||
+                !prepared->errors.empty() || !prepared->pending.empty()) {
+                (void)owner->rejectRoofOpeningTransformPreview(serial,
+                    QStringLiteral("The candidate skylight geometry is incomplete."));
+                return;
+            }
+            std::vector<std::pair<occ::handle<AIS_Shape>,bool>> next;
+            std::vector<occ::handle<AIS_Shape>> selected_fills;
+            std::vector<NativeRoofOpeningTarget> found_targets;
+            for (const auto& [id,solid] : prepared->solids) {
+                next.emplace_back(prepared_presentation(solid),solid.visible);
+                for (const auto& region : solid.material_regions) {
+                    if (!region.roof_opening) continue;
+                    if (region.shape.IsNull()) throw std::invalid_argument("candidate skylight topology is absent");
+                    NativeRoofOpeningTarget target{QString::fromStdString(region.roof_opening->roof_id),
+                        QString::fromStdString(region.roof_opening->opening_id)};
+                    auto fill = occ::handle<AIS_Shape>(new AIS_Shape(region.shape));
+                    fill->SetColor(region.color);
+                    fill->SetDisplayMode(AIS_Shaded);
+                    next.emplace_back(fill,solid.visible);
+                    if (solid.visible) found_targets.push_back(target);
+                    if (solid.visible && std::find(roof_candidate_targets.begin(),roof_candidate_targets.end(),target) != roof_candidate_targets.end())
+                        selected_fills.push_back(fill);
+                }
+            }
+            for (const auto& target : roof_candidate_targets)
+                if (std::find(found_targets.begin(),found_targets.end(),target) == found_targets.end())
+                    throw std::invalid_argument("candidate skylight cohort lacks visible native provenance");
+            if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
+            for (const auto& [id,solid] : solids) {
+                roof_original_visibility.emplace_back(solid.presentation,context->IsDisplayed(solid.presentation));
+                for (const auto& child : solid.roof_openings)
+                    roof_original_visibility.emplace_back(child.presentation,context->IsDisplayed(child.presentation));
+            }
+            // Register rollback ownership before any display operation can fail.
+            for (const auto& [presentation,visible] : next) roof_preview_presentations.push_back(presentation);
+            for (const auto& [presentation,visible] : next) if (visible) context->Display(presentation,false);
+            for (const auto& [presentation,visible] : roof_original_visibility) if (visible) context->Erase(presentation,false);
+            context->ClearSelected(false);
+            for (const auto& fill : selected_fills) context->AddOrRemoveSelected(fill,false);
+            viewer->Redraw();
+            if (!roof_preview_current(serial)) { owner->cancelInteraction(); return; }
+            roof_presented_serial = serial;
+            roof_transform_feedback.replace(QStringLiteral(" — preparing"),QStringLiteral(" — preview"));
+            refresh_status_label();
+            commit_roof_preview();
+        } catch (const Standard_Failure& error) {
+            if (guard && collecting_serial && roof_preview_current(collecting_serial))
+                (void)owner->rejectRoofOpeningTransformPreview(collecting_serial,exception_text(error));
+        } catch (const std::exception& error) {
+            if (guard && collecting_serial && roof_preview_current(collecting_serial))
+                (void)owner->rejectRoofOpeningTransformPreview(collecting_serial,exception_text(error));
+        } catch (...) {
+            if (guard && collecting_serial && roof_preview_current(collecting_serial))
+                (void)owner->rejectRoofOpeningTransformPreview(collecting_serial,QStringLiteral("Native skylight preview failed."));
+        }
     }
 
     occ::handle<AIS_Shape> roof_opening_presentation(const NativeRoofOpeningTarget& target) const {
@@ -1510,6 +1812,8 @@ NativeModelView::NativeModelView(QWidget* parent)
 NativeModelView::~NativeModelView() {
     m_impl->preparation_timer->stop();
     m_impl->regenerator.shutdown();
+    m_impl->roof_preview_timer->stop();
+    m_impl->roof_preview_regenerator.shutdown();
     m_impl->detach_manipulator();
     if (m_impl->native_ready && !m_impl->context.IsNull()) {
         m_impl->context->RemoveAll(false);
@@ -1527,7 +1831,7 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
     // Forks may share both identity and revision while holding different content.
     // Deduplicate only the same immutable head and visibility request, retaining
     // in-flight work, completed topology, and failures for unchanged refreshes.
-    if (m_impl->snapshot &&
+    if (!m_impl->roof_restoration_needs_republication && m_impl->snapshot &&
         m_impl->snapshot->document_id() == snapshot.document_id() &&
         m_impl->snapshot->revision() == snapshot.revision() &&
         m_impl->visible_ids == visible_ids &&
@@ -1538,7 +1842,9 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
     }
 
     auto requested_source = std::make_shared<const DocumentSnapshot>(snapshot);
+    const QPointer<NativeModelView> cancellation_guard(this);
     cancelInteraction();
+    if (!cancellation_guard) return;
     m_impl->detach_manipulator();
     m_impl->visible_ids = std::move(visible_ids);
     m_impl->snapshot = std::move(requested_source);
@@ -1613,6 +1919,7 @@ void NativeModelView::setSemanticSelections(const QStringList& entity_ids,
         // Publish logical intent even if restoring a derived driver preview
         // fails. The failure is contained below and retires input readiness.
         if (changed) cancelInteraction();
+        if (!guard) return;
         m_impl->restore_selection_highlights();
         m_impl->attach_manipulator();
         if (m_impl->native_ready && !m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
@@ -1643,9 +1950,85 @@ void NativeModelView::setSelectedRoofOpenings(std::vector<NativeRoofOpeningTarge
 }
 
 bool NativeModelView::transformControlsVisible() const noexcept {
-    return m_impl->selected_roof_openings.empty() && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
-           m_impl->manipulator_entity_id == m_impl->selected_entity_id &&
+    return ((!m_impl->selected_roof_openings.empty() && !m_impl->roof_transform_proxy.IsNull()) ||
+           (m_impl->selected_roof_openings.empty() && m_impl->selected_entity_ids.size() == 1 && m_impl->selected_entity_id.has_value() &&
+           m_impl->manipulator_entity_id == m_impl->selected_entity_id)) &&
            !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
+}
+
+bool NativeModelView::roofOpeningTransformPreviewCurrent(std::uint64_t serial) const noexcept {
+    try { return m_impl->roof_preview_current(serial); } catch (...) { return false; }
+}
+
+bool NativeModelView::completeRoofOpeningTransformPreview(
+    std::uint64_t serial, const DocumentSnapshot& candidate,
+    std::vector<NativeRoofOpeningTarget> remapped_targets,
+    VisibleEntityIds candidate_visible_ids) {
+    if (QThread::currentThread() != thread() || !roofOpeningTransformPreviewCurrent(serial)) return false;
+    if (!candidate.is_editable() || candidate.document_id() != m_impl->roof_transform_capture->source->document_id() ||
+        remapped_targets.size() != m_impl->roof_transform_proposal->targets.size()) {
+        (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The skylight candidate source or cohort is invalid."));
+        return false;
+    }
+    for (std::size_t i=0;i<remapped_targets.size();++i) {
+        if (remapped_targets[i].roof_id.isEmpty() || remapped_targets[i].opening_id.isEmpty() ||
+            std::find(remapped_targets.begin(),remapped_targets.begin()+static_cast<std::ptrdiff_t>(i),remapped_targets[i]) !=
+                remapped_targets.begin()+static_cast<std::ptrdiff_t>(i)) {
+            (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("The skylight candidate has invalid child identities."));
+            return false;
+        }
+    }
+    // Duplicate completions cannot replace an already bound candidate source.
+    if (m_impl->roof_candidate_serial == serial) return false;
+    try {
+        auto source = std::make_shared<const DocumentSnapshot>(candidate);
+        m_impl->roof_preview_regenerator.request(candidate,candidate_visible_ids);
+        m_impl->roof_candidate = std::move(source);
+        m_impl->roof_candidate_visible_ids = std::move(candidate_visible_ids);
+        m_impl->roof_candidate_targets = std::move(remapped_targets);
+        m_impl->roof_candidate_serial = serial;
+        m_impl->roof_transform_feedback.replace(QStringLiteral(" — checking"),QStringLiteral(" — preparing"));
+        m_impl->refresh_status_label();
+        m_impl->roof_preview_timer->start();
+        return true;
+    } catch (const std::exception& error) {
+        (void)rejectRoofOpeningTransformPreview(serial,exception_text(error));
+    } catch (...) {
+        (void)rejectRoofOpeningTransformPreview(serial,QStringLiteral("Native skylight preparation could not start."));
+    }
+    return false;
+}
+
+bool NativeModelView::rejectRoofOpeningTransformPreview(std::uint64_t serial, QString message) {
+    if (QThread::currentThread() != thread() || !m_impl->roof_transform_capture ||
+        serial != m_impl->roof_transform_serial || !m_impl->roof_transform_proposal) return false;
+    const bool released = m_impl->roof_release_pending;
+    m_impl->roof_transform_proposal.reset();
+    m_impl->roof_candidate_serial = 0;
+    m_impl->roof_candidate.reset();
+    m_impl->roof_candidate_visible_ids.reset();
+    m_impl->roof_candidate_targets.clear();
+    if (!m_impl->restore_roof_preview()) {
+        cancelInteraction();
+        return true;
+    }
+    if (released) {
+        const QPointer<NativeModelView> guard(this);
+        cancelInteraction();
+        if (!guard) return true;
+        m_impl->show_input_error(message);
+    } else {
+        m_impl->roof_transform_feedback = std::move(message);
+        m_impl->refresh_status_label();
+    }
+    return true;
+}
+
+void NativeModelView::setRoofOpeningTransformMetricUnits(bool metric) {
+    if (m_impl->roof_transform_metric_units == metric) return;
+    const QPointer<NativeModelView> guard(this);
+    cancelInteraction();
+    if (guard) m_impl->roof_transform_metric_units = metric;
 }
 
 bool NativeModelView::exportViewImage(const QString& path) {
@@ -1676,7 +2059,9 @@ bool NativeModelView::isGeometryPending() const noexcept {
 void NativeModelView::pollGeometryPreparation() noexcept {
     if (QThread::currentThread() != thread()) return;
     try {
+        const QPointer<NativeModelView> guard(this);
         m_impl->collect_prepared_geometry();
+        if (guard) m_impl->collect_roof_preview();
     } catch (...) {
         // Collection records worker/publication failures before notifying the
         // shell. A throwing error callback must not escape a polling boundary.
@@ -1788,6 +2173,9 @@ void NativeModelView::cancelInteraction() {
 }
 
 void NativeModelView::resetInteraction(bool restore_controls, bool keep_tablet_dispatch) {
+    const QPointer<NativeModelView> guard(this);
+    m_impl->retire_roof_transform();
+    if (!guard) return;
     if (m_impl->tablet_dispatch_depth && !keep_tablet_dispatch) m_impl->tablet_dispatch_retired=true;
     if (!keep_tablet_dispatch || !m_impl->touch_dispatch_depth) {
         if (m_impl->touch_dispatch_depth) m_impl->touch_dispatch_retired=true;
@@ -2383,6 +2771,10 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
         event->accept();
         return; // Extra buttons cannot replace the gesture owner.
     }
+    if (m_impl->roof_release_pending) {
+        cancelInteraction();
+        if (!owner_guard) { event->accept(); return; }
+    }
     m_impl->left_press = logical_point;
     m_impl->left_moved = false;
     if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton ||
@@ -2435,8 +2827,13 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
             Impl::CommitSourceScope source_scope(this);
             m_impl->commit_snapshot=m_impl->gesture_snapshot;
             try {
-                const auto observer=onTransformGestureStarted;
-                if (observer) observer(target);
+                if (m_impl->roof_transform_capture) {
+                    const auto observer=onRoofOpeningTransformStarted;
+                    if (observer) observer(m_impl->roof_transform_capture->roof_openings);
+                } else {
+                    const auto observer=onTransformGestureStarted;
+                    if (observer) observer(target);
+                }
                 if (!guard) return false;
                 if (m_impl->touch_dispatch_depth && (m_impl->touch_dispatch_retired || !m_impl->touch ||
                     !m_impl->touch->device || !m_impl->selection_current(m_impl->touch->context))) {
@@ -2464,7 +2861,22 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
         const bool manipulating = !isMoveActive() && m_impl->begin_manipulation(point);
         if (!owner_guard) { event->accept(); return; }
         if (manipulating) {
-            if (!capture_transform(QString::fromStdString(*m_impl->manipulator_entity_id))) {
+            const bool children = !m_impl->selected_roof_openings.empty();
+            if (children) {
+                m_impl->roof_transform_capture = m_impl->capture_selection();
+                // Capture the world length magnet once; camera changes retire
+                // the gesture rather than changing its quantization mid-drag.
+                const double desired = 8.0 * m_impl->view->Camera()->Scale() / std::max(1,height());
+                const std::vector<double> steps = m_impl->roof_transform_metric_units ?
+                    std::vector<double>{0.001,0.002,0.005,0.01,0.02,0.05,0.1,0.25,0.5,1.0} :
+                    std::vector<double>{0.00635,0.0127,0.0254,0.0762,0.1524,0.3048};
+                const auto step = std::lower_bound(steps.begin(),steps.end(),desired);
+                m_impl->roof_transform_length_step = step == steps.end() ? steps.back() : *step;
+            }
+            if (!capture_transform(children ? QString() : QString::fromStdString(*m_impl->manipulator_entity_id)) ||
+                !owner_guard || (children && (!m_impl->roof_transform_capture ||
+                    !m_impl->selection_current(*m_impl->roof_transform_capture)))) {
+                if (owner_guard) cancelInteraction();
                 event->accept();
                 return;
             }
@@ -2582,7 +2994,7 @@ void NativeModelView::pointerMove(QSinglePointEvent* event) {
     if (m_impl->initiating_button == Qt::LeftButton) {
         if (m_impl->gesture == Impl::Gesture::manipulate && m_impl->left_moved) {
             const QPointer<NativeModelView> owner_guard(this);
-            m_impl->preview_manipulation(point);
+            m_impl->preview_manipulation(point,event->modifiers());
             if (!owner_guard) { event->accept(); return; }
         }
         if (m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
@@ -2618,6 +3030,36 @@ void NativeModelView::pointerRelease(QSinglePointEvent* event) {
     const auto selection_point = m_impl->input_point(m_impl->left_press);
     if ((event->position() - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
         m_impl->left_moved = true;
+    if (m_impl->gesture == Impl::Gesture::manipulate && m_impl->roof_transform_capture) {
+        if (!m_impl->left_moved || !m_impl->selection_current(*m_impl->roof_transform_capture)) {
+            cancelInteraction(); event->accept(); return;
+        }
+        m_impl->preview_manipulation(point,event->modifiers());
+        if (!owner_guard) { event->accept(); return; }
+        if (!m_impl->roof_transform_proposal || !m_impl->roof_transform_capture) {
+            cancelInteraction(); event->accept(); return;
+        }
+        try {
+            if (!m_impl->manipulator.IsNull()) {
+                m_impl->manipulator->StopTransform(false);
+                m_impl->manipulator->DeactivateCurrentMode();
+            }
+        } catch (...) { cancelInteraction(); event->accept(); return; }
+        // Pointer ownership ends, but the exact source/camera/cohort proposal
+        // survives until its manufactured presentation completes or is retired.
+        m_impl->initiating_button = Qt::NoButton;
+        m_impl->gesture = Impl::Gesture::none;
+        m_impl->tablet_active = false;
+        m_impl->tablet_button = Qt::NoButton;
+        m_impl->tablet_device.clear();
+        m_impl->touch.reset();
+        m_impl->roof_release_pending = true;
+        m_impl->roof_preview_timer->start();
+        unsetCursor();
+        m_impl->commit_roof_preview();
+        event->accept();
+        return;
+    }
     if (m_impl->gesture==Impl::Gesture::overlap_select || m_impl->gesture==Impl::Gesture::overlap_pan) {
         if (m_impl->left_moved) {
             // Also covers press/release beyond threshold with no move event.

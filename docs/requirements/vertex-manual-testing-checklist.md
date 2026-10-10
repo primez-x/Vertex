@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus thirty-eight focused drawing and architectural checks below (488 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty focused drawing and architectural checks below (490 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3382,6 +3382,18 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-GROUP-TRANSFER - Copy and place several skylights together**
   - Steps: Give several skylights different sizes, angles and construction dimensions. Select them, copy and paste, then hover and click a compatible roof face. Repeat using Duplicate and Cut. Paste onto a differently sloped or rotated roof with enough space. Leave the canvas and return to the same placement point; repeat after switching focus or opening a modal dialog. Try a placement that overlaps an existing opening, cancel a pending paste with right-click, then undo/redo, save and reopen. Repeat in a design alternative.
   - Expected: A completed preview shows every new skylight before placement. The copies have new identities, retain their physical face sizes, individual angles and construction profiles, and preserve relative centre offsets. Source roofs are never copied as active objects. One command places the complete group; invalid or cancelled placement adds nothing. Cut is one undoable removal and its clipboard remains usable. Baseline geometry remains intact in an alternative.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-3D-TRANSFORM - Move, rotate and resize a skylight in 3D**
+  - Steps: Select a skylight in the 3D view. Drag its horizontal movement handle, rotate to 45 and 90 degrees, and resize uniformly. Hold Shift for finer movement and rotation. Repeat with metric and imperial units at close and distant zoom. Inspect the roof cut, frame and glazing during the preview and after release. Try moving it beyond the roof edge, then cancel another edit. Undo/redo, save and reopen.
+  - Expected: Controls act on the skylight and retain its roof. Movement follows practical unit increments; fine movement remains measurable. The preview shows the actual changed roof cut, frame and glazing. A valid edit is one undoable operation; an invalid or cancelled edit changes nothing. The containing roof does not move or resize.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-3D-GROUP - Transform several skylights together in 3D**
+  - Steps: Ctrl-click several skylights, including ones on different roof slopes or buildings. Move, rotate and resize the group using its controls. Repeat in a remodeling alternative. During a pending preview, switch focus, orbit the camera, hide a selected roof or change the selection. Try another valid edit, undo once, redo, save and reopen.
+  - Expected: Every selected skylight follows the common operation in the displayed coordinate system, retaining its actual roof host and construction dimensions. A complete valid preview is required before the group is committed once. Changing the view, source or selection cancels the earlier proposal permanently. Baseline roofs remain intact in a remodeling alternative. One undo restores all members together.
   - Result: Not tested
   - Notes: ______________________________
 

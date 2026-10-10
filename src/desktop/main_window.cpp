@@ -6130,6 +6130,27 @@ class MainWindow::Impl {
         std::optional<CanvasRoofOpeningGroupEdit> group_gesture;
         Vec2 group_placement_anchor;
     };
+    struct NativeRoofOpeningCapture {
+        QPointer<visualization::NativeModelView> view;
+        std::shared_ptr<const DocumentSnapshot> source;
+        std::shared_ptr<const SourceEditAuthority> authority;
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source;
+        std::vector<visualization::NativeRoofOpeningTarget> targets;
+        visualization::NativeModelView::VisibleEntityIds visible_ids;
+    };
+    struct NativeRoofOpeningResult {
+        std::shared_ptr<PreparedCanvasEdit> prepared;
+        std::shared_ptr<const DocumentSnapshot> candidate;
+        std::vector<visualization::NativeRoofOpeningTarget> targets;
+        visualization::NativeModelView::VisibleEntityIds visible_ids;
+        bool no_op{};
+    };
+    struct PendingNativeRoofOpeningPreview {
+        std::shared_ptr<const NativeRoofOpeningCapture> capture;
+        visualization::NativeRoofOpeningTransform gesture;
+        std::uint64_t serial{};
+        std::shared_ptr<NativeRoofOpeningResult> result;
+    };
     struct VisibleOpeningHost {
         Entity owner;
         Wall wall;
@@ -6300,6 +6321,9 @@ public:
         m_roof_opening_preview_timer=new QTimer(owner);
         m_roof_opening_preview_timer->setInterval(16);
         QObject::connect(m_roof_opening_preview_timer,&QTimer::timeout,owner,[this] { pollRoofOpeningCanvasPreview(); });
+        m_native_roof_opening_preview_timer=new QTimer(owner);
+        m_native_roof_opening_preview_timer->setInterval(16);
+        QObject::connect(m_native_roof_opening_preview_timer,&QTimer::timeout,owner,[this] { pollNativeRoofOpeningPreview(); });
     }
 
     ~Impl() {
@@ -6314,6 +6338,8 @@ public:
         m_opening_placement_preview_queue.shutdown(false);
         m_roof_opening_preview_timer->stop();
         m_roof_opening_preview_queue.shutdown(false);
+        m_native_roof_opening_preview_timer->stop();
+        m_native_roof_opening_preview_queue.shutdown(false);
         // Jobs own detached values only. Join before destroying any owner state.
         try { waitForSaveBarrier(); }
         catch (...) { settleAutosave(false); }
@@ -29155,10 +29181,17 @@ public:
 
     void publishPreparedCanvasEdit(const std::shared_ptr<PreparedCanvasEdit>& prepared,
         const std::shared_ptr<const CanvasEditSourceCapture>& capture) {
+        requireSiteSelectionAdmission();
+        publishPreparedCapturedEdit(prepared,capture);
+    }
+
+    // Publication mechanics are shared; each input surface must first admit
+    // its own captured semantic selection, not a different surface's roster.
+    void publishPreparedCapturedEdit(const std::shared_ptr<PreparedCanvasEdit>& prepared,
+        const std::shared_ptr<const CanvasEditSourceCapture>& capture) {
         if (!prepared || !capture) throw std::invalid_argument("The canvas edit has no admitted publication.");
         if (prepared->alternative_wall)
             throw std::invalid_argument("Complete the proposed wall and room review before publishing this physical preview.");
-        requireSiteSelectionAdmission();
         if (m_recovery_ledger.empty()) {
             if (capture->workspace || capture->mirror || !prepared->document || prepared->workspace || prepared->mirror)
                 throw std::invalid_argument("The canvas edit's document authority changed.");
@@ -47662,7 +47695,7 @@ private:
                 retain_physical(decode_phase_slab_replacement_authoring(component.slab_replacement));
             else if (!component.roof_replacement.is_null()) {
                 const auto replacement = decode_phase_roof_replacement_authoring(component.roof_replacement);
-                if (!replacement.demolition) identities = replacement.identities;
+                if (!replacement.demolition) retain_physical(replacement);
             }
             else if (!component.structural_replacement.is_null())
                 retain_physical(decode_phase_structural_replacement_authoring(component.structural_replacement));
@@ -47683,7 +47716,8 @@ private:
     static PhaseWallReplacementIdentityMap alternativeCommandReplacementIdentities(const Command& command,
         std::vector<PhaseStructuralReplacementAuthoring>* structural_components=nullptr,
         std::vector<PhaseStairReplacementAuthoring>* stair_components=nullptr,
-        std::vector<PhaseSlabReplacementAuthoring>* slab_components=nullptr) {
+        std::vector<PhaseSlabReplacementAuthoring>* slab_components=nullptr,
+        std::vector<PhaseRoofReplacementAuthoring>* roof_components=nullptr) {
         PhaseWallReplacementIdentityMap identities;
         if (!std::holds_alternative<ApplyBoundaryConstraintChanges>(command)) return identities;
         // Room completion retains the complete geometry command in its closed
@@ -47707,6 +47741,12 @@ private:
                     for (const auto& component:phase_constraint_replacement_components(intent))
                         if (!component.slab_replacement.is_null())
                             slab_components->push_back(decode_phase_slab_replacement_authoring(component.slab_replacement));
+                if (roof_components)
+                    for (const auto& component:phase_constraint_replacement_components(intent))
+                        if (!component.roof_replacement.is_null()) {
+                            auto replacement=decode_phase_roof_replacement_authoring(component.roof_replacement);
+                            if (!replacement.demolition) roof_components->push_back(std::move(replacement));
+                        }
                 for (const auto& [original, proposed] : alternativePhysicalReplacementIdentities(intent)) {
                     const auto [found, inserted] = identities.emplace(original, proposed);
                     if (!inserted && found->second != proposed)
@@ -47732,7 +47772,8 @@ private:
         std::vector<PhaseStructuralReplacementAuthoring> structural_components;
         std::vector<PhaseStairReplacementAuthoring> stair_components;
         std::vector<PhaseSlabReplacementAuthoring> slab_components;
-        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components,&stair_components,&slab_components);
+        std::vector<PhaseRoofReplacementAuthoring> roof_components;
+        const auto identities = alternativeCommandReplacementIdentities(command,&structural_components,&stair_components,&slab_components,&roof_components);
         for (const auto& [original_id, proposed_id] : identities) {
             const auto original = source.entities().find(original_id);
             if (original == source.entities().end() ||
@@ -47752,6 +47793,8 @@ private:
             return !component.hosted_instance_identities.empty();
         }) || std::any_of(slab_components.begin(),slab_components.end(),[](const auto& component) {
             return !component.hosted_instance_identities.empty();
+        }) || std::any_of(roof_components.begin(),roof_components.end(),[](const auto& component) {
+            return !component.hosted_instance_identities.empty();
         });
         if (hosted) {
             const auto before=embedded_assembly_presentation_ids(source.entities());
@@ -47769,6 +47812,7 @@ private:
             append(structural_components);
             append(stair_components);
             append(slab_components);
+            append(roof_components);
         }
         return result;
     }
@@ -51989,6 +52033,16 @@ private:
                     throw std::invalid_argument("The displayed 3D source or editing context changed before the gesture.");
                 m_native_gesture_authority = captureSourceEditAuthority(*source);
             };
+            m_nativeModelView->onRoofOpeningTransformStarted=[this](std::vector<visualization::NativeRoofOpeningTarget> targets) {
+                captureNativeRoofOpeningGesture(std::move(targets));
+            };
+            m_nativeModelView->onRoofOpeningTransformPreviewRequested=[this](visualization::NativeRoofOpeningTransform gesture,std::uint64_t serial) {
+                previewNativeRoofOpeningGesture(std::move(gesture),serial);
+            };
+            m_nativeModelView->onRoofOpeningTransformRequested=[this](visualization::NativeRoofOpeningTransform gesture,std::uint64_t serial) {
+                return commitNativeRoofOpeningGesture(std::move(gesture),serial);
+            };
+            m_nativeModelView->onRoofOpeningTransformCanceled=[this] { cancelNativeRoofOpeningPreview(); };
             m_nativeModelView->setEntityTranslationRequestedCallback(
                 [this](QString id, double x, double y, double z) {
                     (void)commitNativeWorldEdit(id, {{x, y, z}, 0.0, 1.0});
@@ -62203,6 +62257,7 @@ private:
 
     void clearRoofOpeningSelection() {
         cancelRoofOpeningCanvasPreview();
+        cancelNativeRoofOpeningPreview();
         m_selected_roof_openings.clear();
         m_selected_roof_opening.reset();
         m_roof_opening_native_selection=false;
@@ -62260,18 +62315,27 @@ private:
         return selectedRoofOpeningCohortSource(require_editable);
     }
 
+    static QStringList roofOpeningOwnerSelection(const std::vector<CanvasRoofOpeningTarget>& targets) {
+        QStringList owners;
+        for (const auto& target:targets) {
+            // The final child is primary, including A/B/A child order. Keep
+            // its owner last so refresh cannot collapse a valid whole cohort.
+            owners.removeAll(target.roof_id);
+            owners.push_back(target.roof_id);
+        }
+        return owners;
+    }
+
     bool adoptRoofOpeningSelection(const std::shared_ptr<const DocumentSnapshot>& source,
         std::vector<CanvasRoofOpeningTarget> children,bool native) {
         if (!source || fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
             throw std::invalid_argument("The displayed source changed before skylight selection.");
-        QStringList owners;
         std::vector<CanvasRoofOpeningTarget> unique;
         for (const auto& target:children) {
             if (target.source_revision!=source->revision())
                 throw std::invalid_argument("The skylight source changed before selection.");
             (void)roofCanvasChild(*source,target);
             if (std::find(unique.begin(),unique.end(),target)==unique.end()) unique.push_back(target);
-            if (!owners.contains(target.roof_id)) owners.push_back(target.roof_id);
         }
         const auto previous=m_selected_roof_openings;
         const auto previous_native=m_roof_opening_native_selection;
@@ -62284,7 +62348,7 @@ private:
             {
                 const QScopedValueRollback<bool> defer_native(m_native_selection_sync_deferred,true);
                 cancelRoofOpeningCanvasPreview();
-                m_selected_ids=owners;
+                m_selected_ids=roofOpeningOwnerSelection(unique);
                 m_selected_id=unique.empty() ? QString{} : unique.back().roof_id;
                 m_selected_generated_labels.clear();
                 // Child owners remain internal identities. Do not call ordinary
@@ -62372,6 +62436,7 @@ private:
     }
 
     void refreshRoofOpeningControls(const DocumentSnapshot& source) {
+        if (m_nativeModelView) m_nativeModelView->setRoofOpeningTransformMetricUnits(m_metric_units);
         for (auto* canvas:{m_measurementCanvas,m_architecturalCanvas}) {
             std::vector<CanvasRoofOpeningControls> controls;
             try {
@@ -62747,8 +62812,7 @@ private:
             auto targets=ready->result->targets;
             for (auto& target:targets) target.source_revision=authoringSnapshot().revision();
             cancelRoofOpeningCanvasPreview();
-            m_selected_ids.clear();
-            for (const auto& target:targets) if (!m_selected_ids.contains(target.roof_id)) m_selected_ids.push_back(target.roof_id);
+            m_selected_ids=roofOpeningOwnerSelection(targets);
             m_selected_id=targets.empty() ? QString{} : targets.back().roof_id;
             setRoofOpeningSelectionState(std::move(targets),false);
             clearError(); refresh(); return true;
@@ -63068,9 +63132,7 @@ private:
             retained.push_back(std::move(target));
         }
         cancelRoofOpeningCanvasPreview();
-        m_selected_ids.clear();
-        for (const auto& target:retained)
-            if (!m_selected_ids.contains(target.roof_id)) m_selected_ids.push_back(target.roof_id);
+        m_selected_ids=roofOpeningOwnerSelection(retained);
         m_selected_id=retained.empty() ? QString{} : retained.back().roof_id;
         setRoofOpeningSelectionState(std::move(retained),native);
         clearError(); refresh(); return true;
@@ -63386,8 +63448,7 @@ private:
                 auto targets=ready->result->targets;
                 for (auto& target:targets) target.source_revision=authoringSnapshot().revision();
                 setTool(CanvasTool::select);
-                m_selected_ids.clear();
-                for (const auto& target:targets) if (!m_selected_ids.contains(target.roof_id)) m_selected_ids.push_back(target.roof_id);
+                m_selected_ids=roofOpeningOwnerSelection(targets);
                 m_selected_id=targets.empty() ? QString{} : targets.back().roof_id;
                 setRoofOpeningSelectionState(std::move(targets),false);
                 clearError(); refresh(); return;
@@ -65497,6 +65558,197 @@ private:
         } catch (const std::exception& error) {
             setError(QStringLiteral("3D input: %1").arg(QString::fromUtf8(error.what())));
             return false;
+        }
+    }
+
+    void cancelNativeRoofOpeningPreview() {
+        m_native_roof_opening_capture.reset();
+        m_pending_native_roof_opening_preview.reset();
+        m_ready_native_roof_opening_preview.reset();
+        if (m_running_native_roof_opening_preview)
+            (void)m_native_roof_opening_preview_queue.cancel(m_native_roof_opening_preview_sequence);
+    }
+
+    bool nativeRoofOpeningCaptureCurrent(const std::shared_ptr<const NativeRoofOpeningCapture>& capture) const noexcept {
+        try {
+            if (!capture || capture!=m_native_roof_opening_capture || !capture->view ||
+                capture->view!=m_nativeModelView || !capture->view->isVisible() || m_refreshing ||
+                !m_roof_opening_native_selection || !capture->source || !capture->authority ||
+                !sourceEditAuthorityCurrent(*capture->authority) || hasPendingPlacementEdit()) return false;
+            const auto displayed=capture->view->publishedSnapshot();
+            if (!displayed || fullSnapshotDigest(*displayed)!=fullSnapshotDigest(*capture->source) ||
+                capture->targets.size()!=m_selected_roof_openings.size()) return false;
+            for (std::size_t index=0;index<capture->targets.size();++index) {
+                const auto& target=capture->targets[index];
+                const auto& selected=m_selected_roof_openings[index];
+                if (target.roof_id!=selected.roof_id || target.opening_id!=selected.opening_id ||
+                    selected.source_revision!=capture->source->revision()) return false;
+            }
+            return true;
+        } catch (...) { return false; }
+    }
+
+    bool nativeRoofOpeningRequestCurrent(const PendingNativeRoofOpeningPreview& request) const noexcept {
+        return nativeRoofOpeningCaptureCurrent(request.capture) && request.result &&
+            request.capture->view->roofOpeningTransformPreviewCurrent(request.serial);
+    }
+
+    void captureNativeRoofOpeningGesture(std::vector<visualization::NativeRoofOpeningTarget> targets) {
+        cancelNativeRoofOpeningPreview();
+        const auto source=m_nativeModelView->gestureSourceSnapshot();
+        if (!source || !admitNativeSceneInput(false) || targets.empty() ||
+            !m_roof_opening_native_selection || targets.size()!=m_selected_roof_openings.size() ||
+            fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot()))
+            throw std::invalid_argument("Select the current skylights before using their 3D controls.");
+        for (std::size_t index=0;index<targets.size();++index) {
+            const auto& selected=m_selected_roof_openings[index];
+            if (targets[index].roof_id!=selected.roof_id || targets[index].opening_id!=selected.opening_id)
+                throw std::invalid_argument("The 3D skylight selection changed before the gesture.");
+            (void)roofCanvasChild(*source,selected);
+        }
+        NativeRoofOpeningCapture capture;
+        capture.view=m_nativeModelView; capture.source=source; capture.targets=std::move(targets);
+        capture.visible_ids=m_native_visible_ids;
+        capture.authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
+        capture.edit_source=captureCanvasEditSource();
+        m_native_roof_opening_capture=std::make_shared<NativeRoofOpeningCapture>(std::move(capture));
+    }
+
+    static std::vector<RoofEditIntent> nativeRoofOpeningTransformIntents(
+        const DocumentSnapshot& source,const visualization::NativeRoofOpeningTransform& gesture) {
+        const auto finite=[](const auto& values) { return std::all_of(values.begin(),values.end(),[](double value) { return std::isfinite(value); }); };
+        if (gesture.targets.empty() || gesture.targets.size()>4096 || !finite(gesture.pivot_world_m) ||
+            !finite(gesture.translation_world_m) || std::abs(gesture.translation_world_m[2])>1e-9 ||
+            !std::isfinite(gesture.rotation_radians) || std::abs(gesture.rotation_radians)>std::numbers::pi ||
+            !std::isfinite(gesture.uniform_scale) || gesture.uniform_scale<=0.0)
+            throw std::invalid_argument("Skylights slide on their roof hosts; use XY movement, face rotation or positive uniform scaling.");
+        std::map<std::string,std::vector<RoofOpeningGroupMember>,std::less<>> members;
+        std::set<std::pair<std::string,std::string>> identities;
+        for (const auto& target:gesture.targets) {
+            const auto roof=target.roof_id.toStdString(),opening=target.opening_id.toStdString();
+            if (!identities.emplace(roof,opening).second) throw std::invalid_argument("A skylight is repeated in the transform.");
+            members[roof].push_back({roof,opening});
+        }
+        std::vector<RoofEditIntent> result;
+        for (const auto& [roof,children]:members) {
+            // Each real owner can belong to a different site/building frame.
+            // Conjugate the common world pivot and delta before changing source
+            // coordinates; never apply displayed coordinates to source roofs.
+            const auto placement=resolve_site_presentation(source,roof);
+            const auto pivot=site_transform_point({gesture.pivot_world_m[0],gesture.pivot_world_m[1],gesture.pivot_world_m[2]},placement.inverse);
+            const auto delta=site_transform_delta({gesture.translation_world_m[0],gesture.translation_world_m[1],0.0},placement.inverse);
+            RoofOpeningGroupTransform transform;
+            transform.members=children; transform.world_pivot={pivot.x,pivot.y};
+            transform.world_translation={delta.x,delta.y}; transform.rotation_radians=gesture.rotation_radians;
+            transform.uniform_scale=gesture.uniform_scale;
+            auto edits=prepare_roof_opening_group_transform(source.entities(),transform);
+            result.insert(result.end(),std::make_move_iterator(edits.begin()),std::make_move_iterator(edits.end()));
+        }
+        // Per-owner intent production never replaces whole-cohort admission.
+        if (!result.empty()) (void)replay_roof_edit_entities(source.entities(),result);
+        return result;
+    }
+
+    void startNativeRoofOpeningPreview(PendingNativeRoofOpeningPreview request) {
+        m_native_roof_opening_preview_sequence=m_native_roof_opening_preview_queue.enqueue(
+            [request](const RegenerationCancellationToken& cancellation) {
+                const auto& capture=*request.capture;
+                if (cancellation.is_cancelled()) return RegenerationReceipt{capture.source->revision(),{}};
+                const auto edits=nativeRoofOpeningTransformIntents(*capture.source,request.gesture);
+                const auto physical=edits.empty() ? capture.source->entities() : replay_roof_edit_entities(capture.source->entities(),edits);
+                request.result->no_op=physical==capture.source->entities();
+                request.result->targets=capture.targets;
+                request.result->visible_ids=capture.visible_ids;
+                if (request.result->no_op) request.result->candidate=capture.source;
+                else {
+                    const auto command=sourceDerivedRoofMathEditCommand(*capture.source,physical,edits,"Transform skylights in 3D");
+                    request.result->prepared=std::make_shared<PreparedCanvasEdit>();
+                    request.result->candidate=std::make_shared<DocumentSnapshot>(prepareCanvasEdit(
+                        *capture.source,command,capture.edit_source,*request.result->prepared));
+                    for (auto& target:request.result->targets) {
+                        target.roof_id=id_from(alternativeReplacementTargetID(command,target.roof_id.toStdString()));
+                        target.opening_id=id_from(alternativeReplacementTargetID(command,target.opening_id.toStdString()));
+                    }
+                    request.result->visible_ids.clear();
+                    for (const auto& id:capture.visible_ids) {
+                        const auto alias=request.result->prepared->proposed_selection_redirect.find(id);
+                        request.result->visible_ids.insert(alias==request.result->prepared->proposed_selection_redirect.end()
+                            ? alternativeReplacementTargetID(command,id) : alias->second);
+                    }
+                }
+                return RegenerationReceipt{capture.source->revision(),{}};
+            });
+        m_running_native_roof_opening_preview=std::move(request);
+        m_native_roof_opening_preview_timer->start();
+    }
+
+    void previewNativeRoofOpeningGesture(visualization::NativeRoofOpeningTransform gesture,std::uint64_t serial) {
+        if (!nativeRoofOpeningCaptureCurrent(m_native_roof_opening_capture) ||
+            gesture.targets!=m_native_roof_opening_capture->targets ||
+            !m_nativeModelView->roofOpeningTransformPreviewCurrent(serial)) {
+            (void)m_nativeModelView->rejectRoofOpeningTransformPreview(serial,QStringLiteral("The 3D skylight source changed. Begin the gesture again."));
+            return;
+        }
+        PendingNativeRoofOpeningPreview request{m_native_roof_opening_capture,std::move(gesture),serial,std::make_shared<NativeRoofOpeningResult>()};
+        m_ready_native_roof_opening_preview.reset();
+        if (m_running_native_roof_opening_preview) {
+            m_pending_native_roof_opening_preview=std::move(request);
+            (void)m_native_roof_opening_preview_queue.cancel(m_native_roof_opening_preview_sequence);
+            m_native_roof_opening_preview_timer->start();
+        } else startNativeRoofOpeningPreview(std::move(request));
+    }
+
+    void pollNativeRoofOpeningPreview() {
+        if (m_running_native_roof_opening_preview && !nativeRoofOpeningRequestCurrent(*m_running_native_roof_opening_preview))
+            (void)m_native_roof_opening_preview_queue.cancel(m_native_roof_opening_preview_sequence);
+        for (auto& completion:m_native_roof_opening_preview_queue.take_completed()) {
+            if (!m_running_native_roof_opening_preview || completion.sequence!=m_native_roof_opening_preview_sequence) continue;
+            auto request=std::move(*m_running_native_roof_opening_preview); m_running_native_roof_opening_preview.reset();
+            if (!nativeRoofOpeningRequestCurrent(request)) continue;
+            if (completion.succeeded() && completion.receipt->source_revision==request.capture->source->revision() &&
+                request.result->candidate && (request.result->no_op || request.result->prepared)) {
+                // Store command authority before native completion, which may
+                // finish a release waiting for this exact manufactured result.
+                m_ready_native_roof_opening_preview=request;
+                if (!request.capture->view->completeRoofOpeningTransformPreview(request.serial,
+                    *request.result->candidate,request.result->targets,request.result->visible_ids)) m_ready_native_roof_opening_preview.reset();
+            } else {
+                QString message=QStringLiteral("The skylights do not fit this 3D proposal.");
+                try { if (completion.error) std::rethrow_exception(completion.error); }
+                catch (const Standard_Failure& error) { if (error.GetMessageString()) message=QString::fromUtf8(error.GetMessageString()); }
+                catch (const std::exception& error) { message=QString::fromUtf8(error.what()); }
+                catch (...) {}
+                (void)request.capture->view->rejectRoofOpeningTransformPreview(request.serial,message);
+                setError(message);
+            }
+        }
+        if (!m_running_native_roof_opening_preview && m_pending_native_roof_opening_preview) {
+            auto request=std::move(*m_pending_native_roof_opening_preview); m_pending_native_roof_opening_preview.reset();
+            if (nativeRoofOpeningRequestCurrent(request)) startNativeRoofOpeningPreview(std::move(request));
+        }
+        if (!m_running_native_roof_opening_preview && !m_pending_native_roof_opening_preview) m_native_roof_opening_preview_timer->stop();
+    }
+
+    bool commitNativeRoofOpeningGesture(visualization::NativeRoofOpeningTransform gesture,std::uint64_t serial) {
+        try {
+            const auto ready=m_ready_native_roof_opening_preview;
+            const auto source=m_nativeModelView->gestureSourceSnapshot();
+            if (!ready || !nativeRoofOpeningRequestCurrent(*ready) || ready->serial!=serial ||
+                ready->gesture!=gesture || !source || fullSnapshotDigest(*source)!=fullSnapshotDigest(*ready->capture->source))
+                throw std::invalid_argument("The exact 3D skylight preview is no longer current. Begin the gesture again.");
+            if (!ready->result->no_op) publishPreparedCapturedEdit(ready->result->prepared,ready->capture->edit_source);
+            std::vector<CanvasRoofOpeningTarget> targets;
+            for (const auto& target:ready->result->targets) {
+                targets.push_back({target.roof_id,target.opening_id,authoringSnapshot().revision()});
+            }
+            m_selected_ids=roofOpeningOwnerSelection(targets);
+            m_selected_id=targets.empty() ? QString{} : targets.back().roof_id;
+            cancelNativeRoofOpeningPreview();
+            setRoofOpeningSelectionState(std::move(targets),true);
+            clearError(); refresh(); return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("3D skylight edit: %1").arg(QString::fromUtf8(error.what())));
+            cancelNativeRoofOpeningPreview(); return false;
         }
     }
 
@@ -68958,6 +69210,13 @@ private:
     std::optional<PendingRoofOpeningCanvasPreview> m_running_roof_opening_preview;
     std::optional<PendingRoofOpeningCanvasPreview> m_pending_roof_opening_preview;
     std::optional<PendingRoofOpeningCanvasPreview> m_ready_roof_opening_preview;
+    std::shared_ptr<const NativeRoofOpeningCapture> m_native_roof_opening_capture;
+    WorkspaceRegenerationQueue m_native_roof_opening_preview_queue;
+    QTimer* m_native_roof_opening_preview_timer{};
+    std::uint64_t m_native_roof_opening_preview_sequence{};
+    std::optional<PendingNativeRoofOpeningPreview> m_running_native_roof_opening_preview;
+    std::optional<PendingNativeRoofOpeningPreview> m_pending_native_roof_opening_preview;
+    std::optional<PendingNativeRoofOpeningPreview> m_ready_native_roof_opening_preview;
     QPushButton* m_drawing_measurement_button{};
     QAction* m_architectural_view_control_action{};
     std::vector<QAction*> m_architectural_actions;
