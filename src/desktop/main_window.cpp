@@ -31500,11 +31500,35 @@ public:
         return transfer;
     }
 
+    std::optional<QString> cornerWindowClipboardOwner(const DocumentSnapshot& source,const QString& selected) const {
+        const auto found=source.entities().find(selected.toStdString());
+        if (found==source.entities().end()) return std::nullopt;
+        if (found->second.type=="corner_window") return selected;
+        const auto& properties=found->second.properties;
+        if (found->second.type!="opening" ||
+            (!properties.contains("corner_window_id") && !properties.contains("corner_leg"))) return std::nullopt;
+        if (!properties.contains("corner_window_id") || !properties.at("corner_window_id").is_string())
+            throw std::invalid_argument("The selected managed corner cut has no complete owner.");
+        const auto id=properties.at("corner_window_id").get<std::string>();
+        const auto owner=source.entities().find(id);
+        if (owner==source.entities().end() || owner->second.type!="corner_window")
+            throw std::invalid_argument("The selected managed corner cut's owner is unavailable.");
+        const auto corner=parse_corner_window(owner->second);
+        if (std::find(corner.opening_ids.begin(),corner.opening_ids.end(),found->first)==corner.opening_ids.end())
+            throw std::invalid_argument("The selected managed corner cut is outside its owner's complete cohort.");
+        // Authenticate both actual hosts and ordered reciprocal cuts before
+        // deriving portable ownership from an explicitly selected child.
+        const CornerWindowTransfer actual{owner->second,
+            {source.entities().at(corner.wall_ids[0]),source.entities().at(corner.wall_ids[1])},
+            {source.entities().at(corner.opening_ids[0]),source.entities().at(corner.opening_ids[1])}};
+        validate_corner_window_transfer(actual);
+        return id_from(id);
+    }
+
     bool hasCornerWindowSelection() const {
         const auto source = authoringSnapshot();
         return std::any_of(m_selected_ids.begin(), m_selected_ids.end(), [&](const auto& id) {
-            const auto found = source.entities().find(id.toStdString());
-            return found != source.entities().end() && found->second.type == "corner_window";
+            return cornerWindowClipboardOwner(source,id).has_value();
         });
     }
 
@@ -31514,13 +31538,17 @@ public:
         if (selected.isEmpty() || selected.size() > 128 || (!selection_override && !m_selected_roof_openings.empty()))
             throw std::invalid_argument("Choose a bounded selection containing only corner windows.");
         // Admit the complete roster before collecting any portable subset.
+        QStringList owners;
         for (const auto& id : selected) {
-            const auto found = source.entities().find(id.toStdString());
-            if (found == source.entities().end() || found->second.type != "corner_window")
+            const auto owner=cornerWindowClipboardOwner(source,id);
+            if (!owner)
                 throw std::invalid_argument("Clipboard transfer for the complete mixed corner-window and other-object selection is not yet available.");
+            if (!owners.contains(*owner)) owners.push_back(*owner);
         }
         std::vector<CornerWindowTransfer> result;
-        for (const auto& id : selected) result.push_back(cornerWindowTransfer(source, source.entities().at(id.toStdString())));
+        // Normalize portable ownership only. The explicit selected cut IDs
+        // remain intact for source fencing and typed removal authority.
+        for (const auto& id : owners) result.push_back(cornerWindowTransfer(source, source.entities().at(id.toStdString())));
         validate_corner_window_transfer_group(result);
         return result;
     }
@@ -34007,14 +34035,50 @@ public:
                 return change.entity.type == "measurement_linework";
             })) return false;
         std::map<std::string,Entity,std::less<>> copied;
-        for (const auto& change : changes) copied.emplace(change.entity.id,change.entity);
-        const auto candidate = Document::preview_command(source,ApplyEntityChanges{
-            source.revision(),changes,{},"Inspect detached clipboard geometry"});
+        for (const auto& change : changes) {
+            if (change.kind!=EntityChangeKind::upsert || source.entities().contains(change.entity.id) ||
+                !copied.emplace(change.entity.id,change.entity).second)
+                throw std::invalid_argument("Clipboard placement requires complete fresh additions. Nothing was pasted.");
+        }
+        // Resolve bounds against the actual destination plus passive fresh
+        // descriptors. This map never supplies snapshot authoring authority.
+        auto context=source.entities();
+        context.insert(copied.begin(),copied.end());
+        auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        const bool site=siteCanvas(canvas);
+        std::optional<SitePresentationPlacement> input_frame;
+        if (site) {
+            requireSitePublicationCurrent();
+            if (!m_site_publication_input_frame || fullSnapshotDigest(source)!=fullSnapshotDigest(*m_site_publication_source))
+                throw std::invalid_argument("The measured clipboard's destination Site Plan frame changed. Nothing was pasted.");
+            input_frame=m_site_publication_input_frame;
+        }
         double existing_right=-std::numeric_limits<double>::infinity();
         double copied_left=std::numeric_limits<double>::infinity();
-        const auto geometry_bounds = [](const auto& entities, const DocumentSnapshot& authority, const auto& accept) {
+        const auto geometry_bounds = [&input_frame](const auto& entities, const auto& authority, const auto& accept) {
             const auto wall_plans=document_wall_plan_geometry(entities);
+            std::vector<std::string> framed_owners;
+            std::vector<SiteAnnotationTarget> framed_children;
+            if (input_frame) for (const auto& [id,entity]:entities) {
+                if (entity.type==kAnnotationEntityType) {
+                    const auto state=decode_annotation_entity(entity);
+                    for (const auto& label:state.labels) framed_children.push_back({id,label.id});
+                    for (const auto& symbol:state.symbols) framed_children.push_back({id,symbol.id});
+                } else if (is_closed_boundary_entity(entity.type) || entity.type=="measurement_linework" ||
+                    entity.type=="wall" || entity.type=="assembly_instance" || can_recognize_building_entity_type(entity.type) ||
+                    entity.type=="slab" || entity.type=="room" || entity.type=="dimension") framed_owners.push_back(id);
+            }
+            const auto owner_frames=input_frame ? resolve_site_presentations(authority,framed_owners) :
+                std::map<std::string,SitePresentationPlacement,std::less<>>{};
+            const auto child_frames=input_frame ? resolve_site_annotation_presentations(authority,framed_children) :
+                std::map<SiteAnnotationTarget,SitePresentationPlacement>{};
             for (const auto& [id,entity] : entities) {
+                // Site extrema must share the captured destination input
+                // frame. Raw coordinates from different building poses cannot
+                // prove a gap, even when their container IDs happen to match.
+                const auto accept_owner=[&](const Bounds2& bounds) {
+                    accept(input_frame ? site_reframed_plan_bounds(bounds,owner_frames.at(id),*input_frame) : bounds);
+                };
                 Boundary geometry;
                 if (is_closed_boundary_entity(entity.type)) geometry=read_boundary(entity.properties);
                 else if (entity.type=="measurement_linework") {
@@ -34026,119 +34090,76 @@ public:
                     geometry=wall_plans.at(id).footprint;
                 } else if (entity.type == "assembly_instance") {
                     AssemblyExpansionBudget budget;
-                    geometry = project_assembly_plan(expand_document_assembly_instance(entity,authority.entities(),budget));
+                    geometry = project_assembly_plan(expand_document_assembly_instance(entity,authority,budget));
                 } else if (can_recognize_building_entity_type(entity.type))
                     geometry=project_building_plan(decode_building_entity(
-                        effective_building_geometry_entity(authority, entity)), authority.entities());
+                        hosted_stair_railing(entity) ? entity : resolve_vertical_placement(authority,entity)),authority);
                 else if (entity.type=="slab" || entity.type=="room") geometry=read_boundary(entity.properties);
                 else if (entity.type==kAnnotationEntityType) {
                     const auto state=decode_annotation_entity(entity);
-                    for (const auto& label : state.labels) accept(Bounds2{label.placement.position,label.placement.position});
-                    for (const auto& symbol : state.symbols) accept(Bounds2{symbol.placement.position,symbol.placement.position});
+                    const auto accept_child=[&](const auto& child) {
+                        const Bounds2 bounds{child.placement.position,child.placement.position};
+                        accept(input_frame ? site_reframed_plan_bounds(bounds,child_frames.at({id,child.id}),*input_frame) : bounds);
+                    };
+                    for (const auto& label : state.labels) accept_child(label);
+                    for (const auto& symbol : state.symbols) accept_child(symbol);
                 } else if (entity.type=="dimension") {
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-                    accept(Bounds2{decoded.dimension->text_position,decoded.dimension->text_position});
+                    accept_owner(Bounds2{decoded.dimension->text_position,decoded.dimension->text_position});
                 }
-                if (!geometry.empty()) accept(boundary_bounds(geometry));
+                if (!geometry.empty()) accept_owner(boundary_bounds(geometry));
             }
         };
-        geometry_bounds(source.entities(),source,[&](const auto& bounds){existing_right=std::max(existing_right,bounds.maximum.x);});
-        geometry_bounds(copied,candidate,[&](const auto& bounds){copied_left=std::min(copied_left,bounds.minimum.x);});
+        geometry_bounds(source.entities(),source.entities(),[&](const auto& bounds){existing_right=std::max(existing_right,bounds.maximum.x);});
+        geometry_bounds(copied,context,[&](const auto& bounds){copied_left=std::min(copied_left,bounds.minimum.x);});
         if (!std::isfinite(copied_left))
             throw std::invalid_argument("The complete measured clipboard graph has no usable placement bounds. Nothing was pasted.");
         const bool has_existing_geometry = std::isfinite(existing_right);
-        const double gap=m_measurementCanvas->gridSpacingMetres();
+        const double gap=canvas->gridSpacingMetres();
         if (!placement_offset && has_existing_geometry && (!std::isfinite(gap) || gap<=0))
             throw std::invalid_argument("The drawing grid cannot provide a safe measured-copy placement. Nothing was pasted.");
         const Vec2 offset = placement_offset ? *placement_offset : has_existing_geometry
             ? Vec2{std::ceil(existing_right/gap)*gap+gap-copied_left,0} : Vec2{};
-        const PlanarTransform transform{{},0,false,false,offset};
-        std::vector<BoundaryTransformation> boundaries;
-        std::set<std::string,std::less<>> boundary_ids;
-        std::set<std::string,std::less<>> plain_source_owners;
-        std::vector<std::string> physical_ids;
-        std::vector<ArchitecturalOperation> physical_operations;
-        for (const auto& [id,entity] : copied) {
-            if (is_closed_boundary_entity(entity.type)) {
-                if (entity.type=="measurement_boundary" && entity.extensions.contains("measurement_linework_sources") &&
-                    !entity.properties.contains("boundary_authoring") && !entity.extensions.contains("boundary_geometry_derivation"))
-                    plain_source_owners.insert(id);
-                else { boundaries.push_back({id,transform});boundary_ids.insert(id); }
-            } else if (can_transform_architectural_entity_type(entity.type)) {
-                physical_ids.push_back(id);
-                ArchitecturalOperation operation{ArchitecturalAction::transform,id};
-                operation.transform=ArchitecturalTransform{offset.x,offset.y,0,0,1};
-                physical_operations.push_back(std::move(operation));
-            } else if (entity.type!="measurement_linework" && entity.type!="dimension" &&
-                       entity.type!="constraint" && entity.type!=kAnnotationEntityType && entity.type!="opening" &&
-                       entity.type!="assembly_model") {
-                throw std::invalid_argument("The measured clipboard graph contains geometry that cannot be placed together: "+entity.type+". Nothing was pasted.");
-            }
-        }
         // Apply the same graph admission in fresh and populated destinations.
         // A fresh destination (including Cut followed by Paste) has no geometry
         // to avoid: retain its measured location and dialect without inventing
         // a placement operation.
-        if (!placement_offset && !has_existing_geometry) return true;
-        if (offset.x==0.0 && offset.y==0.0) return true;
-        // The pure typed kernel retains boundary receipts/derivations and moves
-        // bound dimensions from one detached source state before admission.
-        auto placed=boundaries.empty()?copied:transformed_boundary_entities_batch(copied,boundaries);
-        // A new plain source-derived owner is created at its destination. Its
-        // measured sources remain the proof; adding a rigid origin derivation
-        // here would incorrectly prevent later source-driven refreshes.
-        for (const auto& id : plain_source_owners) {
-            const auto& original=copied.at(id);
-            auto boundary=decode_identified_boundary_entity(original);
-            for (auto& edge : boundary.segments) edge.segment=transform_segment(edge.segment,transform);
-            placed.at(id)=encode_identified_boundary_entity(boundary,&original);
+        const auto view=!site && canvas==m_architecturalCanvas && m_architectural_view_kind==BuildingViewKind::plan
+            ? boundaryVertexViewContext(canvas,source) : std::optional<ArchitecturalViewContext>{};
+        Vec2 displayed_offset=offset;
+        if (input_frame) displayed_offset=site_presented_plan_delta(offset,*input_frame);
+        else if (view) {
+            const auto origin=project_plan_point({},view->frame);
+            const auto moved=project_plan_point(offset,view->frame);
+            displayed_offset={moved.x-origin.x,moved.y-origin.y};
         }
-        if (!physical_operations.empty()) {
-            const auto transaction=ArchitecturalTransaction::create(new_id("architectural-tx"),
-                std::to_string(candidate.revision()),std::move(physical_ids),std::move(physical_operations),"Place copied physical geometry");
-            const auto physical=architectural_transaction_command(candidate,transaction,candidate.revision());
-            for (const auto& change : physical.entity_changes) {
-                if (change.kind!=EntityChangeKind::upsert || !copied.contains(change.entity.id))
-                    throw std::invalid_argument("Placing the measured clipboard graph would change an existing object. Nothing was pasted.");
-                placed.insert_or_assign(change.entity.id,change.entity);
-            }
+        std::map<std::string,Vec2,std::less<>> offsets;
+        std::map<std::pair<std::string,std::string>,Vec2> annotation_offsets;
+        std::vector<SiteAnnotationTarget> annotation_targets;
+        for (const auto& [id,entity]:copied) {
+            offsets.emplace(id,site && entity.type!=kAnnotationEntityType
+                ? site_source_plan_delta(displayed_offset,resolve_site_presentation(context,id)) : offset);
+            if (entity.type!=kAnnotationEntityType) continue;
+            const auto state=decode_annotation_entity(entity);
+            const auto add_child=[&](const auto& child) {
+                if (site) annotation_targets.push_back({id,child.id});
+                else annotation_offsets.emplace(std::pair{id,child.id},child.model_plan ? offset : displayed_offset);
+            };
+            for (const auto& label:state.labels) add_child(label);
+            for (const auto& symbol:state.symbols) add_child(symbol);
         }
-        for (auto& [id,entity] : placed) {
-            if (entity.type=="measurement_linework") {
-                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
-                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
-                entity.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
-            } else if (entity.type=="constraint") {
-                const auto decoded=decode_constraint_entity(entity);
-                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-                auto constraint=*decoded.constraint;
-                if (constraint.anchor) constraint.anchor=transform_point(*constraint.anchor,transform);
-                entity=encode_constraint_entity(constraint,&entity);
-            } else if (entity.type=="dimension") {
-                const auto decoded=decode_boundary_dimension_entity(entity);
-                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-                if (!boundary_ids.contains(decoded.dimension->boundary_id) && entity==copied.at(id)) {
-                    auto dimension=*decoded.dimension;
-                    dimension.text_position=transform_point(dimension.text_position,transform);
-                    entity=encode_boundary_dimension_entity(dimension,&entity);
-                }
-            } else if (entity.type==kAnnotationEntityType) {
-                (void)decode_annotation_entity(entity);
-                for (const auto* collection : {"labels","symbols"})
-                    for (auto& child : entity.properties.at("state").at(collection)) {
-                        auto& placement=child.at("placement");
-                        placement["x"]=placement.at("x").get<double>()+offset.x;
-                        placement["y"]=placement.at("y").get<double>()+offset.y;
-                    }
-                validate_annotation_entity(entity);
-            } else if (entity.type=="opening") {
-                const auto host=read_string(entity.properties,"wall_id").value_or("");
-                if (!copied.contains(host) || copied.at(host).type!="wall" || placed.at(host)==copied.at(host))
-                    throw std::invalid_argument("A measured clipboard graph's opening must move with its copied host wall. Nothing was pasted.");
-            }
+        if (site) {
+            // Annotation layers and retained frame modes belong to qualified
+            // children; their carrier is never their coordinate authority.
+            const auto frames=resolve_site_annotation_presentations(context,annotation_targets);
+            for (const auto& target:annotation_targets)
+                annotation_offsets.emplace(std::pair{target.owner_entity_id,target.child_id},
+                    site_source_plan_delta(displayed_offset,frames.at(target)));
         }
-        for (auto& change : changes) change.entity=placed.at(change.entity.id);
+        const auto placed=translated_mixed_clipboard_ordinary_graph(source,
+            ApplyEntityChanges{source.revision(),changes,{},"Place copied geometry"},offsets,annotation_offsets);
+        changes=placed.entity_changes;
         return true;
     }
 
@@ -34152,35 +34173,68 @@ public:
         std::set<std::string,std::less<>> reserved_identities;
     };
 
+    static QStringList mixedClipboardCornerDependencies(const json& ordinary) {
+        QStringList result;
+        for (const auto& row:ordinary.at("entities")) {
+            if (row.at("type")!="opening") continue;
+            const auto& properties=row.at("properties");
+            if (!properties.contains("corner_window_id") && !properties.contains("corner_leg")) continue;
+            if (!properties.contains("corner_window_id") || !properties.at("corner_window_id").is_string() ||
+                properties.at("corner_window_id").get_ref<const std::string&>().empty())
+                throw std::invalid_argument("A copied managed corner cut has no complete corner-window owner.");
+            const auto id=id_from(properties.at("corner_window_id").get<std::string>());
+            if (!result.contains(id)) result.push_back(id);
+        }
+        return result;
+    }
+
     bool mixedClipboardSelection() const {
         if (mixedSemanticSelection()) return true;
-        bool corner=false,other=false;
+        bool corner=false;
+        QStringList ordinary;
+        std::vector<Entity> geometry;
+        std::set<std::string,std::less<>> captured;
         const auto source=authoringSnapshot();
         for (const auto& id:ordinarySelectionIDs()) {
             const auto found=source.entities().find(id.toStdString());
-            if (found!=source.entities().end() && found->second.type=="corner_window") corner=true;
-            else other=true;
+            if (cornerWindowClipboardOwner(source,id)) corner=true;
+            else {
+                ordinary.push_back(id);
+                if (found!=source.entities().end() && (found->second.type=="wall" || found->second.type=="opening" ||
+                    is_closed_boundary_entity(found->second.type) || found->second.type=="measurement_linework")) {
+                    const auto graph=clipboard_entities_for_selection(source,found->first);
+                    if (graph.empty()) throw std::invalid_argument("The selected clipboard geometry exceeds its complete dependency budget.");
+                    for (const auto& entity:graph)
+                        if (captured.insert(entity.id).second) geometry.push_back(entity);
+                }
+            }
         }
-        return corner && other;
+        if (corner && !ordinary.isEmpty()) return true;
+        if (geometry.empty()) return false;
+        // Discover the same drawing dependency closure as ordinary capture,
+        // without attempting constraint admission just to expose menu actions.
+        // Complete capture still admits every selected root and relationship.
+        const auto graph=independentAreaCopyGraph(source,std::move(geometry),false);
+        json packet{{"entities",json::array()}};
+        for (const auto& entity:graph) if (entity.type=="opening") packet["entities"].push_back(clipboard_entity_json(entity));
+        return !mixedClipboardCornerDependencies(packet).isEmpty();
     }
 
     MixedClipboardTransfer captureMixedClipboardTransfer(const DocumentSnapshot& source) const {
         MixedClipboardTransfer transfer;
         QStringList ordinary,corner_ids;
         for (const auto& id:ordinarySelectionIDs()) {
-            const auto found=source.entities().find(id.toStdString());
-            if (found!=source.entities().end() && found->second.type=="corner_window") corner_ids.push_back(id);
+            if (const auto corner=cornerWindowClipboardOwner(source,id)) {
+                if (!corner_ids.contains(*corner)) corner_ids.push_back(*corner);
+            }
             else ordinary.push_back(id);
         }
         if (!ordinary.isEmpty()) {
             auto packet=json::parse(clipboardSelectionPayload(source,&ordinary));
             // A wall's dependency closure contains its managed corner cuts.
             // Transport their complete owner once in the coordinated lane.
-            for (const auto& row:packet.at("entities"))
-                if (row.at("type")=="opening" && row.at("properties").contains("corner_window_id")) {
-                    const auto owner_id=id_from(row.at("properties").at("corner_window_id").get<std::string>());
-                    if (!corner_ids.contains(owner_id)) corner_ids.push_back(owner_id);
-                }
+            for (const auto& owner_id:mixedClipboardCornerDependencies(packet))
+                if (!corner_ids.contains(owner_id)) corner_ids.push_back(owner_id);
             if (!corner_ids.isEmpty()) transfer.corners=cornerWindowSelectionTransfers(source,&corner_ids);
             std::set<std::string,std::less<>> coordinated;
             for (const auto& corner:transfer.corners) {
@@ -35831,8 +35885,7 @@ public:
             };
             const auto& ordinary_selection=ordinarySelectionIDs();
             const bool has_corner=std::any_of(ordinary_selection.begin(),ordinary_selection.end(),[&](const auto& id) {
-                const auto actual=source.entities().find(id.toStdString());
-                return actual!=source.entities().end() && actual->second.type=="corner_window";
+                return cornerWindowClipboardOwner(source,id).has_value();
             });
             const bool has_corner_component=!has_corner && hasCornerCatalogComponentSelection(source,ordinary_selection);
             if ((has_corner || has_corner_component) && !hasMixedPhysicalWallSelection(source)) {
@@ -35851,6 +35904,7 @@ public:
                 for (const auto& id:intent.other.architectural.object_ids) {
                     const auto& actual=source.entities().at(id);
                     if (actual.type=="corner_window") intent.corner_ids.push_back(id);
+                    else if (cornerWindowClipboardOwner(source,id_from(id))) intent.selected_cut_ids.push_back(id);
                     else if (actual.type=="roof" || actual.type=="stair" || actual.type=="railing" ||
                         actual.type=="slab" || structuralObject(actual)) other_ids.push_back(id);
                     else throw std::invalid_argument("Corner-window deletion with this object family requires unsupported removal integration: "+
@@ -35859,6 +35913,11 @@ public:
                 intent.other.architectural=captureArchitecturalSelectionRemoval(source,std::move(other_ids),
                     std::move(intent.other.architectural.components));
                 intent.other.allow_manufactured_opening_hosts=!intent.other.architectural.components.empty();
+                // Preserve explicit selected cuts in the closed proof. Core
+                // independently authenticates and deduplicates their complete
+                // owner aggregates; no derived owner becomes explicit authority.
+                std::sort(intent.corner_ids.begin(),intent.corner_ids.end());
+                std::sort(intent.selected_cut_ids.begin(),intent.selected_cut_ids.end());
                 source_guard();
                 // The helper owns the complete source-derived candidate, including
                 // retained baseline demolition. Qt registry augmentation must not
@@ -35974,8 +36033,7 @@ public:
         // first. Corner preparation captures its complete roster itself before
         // any candidate and provides the explicit catalog-copy admission below.
         const bool corner_selection=std::any_of(ordinary_selection.begin(),ordinary_selection.end(),[&](const auto& id) {
-            const auto actual=source->entities().find(id.toStdString());
-            return actual!=source->entities().end() && actual->second.type=="corner_window";
+            return cornerWindowClipboardOwner(*source,id).has_value();
         }) || hasCornerCatalogComponentSelection(*source,ordinary_selection);
         std::optional<ArchitecturalDrawingRemovalIntent> captured_selection;
         if (!corner_selection || hasMixedPhysicalWallSelection(*source))
@@ -55792,8 +55850,10 @@ private:
                     auto* properties = menu.addAction(QStringLiteral("Properties"));
                     QObject::connect(properties, &QAction::triggered, owner,
                                      guarded([this] { positionContextEditor(true); }));
-                    if (hasCornerWindowSelection()) {
-                        auto* duplicate = menu.addAction(m_selected_ids.size() == 1 ? QStringLiteral("Duplicate corner window") : QStringLiteral("Duplicate corner windows"));
+                    const bool mixed_clipboard=mixedClipboardSelection();
+                    if (mixed_clipboard || hasCornerWindowSelection()) {
+                        auto* duplicate = menu.addAction(mixed_clipboard ? QStringLiteral("Duplicate selected group…") :
+                            m_selected_ids.size() == 1 ? QStringLiteral("Duplicate corner window") : QStringLiteral("Duplicate corner windows"));
                         QObject::connect(duplicate, &QAction::triggered, owner, guarded([this] { duplicateCornerWindowSelection(); }));
                     }
                     if (auto* transform=add_command(m_transform_action))

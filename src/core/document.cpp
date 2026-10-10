@@ -3418,7 +3418,7 @@ static std::map<std::string,Entity,std::less<>> checked_phase_selection_removal_
 static void validate_phase_mixed_removal_dependents(const DocumentSnapshot& source,
     const std::map<std::string,Entity,std::less<>>& result,const nlohmann::json& encoded) {
     const auto intent=validate_mixed_selection_removal_intent(encoded);
-    if (intent.at("version")!=4 && intent.at("version")!=5 && intent.at("version")!=6 && intent.at("version")!=7) return;
+    if (intent.at("version")!=4 && intent.at("version")!=5 && intent.at("version")!=6 && intent.at("version")!=7 && intent.at("version")!=8) return;
     validate_active_design_preserved_dependents(source.entities(),result,false,true);
 }
 #endif
@@ -3617,7 +3617,7 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         }
         else if (version==45) {
             const auto intent=validate_mixed_selection_removal_intent(proof.at("mixed_selection_removal_intent"));
-            if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7) {
+            if (intent.at("version")==5 || intent.at("version")==6 || intent.at("version")==7 || intent.at("version")==8) {
                 const auto ordinary=corner_selection_removal_authority(
                     decode_corner_selection_removal_intent(intent.at("ordinary")));
                 for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
@@ -3726,7 +3726,7 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const auto lifetime_proofs=phase_constraint_lifetime_proofs(command);
     const auto mixed_dialect=has_mixed_selection_removal(command)
         ? validate_mixed_selection_removal_intent(command.mixed_selection_removal_intent).at("version").get<int>() : 0;
-    const bool phase_completion=has_phase_selection_removal(command) || mixed_dialect==4 || mixed_dialect==5 || mixed_dialect==6 || mixed_dialect==7;
+    const bool phase_completion=has_phase_selection_removal(command) || mixed_dialect==4 || mixed_dialect==5 || mixed_dialect==6 || mixed_dialect==7 || mixed_dialect==8;
     const auto current_phase_proofs=phase_completion ? lifetime_proofs.phase_proofs : phase_constraint_authoring_proofs(command);
     const bool phase_drawing_enclosure=phase_completion ||
         (has_independent_drawing_removal(command) && has_phase_constraint_authoring(command));

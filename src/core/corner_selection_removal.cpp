@@ -44,17 +44,23 @@ bool other_present(const ArchitecturalDrawingRemovalIntent& intent) {
     return architectural(intent) || drawing(intent);
 }
 void bounded(const CornerSelectionRemovalIntent& intent) {
+    if (!intent.selected_cut_ids.empty() &&
+        (!intent.complete_corner_catalog_hosts || intent.component_only))
+        reject("selected cuts require complete corner catalog hosts and owner-removal consequences");
     if (intent.component_only) {
         if (!intent.complete_corner_catalog_hosts || !intent.corner_ids.empty() ||
             intent.other.architectural.components.empty())
             reject("component-only authority requires complete corner catalog hosts, no corner owners and qualified components");
-    } else if (intent.corner_ids.empty() || intent.corner_ids.size() > selection_limit)
+    } else if ((intent.corner_ids.empty() && intent.selected_cut_ids.empty()) || intent.corner_ids.size() > selection_limit)
         reject("requires 1..1000 explicit actual corner owners");
     if (!std::is_sorted(intent.corner_ids.begin(), intent.corner_ids.end()) ||
         std::adjacent_find(intent.corner_ids.begin(), intent.corner_ids.end()) != intent.corner_ids.end())
         reject("corner owners must be sorted and unique");
+    if (!std::is_sorted(intent.selected_cut_ids.begin(), intent.selected_cut_ids.end()) ||
+        std::adjacent_find(intent.selected_cut_ids.begin(), intent.selected_cut_ids.end()) != intent.selected_cut_ids.end())
+        reject("selected cuts must be sorted and unique");
     std::size_t count = intent.corner_ids.size();
-    for (const auto size : {intent.other.architectural.object_ids.size(), intent.other.architectural.components.size(),
+    for (const auto size : {intent.selected_cut_ids.size(), intent.other.architectural.object_ids.size(), intent.other.architectural.components.size(),
             intent.other.drawing.owner_ids.size(), intent.other.drawing.annotations.size()}) {
         if (size > selection_limit - count) reject("selection exceeds 1000 aggregate roots/components/rows");
         count += size;
@@ -69,15 +75,70 @@ void bounded(const CornerSelectionRemovalIntent& intent) {
             std::binary_search(intent.other.drawing.owner_ids.begin(), intent.other.drawing.owner_ids.end(), id))
             reject("corner owner overlaps another selected root");
     }
+    for (const auto& id : intent.selected_cut_ids) {
+        identity(id);
+        if (std::binary_search(intent.corner_ids.begin(), intent.corner_ids.end(), id) ||
+            std::binary_search(intent.other.architectural.object_ids.begin(), intent.other.architectural.object_ids.end(), id) ||
+            std::binary_search(intent.other.drawing.owner_ids.begin(), intent.other.drawing.owner_ids.end(), id))
+            reject("selected cut overlaps another selected root");
+    }
     for (const auto& [owner, rows] : intent.other.architectural.roof_additional_identities) {
         (void)owner;
         for (const auto& id : rows) {
             if (std::binary_search(intent.corner_ids.begin(), intent.corner_ids.end(), id))
                 reject("roof destination borrows a selected corner owner");
+            if (std::binary_search(intent.selected_cut_ids.begin(), intent.selected_cut_ids.end(), id) ||
+                (!intent.selected_cut_ids.empty() && id == "selected_cut_ids"))
+                reject("roof destination borrows a selected cut or its intent token");
             for (const auto* token : {"corner_ids", "other", "corner_removal"})
                 if (id == token) reject("roof destination borrows a corner intent token");
         }
     }
+}
+std::vector<std::string> effective_corner_owners(const Entities& actual,
+    const CornerSelectionRemovalIntent& intent) {
+    // Call only after source budget admission. This is consequence authority;
+    // keep it separate from the explicit inventory returned for comparison.
+    Ids owners(intent.corner_ids.begin(), intent.corner_ids.end());
+    for (const auto& id : intent.corner_ids) {
+        const auto found = actual.find(id);
+        if (found == actual.end() || found->second.type != "corner_window")
+            reject("requires an actual corner owner: " + id);
+    }
+    for (const auto& id : intent.selected_cut_ids) {
+        const auto cut = actual.find(id);
+        if (cut == actual.end() || cut->second.id != id || cut->second.type != "opening" ||
+            !cut->second.properties.is_object()) reject("selected cut is not an actual opening: " + id);
+        const auto& properties = cut->second.properties;
+        if (!properties.contains("corner_window_id") || !properties.at("corner_window_id").is_string() ||
+            !properties.contains("corner_leg") || !properties.at("corner_leg").is_number_integer() ||
+            (properties.at("corner_leg") != 0 && properties.at("corner_leg") != 1))
+            reject("selected cut lacks its actual indexed corner owner: " + id);
+        const auto owner_id = properties.at("corner_window_id").get<std::string>();
+        const auto owner = actual.find(owner_id);
+        if (owner == actual.end() || owner->second.id != owner_id || owner->second.type != "corner_window")
+            reject("selected cut lacks its actual corner owner: " + id);
+        const auto corner = parse_corner_window(owner->second);
+        const auto selected_leg = properties.at("corner_leg").get<std::size_t>();
+        if (corner.opening_ids[selected_leg] != id)
+            reject("selected cut is absent from its actual owner's indexed roster: " + id);
+        for (std::size_t leg = 0; leg < 2; ++leg) {
+            const auto host = actual.find(corner.wall_ids[leg]);
+            const auto child = actual.find(corner.opening_ids[leg]);
+            if (host == actual.end() || host->second.id != corner.wall_ids[leg] || host->second.type != "wall" ||
+                child == actual.end() || child->second.id != corner.opening_ids[leg] || child->second.type != "opening" ||
+                !child->second.properties.is_object())
+                reject("selected cut requires both actual corner hosts and cuts: " + id);
+            const auto& child_properties = child->second.properties;
+            if (!child_properties.contains("corner_window_id") || child_properties.at("corner_window_id") != owner_id ||
+                !child_properties.contains("corner_leg") || !child_properties.at("corner_leg").is_number_integer() ||
+                child_properties.at("corner_leg") != leg || !child_properties.contains("wall_id") ||
+                child_properties.at("wall_id") != corner.wall_ids[leg])
+                reject("selected cut requires reciprocal owner, leg and host links: " + id);
+        }
+        owners.insert(owner_id);
+    }
+    return {owners.begin(), owners.end()};
 }
 void wire_budget(const Json& value, std::size_t& nodes, std::size_t& bytes, std::size_t depth = 0) {
     // The wrapper adds one level to the closed historical child codec.
@@ -137,8 +198,9 @@ void metadata(const DocumentSnapshot& source, const DocumentSnapshot& preview) {
 
 Json encode_corner_selection_removal_intent(const CornerSelectionRemovalIntent& intent) {
     bounded(intent);
-    Json result{{"version", intent.component_only ? 3 : intent.complete_corner_catalog_hosts ? 2 : 1}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
+    Json result{{"version", !intent.selected_cut_ids.empty() ? 4 : intent.component_only ? 3 : intent.complete_corner_catalog_hosts ? 2 : 1}, {"kind", "corner_removal"}, {"corner_ids", intent.corner_ids},
         {"other", other_present(intent.other) ? encode_architectural_drawing_removal_intent(intent.other) : Json(nullptr)}};
+    if (!intent.selected_cut_ids.empty()) result["selected_cut_ids"] = intent.selected_cut_ids;
     if (result.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
     return result;
 }
@@ -147,12 +209,15 @@ CornerSelectionRemovalIntent decode_corner_selection_removal_intent(const Json& 
     std::size_t nodes = 0, bytes = 0;
     wire_budget(value, nodes, bytes);
     if (value.dump().size() > intent_byte_limit) reject("intent exceeds one MiB");
-    if (!value.is_object() || value.size() != 4 || !value.contains("version") || !value.contains("kind") ||
+    if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
         !value.contains("corner_ids") || !value.contains("other")) reject("unsupported intent field set");
-    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3) ||
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) ||
         !value.at("kind").is_string() || value.at("kind") != "corner_removal") reject("unsupported intent version/kind");
+    const bool selected_cuts = value.at("version") == 4;
+    if (value.size() != (selected_cuts ? 5 : 4) || value.contains("selected_cut_ids") != selected_cuts)
+        reject("unsupported intent field set");
     const auto& ids = value.at("corner_ids");
-    if (!ids.is_array() || (ids.empty() && value.at("version") != 3) || ids.size() > selection_limit)
+    if (!ids.is_array() || (ids.empty() && value.at("version") != 3 && !selected_cuts) || ids.size() > selection_limit)
         reject("invalid explicit corner inventory");
     CornerSelectionRemovalIntent result;
     result.complete_corner_catalog_hosts = value.at("version") != 1;
@@ -160,6 +225,15 @@ CornerSelectionRemovalIntent decode_corner_selection_removal_intent(const Json& 
     for (const auto& id : ids) {
         if (!id.is_string()) reject("corner owner must be an identity");
         result.corner_ids.push_back(id.get<std::string>());
+    }
+    if (selected_cuts) {
+        const auto& cuts = value.at("selected_cut_ids");
+        if (!cuts.is_array() || cuts.empty() || cuts.size() > selection_limit)
+            reject("invalid explicit selected cut inventory");
+        for (const auto& id : cuts) {
+            if (!id.is_string()) reject("selected cut must be an identity");
+            result.selected_cut_ids.push_back(id.get<std::string>());
+        }
     }
     if (!value.at("other").is_null()) result.other = decode_architectural_drawing_removal_intent(value.at("other"));
     if (encode_corner_selection_removal_intent(result).dump() != value.dump()) reject("intent is not canonical");
@@ -170,6 +244,7 @@ ArchitecturalDrawingRemovalIntent corner_selection_removal_authority(const Corne
     (void)encode_corner_selection_removal_intent(intent);
     auto result = intent.other;
     result.architectural.object_ids.insert(result.architectural.object_ids.end(), intent.corner_ids.begin(), intent.corner_ids.end());
+    result.architectural.object_ids.insert(result.architectural.object_ids.end(), intent.selected_cut_ids.begin(), intent.selected_cut_ids.end());
     std::sort(result.architectural.object_ids.begin(), result.architectural.object_ids.end());
     return result;
 }
@@ -181,10 +256,8 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     // producer runs. The ordinary lane retains its historical authority.
     validate_mixed_wall_removal_source_admission(actual, true, intent.complete_corner_catalog_hosts);
     validate_physical_wall_join_removal_identity_lifetime(actual, {}, 0, intent.other.architectural.roof_additional_identities);
-    for (const auto& id : intent.corner_ids) {
-        const auto found = actual.find(id);
-        if (found == actual.end() || found->second.type != "corner_window") reject("requires an actual corner owner: " + id);
-    }
+    const auto effective_owners = effective_corner_owners(actual, intent);
+    if (!intent.selected_cut_ids.empty()) validate_corner_window_state(actual);
     constraints(actual, active_phase_constraints);
     const auto original_aliases = embedded_assembly_presentation_ids(actual);
     std::map<std::string, AssemblyModel, std::less<>> selected_catalogs;
@@ -219,17 +292,17 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
     auto expected_inactive = constraint_phase_scope(actual).inactive_owner_ids;
     std::vector<Entities> candidates;
     if (intent.component_only) candidates.push_back(actual);
-    else candidates.push_back(replay_corner_window_removal(actual, intent.corner_ids, active_phase_constraints,
+    else candidates.push_back(replay_corner_window_removal(actual, effective_owners, active_phase_constraints,
         intent.complete_corner_catalog_hosts));
     auto other=intent.other.architectural;
     const auto corner_aliases=embedded_assembly_presentation_ids(candidates.front());
     Ids corner_closure;
-    for (const auto& id:intent.corner_ids) {
+    for (const auto& id:effective_owners) {
         const auto corner=parse_corner_window(actual.at(id));
         corner_closure.insert(id);
         corner_closure.insert(corner.opening_ids.begin(),corner.opening_ids.end());
     }
-    // Explicit selected owners dominate their actual hosted rows once. The
+    // Authenticated removal owners dominate their actual hosted rows once. The
     // complete intent still retains every qualified selection; only an exact
     // source row already retired by the independently admitted corner kernel
     // can omit a second component replay. Unrelated rows retain their authority.
@@ -239,7 +312,7 @@ Entities replay_corner_selection_removal_architectural(const Entities& actual,
         const auto& row=selected_source_row(key);
         if (!row.placement || !corner_closure.contains(row.placement->host_entity_id) ||
             candidates.front().contains(row.placement->host_entity_id))
-            reject("component retirement is not a consequence of the explicit corner owners");
+            reject("component retirement is not a consequence of the authenticated corner owners");
         return true;
     });
     if (!other.object_ids.empty() || !other.components.empty())
@@ -294,7 +367,7 @@ ApplyEntityChanges prepare_corner_selection_removal(const DocumentSnapshot& sour
     const auto expected = replay_corner_selection_removal(source, intent);
     ApplyEntityChanges command{source.revision(), {}, {}, message};
     Ids required;
-    for (const auto& id : intent.corner_ids) {
+    for (const auto& id : effective_corner_owners(source.entities(), intent)) {
         const auto corner = parse_corner_window(source.entities().at(id));
         required.insert(corner.wall_ids.begin(), corner.wall_ids.end());
     }

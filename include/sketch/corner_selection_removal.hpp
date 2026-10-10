@@ -5,15 +5,18 @@
 namespace sketch {
 
 struct CornerSelectionRemovalIntent {
-    // Explicit actual owners only; neither host walls nor child cuts promote
-    // into selection authority. The additive lane keeps historical codecs.
+    // Explicit actual owners only; host walls and child cuts never promote
+    // into this owner roster. The additive lane keeps historical codecs.
     std::vector<std::string> corner_ids;
     ArchitecturalDrawingRemovalIntent other;
-    // Versions two and three admit actual corner-owner catalog copies. Version
+    // Versions two through four admit actual corner-owner catalog copies. Version
     // two retains explicit owner dominance; version three requires selected
     // qualified rows and cannot grant actual corner-owner removal authority.
     bool complete_corner_catalog_hosts{false};
     bool component_only{false};
+    // Version four retains explicitly selected actual managed cuts. Their
+    // authenticated owners derive consequences without becoming selection.
+    std::vector<std::string> selected_cut_ids;
 };
 
 using CornerSelectionRemovalEntities = DrawingSelectionRemovalEntities;

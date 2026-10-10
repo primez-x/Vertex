@@ -14,6 +14,39 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 ordinary placement and selected corner-cut source follow-up
+
+The reviewed mixed clipboard desktop integration is committed and pushed as
+e6ab165e, with exact local/remote ref verification. The next source batch removes
+ordinary measured paste's temporary authoring candidate and duplicated geometry
+re-encoding, using the same actual-source fresh graph producer. Empty destinations
+retain copied coordinates. In Site views, owner and qualified annotation-child
+bounds resolve into the captured active input frame before gap calculation;
+the active canvas grid supplies the gap and each owner receives the inverse
+local displacement. Saved-view overlays keep their own coordinate mode.
+
+Clipboard family routing now authenticates exposed managed corner cuts against
+both actual hosts and reciprocal cuts. Copying a leg carries the complete corner
+once; copying a supporting wall or measured area carries its corner dependency.
+Cut/Delete preparation retains original explicit selected cuts separately from
+explicit owners. New closed corner inner4 and mixed-removal dialect8 derive the
+effective owner only inside original-source replay and deduplicate complete
+consequences. Reader186/extraction184 retain the new proof through nested and
+undone history; older dialects keep their meanings.
+
+Independent desktop and core source reviews approve the bounded changes with
+no remaining concrete P1/P2 finding. The Site overlap finding was corrected.
+Root reviewed original selection capture, reciprocal cut/host authentication,
+single publication, coordinate ownership and nested/undone reader floors.
+Source whitespace checks are clean. Standalone corner removal keeps its existing
+complete raw-history path; explicit inner4 provenance is persisted by mixed8.
+Compilation,
+interaction, Undo/reopen, migration and responsiveness remain unqualified.
+Mixed Properties/transforms, native directional group controls and the entire
+consolidated delivery scope remain required. No builds, tests/new tests, scripts,
+probes, native jobs, launches, packages or installations run. The installed app
+is unchanged and all ten production gates remain open.
+
 ### October 10 mixed clipboard - reviewed desktop source integration
 
 Fresh graph staging is committed and pushed as 7fb4cab0, with exact local/remote

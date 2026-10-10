@@ -1,5 +1,17 @@
 # Portable project extraction
 
+Exchange version184 requires native reader186 for mixed-removal dialect eight
+and explicit managed corner-cut selection under closed corner inner4. The wire
+retains actual selected cut IDs and explicit owners separately; replay derives
+complete corner consequences from their authenticated original source. Direct,
+nested, retained and undone history keep the reader floor. Earlier dialects and
+their floors are unchanged. This is a source contract, not round-trip acceptance.
+
+Exchange version183 requires native reader185 for atomic mixed clipboard
+placement under envelope51, including room-review wrapping. Fresh graph staging
+does not itself broaden an existing entity command or acquire publication
+authority. Actual source and history receipts govern the complete placement.
+
 Exchange version182 requires native reader184 for actual phase corner cohorts
 under closed phase-wall authoring inner5 and baseline-wall leaf2. Explicit
 selected corner inventory, owner-based parking/retirement and retained nested

@@ -377,6 +377,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("kind",nlohmann::json())=="corner_removal" &&
+                value.value("version",nlohmann::json())==4 && value.contains("selected_cut_ids"))
+                floor=std::max(floor,186U);
             if (value.is_object() && value.value("kind",nlohmann::json())=="apply_boundary_constraint_changes" &&
                 value.value("version",nlohmann::json())==51 &&
                 value.contains("clipboard_placement_completion") && value.contains("clipboard_placement_intent"))
@@ -558,9 +561,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<185 && revision.boundary_geometry_edit)
+        if (required<186 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<185 && revision.boundary_constraint_changes)
+        if (required<186 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -605,7 +608,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required=std::max(required,178U);
             if (command.mixed_selection_removal_completion || !command.mixed_selection_removal_intent.is_null()) {
                 const auto dialect=command.mixed_selection_removal_intent.value("version",1);
-                required=std::max(required,dialect>=7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
+                required=std::max(required,dialect>=8 ? 186U : dialect==7 ? 182U : dialect==6 ? 181U : dialect==5 ? 180U : dialect==4 ? 179U : dialect==3 ? 178U : dialect==2 ? 177U : 176U);
             }
             if (command.independent_drawing_removal_completion || !command.independent_drawing_removal_intent.is_null())
                 required=std::max(required,
@@ -2961,6 +2964,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 183 &&
          sqlite3_column_int(user_version.get(), 0) != 184 &&
          sqlite3_column_int(user_version.get(), 0) != 185 &&
+         sqlite3_column_int(user_version.get(), 0) != 186 &&
          sqlite3_column_int(user_version.get(), 0) != 174 &&
          sqlite3_column_int(user_version.get(), 0) != 169 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
@@ -3683,6 +3687,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=186)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 186 for explicit managed corner-cut selection and retained history");
         if (required_format>=185)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 185 for atomic mixed clipboard placement and retained history");
         if (required_format>=184)

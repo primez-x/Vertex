@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v185
+# Vertex project formats v1 through v186
+
+## Explicit managed corner-cut selection (v186, source integration)
+
+Corner-selection inner version four adds `selected_cut_ids` to the otherwise
+closed `version`, `kind:"corner_removal"`, `corner_ids` and `other` field set.
+The cut inventory is nonempty, sorted, unique and counts against the same
+1000-selection budget. It requires complete corner catalog-host admission and
+cannot carry component-only authority. `corner_ids` still contains only
+explicitly selected owners. Empty cut inventories retain historical inner
+versions one through three and their exact four-field encoding.
+
+Replay authenticates each selected actual opening against its actual corner
+owner, indexed leg, both reciprocal cuts and both real walls after bounded
+source admission. Only the known removal producer receives the deduplicated
+effective owner set. Comparison authority retains original explicit owners,
+cuts and other selected roots/rows; it never substitutes derived owners.
+Owner-plus-cut selections retire or park their aggregate once. Existing phase,
+drawing, catalog, constraint and surviving-reference guards still apply.
+
+Mixed-removal dialect eight inside unchanged envelope45 requires this inner
+version four. It reconstructs the ordinary command from the full original
+source before staging selected roof children and retains active-phase,
+save/history, protected-dependent and destination-lifetime checks. Reader186
+and extraction184 apply to direct or nested retained dialect-eight history,
+including undone records. Older dialect pairs retain their meanings and floors.
+Standalone corner removal retains the existing complete raw entity-command
+history path, with selected-cut authentication during preparation and original
+selection/source fences at publication. It does not encode inner4 in bare raw
+history or acquire this reader floor without a retained dialect-eight proof.
+This source integration does not establish compilation or runtime acceptance.
 
 ## Atomic mixed clipboard placement (v185, source integration in progress)
 
