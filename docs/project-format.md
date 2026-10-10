@@ -49,8 +49,16 @@ canonical proofs together. Snapshot/save/history fences and active-design
 policy apply to roof-free as well as roof-bearing wrapped placements. Reader185
 and extraction183 apply when envelope51 is nested in retained room history.
 
-Desktop coordination is still in progress. This source contract does not
-establish compilation, native geometry, interaction or production acceptance.
+Desktop source integration captures the actual saved view/crop/depth, Site
+frames and source/selection/focus/navigation fences. Independent source-roof
+cohorts choose destinations separately. Background previews use actual SVG,
+text and dimension ink; callouts on uncopied targets regenerate their fixed
+witnesses for each qualified hover proposal. Pending placement owns stationary
+clicks using the same effective coordinate as the cursor. Pointer Leave retires
+ink; returning can restore the exact admitted final candidate under unchanged
+fences. One prepared publication carries the complete room-reviewed command.
+This source contract does not establish compilation, native geometry,
+interaction, Undo/reopen or production acceptance.
 
 Fresh-graph placement has a separate pure staging producer. Its input is the
 actual editable destination snapshot, fresh additions and explicit local XY
@@ -61,7 +69,8 @@ hosts, conjugating world-authored profiles through their actual Site frames.
 Qualified annotation-child offsets preserve the distinction between model
 coordinates and saved-view overlays. Typed measured strokes append only their
 new transformation to raw receipts and operations. Non-anchor constraints stay
-exact; fixed anchors change only the affected raw coordinates.
+exact; fixed anchors and independent callout positions change only the affected
+raw coordinates.
 
 Changed positional `quantity_entries` on translated physical objects retire
 verbatim into the passive extension `clipboard_translation_quantity_archive`.

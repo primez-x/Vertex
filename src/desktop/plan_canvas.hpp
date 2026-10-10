@@ -536,6 +536,8 @@ public:
     // A pending library component is never part of committed geometry,
     // selection, snapping, content bounds, minimap, print or export.
     void setComponentPlacementPreview(std::optional<CanvasEntity> preview);
+    void setComponentPlacementGroupPreview(std::vector<CanvasEntity> entities,
+        std::vector<CanvasLabel> labels = {}, std::optional<Bounds2> crop = std::nullopt);
     void clearComponentPlacementPreview();
     // Hover workers publish on the UI thread against one pointer proposal.
     // Leave, cancellation, navigation and scene replacement retire its serial.
@@ -548,6 +550,9 @@ public:
     }
     bool completeComponentPlacementPreview(std::uint64_t serial,
         std::optional<CanvasEntity> preview);
+    bool completeComponentPlacementGroupPreview(std::uint64_t serial,
+        std::vector<CanvasEntity> entities, std::vector<CanvasLabel> labels = {},
+        std::optional<Bounds2> crop = std::nullopt);
     void clearPreview();
     void fitView();
     void zoomBy(double factor);
@@ -615,7 +620,11 @@ public:
 
     void setPointClicked(std::function<void(Vec2)> callback);
     // A temporary one-click command consumes input before picks or authoring.
-    void setPointPlacementRequested(std::function<void(Vec2)> callback);
+    // Opt into the cursor's effective grid/object/fine-input coordinate so a
+    // preview and its click share exactly one placement. Legacy callers keep
+    // their raw painted-point semantics.
+    void setPointPlacementRequested(std::function<void(Vec2)> callback,
+        bool use_effective_input = false);
     void setEntityClicked(std::function<void(QString)> callback);
     // Unmodified left-button double-click with idle selection available. The
     // first click already applied ordinary selection; this requests the object's
@@ -1146,7 +1155,8 @@ private:
                     Vec2 view_center, bool output, QColor background,
                     std::optional<double> paper_pixels_per_mm,
                     std::vector<QRectF>* annotation_footprints = nullptr,
-                    bool content_only = false, bool floor_ghost = false) const;
+                    bool content_only = false, bool floor_ghost = false,
+                    const std::vector<CanvasLabel>* explicit_labels = nullptr) const;
     void drawReference(QPainter& painter, const CanvasReference& reference) const;
     enum class SceneLayer { committed, screen_with_floor_ghost, floor_ghost };
     void renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
@@ -1319,6 +1329,9 @@ private:
     std::vector<DrawingWitness> m_drawing_witnesses;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;
     std::optional<CanvasEntity> m_component_placement_preview;
+    std::vector<CanvasEntity> m_component_placement_group_entities;
+    std::vector<CanvasLabel> m_component_placement_group_labels;
+    std::optional<Bounds2> m_component_placement_group_crop;
     std::uint64_t m_component_placement_preview_serial{};
     bool m_component_placement_preview_pending{};
     std::optional<CanvasEntity> m_symbol_drag_preview;
@@ -1519,6 +1532,7 @@ private:
     std::function<void(Vec2)> m_point_clicked;
     std::function<void(Vec2, double)> m_navigation_changed;
     std::function<void(Vec2)> m_point_placement_requested;
+    bool m_point_placement_uses_effective_input{};
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString)> m_entity_double_clicked;
     std::function<bool(CanvasLabelPresentationIdentity)> m_label_double_clicked;

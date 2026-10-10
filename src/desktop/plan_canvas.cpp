@@ -257,6 +257,49 @@ bool drawable_label(const CanvasLabel& label) {
            std::isfinite(label.position.y);
 }
 
+bool valid_component_placement_group(const std::vector<CanvasEntity>& entities,
+                                     const std::vector<CanvasLabel>& labels) {
+    if (entities.size() > 4096 || labels.size() > 4096) return false;
+    const auto point = [](Vec2 p) { return std::isfinite(p.x) && std::isfinite(p.y); };
+    const auto finite_rect = [](const QRectF& r) {
+        return std::isfinite(r.left()) && std::isfinite(r.right()) &&
+               std::isfinite(r.top()) && std::isfinite(r.bottom());
+    };
+    const auto boundary = [&](const Boundary& b) {
+        return std::all_of(b.begin(), b.end(), [&](const Segment& s) {
+            return point(s.start) && point(s.end) && std::isfinite(s.sweep_radians);
+        });
+    };
+    for (const auto& entity : entities) {
+        if (!boundary(entity.segments) ||
+            (entity.stroke_segments && !boundary(*entity.stroke_segments)) ||
+            !std::all_of(entity.holes.begin(), entity.holes.end(), boundary) ||
+            !std::isfinite(entity.thickness_metres) || !std::isfinite(entity.hatch_scale) ||
+            !std::isfinite(entity.stroke_width_metres) ||
+            !std::isfinite(entity.output_stroke_width_mm) ||
+            (entity.fill_opacity && (!std::isfinite(*entity.fill_opacity) ||
+                                    *entity.fill_opacity < 0 || *entity.fill_opacity > 1))) return false;
+        if (entity.svg_symbol) {
+            const auto& symbol = *entity.svg_symbol;
+            if (!point(symbol.position) || !std::isfinite(symbol.rotation_radians) ||
+                !std::isfinite(symbol.width_metres) || symbol.width_metres <= 0 ||
+                !std::isfinite(symbol.depth_metres) || symbol.depth_metres <= 0 ||
+                !finite_rect(symbol.view_box) || symbol.view_box.isEmpty() ||
+                !finite_rect(symbol.footprint_view_box) || symbol.footprint_view_box.isEmpty()) return false;
+        }
+    }
+    for (const auto& label : labels) {
+        if (!drawable_label(label) || !std::isfinite(label.rotation_radians) ||
+            !std::isfinite(label.scale) || label.scale <= 0 ||
+            !std::isfinite(label.text_height_metres) || label.text_height_metres <= 0 ||
+            !std::isfinite(label.paper_height_mm) || label.paper_height_mm < 0 ||
+            (label.leader_start && !point(*label.leader_start)) ||
+            (label.fill_opacity && (!std::isfinite(*label.fill_opacity) ||
+                                   *label.fill_opacity < 0 || *label.fill_opacity > 1))) return false;
+    }
+    return true;
+}
+
 struct LabelLayout {
     QFont font;
     QRectF bounds;
@@ -1203,14 +1246,27 @@ void PlanCanvas::setComponentPlacementPreview(std::optional<CanvasEntity> previe
     m_component_placement_preview_pending = false;
     if (preview) preview->selected = false;
     m_component_placement_preview = std::move(preview);
+    m_component_placement_group_entities.clear();
+    m_component_placement_group_labels.clear();
+    m_component_placement_group_crop.reset();
     update();
+}
+
+void PlanCanvas::setComponentPlacementGroupPreview(std::vector<CanvasEntity> entities,
+    std::vector<CanvasLabel> labels, std::optional<Bounds2> crop) {
+    const auto serial = beginComponentPlacementPreview();
+    completeComponentPlacementGroupPreview(serial, std::move(entities), std::move(labels), crop);
 }
 
 void PlanCanvas::clearComponentPlacementPreview() {
     ++m_component_placement_preview_serial;
     m_component_placement_preview_pending = false;
-    if (!m_component_placement_preview) return;
+    if (!m_component_placement_preview && m_component_placement_group_entities.empty() &&
+        m_component_placement_group_labels.empty() && !m_component_placement_group_crop) return;
     m_component_placement_preview.reset();
+    m_component_placement_group_entities.clear();
+    m_component_placement_group_labels.clear();
+    m_component_placement_group_crop.reset();
     update();
 }
 
@@ -1219,6 +1275,9 @@ std::uint64_t PlanCanvas::beginComponentPlacementPreview() {
     ++m_component_placement_preview_serial;
     m_component_placement_preview_pending = true;
     m_component_placement_preview.reset();
+    m_component_placement_group_entities.clear();
+    m_component_placement_group_labels.clear();
+    m_component_placement_group_crop.reset();
     update();
     return m_component_placement_preview_serial;
 }
@@ -1230,6 +1289,39 @@ bool PlanCanvas::completeComponentPlacementPreview(std::uint64_t serial,
     m_component_placement_preview_pending = false;
     if (preview) preview->selected = false;
     m_component_placement_preview = std::move(preview);
+    m_component_placement_group_entities.clear();
+    m_component_placement_group_labels.clear();
+    m_component_placement_group_crop.reset();
+    update();
+    return true;
+}
+
+bool PlanCanvas::completeComponentPlacementGroupPreview(std::uint64_t serial,
+    std::vector<CanvasEntity> entities, std::vector<CanvasLabel> labels,
+    std::optional<Bounds2> crop) {
+    if (!m_component_placement_preview_pending || serial != m_component_placement_preview_serial)
+        return false;
+    m_component_placement_preview_pending = false;
+    if (!valid_component_placement_group(entities, labels) || (crop &&
+        (!std::isfinite(crop->minimum.x) || !std::isfinite(crop->minimum.y) ||
+         !std::isfinite(crop->maximum.x) || !std::isfinite(crop->maximum.y) ||
+         crop->minimum.x >= crop->maximum.x || crop->minimum.y >= crop->maximum.y))) {
+        m_component_placement_preview.reset();
+        m_component_placement_group_entities.clear();
+        m_component_placement_group_labels.clear();
+        m_component_placement_group_crop.reset();
+        update();
+        return false;
+    }
+    for (auto& entity : entities) entity.selected = false;
+    for (auto& label : labels) label.selected = false;
+    // A blank primary marks presence for the existing gesture guards without
+    // exposing any group member to single-object selection dimensions.
+    m_component_placement_preview = entities.empty() && labels.empty()
+        ? std::optional<CanvasEntity>{} : CanvasEntity{};
+    m_component_placement_group_entities = std::move(entities);
+    m_component_placement_group_labels = std::move(labels);
+    m_component_placement_group_crop = crop;
     update();
     return true;
 }
@@ -1970,8 +2062,17 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         if (placement_preview) {
             QPainterStateGuard placement_state(&painter);
             painter.setOpacity(painter.opacity() * 0.6);
+            if (!m_symbol_drag_active && m_component_placement_group_crop) {
+                const auto& crop = *m_component_placement_group_crop;
+                painter.setClipRect(QRectF(QPointF(crop.minimum.x, crop.minimum.y),
+                                          QPointF(crop.maximum.x, crop.maximum.y)), Qt::IntersectClip);
+            }
             drawEntity(painter, *placement_preview, false, background,
                        paper_pixels_per_mm);
+            if (!m_symbol_drag_active) {
+                for (const auto& entity : m_component_placement_group_entities)
+                    drawEntity(painter, entity, false, background, paper_pixels_per_mm);
+            }
             placement_state.restore();
         }
         if (m_boundary_preview.size() >= 2) {
@@ -2137,6 +2238,22 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     drawLabels(painter, viewport, scale, view_center, output, background,
                paper_pixels_per_mm, interactive ? &annotation_footprints : nullptr,
                content_only, floor_ghost);
+    if (interactive && !m_symbol_drag_active && !m_component_placement_group_labels.empty()) {
+        QPainterStateGuard placement_state(&painter);
+        painter.setOpacity(painter.opacity() * 0.6);
+        if (m_component_placement_group_crop) {
+            const auto& crop = *m_component_placement_group_crop;
+            const auto to_screen = [&](Vec2 p) {
+                return QPointF(viewport.center().x() + (p.x - view_center.x) * scale,
+                               viewport.center().y() - (p.y - view_center.y) * scale);
+            };
+            painter.setClipRect(QRectF(to_screen(crop.minimum), to_screen(crop.maximum)).normalized(),
+                                Qt::IntersectClip);
+        }
+        drawLabels(painter, viewport, scale, view_center, false, background,
+                   paper_pixels_per_mm, nullptr, false, false,
+                   &m_component_placement_group_labels);
+    }
     if (floor_ghost) return;
 
     if (!output) {
@@ -2490,8 +2607,10 @@ void PlanCanvas::setPointClicked(std::function<void(Vec2)> callback) {
     m_point_clicked = std::move(callback);
 }
 
-void PlanCanvas::setPointPlacementRequested(std::function<void(Vec2)> callback) {
+void PlanCanvas::setPointPlacementRequested(std::function<void(Vec2)> callback,
+    bool use_effective_input) {
     resetGesture();
+    m_point_placement_uses_effective_input = bool(callback) && use_effective_input;
     m_point_placement_requested = std::move(callback);
     update();
 }
@@ -3907,7 +4026,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             return;
         }
         const auto callback = m_point_placement_requested;
-        const auto point = toModel(position, QRectF(rect()));
+        const auto point = m_point_placement_uses_effective_input
+            ? inputPoint(position) : toModel(position, QRectF(rect()));
         resetGesture();
         callback(point);
         return;
@@ -10450,7 +10570,8 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                             Vec2 view_center, bool output, QColor background,
                             std::optional<double> paper_pixels_per_mm,
                             std::vector<QRectF>* annotation_footprints,
-                            bool content_only, bool floor_ghost) const {
+                            bool content_only, bool floor_ghost,
+                            const std::vector<CanvasLabel>* explicit_labels) const {
     if (!(scale > 0.0) || !std::isfinite(scale)) {
         return;
     }
@@ -10470,12 +10591,12 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         // differ from device DPI. Model scale remains independent of this.
         dpi = *paper_pixels_per_mm * 25.4;
     }
-    const auto& labels = positionedLabels(legacy_font, metrics_device, scale, dpi, output,
+    const auto& labels = explicit_labels ? *explicit_labels : positionedLabels(legacy_font, metrics_device, scale, dpi, output,
                                          content_only, content_only ? view_center : Vec2{},
                                          floor_ghost);
     const auto& paint_layouts = m_label_placement_cache[
         floor_ghost ? 3 : content_only ? 2 : output ? 1 : 0].paint_layouts;
-    const bool cached_layouts = paint_layouts.size() == labels.size();
+    const bool cached_layouts = !explicit_labels && paint_layouts.size() == labels.size();
     const auto dpr = devicePixelRatioF();
     // Only the widget's ordinary screen paint has a viewport in these logical
     // coordinates. Output, content recorders and transformed callers keep all

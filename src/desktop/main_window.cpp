@@ -28,6 +28,9 @@
 #include "sketch/corner_window.hpp"
 #include "sketch/corner_window_transfer.hpp"
 #include "sketch/mixed_clipboard_transfer.hpp"
+#include "sketch/mixed_clipboard_placement.hpp"
+#include "sketch/mixed_clipboard_command.hpp"
+#include "sketch/authored_phase_membership.hpp"
 #include "sketch/corner_window_edit.hpp"
 #include "sketch/dxf_architectural_source.hpp"
 #include "sketch/phase_corner_window_edit.hpp"
@@ -2341,9 +2344,9 @@ QString format_boundary_area(double square_metres, bool metric, bool ansi) {
 }
 
 DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
-    const Entity& boundary, const DocumentSnapshot& snapshot,
+    const Entity& boundary, const std::map<std::string,Entity,std::less<>>& entities,
     bool metric, bool selected, bool ansi = false) {
-    const auto resolved=resolve_current_boundary_dimension(dimension, snapshot);
+    const auto resolved=resolve_current_boundary_dimension(dimension, entities);
     QString text;
     std::optional<Boundary> overlay;
     if (resolved.kind==BoundaryDimensionKind::segment_length || resolved.kind==BoundaryDimensionKind::wall_axis_length ||
@@ -2372,6 +2375,12 @@ DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& di
             resolved.kind==BoundaryDimensionKind::wall_axis_length || resolved.kind==BoundaryDimensionKind::corner_window_leg_length;
     }
     return result;
+}
+
+DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
+    const Entity& boundary, const DocumentSnapshot& snapshot,
+    bool metric, bool selected, bool ansi = false) {
+    return project_boundary_dimension(dimension,boundary,snapshot.entities(),metric,selected,ansi);
 }
 
 Vec2 assembly_placement_point(Vec2 point, const AssemblyPlacement& placement) {
@@ -6331,9 +6340,14 @@ public:
         m_native_roof_opening_preview_timer=new QTimer(owner);
         m_native_roof_opening_preview_timer->setInterval(16);
         QObject::connect(m_native_roof_opening_preview_timer,&QTimer::timeout,owner,[this] { pollNativeRoofOpeningPreview(); });
+        m_mixed_clipboard_preview_timer=new QTimer(owner);
+        m_mixed_clipboard_preview_timer->setInterval(16);
+        QObject::connect(m_mixed_clipboard_preview_timer,&QTimer::timeout,owner,[this] { pollMixedClipboardPreview(); });
     }
 
     ~Impl() {
+        m_mixed_clipboard_preview_timer->stop();
+        m_mixed_clipboard_preview_queue.shutdown(false);
         m_save_timer->stop();
         m_opening_preview_timer->stop();
         m_opening_preview_queue.shutdown(false);
@@ -31600,6 +31614,7 @@ public:
 
     void duplicateCornerWindowSelection() {
         try {
+            if (mixedClipboardSelection()) { duplicateMixedClipboardSelection(); return; }
             const auto source = authoringSnapshot();
             const auto authority = captureSourceEditAuthority(source);
             auto transfers = cornerWindowSelectionTransfers(source);
@@ -31733,7 +31748,7 @@ public:
 
     bool copySelection() {
         try {
-            if (rejectMixedSelectionCommand(QStringLiteral("Copy"))) return false;
+            if (mixedClipboardSelection()) return copyMixedClipboardSelection(false);
             if (!m_selected_roof_openings.empty()) return copyRoofOpeningSelection(false);
             if (hasCornerWindowSelection())
                 return copyCornerWindowSelection(false);
@@ -33900,7 +33915,7 @@ public:
 
     bool cutSelection() {
         try {
-            if (rejectMixedSelectionCommand(QStringLiteral("Cut"))) return false;
+            if (mixedClipboardSelection()) return copyMixedClipboardSelection(true);
             if (!m_selected_roof_openings.empty()) return copyRoofOpeningSelection(true);
             if (hasCornerWindowSelection())
                 return copyCornerWindowSelection(true);
@@ -33986,8 +34001,9 @@ public:
         }
     }
 
-    bool placeMeasuredClipboardGraph(const DocumentSnapshot& source, std::vector<EntityChange>& changes) {
-        if (std::none_of(changes.begin(), changes.end(), [](const auto& change) {
+    bool placeMeasuredClipboardGraph(const DocumentSnapshot& source, std::vector<EntityChange>& changes,
+        std::optional<Vec2> placement_offset=std::nullopt) {
+        if (!placement_offset && std::none_of(changes.begin(), changes.end(), [](const auto& change) {
                 return change.entity.type == "measurement_linework";
             })) return false;
         std::map<std::string,Entity,std::less<>> copied;
@@ -34033,9 +34049,9 @@ public:
             throw std::invalid_argument("The complete measured clipboard graph has no usable placement bounds. Nothing was pasted.");
         const bool has_existing_geometry = std::isfinite(existing_right);
         const double gap=m_measurementCanvas->gridSpacingMetres();
-        if (has_existing_geometry && (!std::isfinite(gap) || gap<=0))
+        if (!placement_offset && has_existing_geometry && (!std::isfinite(gap) || gap<=0))
             throw std::invalid_argument("The drawing grid cannot provide a safe measured-copy placement. Nothing was pasted.");
-        const Vec2 offset = has_existing_geometry
+        const Vec2 offset = placement_offset ? *placement_offset : has_existing_geometry
             ? Vec2{std::ceil(existing_right/gap)*gap+gap-copied_left,0} : Vec2{};
         const PlanarTransform transform{{},0,false,false,offset};
         std::vector<BoundaryTransformation> boundaries;
@@ -34064,7 +34080,8 @@ public:
         // A fresh destination (including Cut followed by Paste) has no geometry
         // to avoid: retain its measured location and dialect without inventing
         // a placement operation.
-        if (!has_existing_geometry) return true;
+        if (!placement_offset && !has_existing_geometry) return true;
+        if (offset.x==0.0 && offset.y==0.0) return true;
         // The pure typed kernel retains boundary receipts/derivations and moves
         // bound dimensions from one detached source state before admission.
         auto placed=boundaries.empty()?copied:transformed_boundary_entities_batch(copied,boundaries);
@@ -34131,8 +34148,1170 @@ public:
         std::map<QString,SiteAnnotationTarget> annotation_targets;
         std::map<std::string,std::string,std::less<>> identity_mapping;
         std::map<std::string,std::string,std::less<>> material_catalog_mapping;
+        std::map<std::pair<std::string,std::string>,std::string> roof_opening_identity_mapping;
         std::set<std::string,std::less<>> reserved_identities;
     };
+
+    bool mixedClipboardSelection() const {
+        if (mixedSemanticSelection()) return true;
+        bool corner=false,other=false;
+        const auto source=authoringSnapshot();
+        for (const auto& id:ordinarySelectionIDs()) {
+            const auto found=source.entities().find(id.toStdString());
+            if (found!=source.entities().end() && found->second.type=="corner_window") corner=true;
+            else other=true;
+        }
+        return corner && other;
+    }
+
+    MixedClipboardTransfer captureMixedClipboardTransfer(const DocumentSnapshot& source) const {
+        MixedClipboardTransfer transfer;
+        QStringList ordinary,corner_ids;
+        for (const auto& id:ordinarySelectionIDs()) {
+            const auto found=source.entities().find(id.toStdString());
+            if (found!=source.entities().end() && found->second.type=="corner_window") corner_ids.push_back(id);
+            else ordinary.push_back(id);
+        }
+        if (!ordinary.isEmpty()) {
+            auto packet=json::parse(clipboardSelectionPayload(source,&ordinary));
+            // A wall's dependency closure contains its managed corner cuts.
+            // Transport their complete owner once in the coordinated lane.
+            for (const auto& row:packet.at("entities"))
+                if (row.at("type")=="opening" && row.at("properties").contains("corner_window_id")) {
+                    const auto owner_id=id_from(row.at("properties").at("corner_window_id").get<std::string>());
+                    if (!corner_ids.contains(owner_id)) corner_ids.push_back(owner_id);
+                }
+            if (!corner_ids.isEmpty()) transfer.corners=cornerWindowSelectionTransfers(source,&corner_ids);
+            std::set<std::string,std::less<>> coordinated;
+            for (const auto& corner:transfer.corners) {
+                coordinated.insert(corner.owner.id);
+                for (const auto& cut:corner.cuts) coordinated.insert(cut.id);
+                for (const auto& dimension:corner.dimensions) coordinated.insert(dimension.id);
+            }
+            auto& rows=packet.at("entities");
+            rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& row) {
+                return coordinated.contains(row.at("id").template get<std::string>());
+            }),rows.end());
+            auto& roots=packet.at("root_ids");
+            roots.erase(std::remove_if(roots.begin(),roots.end(),[&](const auto& root) {
+                return coordinated.contains(root.template get<std::string>());
+            }),roots.end());
+            if (!roots.empty()) { packet["root_id"]=roots.front(); transfer.ordinary=std::move(packet); }
+        } else if (!corner_ids.isEmpty()) transfer.corners=cornerWindowSelectionTransfers(source,&corner_ids);
+        if (!transfer.corners.empty()) transfer.catalogs=cornerWindowGroupMaterialCatalogs(source,transfer.corners);
+        for (const auto& target:m_selected_roof_openings) {
+            (void)roofCanvasChild(source,target);
+            RoofOpeningCloneSource clone{source.entities().at(target.roof_id.toStdString()),target.opening_id.toStdString()};
+            (void)validatedRoofOpeningCloneRow(clone);
+            transfer.skylights.push_back(std::move(clone));
+        }
+        validate_mixed_clipboard_transfer(transfer);
+        return transfer;
+    }
+
+    bool copyMixedClipboardSelection(bool cut) {
+        const auto source=m_selected_roof_openings.empty() ? authoringSnapshot() : *selectedRoofOpeningCohortSource(false);
+        const auto authority=captureSourceEditAuthority(source);
+        const auto ordinary=ordinarySelectionIDs();
+        const auto children=m_selected_roof_openings;
+        const auto packet=encode_mixed_clipboard_transfer(captureMixedClipboardTransfer(source)).dump();
+        auto* clipboard=QGuiApplication::clipboard();
+        if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+        if (!sourceEditAuthorityCurrent(authority,cut) || ordinary!=ordinarySelectionIDs() || children!=m_selected_roof_openings)
+            throw std::invalid_argument("The complete clipboard source or selection changed.");
+        if (cut) {
+            if (!deleteSelection()) return false;
+            const auto after=authoringSnapshot();
+            if (authority.context.document!=m_document || after.revision()!=source.revision()+1 ||
+                after.history().at(source.revision()).entities!=source.entities() ||
+                after.history().at(source.revision()).assets!=source.assets())
+                throw std::invalid_argument("The complete Cut source changed before clipboard publication.");
+        }
+        clipboard->setText(QString::fromUtf8(packet.data(),static_cast<int>(packet.size())),QClipboard::Clipboard);
+        clearError(); return true;
+    }
+
+    struct MixedClipboardSession {
+        enum class Stage { preparing,anchor,translating,corners,skylights,confirmation } stage{Stage::preparing};
+        std::shared_ptr<const DocumentSnapshot> source;
+        std::shared_ptr<const SourceEditAuthority> authority;
+        std::shared_ptr<const CanvasEditSourceCapture> edit_source;
+        QPointer<PlanCanvas> canvas;
+        std::optional<BuildingViewFrame> frame;
+        std::optional<ArchitecturalViewContext> view;
+        std::optional<SiteCanvasPresentationFrames> site_frames;
+        std::optional<SitePresentationPlacement> site_input_frame;
+        std::map<std::string,SitePresentationPlacement,std::less<>> fresh_site_frames;
+        std::map<std::string,Vec2,std::less<>> ordinary_translation_offsets;
+        std::map<std::pair<std::string,std::string>,Vec2> annotation_translation_offsets;
+        std::uint64_t site_generation{};
+        OrdinaryClipboardPreparation ordinary;
+        MixedClipboardPlacementRequest request;
+        std::set<std::string,std::less<>> reserved;
+        std::vector<std::vector<RoofOpeningGroupClone>> independent_skylights;
+        std::size_t skylight_index{};
+        std::size_t corner_index{};
+        std::string registry;
+        Boundary ghosts;
+        struct SymbolResource { SymbolDefinition definition; QByteArray artwork,artwork_sha256; };
+        std::map<std::string,SymbolResource,std::less<>> symbol_resources;
+        std::vector<CanvasEntity> annotation_entities;
+        std::vector<CanvasLabel> annotation_labels;
+        std::set<std::string,std::less<>> external_dimension_ids;
+        std::vector<CanvasEntity> hover_dimension_entities;
+        std::vector<CanvasLabel> hover_dimension_labels;
+        Boundary hover_physical;
+        Vec2 hover_dimension_offset{},hover_requested_offset{};
+        std::shared_ptr<MixedClipboardSession> hover_result;
+        std::uint64_t hover_sequence{},hover_pointer_sequence{},hover_serial{};
+        bool hover_dimensions_ready{};
+        std::shared_ptr<PreparedCanvasEdit> prepared;
+        std::optional<Command> command;
+        std::shared_ptr<DocumentSnapshot> candidate;
+        std::shared_ptr<MixedClipboardSession> preview_result;
+        bool rooms_reviewed{};
+        bool reviewing_rooms{};
+        QMetaObject::Connection focus_connection;
+        MixedClipboardPlacement admitted;
+        std::uint64_t serial{},sequence{},navigation{};
+        Vec2 center;
+        double zoom{},dpr{};
+        QSize viewport_size;
+        bool had_focus{};
+    };
+
+    static void reserveMixedClipboardNames(std::set<std::string,std::less<>>& names,const json& packet) {
+        std::vector<const json*> pending{&packet};
+        while (!pending.empty()) {
+            const auto* value=pending.back(); pending.pop_back();
+            if (value->is_string()) names.insert(value->get_ref<const std::string&>());
+            else if (value->is_object()) for (const auto& [key,child]:value->items()) { names.insert(key); pending.push_back(&child); }
+            else if (value->is_array()) for (const auto& child:*value) pending.push_back(&child);
+        }
+    }
+
+    static std::set<std::string,std::less<>> mixedClipboardRetainedNames(const DocumentSnapshot& source) {
+        auto names=retainedSlabIdentityNames(source,true);
+        for (const auto& [id,entity]:source.entities()) {
+            names.insert(id); names.insert(entity.type);
+            reserveMixedClipboardNames(names,entity.properties); reserveMixedClipboardNames(names,entity.extensions);
+        }
+        for (const auto& revision:source.history()) {
+            if (revision.boundary_translation) names.insert(revision.boundary_translation->boundary_id);
+            if (revision.boundary_transform) names.insert(revision.boundary_transform->boundary_id);
+            if (revision.boundary_translations) reserveMixedClipboardNames(names,command_to_json(Command{*revision.boundary_translations}));
+            if (revision.boundary_transforms) reserveMixedClipboardNames(names,command_to_json(Command{*revision.boundary_transforms}));
+            for (const auto& [id,asset]:revision.assets) {
+                (void)id; names.insert(asset.id); names.insert(asset.media_type); names.insert(asset.sha256);
+            }
+            if (revision.phase_entity_import) {
+                names.insert(revision.phase_entity_import->entity_ids.begin(),revision.phase_entity_import->entity_ids.end());
+                names.insert(revision.phase_entity_import->asset_ids.begin(),revision.phase_entity_import->asset_ids.end());
+            }
+        }
+        return names;
+    }
+
+    bool beginMixedClipboardPlacement(MixedClipboardTransfer transfer) {
+        validate_mixed_clipboard_transfer(transfer);
+        if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
+            throw std::invalid_argument("Finish or cancel the current drawing before placing the complete copied group.");
+        setTool(CanvasTool::select);
+        if (!captureOpeningPlacement()) return false;
+        auto session=std::make_shared<MixedClipboardSession>();
+        session->source=siteCanvas(m_architecturalCanvas) ? m_site_opening_source : m_plan_opening_source;
+        session->authority=siteCanvas(m_architecturalCanvas) ? m_site_opening_authority : m_plan_opening_authority;
+        session->edit_source=captureCanvasEditSource();
+        session->canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        session->view=boundaryVertexViewContext(session->canvas,*session->source);
+        session->frame=session->view ? std::optional{session->view->frame} : std::nullopt;
+        if (siteCanvas(session->canvas)) {
+            session->site_frames=m_site_opening_frames;
+            session->site_input_frame=m_site_publication_input_frame;
+            session->site_generation=m_site_publication_generation;
+            if (!session->site_input_frame) throw std::invalid_argument("Choose a complete Site Plan drawing context before pasting.");
+        }
+        session->registry=phaseRegistryForAuthoring(*session->source);
+        session->request.transfer=std::move(transfer);
+        session->request.ordinary={session->source->revision(),{},{},"Paste mixed selection"};
+        if (session->request.transfer.ordinary) {
+            if (!pasteSelection(&session->request.transfer,session->source.get(),&session->ordinary)) return false;
+            session->request.ordinary=*session->ordinary.command;
+            session->request.identity_mapping=session->ordinary.identity_mapping;
+            session->request.material_catalog_mapping=session->ordinary.material_catalog_mapping;
+            session->request.roof_opening_identity_mapping=session->ordinary.roof_opening_identity_mapping;
+        }
+        session->reserved=mixedClipboardRetainedNames(*session->source);
+        reserveMixedClipboardNames(session->reserved,encode_mixed_clipboard_transfer(session->request.transfer));
+        session->reserved.insert(session->ordinary.reserved_identities.begin(),session->ordinary.reserved_identities.end());
+        auto fresh_entities=session->source->entities();
+        for (const auto& change:session->request.ordinary.entity_changes) fresh_entities.insert_or_assign(change.entity.id,change.entity);
+        if (session->site_frames) for (const auto& change:session->request.ordinary.entity_changes)
+            session->fresh_site_frames.emplace(change.entity.id,resolve_site_presentation(fresh_entities,change.entity.id));
+        for (const auto& [key,alias]:embedded_assembly_presentation_ids(fresh_entities)) { (void)key; session->reserved.insert(alias); }
+        const auto allocate=[&](std::string_view prefix) {
+            auto id=new_id(prefix); while (!session->reserved.insert(id).second) id=new_id(prefix); return id;
+        };
+        for (const auto& catalog:session->request.transfer.catalogs) {
+            if (session->request.material_catalog_mapping.contains(catalog.id)) continue;
+            const auto found=session->source->entities().find(catalog.id);
+            if (found!=session->source->entities().end() && found->second==catalog &&
+                found->second.properties.dump()==catalog.properties.dump() && found->second.extensions.dump()==catalog.extensions.dump())
+                session->request.material_catalog_mapping.emplace(catalog.id,catalog.id);
+            else {
+                auto imported=catalog; imported.id=allocate("assembly-materials");
+                session->request.material_catalog_mapping.emplace(catalog.id,imported.id);
+                session->request.imported_material_catalogs.push_back(std::move(imported));
+            }
+        }
+        for (const auto& sky:session->request.transfer.skylights) {
+            const auto mapped=session->request.roof_opening_identity_mapping.find({sky.roof.id,sky.opening_id});
+            if (mapped!=session->request.roof_opening_identity_mapping.end())
+                session->request.skylights.push_back({{{sky,mapped->second}},session->request.identity_mapping.at(sky.roof.id),{}});
+            else {
+                auto cohort=std::find_if(session->independent_skylights.begin(),session->independent_skylights.end(),[&](const auto& group) {
+                    return group.front().source.roof.id==sky.roof.id;
+                });
+                if (cohort==session->independent_skylights.end()) {
+                    session->independent_skylights.push_back({}); cohort=std::prev(session->independent_skylights.end());
+                }
+                cohort->push_back({sky,allocate("skylight")});
+            }
+        }
+        if (!sourceEditAuthorityCurrent(*session->authority)) throw std::invalid_argument("The complete paste destination changed.");
+        // Copy resolved artwork now. Workers receive immutable bytes rather
+        // than reaching into the live library or UI-owned resources later.
+        std::size_t symbol_count{},label_count{};
+        for (const auto& change:session->request.ordinary.entity_changes) if (change.entity.type==kAnnotationEntityType) {
+            const auto state=decode_annotation_entity(change.entity);
+            for (const auto& label:state.labels) if (label.visible && ++label_count>4096)
+                throw std::invalid_argument("The complete copied group exceeds its 4096-label preview limit.");
+            for (const auto& symbol:state.symbols) {
+                if (!symbol.visible) continue;
+                if (++symbol_count>4095) throw std::invalid_argument("The complete copied group exceeds its 4095-symbol preview limit.");
+                MixedClipboardSession::SymbolResource resource;
+                resource.definition=resolved_symbol_definition(symbol,desktop_symbol_catalog());
+                if (resource.definition.svg_asset) {
+                    resource.artwork=symbol.pinned_svg.empty() ? load_symbol_svg(*resource.definition.svg_asset) : QByteArray::fromStdString(symbol.pinned_svg);
+                    validate_svg_document(resource.artwork);
+                    resource.artwork_sha256=QCryptographicHash::hash(resource.artwork,QCryptographicHash::Sha256).toHex();
+                }
+                session->symbol_resources.emplace(symbol.id,std::move(resource));
+            }
+        }
+        m_pending_mixed_clipboard=session;
+        m_pending_opening_kind=QStringLiteral("mixed_clipboard");
+        session->canvas->setFocus();
+        session->center=session->canvas->viewCenter(); session->zoom=session->canvas->viewScale();
+        session->viewport_size=session->canvas->size(); session->dpr=session->canvas->devicePixelRatioF();
+        session->navigation=session->canvas->navigationGeneration(); session->had_focus=session->canvas->hasFocus();
+        session->focus_connection=QObject::connect(qApp,&QApplication::focusChanged,owner,[this,weak=std::weak_ptr<MixedClipboardSession>{session}](QWidget*,QWidget* next) {
+            const auto captured=weak.lock();
+            if (!captured || captured!=m_pending_mixed_clipboard || captured->reviewing_rooms || !captured->had_focus) return;
+            if (next==captured->canvas.data() || (next && captured->canvas->isAncestorOf(next))) return;
+            cancelMixedClipboardPlacement();
+            setError(QStringLiteral("The captured placement focus changed. Paste again."));
+        });
+        // Pending placement owns stationary clicks, including clicks on its
+        // destination hosts. Retained selection must not consume an anchor.
+        session->canvas->setPointPlacementRequested([this,weak=std::weak_ptr<MixedClipboardSession>{session}](Vec2 point) {
+            if (const auto captured=weak.lock(); captured && captured==m_pending_mixed_clipboard)
+                updateMixedClipboardPlacement(point,true);
+        },true);
+        if (session->request.transfer.ordinary) {
+            // Native footprint preparation is worker-only. A separate copy
+            // receives results so hover/cancel never races its mutable ink.
+            auto work=std::make_shared<MixedClipboardSession>(*session);
+            session->preview_result=work;
+            session->sequence=m_mixed_clipboard_preview_queue.enqueue([work](const RegenerationCancellationToken& cancellation) {
+                if (!cancellation.is_cancelled()) {
+                    work->ghosts=mixedOrdinaryGhosts(*work);
+                    prepareMixedClipboardAnnotations(*work);
+                }
+                return RegenerationReceipt{work->source->revision(),{}};
+            });
+            m_architecture_hint->setText(QStringLiteral("Preparing the complete copied group. Right-click or Esc cancels."));
+        } else { session->stage=MixedClipboardSession::Stage::corners; advanceMixedClipboardPlacement(); }
+        m_mixed_clipboard_preview_timer->start();
+        clearError(); return true;
+    }
+
+    void requireMixedClipboardCurrent(const std::shared_ptr<MixedClipboardSession>& session) const {
+        if (!session || session!=m_pending_mixed_clipboard || !session->source || !session->authority || !session->canvas ||
+            m_pending_opening_kind.isEmpty() || !sourceEditAuthorityCurrent(*session->authority) ||
+            fullSnapshotDigest(*session->source)!=fullSnapshotDigest(authoringSnapshot()) ||
+            session->registry!=phaseRegistryForAuthoring(*session->source))
+            throw std::invalid_argument("The complete paste source, selection or destination changed. Paste again.");
+        if (session->site_frames && (!siteCanvas(session->canvas) || session->site_generation!=m_site_publication_generation))
+            throw std::invalid_argument("The captured Site Plan presentation changed. Paste again.");
+        const auto center=session->canvas->viewCenter();
+        if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
+            session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
+            session->navigation!=session->canvas->navigationGeneration() || (session->had_focus && !session->reviewing_rooms && !session->canvas->hasFocus()))
+            throw std::invalid_argument("The captured placement view or focus changed. Paste again.");
+    }
+
+    void cancelMixedClipboardPlacement() {
+        if (m_pending_mixed_clipboard) QObject::disconnect(m_pending_mixed_clipboard->focus_connection);
+        if (m_pending_mixed_clipboard && m_pending_mixed_clipboard->sequence)
+            (void)m_mixed_clipboard_preview_queue.cancel(m_pending_mixed_clipboard->sequence);
+        if (m_pending_mixed_clipboard && m_pending_mixed_clipboard->hover_sequence)
+            (void)m_mixed_clipboard_preview_queue.cancel(m_pending_mixed_clipboard->hover_sequence);
+        if (m_pending_mixed_clipboard && m_pending_mixed_clipboard->canvas) {
+            m_pending_mixed_clipboard->canvas->setPointPlacementRequested({});
+            m_pending_mixed_clipboard->canvas->clearComponentPlacementPreview();
+        }
+        if (m_pending_mixed_clipboard) { m_pending_opening_kind.clear(); clearPendingCornerWindowClone(); }
+        m_pending_mixed_clipboard.reset();
+    }
+
+    void advanceMixedClipboardPlacement() {
+        const auto session=m_pending_mixed_clipboard;
+        requireMixedClipboardCurrent(session);
+        while (session->corner_index<session->request.transfer.corners.size()) {
+            const auto& corner=session->request.transfer.corners[session->corner_index];
+            const auto value=parse_corner_window(corner.owner);
+            const auto first=session->request.identity_mapping.find(corner.walls[0].id);
+            const auto second=session->request.identity_mapping.find(corner.walls[1].id);
+            if (first==session->request.identity_mapping.end() || second==session->request.identity_mapping.end()) {
+                session->stage=MixedClipboardSession::Stage::corners;
+                m_pending_opening_kind=QStringLiteral("corner_window");
+                m_pending_corner_window_clone=corner;
+                configurePendingCornerWindowMember();
+                m_architecture_hint->setText(QStringLiteral("Choose the two destination walls for corner %1 of %2. All placements remain pending.")
+                    .arg(session->corner_index+1).arg(session->request.transfer.corners.size()));
+                return;
+            }
+            appendMixedCornerChoice(session,{first->second,second->second},value.at_start);
+        }
+        if (session->skylight_index<session->independent_skylights.size()) {
+            session->stage=MixedClipboardSession::Stage::skylights;
+            m_pending_opening_kind=QStringLiteral("skylight");
+            m_architecture_hint->setText(QStringLiteral("Choose a roof face for skylight group %1 of %2 (%3 skylights). All placements remain pending.")
+                .arg(session->skylight_index+1).arg(session->independent_skylights.size())
+                .arg(session->independent_skylights.at(session->skylight_index).size()));
+            return;
+        }
+        queueMixedClipboardPreview(session);
+    }
+
+    void appendMixedCornerChoice(const std::shared_ptr<MixedClipboardSession>& session,
+        std::array<std::string,2> hosts,std::array<bool,2> endpoints) {
+        const auto& corner=session->request.transfer.corners.at(session->corner_index);
+        const auto allocate=[&](std::string_view prefix) {
+            auto id=new_id(prefix); while (!session->reserved.insert(id).second) id=new_id(prefix); return id;
+        };
+        CornerWindowCloneRequest request{corner,allocate("corner-window"),{allocate("opening"),allocate("opening")},hosts,endpoints,{}};
+        for (const auto& dimension:corner.dimensions) request.dimension_ids.emplace(dimension.id,allocate("dimension"));
+        const auto value=parse_corner_window(corner.owner);
+        for (std::size_t leg=0;leg<2;++leg) {
+            const Entity* host=nullptr;
+            for (const auto& change:session->request.ordinary.entity_changes) if (change.entity.id==hosts[leg]) host=&change.entity;
+            if (!host) host=&session->source->entities().at(hosts[leg]);
+            Wall wall; std::string diagnostic;
+            if (!read_document_wall(resolve_vertical_placement(*session->source,*host),{},wall,diagnostic))
+                throw std::invalid_argument(diagnostic);
+            const auto start=endpoints[leg] ? wall.baseline.start : wall.baseline.end;
+            const auto station=endpoints[leg] ? value.widths[leg] : segment_length(wall.baseline)-value.widths[leg];
+            Boundary path{{start,point_at_host_station(wall.baseline,station),0.0}};
+            if (session->site_frames) {
+                const auto placement=session->fresh_site_frames.contains(host->id) ? session->fresh_site_frames.at(host->id) :
+                    resolve_site_presentation(*session->source,host->id);
+                path=site_transform_boundary(path,placement.forward);
+            } else if (session->frame) path=project_plan_path(std::move(path),*session->frame);
+            session->ghosts.insert(session->ghosts.end(),path.begin(),path.end());
+        }
+        session->request.corners.push_back(std::move(request)); ++session->corner_index;
+    }
+
+    void queueMixedClipboardPreview(const std::shared_ptr<MixedClipboardSession>& session) {
+        requireMixedClipboardCurrent(session);
+        session->stage=MixedClipboardSession::Stage::confirmation;
+        m_pending_opening_kind=QStringLiteral("mixed_clipboard");
+        session->serial=session->canvas->beginComponentPlacementPreview();
+        auto work=std::make_shared<MixedClipboardSession>(*session);
+        work->preview_result.reset(); work->prepared=std::make_shared<PreparedCanvasEdit>();
+        session->preview_result=work;
+        // All worker inputs are the captured value copy; completion is the
+        // only handoff of its command, candidate and ink to the UI session.
+        session->sequence=m_mixed_clipboard_preview_queue.enqueue([session=std::move(work)](const RegenerationCancellationToken& cancellation) {
+            if (cancellation.is_cancelled()) return RegenerationReceipt{session->source->revision(),{}};
+            session->admitted=prepare_mixed_clipboard_placement(*session->source,session->request,session->source->revision());
+            if (!session->rooms_reviewed) {
+            json roof_authoring=nullptr;
+            if (!session->admitted.roof_intents.empty()) {
+                const auto physical=replay_roof_edit_entities(session->source->entities(),session->admitted.roof_intents);
+                const auto roof=sourceDerivedRoofMathEditCommand(*session->source,physical,session->admitted.roof_intents,
+                    "Paste mixed selection",&session->reserved);
+                const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&roof);
+                if (!typed || !typed->phase_constraint_authoring_completion)
+                    throw std::invalid_argument("The complete skylight placement has no closed roof authoring authority.");
+                roof_authoring=typed->phase_constraint_authoring_intent;
+            }
+            const ApplyEntityChanges fresh{session->source->revision(),session->admitted.fresh_entity_changes,{},"Paste mixed selection"};
+            ApplyBoundaryConstraintChanges compound;
+            compound.expected_revision=session->source->revision(); compound.message="Paste mixed selection";
+            compound.clipboard_placement_completion=true;
+            compound.clipboard_placement_intent=make_mixed_clipboard_placement_intent(*session->source,roof_authoring,fresh,session->registry,compound.message);
+            session->command=Command{compound};
+            }
+            const auto candidate=prepareCanvasEdit(*session->source,*session->command,session->edit_source,*session->prepared);
+            session->candidate=std::make_shared<DocumentSnapshot>(candidate);
+            validate_architectural_geometry_changes(*session->source,candidate);
+            session->ghosts=mixedOrdinaryGhosts(*session,&candidate);
+            prepareMixedClipboardAnnotations(*session,&candidate);
+            for (const auto& choice:session->request.corners) {
+                const auto corner=parse_corner_window(candidate.entities().at(choice.owner_id));
+                const auto hosts=corner_window_plan_hosts(candidate,corner);
+                const auto shape=make_corner_window(hosts,corner_window_cuts(corner,hosts),corner.assembly);
+                auto path=session->view ? project_architectural_view_shape(shape,BuildingViewKind::plan,
+                    *session->view).value_or(Boundary{}) : project_building_shape_plan(shape);
+                if (session->site_frames) path=site_transform_boundary(path,resolve_site_presentation(candidate,choice.owner_id).forward);
+                session->ghosts.insert(session->ghosts.end(),path.begin(),path.end());
+            }
+            for (const auto& [key,child]:session->admitted.roof_opening_identity_mapping) {
+                std::string roof;
+                for (const auto& placement:session->request.skylights) for (const auto& clone:placement.clones)
+                    if (clone.source.roof.id==key.first && clone.source.opening_id==key.second) roof=placement.destination_roof_id;
+                if (roof.empty()) roof=session->admitted.identity_mapping.at(key.first);
+                roof=alternativeReplacementTargetID(*session->command,roof);
+                const auto shape=make_roof_skylight_shape(decode_roof_entity(resolve_vertical_placement(candidate,candidate.entities().at(roof))),
+                    alternativeReplacementTargetID(*session->command,child));
+                auto path=session->view ? project_architectural_view_shape(shape,BuildingViewKind::plan,
+                    *session->view).value_or(Boundary{}) : project_building_shape_plan(shape);
+                if (session->site_frames) path=site_transform_boundary(path,resolve_site_presentation(candidate,roof).forward);
+                session->ghosts.insert(session->ghosts.end(),path.begin(),path.end());
+            }
+            return RegenerationReceipt{session->source->revision(),{}};
+        });
+        m_mixed_clipboard_preview_timer->start();
+        m_architecture_hint->setText(QStringLiteral("Checking the complete copied group. Click once its preview is ready to place everything."));
+    }
+
+    void pollMixedClipboardPreview() {
+        if (m_pending_mixed_clipboard) {
+            try { requireMixedClipboardCurrent(m_pending_mixed_clipboard); }
+            catch (const std::exception& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.what())); }
+        }
+        for (auto& completion:m_mixed_clipboard_preview_queue.take_completed()) {
+            const auto session=m_pending_mixed_clipboard;
+            if (session && completion.sequence==session->hover_sequence) {
+                session->hover_sequence=0;
+                try {
+                    requireMixedClipboardCurrent(session);
+                    const auto work=std::move(session->hover_result);
+                    if (session->stage!=MixedClipboardSession::Stage::anchor || !work ||
+                        work->hover_pointer_sequence!=session->hover_pointer_sequence ||
+                        work->hover_serial!=session->canvas->componentPlacementPreviewSerial() ||
+                        work->hover_requested_offset.x!=session->hover_requested_offset.x ||
+                        work->hover_requested_offset.y!=session->hover_requested_offset.y) continue;
+                    if (!completion.succeeded()) {
+                        if (completion.error) std::rethrow_exception(completion.error);
+                        throw std::invalid_argument("The copied dimension hover preview was cancelled.");
+                    }
+                    session->hover_dimension_entities=std::move(work->annotation_entities);
+                    session->hover_dimension_labels=std::move(work->annotation_labels);
+                    session->hover_dimension_offset=work->hover_requested_offset;
+                    session->hover_dimensions_ready=true;
+                    showMixedClipboardGroupPreview(*session,session->hover_physical,session->hover_requested_offset);
+                } catch (const std::exception& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.what())); }
+                continue; // A hover receipt never admits or advances a placement stage.
+            }
+            if (!session || completion.sequence!=session->sequence) continue;
+            try {
+                requireMixedClipboardCurrent(session);
+                if (!completion.succeeded()) { if (completion.error) std::rethrow_exception(completion.error); throw std::invalid_argument("The complete copied group was not admitted."); }
+                const auto work=std::move(session->preview_result);
+                if (!work) throw std::invalid_argument("The complete placement preview lost its captured result.");
+                session->ghosts=std::move(work->ghosts);
+                session->annotation_entities=std::move(work->annotation_entities);
+                session->annotation_labels=std::move(work->annotation_labels);
+                session->external_dimension_ids=std::move(work->external_dimension_ids);
+                if (session->stage==MixedClipboardSession::Stage::preparing) {
+                    session->stage=MixedClipboardSession::Stage::anchor;
+                    showMixedClipboardGroupPreview(*session,session->ghosts);
+                    m_architecture_hint->setText(QStringLiteral("Click the placement anchor for the complete copied group. Right-click or Esc cancels."));
+                    continue;
+                }
+                if (session->stage==MixedClipboardSession::Stage::translating) {
+                    session->request.ordinary=std::move(work->request.ordinary);
+                    session->stage=MixedClipboardSession::Stage::corners;
+                    showMixedClipboardGroupPreview(*session,session->ghosts);
+                    advanceMixedClipboardPlacement(); continue;
+                }
+                session->admitted=std::move(work->admitted); session->command=std::move(work->command);
+                session->candidate=std::move(work->candidate); session->prepared=std::move(work->prepared);
+                const auto center=session->canvas->viewCenter();
+                if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
+                    session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
+                    session->navigation!=session->canvas->navigationGeneration() || (session->had_focus && !session->canvas->hasFocus()))
+                    throw std::invalid_argument("The complete placement view changed. Paste again.");
+                CanvasEntity ghost; ghost.id=QStringLiteral("mixed-clipboard-preview"); ghost.type=QStringLiteral("source"); ghost.segments=session->ghosts;
+                auto group=session->annotation_entities; group.insert(group.begin(),std::move(ghost));
+                if (!session->canvas->completeComponentPlacementGroupPreview(session->serial,std::move(group),session->annotation_labels,mixedClipboardPreviewCrop(*session)))
+                    throw std::invalid_argument("The complete placement preview was retired. Paste again.");
+                m_architecture_hint->setText(QStringLiteral("Click to place the complete copied group. Right-click or Esc cancels."));
+            } catch (const Standard_Failure& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.GetMessageString())); }
+            catch (const std::exception& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.what())); }
+        }
+        if (!m_pending_mixed_clipboard)
+            m_mixed_clipboard_preview_timer->stop();
+    }
+
+    bool reviewMixedClipboardRooms(const std::shared_ptr<MixedClipboardSession>& session) {
+        requireMixedClipboardCurrent(session);
+        if (!is_physical_wall_room_mixed_clipboard_review_command(*session->command))
+            throw std::invalid_argument("The complete placement lost its room geometry authority.");
+        std::vector<std::pair<DrawingContext,double>> groups;
+        const auto organization=organize_project(*session->candidate);
+        const auto active=active_physical_wall_room_ids(session->candidate->entities());
+        for (const auto& change:session->admitted.fresh_entity_changes) {
+            if (change.entity.type!="wall") continue;
+            const auto context=organization.drawing_context(change.entity.id);
+            if (!context || !context->complete()) throw std::invalid_argument("A copied wall has no complete room review context.");
+            Wall wall; std::string diagnostic;
+            if (!read_document_wall(resolve_vertical_placement(*session->candidate,change.entity),{},wall,diagnostic))
+                throw std::invalid_argument(diagnostic);
+            bool affected=false;
+            for (const auto& room_id:active) {
+                const auto room_context=organization.drawing_context(room_id);
+                if (!room_context || *room_context!=*context) continue;
+                const auto lineage=validate_retained_physical_wall_room_lineage(session->candidate->entities().at(room_id),*room_context);
+                if (std::abs(lineage.effective_elevation_m-wall.elevation)<=default_geometry_tolerance_metres) { affected=true; break; }
+            }
+            if (affected && std::none_of(groups.begin(),groups.end(),[&](const auto& group) {
+                return group.first==*context && std::abs(group.second-wall.elevation)<=default_geometry_tolerance_metres;
+            })) groups.emplace_back(*context,wall.elevation);
+        }
+        if (groups.empty()) { session->rooms_reviewed=true; return false; }
+        if (groups.size()>32) throw std::invalid_argument("The complete copied group exceeds 32 room review contexts and planes.");
+        auto stage=*session->candidate;
+        const QScopedValueRollback<bool> room_focus(session->reviewing_rooms,true);
+        std::vector<ApplyBoundaryConstraintChanges> decisions;
+        const auto current_source=[&] {
+            requireMixedClipboardCurrent(session);
+            const auto center=session->canvas->viewCenter();
+            if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
+                session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
+                session->navigation!=session->canvas->navigationGeneration())
+                throw std::invalid_argument("The complete copied group view changed during room review.");
+        };
+        for (const auto& [context,elevation]:groups) {
+            const auto captured=stage;
+            const auto current_stage=[&] { current_source(); return captured; };
+            PhysicalWallRoomReviewDialog dialog(captured,context,elevation,m_metric_units,current_stage,owner);
+            styleDialog(dialog);
+            if (auto* choice=dialog.findChild<QComboBox*>(QStringLiteral("physicalRoomReviewSource"))) choice->setEnabled(false);
+            if (dialog.exec()!=QDialog::Accepted) { cancelMixedClipboardPlacement(); setTool(CanvasTool::select); clearError(); return true; }
+            current_source();
+            if (!dialog.acceptedCommand()) throw std::invalid_argument("The complete room review has no accepted decision.");
+            const auto decision=*dialog.acceptedCommand();
+            const auto intent=decode_physical_wall_room_review_intent(decision.room_review_intent);
+            if (command_to_json(Command{decision}).at("version")!=29 || !intent.context_plane_selection ||
+                !intent.selected_wall_id.empty() || intent.context!=context ||
+                std::abs(intent.effective_elevation_m-elevation)>default_geometry_tolerance_metres)
+                throw std::invalid_argument("The complete room review changed its captured context or plane.");
+            stage=Document::preview_command(captured,Command{decision}); decisions.push_back(decision);
+        }
+        const auto reviewed=prepare_physical_wall_room_review_batch_after_geometry(*session->source,*session->command,decisions);
+        if (entity_map_digest(reviewed.snapshot.entities())!=entity_map_digest(stage.entities()) || reviewed.snapshot.assets()!=stage.assets())
+            throw std::invalid_argument("The complete copied group differs from its retained room decisions.");
+        current_source(); session->command=Command{reviewed.command}; session->rooms_reviewed=true;
+        session->canvas->setFocus(); queueMixedClipboardPreview(session); return true;
+    }
+
+    void duplicateMixedClipboardSelection() {
+        const auto source=m_selected_roof_openings.empty() ? authoringSnapshot() : *selectedRoofOpeningCohortSource(false);
+        const auto authority=captureSourceEditAuthority(source);
+        auto transfer=captureMixedClipboardTransfer(source);
+        if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The complete duplication source changed.");
+        (void)beginMixedClipboardPlacement(std::move(transfer));
+    }
+
+    static Boundary mixedOrdinaryGhosts(const MixedClipboardSession& session,const DocumentSnapshot* admitted=nullptr) {
+        Boundary result;
+        const auto& authority=admitted ? *admitted : *session.source;
+        auto entities=authority.entities();
+        if (!admitted) for (const auto& change:session.request.ordinary.entity_changes) entities.insert_or_assign(change.entity.id,change.entity);
+        for (const auto& change:session.request.ordinary.entity_changes) {
+            const auto& entity=entities.at(change.entity.id);
+            Boundary path;
+            bool projected=false;
+            const auto project_shape=[&](const TopoDS_Shape& shape) {
+                projected=session.view.has_value();
+                return session.view ? project_architectural_view_shape(shape,BuildingViewKind::plan,*session.view).value_or(Boundary{}) :
+                    project_building_shape_plan(shape);
+            };
+            if (is_closed_boundary_entity(entity.type)) path=boundary_geometry(decode_identified_boundary_entity(entity));
+            else if (entity.type=="wall") {
+                Wall wall; std::string diagnostic;
+                std::vector<const Entity*> openings;
+                for (const auto& [id,child]:entities) {
+                    (void)id;
+                    if (child.type=="opening" && read_string(child.properties,"wall_id")==std::optional{entity.id}) openings.push_back(&child);
+                }
+                if (!read_document_wall(resolve_vertical_placement(authority,entity),openings,wall,diagnostic)) throw std::invalid_argument(diagnostic);
+                path=project_shape(make_wall(wall));
+            } else if (entity.type=="measurement_linework") {
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                for (const auto& edge:replay_measurement_linework(*decoded.model).edges) path.push_back(edge.segment);
+            } else if (entity.type=="room" || entity.type=="slab") {
+                const auto effective=effective_building_geometry_entity(authority,entity);
+                std::string diagnostic;
+                if (entity.type=="room") {
+                    RoomVolume room;
+                    if (!read_document_room(effective,room,diagnostic)) throw std::invalid_argument(diagnostic);
+                    path=project_shape(make_room_volume(room));
+                } else {
+                    Slab slab;
+                    if (!read_document_slab(effective,slab,diagnostic)) throw std::invalid_argument(diagnostic);
+                    path=project_shape(make_slab(slab));
+                }
+            } else if (entity.type=="assembly_instance") {
+                AssemblyExpansionBudget budget;
+                path=project_shape(make_assembly_geometry(expand_document_assembly_instance(entity,entities,budget)).shape);
+            } else if (can_recognize_building_entity_type(entity.type)) {
+                path=project_shape(make_building_shape(decode_building_entity(effective_building_geometry_entity(authority,entity)),entities));
+            } else if (entity.type==kAnnotationEntityType) {
+                // Actual text and artwork have their own retained group values.
+                // They are never represented by tiny measurement-like markers.
+            }
+            if (session.site_frames) path=site_transform_boundary(path,session.fresh_site_frames.at(entity.id).forward);
+            else if (session.frame && !projected) path=project_plan_path(std::move(path),*session.frame);
+            if (session.view && session.view->crop) {
+                const auto& crop=*session.view->crop;
+                path=clip_boundary_to_bounds(path,{{crop.min_horizontal_m,crop.min_vertical_m},{crop.max_horizontal_m,crop.max_vertical_m}});
+            }
+            result.insert(result.end(),path.begin(),path.end());
+        }
+        return result;
+    }
+
+    static void prepareMixedClipboardAnnotations(MixedClipboardSession& session,const DocumentSnapshot* admitted=nullptr) {
+        auto entities=admitted ? admitted->entities() : session.source->entities();
+        if (!admitted) for (const auto& change:session.request.ordinary.entity_changes) entities.insert_or_assign(change.entity.id,change.entity);
+        session.annotation_entities.clear(); session.annotation_labels.clear();
+        session.external_dimension_ids.clear();
+        for (const auto& change:session.request.ordinary.entity_changes) {
+            if (change.entity.type!=kAnnotationEntityType) continue;
+            const auto state=decode_annotation_entity(entities.at(change.entity.id));
+            std::vector<SiteAnnotationTarget> targets;
+            for (const auto& label:state.labels) targets.push_back({change.entity.id,label.id});
+            for (const auto& symbol:state.symbols) targets.push_back({change.entity.id,symbol.id});
+            const auto frames=session.site_frames ? resolve_site_annotation_presentations(entities,targets) :
+                std::map<SiteAnnotationTarget,SitePresentationPlacement>{};
+            for (const auto& label:state.labels) {
+                if (!label.visible) continue;
+                CanvasLabel item{id_from(label.id),label.placement.position,QString::fromStdString(label.content),false,
+                    label.placement.rotation_radians,label.placement.scale,label.style.text_height_metres};
+                item.text_alignment=QString::fromStdString(label.style.text_alignment);
+                if (QString::fromStdString(label.style.stroke_color).compare(QStringLiteral("#000000"),Qt::CaseInsensitive)!=0)
+                    item.color=QColor(QString::fromStdString(label.style.stroke_color));
+                item.bold=label.style.bold; item.italic=label.style.italic;
+                item.font_family=QString::fromStdString(label.style.font_family); item.model_plan=label.model_plan;
+                item.fill_color=QColor(QString::fromStdString(label.style.fill_color)); item.fill_opacity=label.style.fill_opacity;
+                item.fill_pattern=QString::fromStdString(label.style.fill_pattern); item.show_background=label.style.fill_pattern!="none";
+                if (session.site_frames) item=site_presented_canvas_label(item,frames.at({change.entity.id,label.id}));
+                else if (session.frame && item.model_plan) item.position=project_plan_point(item.position,*session.frame);
+                session.annotation_labels.push_back(std::move(item));
+            }
+            for (const auto& symbol:state.symbols) {
+                if (!symbol.visible) continue;
+                const auto& resource=session.symbol_resources.at(symbol.id);
+                const auto& definition=resource.definition;
+                Boundary strokes;
+                for (const auto& stroke:transformed_symbol_preview(definition,symbol)) strokes.push_back({stroke.start,stroke.end,0.0});
+                CanvasEntity item{id_from(symbol.id),QStringLiteral("symbol"),std::move(strokes),0.0,false};
+                item.model_plan=symbol.model_plan;
+                item.stroke_color=QColor(QString::fromStdString(symbol.style.stroke_color));
+                if (QString::fromStdString(symbol.style.stroke_color).compare(QStringLiteral("#000000"),Qt::CaseInsensitive)==0)
+                    item.dark_stroke_color=QColor(210,226,239);
+                item.stroke_width_metres=symbol.style.stroke_width_metres; item.output_stroke_width_mm=.25;
+                item.fill_color=QColor(QString::fromStdString(symbol.style.fill_color)); item.fill_opacity=symbol.style.fill_opacity;
+                item.line_pattern=QString::fromStdString(symbol.style.line_pattern); item.hatch_pattern=QString::fromStdString(symbol.style.fill_pattern);
+                item.filled=symbol.style.fill_pattern!="none" && item.fill_color.isValid();
+                item.resize_frame=CanvasSelectionFrame{symbol.placement.position,symbol.placement.rotation_radians,
+                    definition.width_metres*symbol.placement.scale*symbol.width_scale,
+                    definition.depth_metres*symbol.placement.scale*symbol.depth_scale};
+                if (definition.svg_asset) {
+                    const auto& asset=*definition.svg_asset;
+                    CanvasSvgSymbol svg;
+                    svg.catalog_id=QString::fromStdString(definition.id); svg.document=resource.artwork;
+                    svg.artwork_sha256=resource.artwork_sha256; svg.svg_palette=symbol.svg_palette;
+                    svg.view_box=QRectF(asset.view_box[0],asset.view_box[1],asset.view_box[2],asset.view_box[3]);
+                    svg.footprint_view_box=QRectF(asset.footprint_view_box[0],asset.footprint_view_box[1],asset.footprint_view_box[2],asset.footprint_view_box[3]);
+                    svg.position=symbol.placement.position; svg.rotation_radians=symbol.placement.rotation_radians;
+                    svg.width_metres=item.resize_frame->width_metres; svg.depth_metres=item.resize_frame->depth_metres;
+                    svg.flip_horizontal=symbol.flip_horizontal; svg.flip_vertical=symbol.flip_vertical;
+                    item.svg_symbol=std::move(svg);
+                }
+                if (session.site_frames) item=site_presented_canvas_entity(item,frames.at({change.entity.id,symbol.id}));
+                else if (session.frame) project_model_plan_symbol(item,*session.frame);
+                session.annotation_entities.push_back(std::move(item));
+            }
+        }
+        prepareMixedClipboardDimensions(session,entities,admitted);
+        // The physical group ink consumes one entity slot too. Callouts share
+        // the same retained group limits as actual annotation text/artwork.
+        if (session.annotation_entities.size()>4095 || session.annotation_labels.size()>4096)
+            throw std::invalid_argument("The complete copied group exceeds its dimension and annotation preview limits.");
+    }
+
+    static void prepareMixedClipboardDimensions(MixedClipboardSession& session,
+        const std::map<std::string,Entity,std::less<>>& entities,const DocumentSnapshot* admitted,
+        const std::set<std::string,std::less<>>* only_dimensions=nullptr) {
+        std::set<std::string,std::less<>> dimensions;
+        for (const auto& change:session.request.ordinary.entity_changes)
+            if (can_recognize_boundary_dimension_entity_type(change.entity.type)) dimensions.insert(change.entity.id);
+        if (admitted) for (const auto& change:session.admitted.fresh_entity_changes)
+            if (can_recognize_boundary_dimension_entity_type(change.entity.type)) dimensions.insert(change.entity.id);
+        if (only_dimensions) std::erase_if(dimensions,[&](const auto& id) { return !only_dimensions->contains(id); });
+        if (dimensions.empty()) return;
+
+        const auto& source=admitted ? *admitted : *session.source;
+        const auto visible=visible_project_entities_with_phase(source,session.authority->visibility);
+        const auto organization=organize_project(entities);
+        const auto phase=constraint_phase_scope(entities);
+        std::set<std::string,std::less<>> hidden;
+        for (const auto& [id,entity]:entities) {
+            (void)id;
+            if (entity.type!=kAnnotationEntityType) continue;
+            for (const auto& appearance:decode_annotation_entity(entity).overrides)
+                if (!appearance.visible && appearance.target_kind!="output_view" &&
+                    appearance.target_kind!="wall_dimension" && !area_callout_role(appearance.target_kind))
+                    hidden.insert(appearance.target_id);
+        }
+        const auto semantic_visible=[&](const std::string& id,bool require_placement=true) {
+            if (phase.inactive_owner_ids.contains(id)) return false;
+            if (source.entities().contains(id)) return visible.contains(id);
+            // Fresh identities inherit actual destination organization, rather
+            // than needing a fabricated snapshot to obtain a visibility set.
+            const auto found=organization.nodes.find(id);
+            if (found==organization.nodes.end() || !found->second.issues.empty()) {
+                if (require_placement)
+                    throw std::invalid_argument("A copied dimension or its owner has unresolved drawing placement.");
+                // Match scene visibility's fail-open indexing for unrelated
+                // diagnostic records; those grant no dimension source value.
+                return true;
+            }
+            const auto& context=found->second.context;
+            return !session.authority->visibility.hidden_floor_ids.contains(context.floor_id) &&
+                !session.authority->visibility.hidden_layer_ids.contains(context.layer_id);
+        };
+        std::set<std::string,std::less<>> unavailable;
+        if (session.view) for (const auto& [id,entity]:entities) {
+            (void)entity;
+            if (!semantic_visible(id,false) || hidden.contains(id)) unavailable.insert(id);
+        }
+        const auto referenced=session.view ? architectural_view_references(*session.view,entities,unavailable) :
+            std::set<std::string,std::less<>>{};
+        for (const auto& id:dimensions) {
+            const auto found=entities.find(id);
+            if (found==entities.end()) throw std::invalid_argument("A copied dimension is missing from its prepared graph.");
+            const auto decoded=decode_boundary_dimension_entity(found->second);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            const auto& dimension=*decoded.dimension;
+            const auto owner=entities.find(dimension.boundary_id);
+            if (owner==entities.end()) throw std::invalid_argument("A copied dimension's measurement owner is missing.");
+            if (!admitted && std::none_of(session.request.ordinary.entity_changes.begin(),session.request.ordinary.entity_changes.end(),
+                    [&](const auto& change) { return change.entity.id==dimension.boundary_id; }))
+                session.external_dimension_ids.insert(id);
+            // Resolve before visibility decisions: unsupported/stale targets
+            // are errors, never silently replaced with retained source ink.
+            auto projected=project_boundary_dimension(dimension,owner->second,entities,
+                session.authority->context.metric_units,false,ansi_boundary_dimensions(source,owner->second));
+            if ((dimension.presentation && !dimension.presentation->visible) || !semantic_visible(id) ||
+                !semantic_visible(owner->first) || hidden.contains(id) ||
+                (session.view && session.view->presentation.appearance && !session.view->presentation.appearance->visible) ||
+                (session.view && (session.view->restrict_to_objects || !session.view->object_ids.empty()) && !referenced.contains(id))) continue;
+            if (session.site_frames) {
+                const auto placement=resolve_site_presentation(entities,id);
+                projected.label=site_presented_canvas_label(projected.label,placement);
+                if (projected.line) *projected.line=site_presented_canvas_entity(*projected.line,placement);
+            } else if (session.frame) {
+                // Dimensions retain their source presentation rotation, matching
+                // project_plan_model_labels; only the model anchor is projected.
+                projected.label.position=project_plan_point(projected.label.position,*session.frame);
+                if (projected.line) projected.line->segments=project_plan_path(std::move(projected.line->segments),*session.frame);
+            }
+            if (projected.line) session.annotation_entities.push_back(std::move(*projected.line));
+            session.annotation_labels.push_back(std::move(projected.label));
+        }
+    }
+
+    static std::optional<Bounds2> mixedClipboardPreviewCrop(const MixedClipboardSession& session) {
+        if (!session.view || !session.view->crop) return std::nullopt;
+        const auto& crop=*session.view->crop;
+        return Bounds2{{crop.min_horizontal_m,crop.min_vertical_m},{crop.max_horizontal_m,crop.max_vertical_m}};
+    }
+
+    static void showMixedClipboardGroupPreview(const MixedClipboardSession& session,const Boundary& physical,Vec2 delta={}) {
+        auto group=session.annotation_entities; auto labels=session.annotation_labels;
+        const bool shifted=delta.x!=0.0 || delta.y!=0.0;
+        const bool exact_hover=session.stage==MixedClipboardSession::Stage::anchor && session.hover_dimensions_ready &&
+            session.hover_dimension_offset.x==delta.x && session.hover_dimension_offset.y==delta.y;
+        if (session.stage==MixedClipboardSession::Stage::anchor && (shifted || exact_hover)) {
+            // Uncopied targets stay fixed. Never show their witnesses using
+            // the rigid shift that remains valid for the copied cohort ink.
+            std::erase_if(group,[&](const auto& item) { return session.external_dimension_ids.contains(item.id.toStdString()); });
+            std::erase_if(labels,[&](const auto& item) { return session.external_dimension_ids.contains(item.id.toStdString()); });
+        }
+        SitePresentationPlacement shift;
+        shift.forward.translation_m={delta.x,delta.y,0.0}; shift.inverse=inverse_site_transform(shift.forward);
+        if (shifted) {
+            for (auto& entity:group) entity=site_presented_canvas_entity(entity,shift);
+            for (auto& label:labels) label=site_presented_canvas_label(label,shift);
+        }
+        if (exact_hover) {
+            group.insert(group.end(),session.hover_dimension_entities.begin(),session.hover_dimension_entities.end());
+            labels.insert(labels.end(),session.hover_dimension_labels.begin(),session.hover_dimension_labels.end());
+        }
+        CanvasEntity ink; ink.id=QStringLiteral("mixed-clipboard-preview"); ink.type=QStringLiteral("source"); ink.segments=physical;
+        group.insert(group.begin(),std::move(ink));
+        session.canvas->setComponentPlacementGroupPreview(std::move(group),std::move(labels),mixedClipboardPreviewCrop(session));
+    }
+
+    void queueMixedClipboardDimensionHover(const std::shared_ptr<MixedClipboardSession>& session,
+        const Boundary& physical,Vec2 displayed_offset) {
+        if (session->external_dimension_ids.empty()) return;
+        if (session->hover_dimensions_ready && session->hover_dimension_offset.x==displayed_offset.x &&
+            session->hover_dimension_offset.y==displayed_offset.y) return;
+        if (session->hover_sequence) (void)m_mixed_clipboard_preview_queue.cancel(session->hover_sequence);
+        session->hover_dimensions_ready=false;
+        session->hover_physical=physical; session->hover_requested_offset=displayed_offset;
+        ++session->hover_pointer_sequence;
+        session->hover_serial=session->canvas->componentPlacementPreviewSerial();
+        auto work=std::make_shared<MixedClipboardSession>(*session);
+        work->preview_result.reset(); work->hover_result.reset();
+        session->hover_result=work;
+        session->hover_sequence=m_mixed_clipboard_preview_queue.enqueue([work](const RegenerationCancellationToken& cancellation) {
+            auto entities=work->source->entities();
+            for (const auto& change:work->request.ordinary.entity_changes) entities.insert_or_assign(change.entity.id,change.entity);
+            for (const auto& id:work->external_dimension_ids) {
+                if (cancellation.is_cancelled()) return RegenerationReceipt{work->source->revision(),{}};
+                auto& entity=entities.at(id);
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto dimension=*decoded.dimension;
+                auto offset=work->hover_requested_offset;
+                if (work->site_frames) offset=site_source_plan_delta(offset,work->fresh_site_frames.at(id));
+                else if (work->frame) {
+                    const auto local=unproject_plan_point(offset,*work->frame);
+                    offset={local.x-work->frame->origin.x,local.y-work->frame->origin.y};
+                }
+                dimension.text_position.x+=offset.x; dimension.text_position.y+=offset.y;
+                entity=encode_boundary_dimension_entity(dimension,&entity);
+            }
+            work->annotation_entities.clear(); work->annotation_labels.clear();
+            if (!cancellation.is_cancelled())
+                prepareMixedClipboardDimensions(*work,entities,nullptr,&work->external_dimension_ids);
+            return RegenerationReceipt{work->source->revision(),{}};
+        });
+    }
+
+    static Boundary mixedSkylightMouthPreview(const MixedClipboardSession& session,const Entity& destination,
+        const std::vector<RoofOpeningGroupClone>& clones,Vec2 anchor,
+        const std::optional<SitePresentationPlacement>& site_frame) {
+        const auto roof=decode_roof_entity(destination);
+        const auto source_anchor=roof_opening_group_clone_anchor_world(clones);
+        Boundary result;
+        for (const auto& clone:clones) {
+            const auto source_roof=decode_roof_entity(clone.source.roof);
+            const auto opening=std::visit([&](const auto& object) {
+                const auto row=std::find_if(object.openings.begin(),object.openings.end(),[&](const auto& value) {
+                    return value.id==clone.source.opening_id;
+                });
+                if (row==object.openings.end() || !row->skylight) throw std::invalid_argument("The copied skylight mouth is missing.");
+                return *row;
+            },source_roof);
+            const Vec2 source_center{opening.x+opening.width*.5,opening.y+opening.depth*.5};
+            const auto source_scale=std::visit([&](const auto& object) {
+                return roof_opening_reference_surface_scales(object,source_center);
+            },source_roof);
+            const auto source_world=roof_opening_group_clone_anchor_world({clone});
+            const Vec2 world{anchor.x+(source_world.x-source_anchor.x),anchor.y+(source_world.y-source_anchor.y)};
+            std::visit([&](const auto& object) {
+                const auto c=std::cos(object.orientation_radians),s=std::sin(object.orientation_radians);
+                const auto dx=world.x-object.base_position.x,dy=world.y-object.base_position.y;
+                const Vec2 center{dx*c+dy*s,-dx*s+dy*c};
+                const auto scale=roof_opening_reference_surface_scales(object,center);
+                auto placed=opening;
+                placed.width=opening.width*source_scale.x/scale.x; placed.depth=opening.depth*source_scale.y/scale.y;
+                placed.x=center.x-placed.width*.5; placed.y=center.y-placed.depth*.5;
+                // Pure full-mouth admission mirrors the destination rebasing;
+                // native cut/assembly admission remains in the final worker.
+                const auto mouth=roof_opening_plan_frame(object,placed);
+                std::array<Vec2,4> corners;
+                std::size_t index{};
+                for (const auto signs:{Vec2{-1,-1},Vec2{1,-1},Vec2{1,1},Vec2{-1,1}}) {
+                    const Vec2 local{mouth.center.x+mouth.along.x*signs.x*placed.width*.5+mouth.across.x*signs.y*placed.depth*.5,
+                        mouth.center.y+mouth.along.y*signs.x*placed.width*.5+mouth.across.y*signs.y*placed.depth*.5};
+                    Vec2 displayed{object.base_position.x+c*local.x-s*local.y,object.base_position.y+s*local.x+c*local.y};
+                    if (site_frame) displayed=site_presented_plan_point(displayed,*site_frame);
+                    else if (session.frame) displayed=project_plan_point(displayed,*session.frame);
+                    if (session.view && session.view->crop) {
+                        const auto& crop=*session.view->crop;
+                        if (displayed.x<crop.min_horizontal_m || displayed.x>crop.max_horizontal_m ||
+                            displayed.y<crop.min_vertical_m || displayed.y>crop.max_vertical_m)
+                            throw std::invalid_argument("The complete skylight mouth must be inside this plan's crop.");
+                    }
+                    corners[index++]=displayed;
+                }
+                for (std::size_t edge=0;edge<corners.size();++edge) result.push_back({corners[edge],corners[(edge+1)%corners.size()],0.0});
+            },roof);
+        }
+        return result;
+    }
+
+    void updateMixedClipboardPlacement(Vec2 point,bool commit) {
+        const auto session=m_pending_mixed_clipboard;
+        try {
+            requireMixedClipboardCurrent(session);
+            const auto model=session->frame ? unproject_plan_point(point,*session->frame) : point;
+            if (!std::isfinite(model.x) || !std::isfinite(model.y)) throw std::invalid_argument("The complete placement point must be finite.");
+            BoundaryDraftPreview preview;
+            Vec2 annotation_delta{};
+            if (session->stage==MixedClipboardSession::Stage::anchor) {
+                const auto ink=session->ghosts;
+                Vec2 origin{}; bool has_origin=false;
+                const auto include=[&](Vec2 p) {
+                    if (!has_origin) { origin=p; has_origin=true; }
+                    else { origin.x=std::min(origin.x,p.x); origin.y=std::min(origin.y,p.y); }
+                };
+                if (!ink.empty()) include(boundary_bounds(ink).minimum);
+                for (const auto& entity:session->annotation_entities) {
+                    if (!entity.segments.empty()) include(boundary_bounds(entity.segments).minimum);
+                    else if (entity.svg_symbol) include(entity.svg_symbol->position);
+                }
+                for (const auto& label:session->annotation_labels) include(label.position);
+                const auto local_origin=session->frame ? unproject_plan_point(origin,*session->frame) : origin;
+                const Vec2 offset{model.x-local_origin.x,model.y-local_origin.y};
+                // The existing ordinary graph producer owns geometric dialect,
+                // dimensions, constraints and hosted ordinary consequences.
+                // It never supplies source authority for a corner/roof leaf.
+                preview.segments=ink;
+                const PlanarTransform displayed_offset{{},0.0,false,false,{point.x-origin.x,point.y-origin.y}};
+                annotation_delta=displayed_offset.offset;
+                for (auto& segment:preview.segments) segment=transform_segment(segment,displayed_offset);
+                preview.instruction=QStringLiteral("Click this anchor to retain the complete copied graph, then choose its remaining hosts.");
+                if (commit) {
+                    if (session->hover_sequence) (void)m_mixed_clipboard_preview_queue.cancel(session->hover_sequence);
+                    session->hover_sequence=0; session->hover_result.reset(); ++session->hover_pointer_sequence;
+                    session->ordinary_translation_offsets.clear();
+                    for (const auto& change:session->request.ordinary.entity_changes)
+                        session->ordinary_translation_offsets.emplace(change.entity.id,session->site_frames ?
+                            site_source_plan_delta(displayed_offset.offset,session->fresh_site_frames.at(change.entity.id)) : offset);
+                    session->annotation_translation_offsets.clear();
+                    auto fresh_entities=session->source->entities();
+                    for (const auto& change:session->request.ordinary.entity_changes) fresh_entities.insert_or_assign(change.entity.id,change.entity);
+                    for (const auto& change:session->request.ordinary.entity_changes) if (change.entity.type==kAnnotationEntityType) {
+                        const auto state=decode_annotation_entity(change.entity);
+                        std::vector<SiteAnnotationTarget> targets;
+                        for (const auto& label:state.labels) targets.push_back({change.entity.id,label.id});
+                        for (const auto& symbol:state.symbols) targets.push_back({change.entity.id,symbol.id});
+                        const auto frames=session->site_frames ? resolve_site_annotation_presentations(fresh_entities,targets) :
+                            std::map<SiteAnnotationTarget,SitePresentationPlacement>{};
+                        const auto child_offset=[&](const std::string& id,bool model_plan) {
+                            const auto local=session->site_frames ? site_source_plan_delta(displayed_offset.offset,frames.at({change.entity.id,id})) :
+                                session->frame && model_plan ? offset : displayed_offset.offset;
+                            session->annotation_translation_offsets.emplace(std::pair{change.entity.id,id},local);
+                        };
+                        for (const auto& label:state.labels) child_offset(label.id,label.model_plan);
+                        for (const auto& symbol:state.symbols) child_offset(symbol.id,symbol.model_plan);
+                    }
+                    showMixedClipboardGroupPreview(*session,preview.segments,annotation_delta);
+                    session->stage=MixedClipboardSession::Stage::translating;
+                    auto work=std::make_shared<MixedClipboardSession>(*session); work->preview_result.reset();
+                    session->preview_result=work;
+                    session->sequence=m_mixed_clipboard_preview_queue.enqueue([work](const RegenerationCancellationToken& cancellation) {
+                        if (cancellation.is_cancelled()) return RegenerationReceipt{work->source->revision(),{}};
+                        work->request.ordinary=translated_mixed_clipboard_ordinary_graph(*work->source,work->request.ordinary,
+                            work->ordinary_translation_offsets,work->annotation_translation_offsets);
+                        work->ghosts=mixedOrdinaryGhosts(*work); prepareMixedClipboardAnnotations(*work);
+                        return RegenerationReceipt{work->source->revision(),{}};
+                    });
+                    m_architecture_hint->setText(QStringLiteral("Checking the complete copied graph at this anchor. Right-click or Esc cancels."));
+                    return;
+                }
+            } else if (session->stage==MixedClipboardSession::Stage::corners) {
+                HostedLibraryDragInput input;
+                input.source=session->source; input.visible=session->canvas->entities();
+                input.layer_id=m_active_layer_id.toStdString(); input.plan_frame=session->frame;
+                if (session->site_frames) input.site_frames=*session->site_frames;
+                input.architectural_context=organize_project(*session->source).drawing_context(input.layer_id);
+                input.corner_pick_radius=18.0/session->canvas->viewScale(); input.corner_window=true; input.fit_corner_profile=false;
+                std::map<std::string,Entity,std::less<>> fresh;
+                for (const auto& change:session->request.ordinary.entity_changes) if (change.entity.type=="wall") {
+                    fresh.emplace(change.entity.id,change.entity);
+                    const auto axis=read_required_segment(change.entity.properties,"baseline");
+                    if (!axis) continue;
+                    CanvasEntity ghost; ghost.id=id_from(change.entity.id); ghost.type=QStringLiteral("wall");
+                    ghost.segments={*axis}; ghost.snap_points={axis->start,axis->end};
+                    if (session->view) {
+                        Wall wall; std::string diagnostic;
+                        if (!read_document_wall(resolve_vertical_placement(*session->source,change.entity),{},wall,diagnostic))
+                            throw std::invalid_argument(diagnostic);
+                        const auto support=horizontal_wall_snap_spans(wall,session->view->depth);
+                        ghost.segments=support.segments; ghost.snap_points.clear();
+                        if (support.start_visible) ghost.snap_points.push_back(axis->start);
+                        if (support.end_visible) ghost.snap_points.push_back(axis->end);
+                    }
+                    if (session->site_frames) {
+                        const auto& frame=session->fresh_site_frames.at(change.entity.id);
+                        input.site_frames->insertGeometry(ghost,frame);
+                        ghost=site_presented_canvas_entity(ghost,frame);
+                    } else if (session->frame) {
+                        ghost.segments=project_plan_path(ghost.segments,*session->frame);
+                        for (auto& p:ghost.snap_points) p=project_plan_point(p,*session->frame);
+                    }
+                    if (session->view && session->view->crop) {
+                        const auto& crop=*session->view->crop;
+                        const Bounds2 bounds{{crop.min_horizontal_m,crop.min_vertical_m},{crop.max_horizontal_m,crop.max_vertical_m}};
+                        ghost.segments=clip_boundary_to_bounds(ghost.segments,bounds);
+                        std::erase_if(ghost.snap_points,[&](Vec2 p) {
+                            return p.x<bounds.minimum.x || p.x>bounds.maximum.x || p.y<bounds.minimum.y || p.y>bounds.maximum.y;
+                        });
+                    }
+                    input.visible.push_back(std::move(ghost));
+                }
+                const auto hosts=visibleCornerWindowHostsAt(input,point,fresh);
+                if (!hosts) throw std::invalid_argument("Choose exactly two visible destination wall endpoints for this corner window.");
+                auto identities=std::array<std::string,2>{hosts->walls[0].id,hosts->walls[1].id};
+                auto endpoints=hosts->at_start;
+                const auto& corner=session->request.transfer.corners.at(session->corner_index);
+                // Preserve leg ordering when either host was explicitly copied.
+                for (std::size_t leg=0;leg<2;++leg) if (const auto mapped=session->request.identity_mapping.find(corner.walls[leg].id);
+                    mapped!=session->request.identity_mapping.end()) {
+                    if (identities[leg]!=mapped->second && identities[1-leg]==mapped->second) {
+                        std::swap(identities[0],identities[1]); std::swap(endpoints[0],endpoints[1]);
+                    }
+                    if (identities[leg]!=mapped->second)
+                        throw std::invalid_argument("The copied wall must retain its own corner-window leg. Choose its destination endpoint.");
+                }
+                const auto value=parse_corner_window(corner.owner);
+                input.width=value.widths[0]; input.second_width=value.widths[1]; input.sill=value.sill; input.height=value.height; input.assembly=value.assembly;
+                preview.segments=session->ghosts;
+                preview.instruction=QStringLiteral("Click to retain this corner placement; the whole group remains pending.");
+                if (commit) { appendMixedCornerChoice(session,identities,endpoints); advanceMixedClipboardPlacement(); return; }
+            } else if (session->stage==MixedClipboardSession::Stage::skylights) {
+                std::map<std::string,Entity,std::less<>> roofs;
+                std::map<std::string,SitePresentationPlacement,std::less<>> roof_frames;
+                const auto context=requireDrawingContext(*session->source);
+                if (!context) return;
+                if (session->view && (!horizontal_plan_frame(session->view->frame) || !std::isinf(session->view->depth.far_depth_m)))
+                    throw std::invalid_argument("Use an uncut horizontal plan to place the skylight group.");
+                for (const auto& visible:session->canvas->entities()) {
+                    if (!visible.presentation_key.isEmpty() || (visible.type!=QStringLiteral("roof") && visible.type!=QStringLiteral("roof_join"))) continue;
+                    if (visible.segments.empty()) continue;
+                    const auto extent=boundary_bounds(visible.segments);
+                    if (point.x<extent.minimum.x || point.x>extent.maximum.x || point.y<extent.minimum.y || point.y>extent.maximum.y) continue;
+                    const auto found=session->source->entities().find(visible.id.toStdString());
+                    if (found==session->source->entities().end()) continue;
+                    const auto add_roof=[&](const std::string& id) {
+                        if (session->site_frames) {
+                            const auto* frame=session->site_frames->findGeometry(visible);
+                            if (!frame) return;
+                            roof_frames.emplace(id,*frame);
+                        }
+                        roofs.emplace(id,session->source->entities().at(id));
+                    };
+                    if (found->second.type=="roof") add_roof(found->first);
+                    else if (found->second.type=="roof_join") for (const auto& roof:parse_roof_join(found->second.properties,found->first).roof_ids) add_roof(roof);
+                }
+                for (const auto& change:session->request.ordinary.entity_changes) if (change.entity.type=="roof") {
+                    roofs.emplace(change.entity.id,change.entity);
+                    if (session->site_frames) roof_frames.emplace(change.entity.id,session->fresh_site_frames.at(change.entity.id));
+                }
+                std::optional<std::pair<std::string,Vec2>> target;
+                Boundary target_mouths;
+                const auto& cohort=session->independent_skylights.at(session->skylight_index);
+                for (const auto& [id,roof]:roofs) {
+                    if (read_string(roof.properties,"layer_id")!=std::optional{context->layer_id} ||
+                        read_string(roof.properties,"floor_id")!=std::optional{context->floor_id}) continue;
+                    const auto yaw=roof.properties.at("orientation_rad").get<double>(); const auto& base=roof.properties.at("base_position_m");
+                    const auto local_model=session->site_frames ? site_source_plan_point(point,roof_frames.at(id)) : model;
+                    const auto dx=local_model.x-base.at(0).get<double>(),dy=local_model.y-base.at(1).get<double>();
+                    Vec2 local{dx*std::cos(yaw)+dy*std::sin(yaw),-dx*std::sin(yaw)+dy*std::cos(yaw)};
+                    const auto step=session->canvas->placementLengthIncrementMetres();
+                    if (std::isfinite(step) && step>0) { local.x=std::round(local.x/step)*step; local.y=std::round(local.y/step)*step; }
+                    const Vec2 anchor{base.at(0).get<double>()+local.x*std::cos(yaw)-local.y*std::sin(yaw),
+                        base.at(1).get<double>()+local.x*std::sin(yaw)+local.y*std::cos(yaw)};
+                    Boundary mouths;
+                    try { const auto geometry=decode_roof_entity(roof); (void)std::visit([&](const auto& object) {
+                        return roof_opening_reference_surface_scales(object,local);
+                    },geometry);
+                        mouths=mixedSkylightMouthPreview(*session,roof,cohort,anchor,
+                            session->site_frames ? std::optional{roof_frames.at(id)} : std::nullopt);
+                    } catch (const std::exception&) { continue; }
+                    if (target) throw std::invalid_argument("More than one roof is under this point. Hide the other roof before choosing the destination.");
+                    target=std::pair{id,anchor}; target_mouths=std::move(mouths);
+                }
+                if (!target) throw std::invalid_argument("Choose a visible actual or copied roof face for the skylights.");
+                preview.segments=session->ghosts;
+                preview.segments.insert(preview.segments.end(),target_mouths.begin(),target_mouths.end());
+                preview.instruction=QStringLiteral("Click to retain roof destination %1 of %2; the complete group remains pending.")
+                    .arg(session->skylight_index+1).arg(session->independent_skylights.size());
+                if (commit) {
+                    session->request.skylights.push_back({cohort,target->first,target->second});
+                    session->ghosts=std::move(preview.segments); ++session->skylight_index;
+                    advanceMixedClipboardPlacement(); return;
+                }
+            } else {
+                if (session->stage==MixedClipboardSession::Stage::confirmation && session->command &&
+                    session->candidate && session->prepared && !session->preview_result &&
+                    !session->canvas->componentPlacementPreviewPending() &&
+                    session->serial!=session->canvas->componentPlacementPreviewSerial()) {
+                    // Pointer Leave retires hover ink, not the admitted edit.
+                    // Restore only this exact cached candidate after all source
+                    // and view fences above; do not allocate or re-admit it.
+                    session->serial=session->canvas->beginComponentPlacementPreview();
+                    CanvasEntity ink; ink.id=QStringLiteral("mixed-clipboard-preview");
+                    ink.type=QStringLiteral("source"); ink.segments=session->ghosts;
+                    auto group=session->annotation_entities; group.insert(group.begin(),std::move(ink));
+                    if (!session->canvas->completeComponentPlacementGroupPreview(session->serial,
+                        std::move(group),session->annotation_labels,mixedClipboardPreviewCrop(*session)))
+                        throw std::invalid_argument("The complete cached placement preview could not be restored.");
+                }
+                if (!commit) return;
+                const auto center=session->canvas->viewCenter();
+                if (session->canvas->componentPlacementPreviewPending() || !session->command || !session->candidate || !session->prepared ||
+                    session->serial!=session->canvas->componentPlacementPreviewSerial())
+                    throw std::invalid_argument("Wait for the complete copied group preview, then click to place everything.");
+                if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
+                    session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
+                    session->navigation!=session->canvas->navigationGeneration() || (session->had_focus && !session->canvas->hasFocus()))
+                    throw std::invalid_argument("The placement view changed. Paste again.");
+                if (!session->rooms_reviewed && reviewMixedClipboardRooms(session)) return;
+                requireMixedClipboardCurrent(session);
+                publishPreparedCanvasEdit(session->prepared,session->edit_source);
+                auto ordinary=session->ordinary.selected_roots;
+                if (siteCanvas(m_architecturalCanvas)) {
+                    auto targets=preparedSiteAnnotationTargets(*session->candidate);
+                    ordinary=remapSiteAnnotationSelection(ordinary,session->ordinary.annotation_targets,targets);
+                    m_site_annotation_targets=std::move(targets);
+                }
+                for (const auto& corner:session->request.corners) ordinary.push_back(id_from(corner.owner_id));
+                std::vector<CanvasRoofOpeningTarget> children;
+                for (const auto& choice:session->request.skylights) for (const auto& clone:choice.clones)
+                    children.push_back({id_from(alternativeReplacementTargetID(*session->command,choice.destination_roof_id)),
+                        id_from(alternativeReplacementTargetID(*session->command,clone.opening_id)),authoringSnapshot().revision()});
+                cancelMixedClipboardPlacement(); setTool(CanvasTool::select);
+                (void)adoptSemanticSelection(std::make_shared<DocumentSnapshot>(authoringSnapshot()),ordinary,children,false,std::nullopt);
+                clearError(); refresh(); return;
+            }
+            showMixedClipboardGroupPreview(*session,preview.segments,annotation_delta);
+            if (session->stage==MixedClipboardSession::Stage::anchor)
+                queueMixedClipboardDimensionHover(session,preview.segments,annotation_delta);
+            m_architecture_hint->setText(preview.instruction);
+        } catch (const Standard_Failure& error) {
+            if (commit) setError(QString::fromUtf8(error.GetMessageString()));
+        } catch (const std::exception& error) {
+            if (commit) setError(QString::fromUtf8(error.what()));
+            else { BoundaryDraftPreview preview; preview.segments=session ? session->ghosts : Boundary{};
+                preview.instruction=QString::fromUtf8(error.what()); if (session && session->canvas) showMixedClipboardGroupPreview(*session,preview.segments); m_architecture_hint->setText(preview.instruction); }
+        }
+    }
 
     // The mixed placement coordinator can prepare the ordinary partition on
     // its immutable original destination without publishing a family fragment.
@@ -34158,8 +35337,20 @@ public:
                 const auto encoded=clipboard->text(QClipboard::Clipboard).toUtf8();
                 if (encoded.isEmpty() || static_cast<std::size_t>(encoded.size())>kMaximumClipboardBytes)
                     throw std::invalid_argument("Clipboard data is empty or exceeds the local size limit.");
-                return json::parse(encoded.constData(),encoded.constData()+encoded.size());
+                std::size_t values{};
+                const auto envelope=json::parse(encoded.constData(),encoded.constData()+encoded.size(),
+                    [&](int depth,json::parse_event_t event,json&) {
+                        if (depth>64 || ++values>100000) throw std::invalid_argument("Clipboard data exceeds its JSON work limit.");
+                        (void)event; return true;
+                    });
+                if (envelope.is_object() && envelope.value("format","")=="vertex-mixed-clipboard") {
+                    auto transfer=decode_mixed_clipboard_transfer(std::string_view(encoded.constData(),encoded.size()));
+                    (void)beginMixedClipboardPlacement(std::move(transfer));
+                    return nullptr;
+                }
+                return envelope;
             }();
+            if (payload.is_null()) return m_pending_mixed_clipboard!=nullptr;
             if (payload.is_object() && payload.value("format", "") == kCornerWindowClipboardFormat) {
                 if (payload.value("version", 0) == 3) {
                     if (payload.size() != 4 || !payload.at("version").is_number_integer() ||
@@ -34248,7 +35439,7 @@ public:
             std::map<std::string, std::string, std::less<>> remap;
             std::set<std::string,std::less<>> occupied;
             if (preparation) {
-                occupied=retainedSlabIdentityNames(source,true);
+                occupied=mixedClipboardRetainedNames(source);
                 const auto reserve_json=[&](const json& root) {
                     std::vector<const json*> pending{&root};
                     while (!pending.empty()) {
@@ -34278,6 +35469,7 @@ public:
                 }
             }
             std::set<std::string> reused_catalogs;
+            std::map<std::pair<std::string,std::string>,std::string> roof_opening_remap;
             std::map<std::string,std::map<std::string,std::string,std::less<>>,std::less<>> annotation_remaps;
             const auto allocate = [&](std::string_view prefix) {
                 std::string id;
@@ -34290,7 +35482,7 @@ public:
             };
             for (const auto& entity : source_entities) {
                 const auto existing = source.entities().find(entity.id);
-                if(entity.type=="assembly_model" && existing!=source.entities().end() &&
+                if(!preparation && entity.type=="assembly_model" && existing!=source.entities().end() &&
                     existing->second.type=="assembly_model" && entity.properties.size()==2 && entity.extensions.empty()) {
                     const auto copied = AssemblyModel::from_json(entity.properties.at("model"));
                     const auto local = AssemblyModel::from_json(existing->second.properties.at("model"));
@@ -34304,6 +35496,15 @@ public:
                     }
                 }
                 remap.emplace(entity.id, allocate(entity.type));
+                if (entity.type=="roof") {
+                    validate_roof_uniform_transform_source_entity(entity);
+                    if (entity.properties.contains("roof_openings"))
+                        for (const auto& opening:entity.properties.at("roof_openings")) {
+                            const auto key=std::pair{entity.id,opening.at("id").get<std::string>()};
+                            if (!roof_opening_remap.emplace(key,allocate("roof-opening")).second)
+                                throw std::invalid_argument("The copied roof repeats a local opening identity.");
+                        }
+                }
                 if (multi_flight_stair(entity)) {
                     const auto stair = decode_stair_properties(entity.id, entity.properties);
                     for (const auto& child : stair_child_ids(stair))
@@ -34463,6 +35664,21 @@ public:
                 } else if(entity.type!="assembly_model") {
                     remap_entity_references(entity, remap, &material_catalog_mapping);
                 }
+                if (entity.type=="roof") {
+                    if (entity.properties.contains("roof_openings"))
+                        for (auto& opening:entity.properties.at("roof_openings"))
+                            opening.at("id")=roof_opening_remap.at({original.id,opening.at("id").get<std::string>()});
+                    if (entity.extensions.contains("roof_opening_input")) {
+                        auto& entries=entity.extensions.at("roof_opening_input").at("entries");
+                        auto mapped=json::object();
+                        for (const auto& [child,value]:entries.items())
+                            mapped[roof_opening_remap.at({original.id,child})]=value;
+                        entries=std::move(mapped);
+                    }
+                    // Retained derivation archives are historical provenance.
+                    // Only the current owned roster and its input keys remap.
+                    validate_roof_uniform_transform_source_entity(entity);
+                }
                 if (entity.type == "measurement_linework")
                     entity.extensions["measurement_linework_copy_scope"] = {{"version",1}};
                 if (entity.type == kAnnotationEntityType) {
@@ -34548,6 +35764,7 @@ public:
                 preparation->annotation_targets=std::move(pasted_annotation_targets);
                 preparation->identity_mapping=std::move(remap);
                 preparation->material_catalog_mapping=std::move(material_catalog_mapping);
+                preparation->roof_opening_identity_mapping=std::move(roof_opening_remap);
                 preparation->reserved_identities=std::move(occupied);
                 return true;
             }
@@ -43309,6 +44526,7 @@ public:
     }
 
     void clearPlanOpeningPlacement() {
+        cancelMixedClipboardPlacement();
         cancelOpeningPlacementPreview();
         cancelRoofOpeningCanvasPreview();
         clearPendingCornerWindowClone();
@@ -43651,7 +44869,8 @@ public:
     };
 
     static std::optional<VisibleCornerWindowHosts> visibleCornerWindowHostsAt(
-        const HostedLibraryDragInput& input, Vec2 displayed_point) {
+        const HostedLibraryDragInput& input, Vec2 displayed_point,
+        const std::map<std::string,Entity,std::less<>>& fresh_hosts={}) {
         if (!input.source || !std::isfinite(input.corner_pick_radius) || input.corner_pick_radius <= 0.0)
             throw std::invalid_argument("Corner-window placement needs a captured source and finite pick radius.");
         struct Endpoint {
@@ -43671,14 +44890,17 @@ public:
         for (const auto& visible : input.visible) {
             if (visible.type != QStringLiteral("wall") || !visible.presentation_key.isEmpty() ||
                 !seen.insert(visible.id.toStdString()).second) continue;
-            const auto found = input.source->entities().find(visible.id.toStdString());
-            if (found == input.source->entities().end() || found->second.type != "wall" ||
-                scope.inactive_owner_ids.contains(found->first) ||
-                read_string(found->second.properties, "layer_id") != std::optional{input.layer_id} ||
-                (input.architectural_context && read_string(found->second.properties, "floor_id") !=
+            const auto identity=visible.id.toStdString();
+            const Entity* entity=nullptr;
+            if (const auto found=input.source->entities().find(identity);found!=input.source->entities().end()) entity=&found->second;
+            else if (const auto fresh=fresh_hosts.find(identity);fresh!=fresh_hosts.end()) entity=&fresh->second;
+            if (!entity || entity->type != "wall" ||
+                scope.inactive_owner_ids.contains(identity) ||
+                read_string(entity->properties, "layer_id") != std::optional{input.layer_id} ||
+                (input.architectural_context && read_string(entity->properties, "floor_id") !=
                     std::optional{input.architectural_context->floor_id})) continue;
             Wall wall; std::string error;
-            if (!read_document_wall(resolve_vertical_placement(*input.source, found->second), rosters[found->first], wall, error) ||
+            if (!read_document_wall(resolve_vertical_placement(*input.source, *entity), rosters[identity], wall, error) ||
                 wall.baseline.sweep_radians != 0.0) continue;
             std::optional<SitePresentationPlacement> site_frame;
             if (input.site_frames) {
@@ -43709,8 +44931,8 @@ public:
                 std::hypot(first.local.x-second.local.x, first.local.y-second.local.y) > default_geometry_tolerance_metres ||
                 first.site_frame.has_value() != second.site_frame.has_value() ||
                 (first.site_frame && !sameSitePresentationPlacement(*first.site_frame, *second.site_frame))) continue;
-            const auto& first_entity = input.source->entities().at(first.wall.id);
-            const auto& second_entity = input.source->entities().at(second.wall.id);
+            const auto& first_entity = fresh_hosts.contains(first.wall.id) ? fresh_hosts.at(first.wall.id) : input.source->entities().at(first.wall.id);
+            const auto& second_entity = fresh_hosts.contains(second.wall.id) ? fresh_hosts.at(second.wall.id) : input.source->entities().at(second.wall.id);
             bool same_context = true;
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "level_id", "vertical_placement"})
                 if (first_entity.properties.value(key, json{}) != second_entity.properties.value(key, json{})) same_context = false;
@@ -46982,189 +48204,7 @@ private:
                 changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
             }
         }
-        // Evaluate the actual post-command registries, including an explicit
-        // imported/replacement cohort. Never re-enroll its owners into another set.
-        std::map<std::string, Entity, std::less<>> registry_entities;
-        for (const auto& [id, entity] : source.entities())
-            if (entity.type == "model_phases") registry_entities.emplace(id, entity);
-        std::set<std::string, std::less<>> removed;
-        for (const auto& change : changes->entity_changes) {
-            if (change.kind == EntityChangeKind::erase) {
-                removed.insert(change.entity_id);
-                registry_entities.erase(change.entity_id);
-            } else if (change.entity.type == "model_phases") {
-                registry_entities.insert_or_assign(change.entity.id, change.entity);
-            } else if (registry_entities.contains(change.entity.id)) {
-                throw std::invalid_argument("A design set cannot change its entity type.");
-            }
-        }
-        struct RegistryEdit {
-            Entity entity;
-            ModelPhases model;
-            std::vector<std::string> ids;
-            std::vector<std::string> baseline;
-            std::vector<RemodelingAlternative> alternatives;
-            bool changed{};
-        };
-        std::vector<RegistryEdit> registries;
-        std::map<std::string, std::size_t, std::less<>> memberships;
-        std::optional<std::size_t> selected;
-        for (const auto& [id, entity] : registry_entities) {
-            auto model = ModelPhases::from_json(entity.properties.at("model"));
-            RegistryEdit edit{entity, model, model.entity_ids(), model.baseline_ids(), model.alternatives()};
-            const auto count = edit.ids.size();
-            std::erase_if(edit.ids, [&](const auto& owner) { return removed.contains(owner); });
-            std::erase_if(edit.baseline, [&](const auto& owner) { return removed.contains(owner); });
-            for (auto& alternative : edit.alternatives) {
-                std::erase_if(alternative.demolished_ids, [&](const auto& owner) { return removed.contains(owner); });
-                std::erase_if(alternative.proposed_ids, [&](const auto& owner) { return removed.contains(owner); });
-            }
-            edit.changed = count != edit.ids.size();
-            const auto index = registries.size();
-            if (id == registry_id) selected = index;
-            for (const auto& owner : edit.ids)
-                if (!memberships.emplace(owner, index).second)
-                    throw std::invalid_argument("An object belongs to overlapping design sets: " + owner);
-            registries.push_back(std::move(edit));
-        }
-        const auto fresh = [&](const EntityChange& change) {
-            return change.kind == EntityChangeKind::upsert && !source.entities().contains(change.entity.id) &&
-                !admitted_destinations.contains(change.entity.id) && is_phase_model_entity(change.entity.type);
-        };
-        const auto enroll_current = [&](std::size_t index, const std::string& owner) {
-            auto& edit = registries.at(index);
-            edit.ids.push_back(owner);
-            if (edit.model.active_alternative()) {
-                for (auto& alternative : edit.alternatives)
-                    if (alternative.id == *edit.model.active_alternative()) alternative.proposed_ids.push_back(owner);
-            } else edit.baseline.push_back(owner);
-            memberships.emplace(owner, index);
-            edit.changed = true;
-        };
-        const auto effective_entity = [&](const std::string& id) -> const Entity* {
-            for (auto change = changes->entity_changes.rbegin(); change != changes->entity_changes.rend(); ++change) {
-                if (change->kind == EntityChangeKind::erase && change->entity_id == id) return nullptr;
-                if (change->kind == EntityChangeKind::upsert && change->entity.id == id) return &change->entity;
-            }
-            const auto found = source.entities().find(id);
-            return found == source.entities().end() ? nullptr : &found->second;
-        };
-        // Pure retained transform workers do not have an editing target and
-        // cannot introduce independent owners. UI authoring captures one explicitly.
-        for (const auto& change : changes->entity_changes) {
-            if (!fresh(change) || memberships.contains(change.entity.id) ||
-                hosted_stair_railing(change.entity) || change.entity.type == "opening" ||
-                change.entity.type == "corner_window" ||
-                change.entity.type == "building" || change.entity.type == "floor") continue;
-            if (!selected) {
-                if (!registry_entities.empty() || !registry_id.empty())
-                    throw std::invalid_argument("Choose an existing design set before adding model objects.");
-                continue;
-            }
-            enroll_current(*selected, change.entity.id);
-        }
-        for (const auto& change : changes->entity_changes) {
-            if (!fresh(change) || change.entity.type != "corner_window") continue;
-            const auto corner = parse_corner_window(change.entity);
-            const auto first = memberships.find(corner.wall_ids[0]);
-            const auto second = memberships.find(corner.wall_ids[1]);
-            if ((first == memberships.end()) != (second == memberships.end()) ||
-                (first != memberships.end() && first->second != second->second))
-                throw std::invalid_argument("Both corner-window hosts must share their actual design set.");
-            const auto own = memberships.find(corner.id);
-            if (own != memberships.end()) {
-                if (first == memberships.end() || own->second != first->second)
-                    throw std::invalid_argument("A corner window cannot belong to another design set.");
-                continue;
-            }
-            if (first == memberships.end()) continue; // Preserve legacy unregistered host ownership.
-            const auto& edit = registries.at(first->second);
-            const auto state = ModelPhases::create(edit.ids, edit.baseline, edit.alternatives,
-                edit.model.active_alternative()).active_state();
-            for (const auto& host : corner.wall_ids)
-                if (!state.contains(host) || state.at(host) == ModelPhase::demolished)
-                    throw std::invalid_argument("Choose two active walls before adding a corner window.");
-            enroll_current(first->second, corner.id);
-        }
-        for (const auto& change : changes->entity_changes) {
-            if (!fresh(change)) continue;
-            const auto railing = hosted_stair_railing(change.entity);
-            if (!railing && change.entity.type != "opening") continue;
-            const auto host = railing
-                ? stair_railing_host_id(decode_railing_properties(change.entity.id, change.entity.properties))
-                : read_string(change.entity.properties, "wall_id").value_or("");
-            const auto* host_entity = effective_entity(host);
-            if (!host_entity || host_entity->type != (railing ? "stair" : "wall"))
-                throw std::invalid_argument("The hosted component needs its actual current host.");
-            const auto host_membership = memberships.find(host);
-            const auto own_membership = memberships.find(change.entity.id);
-            if (own_membership != memberships.end()) {
-                if (host_membership == memberships.end() || own_membership->second != host_membership->second)
-                    throw std::invalid_argument("A hosted component cannot belong to a different design set from its host.");
-                // Explicit source-derived cohorts already carry their lifecycle,
-                // including inactive alternatives. Do not reinterpret that intent.
-                continue;
-            }
-            // Legacy unregistered hosts keep their legacy ownership. A selected
-            // unrelated set cannot acquire their opening or hosted railing.
-            if (host_membership == memberships.end()) {
-                if (railing && !registry_entities.empty())
-                    throw std::invalid_argument("A new stair railing needs a host in a design set.");
-                continue;
-            }
-            auto& edit = registries.at(host_membership->second);
-            if (!railing) {
-                const auto state = ModelPhases::create(edit.ids, edit.baseline, edit.alternatives,
-                    edit.model.active_alternative()).active_state();
-                const auto found = state.find(host);
-                if (found == state.end() || found->second == ModelPhase::demolished)
-                    throw std::invalid_argument("Choose an active wall before adding a door or window.");
-                enroll_current(host_membership->second, change.entity.id);
-                continue;
-            }
-            // Rails inherit the stair's complete lifecycle, including alternatives
-            // that are not displayed, so a rail cannot survive demolition of its host.
-            edit.ids.push_back(change.entity.id);
-            if (std::find(edit.baseline.begin(), edit.baseline.end(), host) != edit.baseline.end())
-                edit.baseline.push_back(change.entity.id);
-            for (auto& alternative : edit.alternatives) {
-                if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), host) != alternative.demolished_ids.end())
-                    alternative.demolished_ids.push_back(change.entity.id);
-                if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(), host) != alternative.proposed_ids.end())
-                    alternative.proposed_ids.push_back(change.entity.id);
-            }
-            memberships.emplace(change.entity.id, host_membership->second);
-            edit.changed = true;
-        }
-        for (const auto& change : changes->entity_changes) {
-            if (!fresh(change) || change.entity.type != "corner_window") continue;
-            const auto corner = parse_corner_window(change.entity);
-            const auto own = memberships.find(corner.id);
-            if (own == memberships.end()) continue;
-            auto& edit = registries.at(own->second);
-            if (std::find(edit.baseline.begin(), edit.baseline.end(), corner.id) == edit.baseline.end()) continue;
-            // A baseline assembly follows future demolition of either host.
-            // Retire its owner and both cuts together in every saved alternative.
-            for (auto& alternative : edit.alternatives) {
-                if (std::none_of(corner.wall_ids.begin(), corner.wall_ids.end(), [&](const auto& host) {
-                    return std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), host) != alternative.demolished_ids.end();
-                })) continue;
-                for (const auto& id : {corner.id, corner.opening_ids[0], corner.opening_ids[1]})
-                    if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(), id) == alternative.demolished_ids.end())
-                        alternative.demolished_ids.push_back(id);
-                edit.changed = true;
-            }
-        }
-        for (auto& edit : registries) {
-            if (!edit.changed) continue;
-            const auto model = ModelPhases::create(std::move(edit.ids), std::move(edit.baseline),
-                std::move(edit.alternatives), edit.model.active_alternative());
-            edit.entity.properties["model"] = retain_model_phase_source(edit.entity.properties.at("model"), model);
-            std::erase_if(changes->entity_changes, [&](const auto& change) {
-                return change.kind == EntityChangeKind::upsert && change.entity.id == edit.entity.id;
-            });
-            changes->entity_changes.push_back(EntityChange::upsert(std::move(edit.entity)));
-        }
+        register_new_phase_memberships(source.entities(), command, admitted_destinations, registry_id);
     }
 
     static void requireIndependentCopyRegistrationsForRegistry(const DocumentSnapshot& source,
@@ -47737,7 +48777,8 @@ private:
 
     static Command sourceDerivedRoofMathEditCommand(const DocumentSnapshot& source,
         const std::map<std::string, Entity, std::less<>>& physical,
-        std::vector<RoofEditIntent> edits, const std::string& message) {
+        std::vector<RoofEditIntent> edits, const std::string& message,
+        std::set<std::string,std::less<>>* shared_reservation=nullptr) {
         if (edits.empty()) return ApplyEntityChanges{source.revision(), {}, {}, message};
         const auto partition = partition_phase_roof_geometry_edits(source.entities(), edits);
         const auto& request = partition.replacement;
@@ -47796,6 +48837,7 @@ private:
         replacement.phase_qualified_joins = true;
         replacement.include_hosted_instances = true;
         auto occupied = retainedSlabIdentityNames(source);
+        if (shared_reservation) occupied.insert(shared_reservation->begin(),shared_reservation->end());
         for (const auto* ids : {&plan.required_entity_ids, &plan.required_child_ids})
             for (const auto& id : *ids) {
                 auto proposed = new_id("proposed");
@@ -47811,6 +48853,7 @@ private:
         semantic.message = message;
         auto intent = make_phase_constraint_authoring_intent(source, semantic);
         intent.roof_replacement = encode_phase_roof_replacement_authoring(replacement);
+        if (shared_reservation) shared_reservation->insert(occupied.begin(),occupied.end());
         ApplyBoundaryConstraintChanges command;
         command.expected_revision = source.revision();
         command.message = message;
@@ -48388,6 +49431,16 @@ private:
                     if (!inserted && found->second != proposed)
                         throw std::invalid_argument("The reviewed alternative edit has conflicting proposed identities.");
                 }
+            } else if (version == 51) {
+                const auto intent=validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent"));
+                if (!intent.at("roof_authoring").is_null()) {
+                    ApplyBoundaryConstraintChanges leaf;
+                    leaf.expected_revision=encoded.at("expected_revision").get<Revision>();
+                    leaf.message=encoded.value("message",std::string{});
+                    leaf.phase_constraint_authoring_completion=true;
+                    leaf.phase_constraint_authoring_intent=intent.at("roof_authoring");
+                    self(self,command_to_json(Command{leaf}),depth+1);
+                }
             } else if (version == 19 || version == 22) self(self, encoded.at("proof"), depth + 1);
             else if (encoded.contains("room_review_geometry_proof"))
                 self(self, encoded.at("room_review_geometry_proof"), depth + 1);
@@ -48493,11 +49546,13 @@ private:
                     }
                 }
             }
-            for (const auto& [id, asset] : revision.assets) { (void)asset; reserve_text(id); }
+            for (const auto& [id, asset] : revision.assets) { reserve_text(id); reserve(asset.metadata); }
             if (revision.boundary_constraint_changes)
                 reserve(command_to_json(Command{*revision.boundary_constraint_changes}));
+            if (revision.boundary_geometry_edit)
+                reserve(encode_boundary_geometry_edit(*revision.boundary_geometry_edit));
         }
-        for (const auto& [id, asset] : source.assets()) { (void)asset; reserve_text(id); }
+        for (const auto& [id, asset] : source.assets()) { reserve_text(id); reserve(asset.metadata); }
         return occupied;
     }
 
@@ -54545,8 +55600,8 @@ private:
                 const auto label=label_hit ? canvas->labelPresentation(*label_hit) : std::nullopt;
                 const auto retained_child=keyboard || label_hit ? std::optional<CanvasRoofOpeningTarget>{}
                     : canvas->selectedRoofOpeningAtModelPoint(point);
-                if (retained_child && !selectRoofOpening(canvas,*retained_child)) return;
-                if (!m_selected_roof_openings.empty() && !mixedSemanticSelection() &&
+                if (retained_child && !mixedSemanticSelection() && !selectRoofOpening(canvas,*retained_child)) return;
+                if (!m_selected_roof_openings.empty() &&
                     (keyboard || (!label_hit && m_selected_ids.contains(target)))) {
                     showRoofOpeningContextMenu(global_position);
                     return;
@@ -63890,7 +64945,7 @@ private:
     }
 
     bool copyRoofOpeningSelection(bool cut) {
-        if (rejectMixedSelectionCommand(cut ? QStringLiteral("Cut") : QStringLiteral("Copy"))) return false;
+        if (mixedClipboardSelection()) return copyMixedClipboardSelection(cut);
         try {
             if (m_selected_roof_openings.empty()) return false;
             const auto targets=m_selected_roof_openings;
@@ -64159,8 +65214,24 @@ private:
     }
 
     void showRoofOpeningContextMenu(QPoint global_position) {
-        if (rejectMixedSelectionCommand(QStringLiteral("Skylight actions"))) return;
         try {
+            if (mixedClipboardSelection()) {
+                const auto source=*selectedRoofOpeningCohortSource(false);
+                const auto authority=captureSourceEditAuthority(source);
+                QMenu menu(owner);
+                auto* copy=menu.addAction(QStringLiteral("Copy selected group"));
+                auto* cut=menu.addAction(QStringLiteral("Cut selected group"));
+                auto* duplicate=menu.addAction(QStringLiteral("Duplicate selected group…"));
+                auto* remove=menu.addAction(QStringLiteral("Delete selected group"));
+                for (auto* action:{cut,duplicate,remove}) action->setEnabled(source.is_editable());
+                const auto action=menu.exec(global_position);
+                if (!sourceEditAuthorityCurrent(authority,false)) throw std::invalid_argument("The complete group changed. Reopen its menu.");
+                if (action==copy) (void)copyMixedClipboardSelection(false);
+                else if (action==cut) (void)copyMixedClipboardSelection(true);
+                else if (action==duplicate) duplicateMixedClipboardSelection();
+                else if (action==remove) (void)deleteSelection();
+                return;
+            }
             if (m_selected_roof_openings.empty()) return;
             const auto captured=m_selected_roof_openings;
             const auto source=selectedRoofOpeningCohortSource(false);
@@ -64662,6 +65733,7 @@ private:
     }
 
     void updateOpeningPlacement(Vec2 point, bool commit) {
+        if (m_pending_mixed_clipboard) { updateMixedClipboardPlacement(point,commit); return; }
         if (m_pending_opening_kind == QStringLiteral("corner_window")) { updateCornerWindowPlacement(point, commit); return; }
         if (m_pending_opening_kind == QStringLiteral("skylight")) { updateSkylightPlacement(point, commit); return; }
         BoundaryDraftPreview preview;
@@ -70189,6 +71261,9 @@ private:
     bool m_roof_opening_native_selection{};
     bool m_native_selection_sync_deferred{};
     std::optional<RoofOpeningCloneSource> m_pending_roof_opening_clone;
+    std::shared_ptr<MixedClipboardSession> m_pending_mixed_clipboard;
+    WorkspaceRegenerationQueue m_mixed_clipboard_preview_queue;
+    QTimer* m_mixed_clipboard_preview_timer{};
     std::vector<RoofOpeningGroupClone> m_pending_roof_opening_group_clones;
     std::optional<CornerWindowTransfer> m_pending_corner_window_clone;
     std::vector<Entity> m_pending_corner_window_catalogs;

@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed clipboard - reviewed desktop source integration
+
+Fresh graph staging is committed and pushed as 7fb4cab0, with exact local/remote
+ref verification. The subsequent desktop source integrates mixed
+Copy/Cut/Paste/Duplicate capture, separate corner/roof destination choices,
+original-source phase/room admission, complete background previews and one
+prepared publication. Actual saved view/crop/depth, Site frames, selection,
+focus and navigation are captured and fenced. Cut publishes clipboard content
+only after the complete removal. SVG artwork, text and independent dimension
+lines/ticks/values appear in transient group previews; uncopied measurement
+targets keep their witness points fixed through bounded dimension-only hover
+work. Independent dimension translation changes only affected raw coordinates.
+
+Independent desktop source review found and corrected click interception by
+selection, disagreement between snapped hover and raw click coordinates, and a
+final preview stranded after pointer Leave. Mixed placement now owns an
+explicit effective-coordinate callback and can restore its exact admitted
+cached preview under the original source/view fences. Existing point-placement
+clients retain their prior raw coordinate policy. Affected re-review approves
+the bounded integration with no remaining concrete P1/P2 finding. Root reviewed
+interfaces, transient-only painting, callback cleanup, pointer receipt fencing,
+coordinate/data ownership and the complete publication path; source whitespace
+checks are clean.
+
+This does not qualify compilation, native interaction, cancellation timing,
+Undo/reopen, migration or responsiveness. Mixed Properties/transforms, ordinary
+clipboard placement follow-up and the complete consolidated scope remain
+required work. No builds, tests/new tests, scripts, probes, native jobs, launches,
+packages or installations run. The installed app is unchanged and all ten
+production gates remain open.
+
 ### October 10 mixed clipboard - fresh graph staging reviewed
 
 The atomic wall/room consequence integration is committed and pushed as

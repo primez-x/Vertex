@@ -617,9 +617,12 @@ ApplyEntityChanges translated_mixed_clipboard_ordinary_graph(const DocumentSnaps
             if (!decoded.supported()) reject("fresh graph has an unsupported dimension");
             // The boundary kernel already moves its own bound callouts once.
             if (!boundary_ids.contains(decoded.dimension->boundary_id) && exact(entity,copied.at(id))) {
-                auto dimension=*decoded.dimension;
-                dimension.text_position=transform_point(dimension.text_position,transform);
-                entity=encode_boundary_dimension_entity(dimension,&entity);
+                const auto moved=transform_point(decoded.dimension->text_position,transform);
+                auto& position=entity.properties.at("text_position");
+                if (offset.x!=0.0) position.at(0)=moved.x;
+                if (offset.y!=0.0) position.at(1)=moved.y;
+                if (!decode_boundary_dimension_entity(entity).supported())
+                    reject("translated raw dimension is unsupported");
             }
         } else if (entity.type==kAnnotationEntityType) {
             (void)decode_annotation_entity(entity);
