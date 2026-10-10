@@ -218,7 +218,14 @@ polling timeout does not permit restarting it.
    skylight removal, with physical/phase roof dominance and exact detached
    source/history bindings. Other combinations refuse the whole selection and
    remain required implementation gaps. Qualify Undo/redo, save/reopen and
-   extraction under reader176/exchange174. Existing project command envelopes
+   extraction under reader176/exchange174. The subsequent mixed intent version
+   two retains a complete pure phase34 ordinary demolition, compares its exact
+   explicit roots/components to the captured selection, and independently
+   admits its full source-bound phase proof before staging. It reserves both
+   ordinary and child phase destinations and retains phase policy under
+   reader177/extraction175. Qualify this source addition; phase33, wall/room
+   review, independent drawing enclosures, raw hosted-opening and corner-window
+   mixed deletion remain required gaps. Existing project command envelopes
    must not acquire broader meanings as a shortcut.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.

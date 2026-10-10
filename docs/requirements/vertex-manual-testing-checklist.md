@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty-three focused drawing and architectural checks below (493 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty-four focused drawing and architectural checks below (494 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3412,6 +3412,12 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-MIXED-DELETE - Delete skylights together with other objects**
   - Steps: Ctrl-select a skylight and a furniture symbol, then press Delete. Undo once and redo. Repeat with an area and with another roof. Select a roof together with its own skylight and delete both. Repeat in a remodeling alternative, save and reopen. Try a mixed selection containing a wall and a skylight as well.
   - Expected: The complete supported selection disappears together and one Undo restores it. Deleting a selected roof also removes its selected child without creating a replacement roof just for that child. Remodeling preserves the original baseline and records the intended changes together. A combination that is still unsupported explains the gap and preserves every selected item; it never deletes only part of the selection.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-MIXED-REMODEL-DELETE - Remove objects and skylights in a remodeling alternative**
+  - Steps: Create a remodeling alternative. Ctrl-select an existing roof and its own skylight, then press Delete. Undo once and redo. Repeat with an existing door, slab, stair or structural object together with a skylight on another roof. Check the existing and proposed views, save and reopen. Try a selection containing a wall whose removal requires a room-review dialog, and another containing a drawing label.
+  - Expected: The supported complete selection is removed from the alternative together, while the existing baseline remains intact. Removing a selected roof handles its selected skylight once. One Undo restores the entire change. A combination that is still unavailable preserves every selected item and identifies the missing workflow.
   - Result: Not tested
   - Notes: ______________________________
 

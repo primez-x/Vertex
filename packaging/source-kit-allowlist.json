@@ -3727,6 +3727,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/phase_removal_selection.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/phase_roof_demolition.hpp"
     },
     {
@@ -5008,6 +5012,10 @@
     {
       "category": "source",
       "path": "src/core/phase_opening_demolition.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_removal_selection.cpp"
     },
     {
       "category": "source",

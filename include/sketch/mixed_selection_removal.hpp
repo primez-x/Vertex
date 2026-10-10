@@ -36,4 +36,18 @@ public:
     const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
     const std::optional<Command>& child_command);
 
+// Dialect two retains a complete phase-demolition command. These are explicit
+// ordinary roots/qualified components, never the demolition's derived closure.
+// Each preparation independently binds the proof to the actual full snapshot.
+[[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
+    const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
+    const Command& ordinary_command);
+[[nodiscard]] std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(
+    const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
+    const std::vector<RoofOpeningGroupMember>& members);
+[[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
+    const DocumentSnapshot& source, const ArchitecturalSelectionRemovalIntent& ordinary,
+    const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
+    const std::optional<Command>& child_command);
+
 } // namespace sketch

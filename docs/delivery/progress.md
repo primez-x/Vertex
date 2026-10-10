@@ -14,6 +14,55 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 mixed phase demolition - source integration
+
+The preceding atomic mixed-deletion batch is committed and pushed as 91e9760c.
+The subsequent source adds mixed intent version two for pure phase34 ordinary
+demolition together with actual selected skylights. The controller captures the
+explicit ordinary roster separately from child-host projections, resolves actual
+qualified component rows, and compares the complete selection with roots from
+the original demolition proof. Missing, ambiguous, drawing/annotation and
+mismatched roots preserve the whole selection. The original complete ordinary
+command remains unchanged; preparation retains source/selection fences before
+the one final envelope45 event.
+
+The new phase-selection helper screens known grammar, aggregate selection and
+wire budgets before typed codecs. It reconstructs the entire phase binding from
+the actual captured snapshot and a message-only authoring intent plus one
+recognized demolition leaf. Opening, slab, stair, stair-retirement,
+structural/roof demolition, coordinated demolition and wall-demolition proofs
+retain their explicit roots; derived dependents and destinations never become
+selected objects. The independently previewed original command supplies the
+complete detached stage, including existing room decisions and metadata.
+Explicit roofs dominate their own selected children; surviving children retain
+the existing removal-only stage authority. Historical lifetime scans reserve
+both ordinary phase and child-phase destinations. Active policy recognizes the
+ordinary demolition even when the selected roof dominates every child.
+
+Version-one mixed history retains its prior meaning. Reader177/extraction175
+fence retained and undone version-two history. The source kit lists both new
+helper files once; CMake includes their implementation. Static inspection
+preserves all 277 requirement definitions and changes only two delivery notes.
+The manual checklist retains every earlier task and adds one remodeling mixed
+deletion task, for 494 task/result pairs, all Not tested.
+
+Independent bounded source review found no remaining concrete P1/P2 after the
+pre-codec resource screening was added. Root reviewed the integrated controller,
+closed codec, original/detached phase authority, retained lifetime reservations,
+reader/extraction floor, CMake ownership and documentation. `git diff --check`
+is clean. Scoped commit, push and exact remote-ref verification accompany this
+source batch; none of these constitute runtime or production acceptance.
+
+Phase33, wall/room-review geometry, independent drawing enclosures, raw hosted
+opening and corner-window mixed deletion remain required implementation gaps.
+Mixed Cut, Copy/Paste/Duplicate, properties and transforms, native directional
+group controls and the rest of the consolidated production scope remain open.
+No builds, tests/new tests, scripts, probes, native jobs, UI launches, packages
+or installations run. Source review does not establish compilation, interaction,
+Undo/reopen, migration or performance acceptance. The installed candidate is
+unchanged and all ten production gates remain open. Continue these missing
+mixed command lanes, then the other outstanding delivery packages.
+
 ### October 10 atomic mixed deletion - source integration
 
 The preceding mixed-selection source is committed and pushed as a386d2ff.

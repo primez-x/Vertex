@@ -3430,7 +3430,7 @@ struct PhaseConstraintLifetimeProofs {
 };
 static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const ApplyBoundaryConstraintChanges& command) {
     // Unlike original-source authority, retained identity ownership includes a
-    // strict forty-five child bound to its detached stage. Never use this walk
+    // strict forty-five ordinary and child proofs bound to their stages. Never use this walk
     // for outer source binding, phase policy or semantic replay.
     const auto encoded=command_to_json(Command{command});
     PhaseConstraintLifetimeProofs result;
@@ -3441,10 +3441,21 @@ static PhaseConstraintLifetimeProofs phase_constraint_lifetime_proofs(const Appl
         if (version==34) result.phase_proofs.push_back(proof.at("phase_constraint_authoring_intent"));
         else if (version==45) {
             const auto intent=validate_mixed_selection_removal_intent(proof.at("mixed_selection_removal_intent"));
-            const auto ordinary=decode_architectural_drawing_removal_intent(intent.at("ordinary"));
-            for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
-                (void)original;
-                result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
+            if (intent.at("version")==2) {
+                // The phase ordinary command owns historical reservations at
+                // the original stage; it supplies no outer source authority.
+                const auto& ordinary=intent.at("ordinary_command");
+                const auto decoded=command_from_json(ordinary);
+                const auto* phase=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+                if (ordinary.at("version")!=34 || !phase || !phase->phase_constraint_authoring_completion)
+                    throw std::invalid_argument("Retained mixed removal ordinary command lacks pure phase authoring authority");
+                result.phase_proofs.push_back(phase->phase_constraint_authoring_intent);
+            } else {
+                const auto ordinary=decode_architectural_drawing_removal_intent(intent.at("ordinary"));
+                for (const auto& [original,ids]:ordinary.architectural.roof_additional_identities) {
+                    (void)original;
+                    result.ordinary_roof_destinations.insert(ids.begin(),ids.end());
+                }
             }
             const auto& child=intent.at("child_command");
             if (child.is_null() || child.at("version")!=34) return;

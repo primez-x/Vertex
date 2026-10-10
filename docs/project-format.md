@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v176
+# Vertex project formats v1 through v177
+
+## Mixed phase-demolition and skylight removal (v177, source integration)
+
+Reader 177 adds version two of the closed mixed-removal intent inside unchanged
+command envelope 45. Its eleven outer fields remain those of version one.
+`ordinary` is exactly `version:1`, `kind:"phase_demolition"`, ascending unique
+`object_ids`, and ascending unique qualified `components` rows containing
+`catalog_id` and `instance_id`. Destinations and derived retirement closure do
+not become selected roots. `ordinary_command` is the complete canonical pure
+phase34 demolition command. Other phase edits, replacements and room/drawing
+enclosures are not admitted by this dialect.
+
+The ordinary phase proof is reconstructed against the actual complete source
+using a message-only authoring intent and one recognized demolition leaf. Its
+explicit roots must exactly equal the captured ordinary selection. The complete
+original command then creates the detached stage, retaining room decisions,
+assets, project metadata and history. Explicit roof dominance and surviving
+child removal use the original mixed-removal rules. Both ordinary and staged
+child phase destinations participate in historical lifetime reservations. The
+outer phase policy recognizes the ordinary demolition even when no child
+replacement remains. Version-one history keeps its original meaning.
+
+Retained and undone version-two commands require reader177/extraction175.
+Pure phase34 opening, slab, stair, stair-retirement, structural/roof demolition,
+coordinated demolition and wall-demolition leaves are supported at source
+level. This does not establish compilation, interaction or migration acceptance;
+phase33, reviewed wall geometry, independent drawing enclosures, raw hosted
+opening and corner-window mixed deletion remain implementation gaps.
 
 ## Atomic ordinary-object and skylight removal (v176, source integration)
 
