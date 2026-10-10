@@ -2649,6 +2649,9 @@ double catalog_opening_width(const SymbolDefinition& definition) {
              std::pair{"svg-v2-09_doors-door-hinged-interior", 0.810},
              std::pair{"svg-v2-09_doors-door-hinged-exterior", 0.910},
              std::pair{"svg-v2-09_doors-door-sliding", 1.800},
+             std::pair{"svg-v2-09_doors-door-barn", 1.050},
+             std::pair{"svg-v2-09_doors-door-pocket", 1.020},
+             std::pair{"svg-v2-09_doors-door-bifold", 1.720},
              std::pair{"svg-v2-16_walls_openings-cased-opening", 0.900}}) {
         if (definition.id == id) return width;
     }
@@ -2667,6 +2670,12 @@ std::optional<DoorOperation> catalog_door_operation(
     const SymbolDefinition& definition) {
     if (definition.category != "09_doors") return std::nullopt;
     const auto& id = definition.id;
+    if (id == "svg-v2-09_doors-door-barn")
+        return DoorOperation{false, true, 90.0, DoorOperationKind::barn_sliding};
+    if (id == "svg-v2-09_doors-door-pocket")
+        return DoorOperation{false, true, 90.0, DoorOperationKind::pocket_sliding};
+    if (id == "svg-v2-09_doors-door-bifold")
+        return DoorOperation{false, true, 90.0, DoorOperationKind::double_bifold};
     if (id == "svg-v2-09_doors-door-double" || id == "svg-v2-09_doors-door-french-double")
         return DoorOperation{false, true, 90.0, DoorOperationKind::double_hinged};
     if (id == "svg-v2-09_doors-door-sliding-glass" || id == "svg-v2-09_doors-door-sliding")
@@ -2697,6 +2706,9 @@ OpeningAssembly catalog_opening_assembly(const QString& kind, const QString& sym
         profile.frame_width_m = 0.06;
         profile.panel_thickness_m = 0.045;
     }
+    if (symbol_id == QStringLiteral("svg-v2-09_doors-door-pocket") ||
+        symbol_id == QStringLiteral("svg-v2-09_doors-door-bifold"))
+        profile.frame_width_m = 0.06;
     if (profile.kind == OpeningAssemblyKind::window) {
         if (symbol_id == QStringLiteral("svg-v2-10_windows-window-double"))
             profile.window_layout = WindowLayoutKind::double_fixed;
@@ -4852,21 +4864,27 @@ double project_plan_angle(double angle, const BuildingViewFrame& frame) {
     return std::atan2(x * up.x + y * up.y, x * right.x + y * right.y);
 }
 
+Wall source_wall_geometry(const DocumentSnapshot& source, const Entity& wall_entity) {
+    const auto scope = constraint_phase_scope(source.entities());
+    std::vector<const Entity*> children;
+    for (const auto& [id, entity] : source.entities()) {
+        if (!scope.inactive_owner_ids.contains(id) && entity.type == "opening" &&
+            read_string(entity.properties, "wall_id").value_or("") == wall_entity.id)
+            children.push_back(&entity);
+    }
+    Wall wall;
+    std::string error;
+    if (!read_document_wall(resolve_vertical_placement(source, wall_entity), children, wall, error))
+        throw std::invalid_argument(error);
+    return wall;
+}
+
 Wall opening_plan_host(const DocumentSnapshot& source,const Entity& opening) {
     const auto wall_id=opening.properties.at("wall_id").get<std::string>();
     const auto scope=constraint_phase_scope(source.entities());
     if (scope.inactive_owner_ids.contains(opening.id) || scope.inactive_owner_ids.contains(wall_id))
         throw std::invalid_argument("Opening controls require an active opening and wall in the saved design.");
-    std::vector<const Entity*> siblings;
-    for(const auto& [id,entity]:source.entities()) {
-        if(!scope.inactive_owner_ids.contains(id) && entity.type=="opening" &&
-            read_string(entity.properties,"wall_id").value_or("")==wall_id)
-            siblings.push_back(&entity);
-    }
-    Wall wall;std::string error;
-    if(!read_document_wall(resolve_vertical_placement(source,source.entities().at(wall_id)),siblings,wall,error))
-        throw std::invalid_argument(error);
-    return wall;
+    return source_wall_geometry(source, source.entities().at(wall_id));
 }
 
 void retain_opening_plan_controls(CanvasEntity& entity,const HostedOpeningResizeFrame& frame,
@@ -41996,6 +42014,8 @@ public:
             (window && m_pending_opening_profile->window_layout == WindowLayoutKind::sliding);
         const bool overhead = m_pending_opening_door_operation &&
             m_pending_opening_door_operation->kind == DoorOperationKind::overhead_tilt_up;
+        const bool fractional = m_pending_opening_door_operation &&
+            uses_door_opening_fraction(m_pending_opening_door_operation->kind);
         const bool casement = window && m_pending_opening_profile->window_layout == WindowLayoutKind::casement;
         const bool bay = window && m_pending_opening_profile->window_layout == WindowLayoutKind::bay;
         if (bay) m_pending_opening_profile->window_bay_projection_m *= scale;
@@ -42013,10 +42033,11 @@ public:
             const QSignalBlocker blocker(m_opening_draw_travel);
             m_opening_draw_travel->setValue(0.0);
         }
-        m_opening_draw_travel->setVisible(sliding || overhead);
-        m_opening_draw_travel_label->setVisible(sliding || overhead);
+        m_opening_draw_travel->setVisible(sliding || fractional);
+        m_opening_draw_travel_label->setVisible(sliding || fractional);
         m_opening_draw_travel->setToolTip(overhead
             ? QStringLiteral("Overhead tilt-up opening: 0% closes the panel; 100% raises it horizontally at the header.")
+            : fractional ? QStringLiteral("0% closes the door; 100% retracts or folds the complete panel assembly.")
             : QStringLiteral("Travel of the movable sliding panel; 100% stacks it behind the fixed panel."));
         {
             const QSignalBlocker blocker(m_opening_draw_angle);
@@ -42156,7 +42177,9 @@ public:
     static Boundary openingPlacementPlan(const Wall& host,const HostedOpening& opening,
         const OpeningAssembly& assembly,const std::optional<DoorOperation>& operation,
         std::pair<std::string,Boundary>& cache) {
-        if (host.baseline.sweep_radians!=0.0)
+        if (host.baseline.sweep_radians!=0.0 ||
+            (operation && uses_door_opening_fraction(operation->kind) &&
+                operation->kind != DoorOperationKind::overhead_tilt_up))
             return project_hosted_opening_plan(host,opening,assembly,operation);
         const auto key=json{{"width",opening.width},{"height",opening.height},{"sill",opening.sill},
             {"thickness",host.thickness},{"assembly",opening_assembly_json(assembly)},
@@ -50494,7 +50517,7 @@ private:
         QObject::connect(m_opening_draw_travel, &QDoubleSpinBox::valueChanged, owner, [this](double value) {
             if (m_pending_opening_door_operation && m_pending_opening_door_operation->kind == DoorOperationKind::sliding)
                 m_pending_opening_door_operation->slide_fraction = value / 100.0;
-            else if (m_pending_opening_door_operation && m_pending_opening_door_operation->kind == DoorOperationKind::overhead_tilt_up)
+            else if (m_pending_opening_door_operation && uses_door_opening_fraction(m_pending_opening_door_operation->kind))
                 m_pending_opening_door_operation->opening_fraction = value / 100.0;
             else if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::sliding)
                 m_pending_opening_profile->window_slide_fraction = value / 100.0;
@@ -53713,14 +53736,9 @@ private:
                     continue;
                 }
                 try {
-                    Wall wall{id, segments.front(), *thickness, *height,
-                              *elevation, openings_by_wall[id]};
-                    if (const auto layers = geometry_entity.properties.find("layers");
-                        layers != geometry_entity.properties.end()) {
-                        wall.layers = parse_wall_layers(*layers, *thickness);
-                    }
+                    Wall wall;
                     std::string top_error;
-                    if (!read_document_wall_top_profile(geometry_entity,wall,top_error))
+                    if (!read_document_wall(geometry_entity, opening_entities_by_wall[id], wall, top_error))
                         throw std::invalid_argument(top_error);
                     validate_wall_semantics(wall);
                     try {
@@ -56733,15 +56751,7 @@ private:
                         if (!baseline || !thickness || !height || !elevation) {
                             throw std::invalid_argument("wall projection requires baseline, thickness, height, and elevation");
                         }
-                        Wall wall{id, *baseline, *thickness, *height, *elevation,
-                                  openings_by_wall[id]};
-                        if (const auto layers = resolved.properties.find("layers");
-                            layers != resolved.properties.end()) {
-                            wall.layers = parse_wall_layers(*layers, *thickness);
-                        }
-                        std::string top_error;
-                        if (!read_document_wall_top_profile(resolved,wall,top_error))
-                            throw std::invalid_argument(top_error);
+                        const auto wall = source_wall_geometry(snapshot, entity);
                         validate_wall_semantics(wall);
                         if (kind == BuildingViewKind::plan && horizontal_plan_frame(frame) &&
                             std::isinf(depth.far_depth_m)) {
@@ -65401,7 +65411,8 @@ private:
             auto* layout = new QVBoxLayout(&dialog);
             auto* form = new QFormLayout;
             auto* mechanism = new QComboBox(&dialog); mechanism->setObjectName("editDoorMechanism");
-            mechanism->addItems({"Hinged", "Double hinged", "Sliding", "Overhead tilt-up"});
+            mechanism->addItems({"Hinged", "Double hinged", "Sliding", "Overhead tilt-up",
+                "Barn sliding", "Pocket sliding", "Bifold", "Four-panel bifold"});
             mechanism->setCurrentIndex(static_cast<int>(operation.kind));
             auto* hinge = new QComboBox(&dialog); hinge->setObjectName("editDoorHinge");
             hinge->addItems({"None","Start jamb","End jamb"});
@@ -65414,7 +65425,7 @@ private:
             const auto displayed_angle = angle->value();
             auto* travel = new QDoubleSpinBox(&dialog); travel->setObjectName("editDoorTravel");
             travel->setRange(0.0, 100.0); travel->setDecimals(2); travel->setSuffix("%");
-            travel->setValue((operation.kind == DoorOperationKind::overhead_tilt_up
+            travel->setValue((uses_door_opening_fraction(operation.kind)
                 ? operation.opening_fraction : operation.slide_fraction) * 100.0);
             const auto displayed_travel = travel->value();
             form->addRow("Mechanism",mechanism); form->addRow("Jamb / moving half",hinge);
@@ -65428,12 +65439,21 @@ private:
                 const bool enabled = hinge->currentIndex()!=0;
                 const bool sliding = mechanism->currentIndex()==static_cast<int>(DoorOperationKind::sliding);
                 const bool overhead = mechanism->currentIndex()==static_cast<int>(DoorOperationKind::overhead_tilt_up);
-                hinge->setEnabled(!overhead);
+                const auto kind = static_cast<DoorOperationKind>(mechanism->currentIndex());
+                const bool fractional = uses_door_opening_fraction(kind);
+                const bool both_jambs = kind == DoorOperationKind::double_bifold;
+                hinge->setItemText(1, overhead ? "Top hinge" : both_jambs ? "Both jambs" : "Start jamb");
+                if (overhead || both_jambs) hinge->setCurrentIndex(1);
+                hinge->setEnabled(!overhead && !both_jambs);
                 hinge->setToolTip(overhead ? "Overhead doors hinge along the top edge." :
                     "Jamb order follows the host wall's drawing direction.");
-                side->setEnabled(enabled); angle->setEnabled(enabled && !sliding && !overhead);
-                travel->setEnabled(enabled && (sliding || overhead));
+                side->setEnabled(enabled && kind != DoorOperationKind::pocket_sliding);
+                angle->setEnabled(enabled && !sliding && !fractional);
+                travel->setEnabled(enabled && (sliding || fractional));
+                if (both_jambs) hinge->setToolTip("Four-panel bifold doors are pinned at both jambs.");
+                else if (is_single_panel_sliding_door(kind)) hinge->setToolTip("Select the destination jamb for the panel's travel.");
                 travel->setToolTip(overhead ? "0% closed; 100% horizontal at the top hinge." :
+                    fractional ? "0% closed; 100% fully retracted or folded." :
                     "Travel of the movable panel behind the fixed panel.");
             };
             sync(); QObject::connect(hinge,&QComboBox::currentIndexChanged,&dialog,[&]{sync();});
@@ -65453,17 +65473,18 @@ private:
                 auto edited = operation;
                 edited.kind = static_cast<DoorOperationKind>(mechanism->currentIndex());
                 const bool overhead = edited.kind == DoorOperationKind::overhead_tilt_up;
-                edited.hinge_at_end = !overhead && hinge->currentIndex()==2;
+                const bool fractional = uses_door_opening_fraction(edited.kind);
+                edited.hinge_at_end = !overhead && edited.kind != DoorOperationKind::double_bifold && hinge->currentIndex()==2;
                 edited.swing_left = side->currentIndex()==0;
-                edited.angle_degrees = overhead ? 90.0 :
+                edited.angle_degrees = fractional ? 90.0 :
                     angle->value()==displayed_angle ? operation.angle_degrees : angle->value();
                 edited.slide_fraction = edited.kind == DoorOperationKind::sliding
                     ? edited.kind==operation.kind && travel->value()==displayed_travel
                         ? operation.slide_fraction : travel->value()/100.0 : 0.0;
-                edited.opening_fraction = overhead
+                edited.opening_fraction = fractional
                     ? edited.kind==operation.kind && travel->value()==displayed_travel
                         ? operation.opening_fraction : travel->value()/100.0 : 0.0;
-                if (overhead && !candidate.properties.contains("opening_assembly"))
+                if (fractional && !candidate.properties.contains("opening_assembly"))
                     candidate.properties["opening_assembly"] = opening_assembly_json(
                         default_opening_assembly(OpeningAssemblyKind::door));
                 candidate.properties["door_operation"] = encode_door_operation(edited);

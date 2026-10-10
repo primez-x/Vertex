@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus four focused door checks below. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3127,6 +3127,35 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U449 - Align reusable text at its insertion point**
   - Steps: Create a text-library entry with Left alignment, place it, then change it to Right alignment. Repeat with multiline text, rotate it, save and reopen.
   - Expected: The insertion point stays fixed while the aligned text extends to the chosen side. Picking follows the painted text, and the saved entry and placed text retain their alignment.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Additional sliding and folding door checks
+
+These source additions are not yet included in the installed candidate. Mark
+them Blocked / missing until testing a candidate that contains them.
+
+- [ ] **DOOR-BARN - Place and slide a barn door**
+  - Steps: Draw a long straight wall. Choose the barn door in Library and place it near the middle. Double-click it, open Door operation, and try Open at 0%, 50% and 100%. Change the destination jamb and wall side. Change width, undo, redo, save and reopen. Inspect its plan, 3D and door schedule.
+  - Expected: One complete panel slides outside the selected wall face. The frame stays fixed. Open 100% moves it one opening width toward the chosen jamb. It has no swing arc. The schedule names Barn sliding and its destination jamb. Placement with insufficient track space is refused without changing the project.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **DOOR-POCKET - Retract a pocket door into its wall**
+  - Steps: Draw a long straight wall with enough thickness for the panel and retained skins. Choose the pocket door and place it near the middle. Try Open at 0%, 50% and 100%, then change destination jamb. Inspect a horizontal section through the door, 3D and wall quantities. Save/reopen and export IFC. Try another opening inside the receiving pocket.
+  - Expected: The panel retracts through its slotted jamb into an actual wall cavity. Both wall skins remain. The cavity exists when closed, stays out of the wall fill/hatch and reduces the affected material volumes. A conflicting opening or too-thin wall is refused. The exported opening includes the cavity.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **DOOR-BIFOLD - Fold a two-panel door**
+  - Steps: Place a door in a straight wall. Open Door operation and choose Bifold. Try Open at 0%, 50% and 100%, both pinned jambs and both folding sides. Resize it, undo, redo, save and reopen. Compare the plan and 3D.
+  - Expected: Two finite leaves fold at their shared joint while the free endpoint slides along its track. The selected jamb stays pinned. Fully folded leaves stay separate; closed gaps remain small. The plan shows the fixed hinge swing rather than a false swing about the moving joint. Unsupported dimensions or collisions are refused.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **DOOR-FOUR-PANEL - Fold both pairs of a four-panel door**
+  - Steps: Choose the four-panel bifold artwork in Library and place it in a straight wall. Try Open at 0%, 50% and 100%, then reverse the folding side. Inspect the schedule, resize, undo, redo, save/reopen and export the plan and IFC.
+  - Expected: Four leaves form two mirrored folding pairs, pinned at both jambs. Their center sliders approach their own jambs as the door opens. Both views and exports show four leaves. The schedule identifies Four-panel bifold and both jambs. Changing the mechanism never silently substitutes a two-panel model.
   - Result: Not tested
   - Notes: ______________________________
 

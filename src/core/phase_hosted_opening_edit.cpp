@@ -217,12 +217,14 @@ nlohmann::json encode_hosted_opening_profile_edit_intent(const HostedOpeningProf
     if (intent.materialize_default_door_assembly &&
         (intent.offset || intent.width || intent.sill || intent.height || intent.clear_door_operation ||
          !intent.assembly || *intent.assembly != default_opening_assembly(OpeningAssemblyKind::door) ||
-         !intent.door_operation || intent.door_operation->kind != DoorOperationKind::overhead_tilt_up))
-        invalid("Hosted opening profile materialization requires only a default door assembly and overhead operation");
+         !intent.door_operation || !uses_door_opening_fraction(intent.door_operation->kind)))
+        invalid("Hosted opening profile materialization requires only a default door assembly and fractional door operation");
     if (!intent.offset && !intent.width && !intent.sill && !intent.height &&
         !intent.assembly && !intent.door_operation && !intent.clear_door_operation)
         invalid("Hosted opening profile edit requires an authored field");
-    Json result{{"version", intent.materialize_default_door_assembly ? 2 : 1},
+    const int version = !intent.materialize_default_door_assembly ? 1 :
+        intent.door_operation->kind == DoorOperationKind::overhead_tilt_up ? 2 : 3;
+    Json result{{"version", version},
         {"opening_id", intent.opening_id}, {"wall_id", intent.wall_id},
         {"offset", intent.offset ? quantity(*intent.offset, true) : Json(nullptr)},
         {"width", intent.width ? quantity(*intent.width, false) : Json(nullptr)},
@@ -239,9 +241,9 @@ nlohmann::json encode_hosted_opening_profile_edit_intent(const HostedOpeningProf
 
 HostedOpeningProfileEditIntent decode_hosted_opening_profile_edit_intent(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version") != 1 && value.at("version") != 2))
+        (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3))
         invalid("Hosted opening profile edit version is unsupported");
-    const bool materialization = value.at("version") == 2;
+    const bool materialization = value.at("version") != 1;
     if (materialization)
         keys(value, {"version", "opening_id", "wall_id", "offset", "width", "sill", "height", "assembly", "door_operation", "clear_door_operation", "materialize_default_door_assembly"});
     else
@@ -262,8 +264,13 @@ HostedOpeningProfileEditIntent decode_hosted_opening_profile_edit_intent(const n
     if (materialization) {
         if (!value.at("materialize_default_door_assembly").is_boolean() ||
             !value.at("materialize_default_door_assembly").get<bool>())
-            invalid("Hosted opening profile version two requires explicit default door materialization");
+            invalid("Hosted opening profile materialization requires an explicit true flag");
         result.materialize_default_door_assembly = true;
+        if (!result.door_operation ||
+            (value.at("version") == 2 && result.door_operation->kind != DoorOperationKind::overhead_tilt_up) ||
+            (value.at("version") == 3 && (!uses_door_opening_fraction(result.door_operation->kind) ||
+                result.door_operation->kind == DoorOperationKind::overhead_tilt_up)))
+            invalid("Hosted opening profile materialization mechanism does not match its version");
     }
     (void)encode_hosted_opening_profile_edit_intent(result);
     return result;
@@ -280,7 +287,7 @@ Entity replay_hosted_opening_profile_entity(const Entity& source, const HostedOp
     if (intent.materialize_default_door_assembly &&
         (source.properties.contains("opening_assembly") || !original.assembly ||
          *original.assembly != default_opening_assembly(OpeningAssemblyKind::door) ||
-         (original.operation && original.operation->kind == DoorOperationKind::overhead_tilt_up)))
+         (original.operation && uses_door_opening_fraction(original.operation->kind))))
         invalid("Hosted opening profile materialization requires an actual retained implicit door");
     auto result = source;
     if (intent.offset) scalar(result, "offset_m", "offset", *intent.offset, original.cut.offset, true);
@@ -342,7 +349,7 @@ std::map<std::string, Entity, std::less<>> replay_hosted_opening_profile_entitie
             validate_hosted_opening_profile_entity(target->second);
             const auto retained_host = host_wall(source, host->second, {&target->second});
             if (retained_host.baseline.sweep_radians != 0)
-                invalid("Hosted opening profile overhead conversion requires a straight actual wall");
+                invalid("Hosted opening profile fractional-door conversion requires a straight actual wall");
         }
         result.at(intent.opening_id) = replay_hosted_opening_profile_entity(target->second, intent);
         hosts.insert(intent.wall_id);

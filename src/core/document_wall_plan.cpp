@@ -47,6 +47,9 @@ std::map<std::string, WallPlanGeometry, std::less<>> document_wall_plan_geometry
                 std::erase_if(wall.openings, [&](const auto& opening) {
                     return scope.inactive_owner_ids.contains(opening.id);
                 });
+                std::erase_if(wall.pocket_recesses, [&](const auto& recess) {
+                    return scope.inactive_owner_ids.contains(recess.opening_id);
+                });
             } else if (!read_document_wall(entity, openings[id], wall, error)) continue;
             validate_wall_semantics(wall);
             walls.emplace(id, std::move(wall));

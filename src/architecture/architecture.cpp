@@ -522,6 +522,227 @@ TopoDS_Shape fuse_shapes(const TopoDS_Shape& first, const TopoDS_Shape& second,
     }
     return operation.Shape();
 }
+
+constexpr double door_clearance = 0.002;
+
+TopoDS_Shape hosted_opening_void_parts(const Wall& wall, const HostedOpening& opening) {
+    const double length = segment_length(wall.baseline);
+    const double from = opening.offset / length;
+    const double to = (opening.offset + opening.width) / length;
+    const Segment interval{point_at(wall.baseline, from), point_at(wall.baseline, to),
+                           wall.baseline.sweep_radians * (to - from)};
+    const auto mouth = extrude(strip_range(interval, -wall.thickness * 0.5,
+        wall.thickness * 0.5), wall.elevation + opening.sill, opening.height);
+    const auto recess = std::find_if(wall.pocket_recesses.begin(), wall.pocket_recesses.end(),
+        [&](const auto& item) { return item.opening_id == opening.id; });
+    if (recess == wall.pocket_recesses.end()) return mouth;
+    const auto frame = opening_frame(wall.baseline, recess->offset / length);
+    const auto pocket = opening_box(frame, 0.0,
+        recess->normal_offset - recess->depth * 0.5,
+        recess->width, recess->depth, recess->height,
+        wall.elevation + recess->sill, "Pocket wall cavity construction failed");
+    TopoDS_Compound result;
+    BRep_Builder builder;
+    builder.MakeCompound(result);
+    builder.Add(result, mouth);
+    builder.Add(result, pocket);
+    return result;
+}
+
+bool separate_door_mechanism(DoorOperationKind kind) {
+    return kind == DoorOperationKind::barn_sliding ||
+           kind == DoorOperationKind::pocket_sliding ||
+           kind == DoorOperationKind::bifold || kind == DoorOperationKind::double_bifold;
+}
+
+OpeningAssemblyGeometry separate_door_parts(Wall host, const HostedOpening& opening,
+                                            const OpeningAssembly& assembly,
+                                            const DoorOperation& operation,
+                                            const OpeningFrame& frame) {
+    if (host.baseline.sweep_radians != 0.0)
+        throw std::invalid_argument("Barn, pocket and bifold doors require a straight host");
+    const double gap = door_clearance;
+    const double bar = assembly.frame_width_m;
+    const double depth = assembly.frame_depth_m;
+    const double thickness = assembly.panel_thickness_m;
+    const double clear_width = opening.width - 2.0 * bar;
+    const double clear_height = opening.height - bar;
+    const double base = host.elevation + opening.sill;
+    const double side = operation.swing_left ? 1.0 : -1.0;
+    const double travel_side = operation.hinge_at_end ? 1.0 : -1.0;
+    const bool pocket = operation.kind == DoorOperationKind::pocket_sliding;
+    const bool barn = operation.kind == DoorOperationKind::barn_sliding;
+    const bool four_panels = operation.kind == DoorOperationKind::double_bifold;
+    const bool folding = !pocket && !barn;
+    const auto recess = pocket_door_recess(host, opening, assembly, operation);
+    if (recess) {
+        if (recess->depth + 2.0 * gap > depth + tolerance)
+            throw std::invalid_argument("Pocket jamb leaves no retained frame cheeks");
+        const auto existing = std::find_if(host.pocket_recesses.begin(), host.pocket_recesses.end(),
+            [&](const auto& item) { return item.opening_id == opening.id; });
+        if (existing == host.pocket_recesses.end()) host.pocket_recesses.push_back(*recess);
+        else if (*existing != *recess)
+            throw std::invalid_argument("Pocket assembly differs from its hydrated wall recess");
+    } else if (std::any_of(host.pocket_recesses.begin(), host.pocket_recesses.end(),
+                          [&](const auto& item) { return item.opening_id == opening.id; })) {
+        throw std::invalid_argument("Non-pocket door retains a pocket recess");
+    }
+    const auto host_shape = make_wall(host);
+    TopoDS_Compound result;
+    BRep_Builder builder;
+    builder.MakeCompound(result);
+    std::vector<TopoDS_Shape> material_parts;
+    std::vector<TopoDS_Shape> frame_parts;
+    std::vector<TopoDS_Shape> panel_envelopes;
+    std::vector<Segment> swings;
+    const double overlap_limit = tolerance * tolerance * std::max(1.0, opening.height);
+    const auto require_clear = [&](const TopoDS_Shape& first, const TopoDS_Shape& second,
+                                   const char* message) {
+        if (common_volume(first, second) > overlap_limit)
+            throw std::invalid_argument(message);
+    };
+    const auto add = [&](const TopoDS_Shape& part, bool is_frame) {
+        require_clear(part, host_shape, "Door mechanism intersects its host wall");
+        for (const auto& other : material_parts)
+            require_clear(part, other, "Door mechanism parts share material");
+        builder.Add(result, part);
+        material_parts.push_back(part);
+        if (is_frame) frame_parts.push_back(part);
+    };
+    const double frame_across = assembly.inset_m - depth * 0.5;
+    for (int index = 0; index < 2; ++index) {
+        const double station = index == 0 ? 0.0 : opening.width - bar;
+        auto jamb = opening_box(frame, station, frame_across, bar, depth,
+                                opening.height, base, "Door jamb construction failed");
+        if (pocket && (index == 1) == operation.hinge_at_end) {
+            // The receiving jamb is two real cheeks plus its upper/lower
+            // connections. Its slot continues the exact wall cavity depth.
+            const auto slot = opening_box(frame, station - gap,
+                recess->normal_offset - recess->depth * 0.5,
+                bar + 2.0 * gap, recess->depth, recess->height,
+                host.elevation + recess->sill, "Pocket jamb slot construction failed");
+            jamb = cut(jamb, slot);
+        } else if (folding && (four_panels || (index == 1) == operation.hinge_at_end)) {
+            // A real folding hinge rebate admits the finite leaf's thickness
+            // beside its jamb pin. Keep the opposite cheek and the outer jamb
+            // intact instead of shortening a closed leaf by its thickness.
+            const double rebate_width = thickness + 2.0 * gap;
+            const double hinge_across = assembly.inset_m - side * (thickness * 0.5 + gap);
+            const double rebate_inner = side > 0.0 ? hinge_across - gap : frame_across;
+            const double rebate_outer = side > 0.0 ? frame_across + depth : hinge_across + gap;
+            const double cheek_depth = side > 0.0 ? rebate_inner - frame_across
+                                                  : frame_across + depth - rebate_outer;
+            if (bar <= rebate_width + gap || cheek_depth < gap - tolerance)
+                throw std::invalid_argument("Bifold frame leaves no retained hinge rebate cheek");
+            const double rebate_station = index == 0 ? bar - rebate_width
+                                                     : opening.width - bar;
+            const auto rebate = opening_box(frame, rebate_station, rebate_inner,
+                rebate_width, rebate_outer - rebate_inner, clear_height, base,
+                "Bifold hinge rebate construction failed");
+            jamb = cut(jamb, rebate);
+        }
+        add(jamb, true);
+    }
+    add(opening_box(frame, bar, frame_across, clear_width, depth, bar,
+        base + clear_height, "Door head construction failed"), true);
+
+    const auto panel = [&](const OpeningFrame& panel_frame, double station, double across,
+                           double width, double height, double elevation) {
+        const auto envelope = opening_box(panel_frame, station, across, width, thickness,
+            height, elevation, "Door panel construction failed");
+        require_clear(envelope, host_shape, "Door panel intersects its host wall");
+        for (const auto& frame_part : frame_parts)
+            require_clear(envelope, frame_part, "Door panel intersects its frame");
+        for (const auto& sibling : panel_envelopes)
+            require_clear(envelope, sibling, "Door panels collide at the requested pose");
+        panel_envelopes.push_back(envelope);
+        if (assembly.glazing_thickness_m <= tolerance) {
+            add(envelope, false);
+            return;
+        }
+        const double pane_width = width * 0.65;
+        const double pane_height = height * 0.65;
+        const double pane_station = station + width * 0.175;
+        const double pane_base = elevation + height * 0.175;
+        if (pane_width <= 2.0 * gap + tolerance || pane_height <= 2.0 * gap + tolerance)
+            throw std::invalid_argument("Door glazing leaves no construction clearance");
+        const double overrun = std::max(thickness, 100.0 * tolerance);
+        const auto aperture = opening_box(panel_frame, pane_station, across - overrun,
+            pane_width, thickness + 2.0 * overrun, pane_height, pane_base,
+            "Door glazing aperture construction failed");
+        add(cut(envelope, aperture), false);
+        add(opening_box(panel_frame, pane_station + gap,
+            across + (thickness - assembly.glazing_thickness_m) * 0.5,
+            pane_width - 2.0 * gap, assembly.glazing_thickness_m,
+            pane_height - 2.0 * gap, pane_base + gap,
+            "Door glazing construction failed"), false);
+    };
+    if (barn) {
+        const double reserve_start = operation.hinge_at_end ? opening.offset
+            : opening.offset - opening.width;
+        const double reserve_end = operation.hinge_at_end ? opening.offset + 2.0 * opening.width
+            : opening.offset + opening.width;
+        if (reserve_start < -tolerance || reserve_end > segment_length(host.baseline) + tolerance)
+            throw std::invalid_argument("Barn door full travel does not fit its host baseline");
+        const double across = side > 0.0
+            ? std::max(host.thickness * 0.5, frame_across + depth) + gap
+            : std::min(-host.thickness * 0.5, frame_across) - gap - thickness;
+        panel(frame, travel_side * opening.width * operation.opening_fraction, across,
+              opening.width, opening.height - 2.0 * gap, base + gap);
+    } else if (pocket) {
+        panel(frame, bar + gap + travel_side * (clear_width + bar) * operation.opening_fraction,
+            assembly.inset_m - thickness * 0.5, clear_width - 2.0 * gap,
+            clear_height - 4.0 * gap, base + 2.0 * gap);
+    } else {
+        // Two equal links meet on their inner thickness edges. Opposite
+        // rotations keep the slider exactly on the fixed hinge's track while
+        // finite bodies occupy opposite sides of the fold at full opening.
+        // The manufactured jamb rebate keeps closed leaf gaps to millimetres.
+        const double end_allowance = 2.0 * gap;
+        const double slider_allowance = 2.0 * gap;
+        const double pair_span = four_panels ? clear_width * 0.5 : clear_width;
+        const double link = (pair_span - end_allowance - slider_allowance) * 0.5;
+        if (link <= 2.0 * gap + tolerance)
+            throw std::invalid_argument("Bifold opening leaves no finite folding panels");
+        const double angle = operation.opening_fraction * std::numbers::pi * 0.5;
+        const double cosine = operation.opening_fraction == 1.0 ? 0.0 : std::cos(angle);
+        const double sine = operation.opening_fraction == 1.0 ? 1.0 : std::sin(angle);
+        for (int pair = 0; pair < (four_panels ? 2 : 1); ++pair) {
+            const bool at_end = four_panels ? pair == 1 : operation.hinge_at_end;
+            const double direction = at_end ? -1.0 : 1.0;
+            const double local_side = side * direction;
+            const double hinge_station = at_end
+                ? opening.width - bar - end_allowance : bar + end_allowance;
+            const double hinge_across = assembly.inset_m - side * (thickness * 0.5 + gap);
+            const auto hinge_point = opening_point(frame, hinge_station, hinge_across, base);
+            const OpeningFrame closed{{hinge_point.X(), hinge_point.Y()},
+                {direction * frame.along.x, direction * frame.along.y},
+                {direction * frame.left.x, direction * frame.left.y}};
+            const auto posed_frame = [&](Vec2 origin, double signed_sine) {
+                const Vec2 along{closed.along.x * cosine + closed.left.x * signed_sine,
+                                 closed.along.y * cosine + closed.left.y * signed_sine};
+                return OpeningFrame{origin, along, {-along.y, along.x}};
+            };
+            const auto first = posed_frame(closed.origin, local_side * sine);
+            const Vec2 joint{closed.origin.x + first.along.x * link,
+                             closed.origin.y + first.along.y * link};
+            const auto second = posed_frame(joint, -local_side * sine);
+            const double across = local_side > 0.0 ? gap : -thickness - gap;
+            panel(first, gap, across, link - 2.0 * gap, clear_height - 2.0 * gap, base + gap);
+            panel(second, gap, across, link - 2.0 * gap, clear_height - 2.0 * gap, base + gap);
+            if (operation.opening_fraction > 0.0) {
+                const double face_across = local_side > 0.0 ? gap : -gap;
+                const auto closed_tip = opening_point(closed, link - gap, face_across, base);
+                const auto posed_tip = opening_point(first, link - gap, face_across, base);
+                swings.push_back(arc_from_chord_angle({closed_tip.X(), closed_tip.Y()},
+                    {posed_tip.X(), posed_tip.Y()}, local_side * angle));
+            }
+        }
+    }
+    if (!BRepCheck_Analyzer(result).IsValid() || solid_volume(result) <= tolerance * tolerance * tolerance)
+        throw std::invalid_argument("Door mechanism did not produce valid material solids");
+    return {result, std::nullopt, std::move(swings)};
+}
 }
 
 double solid_volume(const TopoDS_Shape& shape) {
@@ -571,22 +792,34 @@ std::optional<SlabElementKind> parse_slab_element_kind(std::string_view value) n
     return std::nullopt;
 }
 
+TopoDS_Shape make_hosted_opening_void(const Wall& wall, const HostedOpening& opening) {
+    Wall checked = wall;
+    const auto existing = std::find_if(checked.openings.begin(), checked.openings.end(),
+        [&](const auto& item) { return item.id == opening.id; });
+    if (existing == checked.openings.end()) checked.openings.push_back(opening);
+    else if (*existing != opening)
+        throw std::invalid_argument("Opening void conflicts with its actual host opening");
+    validate_wall_semantics(checked);
+    try {
+        const auto result = hosted_opening_void_parts(checked, opening);
+        if (result.IsNull() || !BRepCheck_Analyzer(result).IsValid() ||
+            solid_volume(result) <= tolerance * tolerance * tolerance)
+            throw std::invalid_argument("Opening void did not produce valid material solids");
+        return result;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Opening void geometry failed: ") + error.what());
+    }
+}
+
 TopoDS_Shape make_wall(const Wall& wall) {
     validate_wall_semantics(wall);
-    const double length = segment_length(wall.baseline);
     try {
         const auto cut_openings = [&](TopoDS_Shape result) {
             for (const auto& opening : wall.openings) {
-                const double from = opening.offset / length;
-                const double to = (opening.offset + opening.width) / length;
-                const Segment interval{point_at(wall.baseline, from), point_at(wall.baseline, to),
-                                       wall.baseline.sweep_radians * (to - from)};
                 // Cut through the full wall stack so every layer keeps the
-                // same host-opening relationship.
-                const auto tool = extrude(
-                    strip_range(interval, -wall.thickness * 0.5,
-                                wall.thickness * 0.5),
-                    wall.elevation + opening.sill, opening.height);
+                // same host-opening relationship. Pocket profiles also remove
+                // their admitted partial-depth cavity from each affected layer.
+                const auto tool = hosted_opening_void_parts(wall, opening);
                 result = cut(result, tool);
             }
             if (solid_volume(result) <= tolerance * tolerance * tolerance) {
@@ -669,6 +902,13 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
     }
 
     const auto frame = opening_frame(wall.baseline, opening.offset / wall_length);
+    if (door_operation && separate_door_mechanism(door_operation->kind)) {
+        try {
+            return separate_door_parts(checked, opening, assembly, *door_operation, frame);
+        } catch (const Standard_Failure& error) {
+            throw std::invalid_argument(std::string("Door mechanism geometry failed: ") + error.what());
+        }
+    }
     if (window && assembly.window_layout == WindowLayoutKind::bay) {
         try {
             return {bay_window_parts(checked, opening, assembly, frame), std::nullopt, {}};

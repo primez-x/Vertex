@@ -356,7 +356,7 @@ std::optional<HostedOpeningProfileEditIntent> capture_hosted_opening_profile_edi
     }
     if (!original_assembly && intent.assembly &&
         *intent.assembly == default_opening_assembly(OpeningAssemblyKind::door) &&
-        intent.door_operation && intent.door_operation->kind == DoorOperationKind::overhead_tilt_up) {
+        intent.door_operation && uses_door_opening_fraction(intent.door_operation->kind)) {
         // Infer only the explicit representation required by this actual
         // conversion. Typed replay admits the retained family/source; its
         // closed flag grammar rejects simultaneous dimensions or other edits.

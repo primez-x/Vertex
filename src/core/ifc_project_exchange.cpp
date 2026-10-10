@@ -842,13 +842,13 @@ void export_wall_construction(const Entity& entity, int product, ExportContext& 
                    "wall_layer_placement_not_exported");
 }
 
-Wall native_wall(const Entity& entity) {
+Wall native_wall(const Entity& entity, const std::vector<const Entity*>& openings = {}) {
     auto normalized = entity;
     if (!normalized.properties.contains("elevation_m") && !normalized.properties.contains("elevation"))
         normalized.properties["elevation_m"] = 0.0;
     Wall wall;
     std::string error;
-    require(read_document_wall(normalized, {}, wall, error));
+    require(read_document_wall(normalized, openings, wall, error));
     // This body carrier remains one wall mesh. The retained layer metadata
     // and material associations are exported separately.
     wall.layers.clear();
@@ -876,6 +876,7 @@ std::string door_operation_enum(const std::optional<DoorOperation>& operation) {
     // This profile has one movable and one fixed panel; DOUBLE_DOOR_SLIDING
     // instead specifies two movable panels. Retain an explicit description.
     if (operation->kind == DoorOperationKind::sliding) return ".USERDEFINED.";
+    if (uses_door_opening_fraction(operation->kind)) return ".USERDEFINED.";
     // IfcDoorTypeOperationEnum defines hinge side while looking along local +Y.
     // fill_frame makes +Y the swing side, reversing +X for native right swings.
     // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcdoortypeoperationenum.htm
@@ -912,6 +913,14 @@ std::string door_operation_label(const std::optional<DoorOperation>& operation,
         return step_string("Two-track sliding door; one fixed panel", limits);
     if (operation && operation->kind == DoorOperationKind::overhead_tilt_up)
         return step_string("OVERHEAD_TILT_UP", limits);
+    if (operation && operation->kind == DoorOperationKind::barn_sliding)
+        return step_string("Surface-track barn door; one full-width sliding panel", limits);
+    if (operation && operation->kind == DoorOperationKind::pocket_sliding)
+        return step_string("Pocket door; one panel retracts into an adjacent partial-depth wall cavity", limits);
+    if (operation && operation->kind == DoorOperationKind::bifold)
+        return step_string("Bifold door; two coupled leaves and one sliding endpoint", limits);
+    if (operation && operation->kind == DoorOperationKind::double_bifold)
+        return step_string("Four-panel bifold door; mirrored coupled pairs", limits);
     return operation ? "$" : step_string("Closed leaf; hinge and swing unspecified", limits);
 }
 
@@ -1450,7 +1459,7 @@ void export_fill(const DocumentSnapshot& document, const Entity& entity, int voi
     const auto host = resolve_vertical_placement(document,
         document.entities().at(entity.properties.at("wall_id").get<std::string>()));
     require(!context.inactive_design_ids.contains(host.id));
-    const auto wall = native_wall(host);
+    const auto wall = native_wall(host, context.hosted_openings[host.id]);
     const auto opening = native_opening(entity);
     const auto profile = parse_opening_assembly(entity.properties.at("opening_assembly"));
     const auto operation = native_operation(entity);
@@ -1501,14 +1510,18 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
     require(!context.inactive_design_ids.contains(host.id));
     const auto axis = read_baseline(host);
     if (!axis) return false;
-    if (std::abs(axis->sweep_radians) <= kTolerance && !host.properties.contains("top_plane") &&
+    const auto operation = entity.type == "opening" ? native_operation(entity) : std::nullopt;
+    const bool pocket = operation && operation->kind == DoorOperationKind::pocket_sliding;
+    if (!pocket && std::abs(axis->sweep_radians) <= kTolerance && !host.properties.contains("top_plane") &&
         std::abs(host.properties.contains("slope_rise_m")
             ? host.properties.value("slope_rise_m", 0.0)
             : host.properties.value("slope_rise", 0.0)) <= kTolerance)
         return false;
-    const auto wall = native_wall(host);
+    // Keep historical gross wall carriers: IfcRelVoidsElement applies the
+    // complete mouth/cavity tool. Pocket voids alone need hydrated children.
+    const auto wall = pocket ? native_wall(host, context.hosted_openings[host.id]) : native_wall(host);
     const auto gradient = wall_top_gradient(wall);
-    if (std::abs(axis->sweep_radians) <= kTolerance && gradient.x == 0.0 && gradient.y == 0.0)
+    if (!pocket && std::abs(axis->sweep_radians) <= kTolerance && gradient.x == 0.0 && gradient.y == 0.0)
         return false;
     const auto meshes = entity.type == "wall"
         ? ifc_native_wall_mesh(wall, context.limits.max_mesh_vertices - context.mesh_vertices,
@@ -3525,6 +3538,9 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         }
     }
     std::set<int> reconstructed_relations;
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    std::map<std::string, Entity, std::less<>> pending_pocket_voids;
+#endif
     for (auto& opening : result.entities) {
         if (opening.properties.value("classification", "") != "ifc_opening" &&
             opening.properties.value("ifc_type", "") != "IFCOPENINGELEMENT") continue;
@@ -3552,13 +3568,17 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             if (native_mesh_role(metadata, "void") && meshes_by_id.contains(source_id)) {
                 try {
                     auto candidate = opening; candidate.properties = metadata;
-                    const auto wall = native_wall(*host);
+                    const auto operation = native_operation(candidate);
+                    const auto wall = operation && operation->kind == DoorOperationKind::pocket_sliding
+                        ? native_wall(*host, {&candidate}) : native_wall(*host);
                     const auto cut = native_opening(candidate);
                     if (metadata.contains("_vertex_ifc_host") &&
                         same_native_host(*host, metadata.at("_vertex_ifc_host")) &&
                         metadata.value("wall_id", "") == host->properties.value("ifc_name", "") &&
                         matching_meshes(meshes_by_id.at(source_id), ifc_native_void_mesh(wall, cut,
                             limits.max_mesh_vertices, limits.max_mesh_triangles))) {
+                        if (operation && operation->kind == DoorOperationKind::pocket_sliding)
+                            pending_pocket_voids.emplace(opening.id, opening);
                         opening.type = "opening";
                         opening.properties["wall_id"] = host->id;
                         opening.properties["offset_m"] = cut.offset;
@@ -3675,6 +3695,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             const auto profile = parse_opening_assembly(metadata.at("opening_assembly"));
             Entity candidate = opening; candidate.properties = metadata;
             const auto operation = native_operation(candidate);
+            const auto checked_wall = operation && operation->kind == DoorOperationKind::pocket_sliding
+                ? native_wall(*host, {&candidate}) : native_wall(*host);
             // Swept-void projections on oblique hosts introduce roundoff in
             // station/sill values. After agreement with that independent void
             // geometry is proven above, regenerate using exact source values;
@@ -3699,14 +3721,14 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                     fields[12] == (door ? door_operation_label(operation, limits) : window_partition_label(profile, limits)) &&
                     std::abs(number<double>(fields[8]) - opening.properties.at("height_m").get<double>()) <= kTolerance &&
                     frame && std::abs(number<double>(fields[9]) -
-                        fill_overall_width(native_wall(*host), checked_opening, *frame)) <= kTolerance;
+                        fill_overall_width(checked_wall, checked_opening, *frame)) <= kTolerance;
             }
             if (!product_matches ||
                 metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
                 void_metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
                 (!door && operation) ||
-                !frame || !same_frame(*frame, fill_frame(native_wall(*host), checked_opening, operation)) ||
-                !matching_meshes(meshes_by_id.at(fill_id), ifc_native_fill_mesh(native_wall(*host),
+                !frame || !same_frame(*frame, fill_frame(checked_wall, checked_opening, operation)) ||
+                !matching_meshes(meshes_by_id.at(fill_id), ifc_native_fill_mesh(checked_wall,
                     checked_opening, profile, operation, limits.max_mesh_vertices, limits.max_mesh_triangles)))
                 continue;
             for (const auto* key : {"offset_m", "width_m", "sill_m", "height_m"})
@@ -3718,7 +3740,25 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 {"arguments", fill_record->args}, {"relationship_id", relation_id}, {"properties", metadata}};
             reconstructed_fills.insert(fill_id);
             reconstructed_fill_relations.insert(relation_id);
+            pending_pocket_voids.erase(opening.id);
         } catch (const std::exception&) { }
+    }
+    // A compound pocket void cannot become a live mouth-only opening when
+    // its independent manufactured-fill proof fails. Preserve its original
+    // carrier and source evidence until the complete mechanism is admitted.
+    for (auto& opening : result.entities) {
+        const auto pending = pending_pocket_voids.find(opening.id);
+        if (pending == pending_pocket_voids.end()) continue;
+        const auto source_id = opening.extensions.at("ifc_source").at("record_id").get<int>();
+        opening = std::move(pending->second);
+        add_diagnostic(result.diagnostics, "#" + std::to_string(source_id), "IFCOPENINGELEMENT",
+            "pocket_cavity_semantics_not_reconstructed");
+        for (const auto& [host_id, relation_id] : hosts.at(opening.id)) {
+            (void)host_id;
+            reconstructed_relations.erase(relation_id);
+            add_diagnostic(result.diagnostics, "#" + std::to_string(relation_id), "IFCRELVOIDSELEMENT",
+                "relationship_not_reconstructed");
+        }
     }
 #endif
     std::erase_if(result.entities, [&](const auto& entity) {

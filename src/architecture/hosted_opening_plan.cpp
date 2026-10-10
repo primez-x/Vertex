@@ -16,6 +16,14 @@ Boundary project_hosted_opening_plan(const Wall& wall, const HostedOpening& open
     if (hosted == checked.openings.end()) checked.openings.push_back(opening);
     else if (*hosted != opening)
         throw std::invalid_argument("Hosted plan has a conflicting opening identity");
+    if (operation && operation->kind == DoorOperationKind::pocket_sliding) {
+        const auto recess = pocket_door_recess(checked, opening, assembly, *operation);
+        const auto existing = std::find_if(checked.pocket_recesses.begin(), checked.pocket_recesses.end(),
+            [&](const auto& item) { return item.opening_id == opening.id; });
+        if (existing == checked.pocket_recesses.end()) checked.pocket_recesses.push_back(*recess);
+        else if (*existing != *recess)
+            throw std::invalid_argument("Hosted plan has a conflicting pocket recess");
+    }
     validate_hosted_opening_plan_source(checked);
     validate_opening_assembly(assembly);
     // The host and manufactured parts must both be admitted by the same solid

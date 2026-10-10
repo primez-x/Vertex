@@ -777,6 +777,58 @@ void validate_wall_semantics(const Wall& wall) {
 
     reject_overlapping_openings(bounds);
 
+    if (wall.pocket_recesses.size() > 256) reject("Pocket recess count exceeds the per-wall limit");
+    if (!wall.pocket_recesses.empty() && wall.baseline.sweep_radians != 0.0)
+        reject("Pocket doors require a straight wall");
+    std::set<std::string, std::less<>> pocket_ids;
+    for (const auto& recess : wall.pocket_recesses) {
+        if (!pocket_ids.insert(recess.opening_id).second)
+            reject("A pocket opening can have only one derived recess");
+        const auto source = std::find_if(wall.openings.begin(), wall.openings.end(),
+            [&](const HostedOpening& opening) { return opening.id == recess.opening_id; });
+        if (source == wall.openings.end()) reject("Pocket recess source opening is missing");
+        positive(recess.width, "Pocket recess width must be positive");
+        positive(recess.height, "Pocket recess height must be positive");
+        positive(recess.depth, "Pocket recess depth must be positive");
+        const double end = recess.offset + recess.width;
+        const double top = recess.sill + recess.height;
+        const double inner = recess.normal_offset - recess.depth * 0.5;
+        const double outer = recess.normal_offset + recess.depth * 0.5;
+        if (!std::isfinite(recess.offset) || !std::isfinite(recess.sill) ||
+            !std::isfinite(end) || !std::isfinite(top) || !std::isfinite(inner) ||
+            !std::isfinite(outer) || recess.offset < 0.0 || recess.sill < 0.0 ||
+            end > length_limit)
+            reject("Pocket recess extends beyond its wall");
+        if (inner < -wall.thickness * 0.5 + 0.002 - tolerance ||
+            outer > wall.thickness * 0.5 - 0.002 + tolerance)
+            reject("Pocket recess must retain both wall skins");
+        const bool before = std::abs(end - source->offset) <= tolerance;
+        const bool after = std::abs(recess.offset - source->offset - source->width) <= tolerance;
+        if (!before && !after) reject("Pocket recess must be adjacent to its source opening");
+        if (recess.sill < source->sill - tolerance ||
+            top > source->sill + source->height + tolerance ||
+            top > wall_top_height_range(wall, recess.offset, end, inner, outer).minimum + tolerance)
+            reject("Pocket recess extends beyond its opening or wall top");
+        for (const auto& opening : wall.openings) {
+            if (std::min(end, opening.offset + opening.width) -
+                    std::max(recess.offset, opening.offset) > tolerance &&
+                std::min(top, opening.sill + opening.height) -
+                    std::max(recess.sill, opening.sill) > tolerance)
+                reject("Pocket recess overlaps a hosted opening");
+        }
+    }
+    for (std::size_t i = 0; i < wall.pocket_recesses.size(); ++i) {
+        const auto& a = wall.pocket_recesses[i];
+        for (std::size_t j = i + 1; j < wall.pocket_recesses.size(); ++j) {
+            const auto& b = wall.pocket_recesses[j];
+            if (std::min(a.offset + a.width, b.offset + b.width) - std::max(a.offset, b.offset) > tolerance &&
+                std::min(a.sill + a.height, b.sill + b.height) - std::max(a.sill, b.sill) > tolerance &&
+                std::min(a.normal_offset + a.depth * 0.5, b.normal_offset + b.depth * 0.5) -
+                    std::max(a.normal_offset - a.depth * 0.5, b.normal_offset - b.depth * 0.5) > tolerance)
+                reject("Pocket door recesses overlap");
+        }
+    }
+
     // This is an exact rectangle-union proof over the unwrapped baseline and
     // wall height. It intentionally does not treat a positive gap smaller
     // than tolerance as covered; the OCCT volume check remains authoritative

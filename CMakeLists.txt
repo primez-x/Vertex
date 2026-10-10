@@ -603,6 +603,7 @@ endif()
 # plan projection. It only consumes Entity values, so it belongs below Document
 # rather than introducing an admission-to-projection dependency cycle.
 add_library(sketch_wall_semantics src/core/wall_semantics.cpp src/core/document_wall.cpp)
+target_link_libraries(sketch_wall_semantics PUBLIC sketch_door_operation sketch_opening_assembly)
 target_link_libraries(sketch_wall_semantics PUBLIC sketch_precision sketch_json)
 add_library(sketch_roof_join_semantics src/core/roof_join_semantics.cpp)
 target_include_directories(sketch_roof_join_semantics PUBLIC include)

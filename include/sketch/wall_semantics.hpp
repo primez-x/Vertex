@@ -21,6 +21,15 @@ struct HostedOpening {
     bool operator==(const HostedOpening&) const = default;
 };
 
+// Derived from an actual pocket door's retained operation and manufactured
+// assembly. This is a partial-depth cavity alongside the opening, expressed
+// in directed wall station/left-normal coordinates, never persisted separately.
+struct PocketDoorRecess {
+    std::string opening_id;
+    double offset{}, width{}, sill{}, height{}, normal_offset{}, depth{};
+    bool operator==(const PocketDoorRecess&) const = default;
+};
+
 // A wall layer is ordered through the containing wall's `layers` vector from
 // the negative to positive normal side of the baseline. Layers are contiguous
 // and their thicknesses must sum exactly (within the geometry tolerance) to
@@ -59,7 +68,15 @@ struct Wall {
     // When set, height is the relative top at baseline.start and slope_rise,
     // if supplied, must agree with the gradient projected along the chord.
     std::optional<Vec2> top_gradient_m_per_m;
+    std::vector<PocketDoorRecess> pocket_recesses;
 };
+
+struct OpeningAssembly;
+struct DoorOperation;
+// Computes and admits the cavity even when the leaf is closed. Non-pocket
+// operations return no recess. The opening entity remains the authority.
+[[nodiscard]] std::optional<PocketDoorRecess> pocket_door_recess(
+    const Wall&, const HostedOpening&, const OpeningAssembly&, const DoorOperation&);
 
 struct WallTopHeightRange {
     double minimum{};

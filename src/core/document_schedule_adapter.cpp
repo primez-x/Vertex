@@ -128,15 +128,16 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
     record.properties.emplace("height", ScheduleQuantity{*height, ScheduleUnit::metre});
     if(*opening_kind == "door" && entity.properties.contains("door_operation")) {
         const auto operation = decode_door_operation(entity.properties.at("door_operation"));
-        record.properties.emplace("mechanism", std::string(operation.kind == DoorOperationKind::double_hinged
-            ? "Double hinged" : operation.kind == DoorOperationKind::sliding ? "Sliding" :
-            operation.kind == DoorOperationKind::overhead_tilt_up ? "Overhead tilt-up" : "Hinged"));
-        record.properties.emplace("hinge", std::string(operation.kind == DoorOperationKind::overhead_tilt_up
-            ? "top" : operation.hinge_at_end ? "end" : "start"));
+        record.properties.emplace("mechanism", std::string(door_operation_kind_name(operation.kind)));
+        if (is_single_panel_sliding_door(operation.kind))
+            record.properties.emplace("destination_jamb", std::string(operation.hinge_at_end ? "end" : "start"));
+        else record.properties.emplace("hinge", std::string(operation.kind == DoorOperationKind::overhead_tilt_up
+            ? "top" : operation.kind == DoorOperationKind::double_bifold ? "both" :
+            operation.hinge_at_end ? "end" : "start"));
         record.properties.emplace("swing_side", std::string(operation.swing_left?"left":"right"));
         if (operation.kind == DoorOperationKind::sliding)
             record.properties.emplace("open_percent", operation.slide_fraction * 100.0);
-        else if (operation.kind == DoorOperationKind::overhead_tilt_up)
+        else if (uses_door_opening_fraction(operation.kind))
             record.properties.emplace("open_percent", operation.opening_fraction * 100.0);
         else record.properties.emplace("swing_angle_degrees", operation.angle_degrees);
     }

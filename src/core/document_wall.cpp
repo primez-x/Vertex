@@ -1,4 +1,7 @@
 #include "sketch/document_wall.hpp"
+#include "sketch/door_operation.hpp"
+#include "sketch/opening_assembly.hpp"
+#include <algorithm>
 
 #include <cmath>
 #include <initializer_list>
@@ -103,7 +106,41 @@ bool required_segment(const Json& value, Segment& output, std::string_view label
                            std::string(label) + ".sweep_radians", error);
 }
 
+PocketDoorRecess computed_pocket_recess(const HostedOpening& opening,
+    const OpeningAssembly& assembly, const DoorOperation& operation) {
+    (void)encode_door_operation(operation);
+    validate_opening_assembly(assembly);
+    if (assembly.kind != OpeningAssemblyKind::door)
+        throw std::invalid_argument("Pocket doors require an explicit door assembly");
+    if (assembly.panel_thickness_m + 0.008 > assembly.frame_depth_m + default_geometry_tolerance_metres)
+        throw std::invalid_argument("Pocket jamb leaves no retained frame cheeks");
+    if (opening.width - 2.0 * assembly.frame_width_m <= 0.004 + default_geometry_tolerance_metres ||
+        opening.height - assembly.frame_width_m <= 0.008 + default_geometry_tolerance_metres)
+        throw std::invalid_argument("Pocket opening leaves no finite panel with construction clearance");
+    const double clear_width = opening.width - 2.0 * assembly.frame_width_m;
+    return {opening.id,
+        operation.hinge_at_end ? opening.offset + opening.width : opening.offset - clear_width,
+        clear_width, opening.sill + 0.002, opening.height - assembly.frame_width_m - 0.004,
+        assembly.inset_m, assembly.panel_thickness_m + 0.004};
+}
 } // namespace
+
+std::optional<PocketDoorRecess> pocket_door_recess(const Wall& wall,
+    const HostedOpening& opening, const OpeningAssembly& assembly, const DoorOperation& operation) {
+    if (operation.kind != DoorOperationKind::pocket_sliding) return std::nullopt;
+    const auto recess = computed_pocket_recess(opening, assembly, operation);
+    Wall checked = wall;
+    const auto source = std::find_if(checked.openings.begin(), checked.openings.end(),
+        [&](const HostedOpening& candidate) { return candidate.id == opening.id; });
+    if (source == checked.openings.end()) checked.openings.push_back(opening);
+    else if (*source != opening) throw std::invalid_argument("Pocket source opening does not match its wall");
+    const auto retained = std::find_if(checked.pocket_recesses.begin(), checked.pocket_recesses.end(),
+        [&](const PocketDoorRecess& candidate) { return candidate.opening_id == opening.id; });
+    if (retained == checked.pocket_recesses.end()) checked.pocket_recesses.push_back(recess);
+    else if (*retained != recess) throw std::invalid_argument("Pocket recess does not match its source operation");
+    validate_wall_semantics(checked);
+    return recess;
+}
 
 bool read_document_wall_top_profile(const Entity& entity, Wall& output, std::string& error) {
     output.slope_rise.reset();
@@ -184,6 +221,26 @@ bool read_document_wall(const Entity& entity, const std::vector<const Entity*>& 
             return false;
         }
         output.openings.push_back(opening);
+    }
+    try {
+        for (std::size_t index = 0; index < opening_entities.size(); ++index) {
+            const auto& properties = opening_entities[index]->properties;
+            const auto operation_value = properties.find("door_operation");
+            if (operation_value == properties.end()) continue;
+            const auto operation = decode_door_operation(*operation_value);
+            if (operation.kind != DoorOperationKind::pocket_sliding) continue;
+            const auto assembly_value = properties.find("opening_assembly");
+            if (assembly_value == properties.end())
+                throw std::invalid_argument("Pocket doors require an explicit door assembly");
+            if (output.pocket_recesses.size() >= 256)
+                throw std::invalid_argument("Pocket recess count exceeds the per-wall limit");
+            output.pocket_recesses.push_back(computed_pocket_recess(output.openings[index],
+                parse_opening_assembly(*assembly_value), operation));
+        }
+        if (!output.pocket_recesses.empty()) validate_wall_semantics(output);
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        return false;
     }
     return true;
 }

@@ -277,13 +277,21 @@ std::vector<IfcNativeMesh> ifc_native_wall_mesh(const Wall& wall,
 }
 std::vector<IfcNativeMesh> ifc_native_void_mesh(const Wall& wall, const HostedOpening& opening,
     std::size_t vertices, std::size_t triangles) {
-    Wall checked = wall; checked.openings = {opening};
+    const auto pocket = std::find_if(wall.pocket_recesses.begin(), wall.pocket_recesses.end(),
+        [&](const auto& recess) { return recess.opening_id == opening.id; });
+    if (pocket != wall.pocket_recesses.end()) {
+        preflight(wall, vertices, triangles);
+        return tessellate(make_hosted_opening_void(wall, opening), vertices, triangles);
+    }
+    // Preserve the exact historical non-pocket carrier arithmetic, including
+    // imported mesh comparison; unrelated cavities do not enter this tool.
+    Wall checked = wall; checked.openings = {opening}; checked.pocket_recesses.clear();
     preflight(checked, vertices, triangles);
     Wall cut = wall;
     cut.baseline = hosted_opening_span(wall.baseline, opening.offset, opening.width);
     cut.elevation = wall.elevation + opening.sill;
-    cut.height = opening.height; cut.openings.clear(); cut.layers.clear(); cut.slope_rise.reset();
-    cut.top_gradient_m_per_m.reset();
+    cut.height = opening.height; cut.openings.clear(); cut.pocket_recesses.clear();
+    cut.layers.clear(); cut.slope_rise.reset(); cut.top_gradient_m_per_m.reset();
     return tessellate(make_wall(cut), vertices, triangles);
 }
 std::vector<IfcNativeMesh> ifc_native_fill_mesh(const Wall& wall, const HostedOpening& opening,

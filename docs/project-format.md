@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v164
+# Vertex project formats v1 through v165
+
+## Barn, pocket and bifold door mechanisms (v165, source integration)
+
+Native reader 165 and JSON/assets extraction 163 retain strict door-operation
+v4: exactly `version`, `kind`, `hinge`, `side`, and `opening_fraction`. Kinds are
+`barn_sliding`, `pocket_sliding`, `bifold`, or `double_bifold`; hinge is `start`
+or `end`, side is `left` or `right`, and opening is finite in [0,1]. Internal
+angle remains canonical 90 degrees and legacy two-track slide fraction zero.
+Four-panel bifold requires canonical start handing because both jambs are
+pinned. All these manufactured mechanisms require explicit door assemblies
+and straight hosts. V1 through v3 retain their historical semantics.
+
+Barn doors travel a full opening width along the selected wall face, toward
+the selected destination jamb. Pocket doors retract one leaf into an adjacent
+partial-depth cavity, preserving both wall skins. Its dimensions derive from
+the actual opening operation and assembly, independent of its current pose;
+the transient recess is never a second persisted authority. Wall solids,
+layer quantities and IFC voids use the same cut primitives. Conflicting
+openings/pockets, insufficient skins, baseline travel or top clearance refuse.
+Pocket depth includes 2 mm clearance on either side of the finite leaf; the
+per-wall derived recess budget is 256. Bifold uses two coupled leaves with a
+sliding endpoint; four-panel bifold uses two mirrored pairs. Actual jamb
+rebates admit finite folded leaves with millimetre-scale closed gaps.
+
+Atomic conversion of an implicit retained door to these explicit mechanisms
+uses hosted-opening profile intent v3 with a true
+`materialize_default_door_assembly` flag, default door assembly and no other
+authored fields. V2 remains reserved for overhead conversion. The reader floor
+follows every retained revision and nested proof, including undone changes.
+V165 retains the v161 payload tables. Compilation, physical geometry,
+migration/history and output remain unqualified during source-only execution.
 
 ## Level-edited stair-hosted profiles (v164, source integration)
 

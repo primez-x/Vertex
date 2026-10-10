@@ -377,6 +377,20 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto& value=*pending.back(); pending.pop_back();
             if (++nodes>ProjectStore::maximum_json_values)
                 storage_error(StorageErrorCode::resource_limit,"Typed edit reader-floor scan exceeds its JSON budget");
+            if (value.is_object() && value.value("version",nlohmann::json())==4 &&
+                value.size()==5 && value.contains("hinge") && value.contains("side") &&
+                value.contains("opening_fraction") &&
+                (value.value("kind",nlohmann::json())=="barn_sliding" ||
+                 value.value("kind",nlohmann::json())=="pocket_sliding" ||
+                 value.value("kind",nlohmann::json())=="bifold" ||
+                 value.value("kind",nlohmann::json())=="double_bifold"))
+                floor=std::max(floor,165U);
+            if (value.is_object() && value.value("version",nlohmann::json())==3 &&
+                value.size()==11 && value.value("materialize_default_door_assembly",nlohmann::json())==true &&
+                value.contains("opening_id") && value.contains("wall_id") && value.contains("door_operation") &&
+                value.contains("offset") && value.contains("width") && value.contains("sill") &&
+                value.contains("height") && value.contains("assembly") && value.contains("clear_door_operation"))
+                floor=std::max(floor,165U);
             if (value.is_object() && value.value("version",nlohmann::json())==2 &&
                 value.value("coordinate_profile_hosted_geometry",nlohmann::json())==true &&
                 value.contains("profile_edit") && value.contains("placement_edit"))
@@ -468,9 +482,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<164 && revision.boundary_geometry_edit)
+        if (required<165 && revision.boundary_geometry_edit)
             required=std::max(required,typed_edit_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
-        if (required<164 && revision.boundary_constraint_changes)
+        if (required<165 && revision.boundary_constraint_changes)
             required=std::max(required,typed_edit_reader_floor(command_to_json(Command{*revision.boundary_constraint_changes})));
         if (required<122 && revision.boundary_geometry_edit)
             required=std::max(required,quantity_reader_floor(encode_boundary_geometry_edit(*revision.boundary_geometry_edit)));
@@ -921,6 +935,9 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (operation != entity.properties.end() && operation->is_object() &&
                     operation->value("version", nlohmann::json()) == 3)
                     required = std::max(required, 154U);
+                if (operation != entity.properties.end() && operation->is_object() &&
+                    operation->value("version", nlohmann::json()) == 4)
+                    required = std::max(required, 165U);
             }
             if (has_phase_qualified_roof_join_ownership(entity)) required = std::max(required, 114U);
             if (entity.type == "roof_join" && entity.properties.is_object() &&
@@ -2790,6 +2807,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 161 &&
          sqlite3_column_int(user_version.get(), 0) != 162 &&
          sqlite3_column_int(user_version.get(), 0) != 164 &&
+         sqlite3_column_int(user_version.get(), 0) != 165 &&
          sqlite3_column_int(user_version.get(), 0) != 163 &&
          sqlite3_column_int(user_version.get(), 0) != 143 &&
          sqlite3_column_int(user_version.get(), 0) != 142 &&
@@ -3510,6 +3528,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=165)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 165 for barn, pocket and bifold door mechanisms");
         if (required_format>=164)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 164 for level-edited stair-hosted components");
         if (required_format>=163)

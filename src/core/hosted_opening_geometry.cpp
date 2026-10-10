@@ -462,4 +462,277 @@ WallPlanGeometry joined_wall_plan_geometry(const Segment& host,
     }
     return result;
 }
+
+namespace {
+// Work in directed station/normal coordinates so cavity faces remain analytic
+// even for rotated walls. Keep original world vertices verbatim: in particular,
+// the accepted miter face endpoints must not acquire a second projection error.
+struct PocketVertex { Vec2 local; Vec2 world; };
+using PocketPolygon = std::vector<PocketVertex>;
+struct PocketRectangle { double first, last, inner, outer; };
+constexpr std::size_t maximum_pocket_plan_polygons = 1024;
+constexpr std::size_t maximum_pocket_plan_quads = 4096;
+
+bool same_pocket_point(Vec2 first, Vec2 second) {
+    return std::hypot(first.x-second.x,first.y-second.y)<=tolerance;
+}
+
+PocketVertex pocket_vertex(const Segment& host, Vec2 along, Vec2 local) {
+    const Vec2 normal=left_normal(along);
+    const Vec2 delta=add(multiply(along,local.x),multiply(normal,local.y));
+    const Vec2 world=add(host.start,delta);
+    require(finite(local) && finite(delta) && finite(world) &&
+        preserves_local_offset(world.x,host.start.x,delta.x) &&
+        preserves_local_offset(world.y,host.start.y,delta.y),
+        "Pocket wall plan coordinates are not representable");
+    return {local,world};
+}
+
+PocketPolygon clip_pocket_polygon(const PocketPolygon& polygon,
+    const Segment& host, Vec2 along, bool station_axis, double limit, bool above) {
+    PocketPolygon result;
+    if (polygon.empty()) return result;
+    const auto coordinate=[&](const PocketVertex& vertex) {
+        return station_axis ? vertex.local.x : vertex.local.y;
+    };
+    const auto inside=[&](const PocketVertex& vertex) {
+        return above ? coordinate(vertex)>=limit : coordinate(vertex)<=limit;
+    };
+    const auto append=[&](const PocketVertex& vertex) {
+        if (result.empty() || !same_pocket_point(result.back().local,vertex.local))
+            result.push_back(vertex);
+    };
+    auto previous=polygon.back();
+    bool previous_inside=inside(previous);
+    for (const auto& current : polygon) {
+        const bool current_inside=inside(current);
+        if (previous_inside!=current_inside) {
+            const double fraction=(limit-coordinate(previous))/
+                (coordinate(current)-coordinate(previous));
+            require(std::isfinite(fraction) && fraction>=0 && fraction<=1,
+                "Pocket wall plan intersection is not representable");
+            Vec2 local{std::lerp(previous.local.x,current.local.x,fraction),
+                       std::lerp(previous.local.y,current.local.y,fraction)};
+            (station_axis ? local.x : local.y)=limit;
+            append(pocket_vertex(host,along,local));
+        }
+        if (current_inside) append(current);
+        previous=current;
+        previous_inside=current_inside;
+    }
+    if (result.size()>1 && same_pocket_point(result.front().local,result.back().local))
+        result.pop_back();
+    if (result.size()<3) result.clear();
+    return result;
+}
+
+bool pocket_polygon_has_area(const PocketPolygon& polygon) {
+    if (polygon.size()<3) return false;
+    double area=0;
+    const Vec2 origin=polygon.front().local;
+    for (std::size_t i=1; i+1<polygon.size(); ++i) {
+        const double term=cross(subtract(polygon[i].local,origin),
+                                subtract(polygon[i+1].local,origin));
+        require(std::isfinite(term) && std::isfinite(area+term),
+            "Pocket wall plan area exceeds numeric range");
+        area+=term;
+    }
+    return std::abs(area)>0;
+}
+
+// Four disjoint half-plane pieces are the exact difference of a convex piece
+// and an axis-aligned rectangle. Successive cuts also admit overlapping plan
+// projections of recesses which are disjoint in the authoritative solid.
+void subtract_pocket_rectangle(const PocketPolygon& polygon,
+    const PocketRectangle& rectangle, const Segment& host, Vec2 along,
+    std::vector<PocketPolygon>& result) {
+    const auto clip=[&](const PocketPolygon& source,bool x,double limit,bool above) {
+        return clip_pocket_polygon(source,host,along,x,limit,above);
+    };
+    const auto middle=clip(clip(polygon,true,rectangle.first,true),true,rectangle.last,false);
+    const auto overlap=clip(clip(middle,false,rectangle.inner,true),false,rectangle.outer,false);
+    if (!pocket_polygon_has_area(overlap)) {
+        result.push_back(polygon);
+        return;
+    }
+    const auto append=[&](PocketPolygon piece) {
+        if (pocket_polygon_has_area(piece)) result.push_back(std::move(piece));
+    };
+    append(clip(polygon,true,rectangle.first,false));
+    append(clip(polygon,true,rectangle.last,true));
+    append(clip(middle,false,rectangle.inner,false));
+    append(clip(middle,false,rectangle.outer,true));
+}
+
+bool pocket_edge_on_source(const Segment& edge, const Segment& source) {
+    const Vec2 delta=subtract(source.end,source.start);
+    const double length=std::hypot(delta.x,delta.y);
+    if (!std::isfinite(length) || length<=tolerance) return false;
+    const Vec2 direction=multiply(delta,1/length);
+    for (const Vec2 point : {edge.start,edge.end}) {
+        const Vec2 relative=subtract(point,source.start);
+        const double station=dot(relative,direction);
+        const double distance=cross(relative,direction);
+        if (!finite(relative) || !std::isfinite(station) || !std::isfinite(distance) ||
+            std::abs(distance)>tolerance ||
+            station < -tolerance || station > length+tolerance) return false;
+    }
+    return true;
+}
+
+void append_pocket_boundary_strokes(const Segment& edge, const Boundary& sources,
+    Boundary& strokes) {
+    const double length=segment_length(edge);
+    const Vec2 direction=multiply(subtract(edge.end,edge.start),1/length);
+    std::vector<WallInterval> intervals;
+    for (const auto& source : sources) {
+        if (pocket_edge_on_source(edge,source)) {
+            strokes.push_back(edge);
+            return;
+        }
+        const Vec2 first=subtract(source.start,edge.start);
+        const Vec2 last=subtract(source.end,edge.start);
+        const double first_distance=cross(first,direction), last_distance=cross(last,direction);
+        if (!finite(first) || !finite(last) || !std::isfinite(first_distance) ||
+            !std::isfinite(last_distance) || std::abs(first_distance)>tolerance ||
+            std::abs(last_distance)>tolerance) continue;
+        const double a=dot(first,direction), b=dot(last,direction);
+        if (!std::isfinite(a) || !std::isfinite(b)) continue;
+        const double from=std::max(0.0,std::min(a,b)), to=std::min(length,std::max(a,b));
+        if (to-from>tolerance) intervals.emplace_back(from,to);
+    }
+    std::sort(intervals.begin(),intervals.end());
+    std::vector<WallInterval> merged;
+    for (const auto& interval : intervals) {
+        if (merged.empty() || interval.first>merged.back().second+tolerance)
+            merged.push_back(interval);
+        else merged.back().second=std::max(merged.back().second,interval.second);
+    }
+    for (const auto& [from,to] : merged) {
+        const Vec2 start=from<=tolerance ? edge.start : add(edge.start,multiply(direction,from));
+        const Vec2 end=to>=length-tolerance ? edge.end : add(edge.start,multiply(direction,to));
+        const Segment fragment{start,end,0};
+        (void)segment_bounds(fragment);
+        strokes.push_back(fragment);
+    }
+}
+} // namespace
+
+WallPlanGeometry joined_wall_plan_geometry(const Wall& wall,
+    const std::vector<WallPlanJunction>& junctions) {
+    auto result=joined_wall_plan_geometry(wall.baseline,wall.openings,wall.thickness,junctions);
+    if (wall.pocket_recesses.empty()) return result;
+    validate_wall_semantics(wall);
+    const auto geometry=host_geometry(wall.baseline);
+    const Vec2 normal=left_normal(geometry.along);
+    const auto local_vertex=[&](Vec2 world) {
+        const Vec2 delta=subtract(world,wall.baseline.start);
+        const Vec2 local{dot(delta,geometry.along),dot(delta,normal)};
+        require(finite(delta) && finite(local),"Pocket wall plan coordinates exceed numeric range");
+        return PocketVertex{local,world};
+    };
+    std::vector<PocketRectangle> rectangles;
+    Boundary sources=result.strokes;
+    for (const auto& recess : wall.pocket_recesses) {
+        // Admission permits a tolerance-close mouth. Snap only that boundary
+        // to its actual opening cap so no residual material closes the cavity.
+        const auto opening=std::find_if(wall.openings.begin(),wall.openings.end(),
+            [&](const HostedOpening& candidate) { return candidate.id==recess.opening_id; });
+        double first=recess.offset, last=recess.offset+recess.width;
+        if (std::abs(last-opening->offset)<=tolerance) last=opening->offset;
+        else first=opening->offset+opening->width;
+        const PocketRectangle rectangle{first,last,
+            recess.normal_offset-recess.depth*.5,recess.normal_offset+recess.depth*.5};
+        rectangles.push_back(rectangle);
+        const std::array<Vec2,4> corners{{{first,rectangle.inner},{last,rectangle.inner},
+                                        {last,rectangle.outer},{first,rectangle.outer}}};
+        for (std::size_t i=0; i<corners.size(); ++i)
+            sources.push_back({pocket_vertex(wall.baseline,geometry.along,corners[i]).world,
+                pocket_vertex(wall.baseline,geometry.along,corners[(i+1)%corners.size()]).world,0});
+    }
+    Boundary footprint, strokes;
+    const auto append_quad=[&](const std::array<PocketVertex,4>& vertices) {
+        require(footprint.size()/4<maximum_pocket_plan_quads,
+            "Pocket wall plan subdivision exceeds the resource limit");
+        for (std::size_t i=0; i<vertices.size(); ++i) {
+            const Segment edge{vertices[i].world,vertices[(i+1)%vertices.size()].world,0};
+            require(segment_length(edge)>tolerance,
+                "Pocket wall plan subdivision is not representable");
+            (void)segment_bounds(edge);
+            footprint.push_back(edge);
+            append_pocket_boundary_strokes(edge,sources,strokes);
+        }
+    };
+    for (std::size_t interval=0; interval<result.footprint.size(); interval+=4) {
+        PocketPolygon original;
+        for (std::size_t i=0; i<4; ++i)
+            original.push_back(local_vertex(result.footprint[interval+i].start));
+        std::vector<PocketPolygon> pieces{std::move(original)};
+        for (const auto& rectangle : rectangles) {
+            std::vector<PocketPolygon> next;
+            for (const auto& piece : pieces) {
+                subtract_pocket_rectangle(piece,rectangle,wall.baseline,geometry.along,next);
+                require(next.size()<=maximum_pocket_plan_polygons,
+                    "Pocket wall plan subdivision exceeds the resource limit");
+            }
+            pieces=std::move(next);
+        }
+        // The material beyond a cavity's closed end initially has one full
+        // thickness tile edge. Split it at the actual cavity depth bounds:
+        // only the middle cap is exposed, and it must be a complete quad edge
+        // for junction clipping's material ownership checks.
+        for (const auto& rectangle : rectangles) {
+            for (const double level : {rectangle.inner,rectangle.outer}) {
+                std::vector<PocketPolygon> next;
+                for (const auto& piece : pieces) {
+                    bool split=false;
+                    for (std::size_t i=0; i<piece.size(); ++i) {
+                        const Vec2 a=piece[i].local, b=piece[(i+1)%piece.size()].local;
+                        const double low=std::min(a.y,b.y), high=std::max(a.y,b.y);
+                        if (std::abs(a.x-b.x)<=tolerance &&
+                            (std::abs(a.x-rectangle.first)<=tolerance ||
+                             std::abs(a.x-rectangle.last)<=tolerance) &&
+                            level>low+tolerance && level<high-tolerance &&
+                            std::min(high,rectangle.outer)-std::max(low,rectangle.inner)>tolerance)
+                            split=true;
+                    }
+                    if (split) {
+                        auto lower=clip_pocket_polygon(piece,wall.baseline,geometry.along,false,level,false);
+                        auto upper=clip_pocket_polygon(piece,wall.baseline,geometry.along,false,level,true);
+                        if (pocket_polygon_has_area(lower)) next.push_back(std::move(lower));
+                        if (pocket_polygon_has_area(upper)) next.push_back(std::move(upper));
+                    } else next.push_back(piece);
+                    require(next.size()<=maximum_pocket_plan_polygons,
+                        "Pocket wall plan subdivision exceeds the resource limit");
+                }
+                pieces=std::move(next);
+            }
+        }
+        for (const auto& piece : pieces) {
+            if (piece.size()==4) {
+                append_quad({piece[0],piece[1],piece[2],piece[3]});
+                continue;
+            }
+            // A clipped miter can yield a triangle or a five-sided convex
+            // piece. Edge midpoints and an interior centroid produce convex
+            // quads accepted by the existing material-junction stroke pass.
+            Vec2 center=piece.front().local;
+            Vec2 shift{};
+            for (const auto& vertex : piece)
+                shift=add(shift,multiply(subtract(vertex.local,center),1.0/piece.size()));
+            const auto centroid=pocket_vertex(wall.baseline,geometry.along,add(center,shift));
+            std::vector<PocketVertex> midpoints;
+            for (std::size_t i=0; i<piece.size(); ++i)
+                midpoints.push_back(pocket_vertex(wall.baseline,geometry.along,
+                    {std::midpoint(piece[i].local.x,piece[(i+1)%piece.size()].local.x),
+                     std::midpoint(piece[i].local.y,piece[(i+1)%piece.size()].local.y)}));
+            for (std::size_t i=0; i<piece.size(); ++i)
+                append_quad({piece[i],midpoints[i],centroid,
+                             midpoints[(i+piece.size()-1)%piece.size()]});
+        }
+    }
+    result.footprint=std::move(footprint);
+    result.strokes=std::move(strokes);
+    return result;
+}
 } // namespace sketch

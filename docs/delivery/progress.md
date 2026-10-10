@@ -14,6 +14,47 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 hosted sliding/folding doors - source integration
+
+Distinct barn, pocket, two-panel bifold and four-panel bifold operations now
+have strict v4 storage while historical v1-v3 contracts remain unchanged.
+Library placement binds the supplied four-panel artwork to four actual leaves.
+Operation editing exposes destination/pinned jamb, folding/wall side and opening
+percentage. New implicit-door conversion v3 adds the required default assembly
+atomically; prior v2 remains overhead-only. Reader 165/extraction 163 follows
+retained entities and nested/undone proofs, using the existing payload schema.
+
+New physical assemblies include finite leaves, frames, glazing, pocket jamb
+slots and folding hinge rebates. Actual receiving cavities are derived from
+opening operation/assembly, remain present when closed, retain both wall skins
+and refuse conflicts or insufficient travel/top/depth. Their descriptors are
+transient rather than independently persisted. Shared cut primitives feed wall
+solids, affected layer quantities and pocket IFC voids. Historical gross IFC
+wall carriers remain intact; their void relationship removes the complete
+mouth/cavity tool. Pocket voids with unqualified fill proofs retain their
+original imported carrier rather than activating a mouth-only replacement.
+
+Actual-source hydration now reaches architectural sections and wall scene
+admission. New mechanisms use the actual placement host rather than a short
+synthetic preview wall. Canonical horizontal plan contours now subtract receiving
+cavities from visible fill/hatch with bounded convex material tiles and exposed
+strokes. Depth refinement preserves the cavity end cap and existing junction
+ownership; original miter endpoints and non-pocket paths remain unchanged.
+Schedules distinguish both pinned bifold jambs from sliding destination
+jambs. The manual checklist retains its 450 original scenarios and adds four
+separate focused door checks, each Not tested; none is part of the installed
+candidate yet.
+
+Independent source review corrected IFC cavity omission, section hydration,
+schedule semantics, incomplete pocket reconstruction and a missing canonical
+cavity cap. Final bounded source review identified no remaining concrete P1/P2;
+root reviewed the integrated interfaces and changes. Scoped diff checks and
+registry JSON inspection supply source evidence only. No builds, tests, new tests, scripts/probes, native
+jobs, UI launches, packages or installations ran. The installed candidate is
+unchanged. Compilation, OCCT behavior, actual interaction/appearance,
+migration/history and independently consumed output remain unqualified. All
+ten production gates remain open; no overall percentage or ETA is inferred.
+
 ### October 10 stair profile elevation and commercial SVGs — source integration
 
 Current-source review found that editing a stair or independent railing's
@@ -53,8 +94,9 @@ new tests, scripts/probes, native jobs, UI launches, packages or installations
 ran. The installed candidate is unchanged. Compilation, actual visual/placement
 behavior, output, migration/history and production qualification remain open.
 
-The next identified object-family gap is specific barn, pocket and bifold door
-operation semantics: artwork exists, but distinct hosted mechanisms are missing.
+At this checkpoint the next identified object-family gap was specific barn,
+pocket and bifold door operation semantics; the newer source batch above
+addresses those mechanisms and still requires qualification.
 Do not count generic hinge fallback as completed behavior. All ten production
 gates remain open; continue the complete delivery plan without an inferred
 overall percentage or ETA.

@@ -6,21 +6,31 @@
 
 namespace sketch {
 namespace {
+bool is_travel_mechanism(DoorOperationKind kind) noexcept {
+    return is_single_panel_sliding_door(kind) || kind == DoorOperationKind::bifold ||
+        kind == DoorOperationKind::double_bifold;
+}
 void validate(const DoorOperation& value) {
     if(!std::isfinite(value.angle_degrees) || value.angle_degrees <= 0 || value.angle_degrees > 180)
         throw std::invalid_argument("Door swing angle must be greater than zero and at most 180 degrees");
     if (value.kind != DoorOperationKind::hinged && value.kind != DoorOperationKind::double_hinged &&
-        value.kind != DoorOperationKind::sliding && value.kind != DoorOperationKind::overhead_tilt_up)
+        value.kind != DoorOperationKind::sliding && value.kind != DoorOperationKind::overhead_tilt_up &&
+        !is_travel_mechanism(value.kind))
         throw std::invalid_argument("Unsupported door operation kind");
     if (!std::isfinite(value.slide_fraction) || value.slide_fraction < 0 || value.slide_fraction > 1 ||
         (value.kind != DoorOperationKind::sliding && value.slide_fraction != 0))
         throw std::invalid_argument("Door sliding travel must be in [0,1] and zero for hinged doors");
     if (!std::isfinite(value.opening_fraction) || value.opening_fraction < 0 || value.opening_fraction > 1 ||
-        (value.kind != DoorOperationKind::overhead_tilt_up && value.opening_fraction != 0))
+        (value.kind != DoorOperationKind::overhead_tilt_up && !is_travel_mechanism(value.kind) &&
+         value.opening_fraction != 0))
         throw std::invalid_argument("Door overhead opening must be in [0,1] and zero for other mechanisms");
     if (value.kind == DoorOperationKind::overhead_tilt_up &&
         (value.angle_degrees != 90 || value.hinge_at_end))
         throw std::invalid_argument("Overhead doors require a top hinge and canonical 90 degree travel");
+    if (is_travel_mechanism(value.kind) && value.angle_degrees != 90)
+        throw std::invalid_argument("Barn, pocket and bifold doors require canonical 90 degree travel");
+    if (value.kind == DoorOperationKind::double_bifold && value.hinge_at_end)
+        throw std::invalid_argument("Four-panel bifold doors require both jambs and a canonical start hinge");
 }
 Vec2 point(const Segment& line,double fraction) {
     if(line.sweep_radians==0) return {std::lerp(line.start.x,line.end.x,fraction),std::lerp(line.start.y,line.end.y,fraction)};
@@ -32,10 +42,50 @@ Vec2 point(const Segment& line,double fraction) {
         center.y+(line.start.x-center.x)*s+(line.start.y-center.y)*c};
 }
 }
+std::string_view door_operation_kind_name(DoorOperationKind kind) noexcept {
+    switch (kind) {
+    case DoorOperationKind::hinged: return "Hinged";
+    case DoorOperationKind::double_hinged: return "Double hinged";
+    case DoorOperationKind::sliding: return "Sliding";
+    case DoorOperationKind::overhead_tilt_up: return "Overhead tilt-up";
+    case DoorOperationKind::barn_sliding: return "Barn sliding";
+    case DoorOperationKind::pocket_sliding: return "Pocket sliding";
+    case DoorOperationKind::bifold: return "Bifold";
+    case DoorOperationKind::double_bifold: return "Four-panel bifold";
+    }
+    return "Unknown";
+}
+bool is_single_panel_sliding_door(DoorOperationKind kind) noexcept {
+    return kind == DoorOperationKind::barn_sliding || kind == DoorOperationKind::pocket_sliding;
+}
+bool uses_door_opening_fraction(DoorOperationKind kind) noexcept {
+    return kind == DoorOperationKind::overhead_tilt_up || is_travel_mechanism(kind);
+}
 DoorOperation decode_door_operation(const nlohmann::json& value) {
     if(!value.is_object() || !value.contains("version") || !value.at("version").is_number_integer() ||
-        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3))
+        (value.at("version")!=1 && value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4))
         throw std::invalid_argument("Unsupported door operation");
+    if (value.at("version") == 4) {
+        if (value.size() != 5u || !value.contains("kind") || !value.at("kind").is_string() ||
+            !value.contains("hinge") || !value.at("hinge").is_string() ||
+            !value.contains("side") || !value.at("side").is_string() ||
+            !value.contains("opening_fraction") || !value.at("opening_fraction").is_number())
+            throw std::invalid_argument("Travel door operation has missing, unknown, or invalid fields");
+        const auto kind = value.at("kind").get<std::string>();
+        const auto hinge = value.at("hinge").get<std::string>();
+        const auto side = value.at("side").get<std::string>();
+        if ((hinge != "start" && hinge != "end") || (side != "left" && side != "right"))
+            throw std::invalid_argument("Invalid travel door destination, hinge or side");
+        DoorOperation result{hinge == "end", side == "left", 90, DoorOperationKind::hinged,
+                             0, value.at("opening_fraction").get<double>()};
+        if (kind == "barn_sliding") result.kind = DoorOperationKind::barn_sliding;
+        else if (kind == "pocket_sliding") result.kind = DoorOperationKind::pocket_sliding;
+        else if (kind == "bifold") result.kind = DoorOperationKind::bifold;
+        else if (kind == "double_bifold") result.kind = DoorOperationKind::double_bifold;
+        else throw std::invalid_argument("Unsupported travel door operation kind");
+        validate(result);
+        return result;
+    }
     if (value.at("version") == 3) {
         if (value.size() != 4u || !value.contains("kind") || !value.at("kind").is_string() ||
             value.at("kind") != "overhead_tilt_up" || !value.contains("side") ||
@@ -73,6 +123,13 @@ DoorOperation decode_door_operation(const nlohmann::json& value) {
 }
 nlohmann::json encode_door_operation(const DoorOperation& value) {
     validate(value);
+    if (is_travel_mechanism(value.kind))
+        return {{"version", 4}, {"kind", value.kind == DoorOperationKind::barn_sliding ? "barn_sliding" :
+                value.kind == DoorOperationKind::pocket_sliding ? "pocket_sliding" :
+                value.kind == DoorOperationKind::double_bifold ? "double_bifold" : "bifold"},
+                {"hinge", value.hinge_at_end ? "end" : "start"},
+                {"side", value.swing_left ? "left" : "right"},
+                {"opening_fraction", value.opening_fraction}};
     if (value.kind == DoorOperationKind::overhead_tilt_up)
         return {{"version", 3}, {"kind", "overhead_tilt_up"},
                 {"side", value.swing_left ? "left" : "right"},
@@ -97,8 +154,53 @@ Boundary door_plan_symbol(const Segment& host,double offset,double width,const D
         throw std::invalid_argument("Door dimensions must fit the host baseline");
     if (operation.kind == DoorOperationKind::overhead_tilt_up && host.sweep_radians != 0)
         throw std::invalid_argument("Overhead tilt-up doors require a straight host");
+    if (is_travel_mechanism(operation.kind) && host.sweep_radians != 0)
+        throw std::invalid_argument("Barn, pocket and bifold doors require a straight host");
     const auto start=point(host,offset/length),end=point(host,std::min(1.0,(offset+width)/length));
     const Vec2 midpoint{(start.x+end.x)*0.5,(start.y+end.y)*0.5};
+    if (is_travel_mechanism(operation.kind)) {
+        const double dx = end.x - start.x, dy = end.y - start.y;
+        const double span = std::hypot(dx, dy);
+        if (!std::isfinite(span) || span <= default_geometry_tolerance_metres)
+            throw std::invalid_argument("Travel door jambs must have a finite nonzero separation");
+        const double side = operation.swing_left ? 1.0 : -1.0;
+        const Vec2 normal{-dy / span * side, dx / span * side};
+        const auto segment = [](Vec2 first, Vec2 last) {
+            if (!std::isfinite(first.x) || !std::isfinite(first.y) ||
+                !std::isfinite(last.x) || !std::isfinite(last.y) ||
+                !std::isfinite(std::hypot(last.x - first.x, last.y - first.y)) ||
+                std::hypot(last.x - first.x, last.y - first.y) <= default_geometry_tolerance_metres)
+                throw std::invalid_argument("Travel door plan exceeds the supported numeric range");
+            return Segment{first, last, 0};
+        };
+        if (is_single_panel_sliding_door(operation.kind)) {
+            const double travel = (operation.hinge_at_end ? 1.0 : -1.0) * width * operation.opening_fraction;
+            const double track = operation.kind == DoorOperationKind::barn_sliding ? width * 0.02 : 0.0;
+            const Vec2 delta{dx / span * travel + normal.x * track,
+                             dy / span * travel + normal.y * track};
+            return {segment({start.x + delta.x, start.y + delta.y},
+                            {end.x + delta.x, end.y + delta.y})};
+        }
+        const double angle = operation.opening_fraction * std::numbers::pi * 0.5;
+        // Exact endpoint states keep the slider on the jamb at full fold.
+        const double cosine = operation.opening_fraction == 1.0 ? 0.0 : std::cos(angle);
+        const double sine = operation.opening_fraction == 0.0 ? 0.0 : std::sin(angle);
+        Boundary result;
+        const bool doubled = operation.kind == DoorOperationKind::double_bifold;
+        const double pair_fraction = doubled ? 0.5 : 1.0;
+        for (int pair = 0; pair < (doubled ? 2 : 1); ++pair) {
+            const bool at_end = doubled ? pair == 1 : operation.hinge_at_end;
+            const Vec2 hinge = at_end ? end : start;
+            const double direction = at_end ? -1.0 : 1.0;
+            const Vec2 joint{hinge.x + direction * dx * pair_fraction * 0.5 * cosine + normal.x * span * pair_fraction * 0.5 * sine,
+                             hinge.y + direction * dy * pair_fraction * 0.5 * cosine + normal.y * span * pair_fraction * 0.5 * sine};
+            const Vec2 slider{hinge.x + direction * dx * pair_fraction * cosine,
+                              hinge.y + direction * dy * pair_fraction * cosine};
+            result.push_back(segment(hinge, joint));
+            result.push_back(segment(joint, slider));
+        }
+        return result;
+    }
     if (operation.kind == DoorOperationKind::overhead_tilt_up) {
         if (!opening_height_metres || !std::isfinite(*opening_height_metres) || *opening_height_metres <= 0.0)
             throw std::invalid_argument("Overhead door plan requires a finite positive opening height; "

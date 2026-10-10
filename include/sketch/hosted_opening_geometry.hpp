@@ -67,4 +67,11 @@ struct WallPlanGeometry {
     const std::vector<HostedOpening>& openings, double wall_thickness_metres,
     const std::vector<WallPlanJunction>& junctions);
 
+// The canonical wall overload also removes admitted straight pocket cavities.
+// Closed, nonoverlapping convex quadrilaterals cover the remaining material;
+// visible strokes exclude the subdivision seams and retain joined-end omission.
+// Walls without pockets use the preceding overload without any changes.
+[[nodiscard]] WallPlanGeometry joined_wall_plan_geometry(const Wall& wall,
+    const std::vector<WallPlanJunction>& junctions);
+
 } // namespace sketch

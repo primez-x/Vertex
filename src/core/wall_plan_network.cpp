@@ -112,8 +112,7 @@ std::map<std::string, WallPlanGeometry, std::less<>> wall_plan_network_geometry(
         for (const auto& [id, wall] : walls) {
             std::vector<WallPlanJunction> junctions;
             for (const auto& connection : connections[id]) junctions.push_back(connection.junction);
-            result.emplace(id, joined_wall_plan_geometry(wall.baseline, wall.openings,
-                                                         wall.thickness, junctions));
+            result.emplace(id, joined_wall_plan_geometry(wall, junctions));
         }
     };
     regenerate();

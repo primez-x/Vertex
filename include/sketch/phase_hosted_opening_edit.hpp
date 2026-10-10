@@ -21,13 +21,14 @@ struct HostedOpeningProfileEditIntent {
     std::optional<OpeningAssembly> assembly;
     std::optional<DoorOperation> door_operation;
     bool clear_door_operation = false;
-    // Atomic conversion of a retained implicit door to an overhead operation:
+    // Atomic conversion of a retained implicit door to a fractional operation:
     // materialize only its unchanged default assembly, with no other edit.
     bool materialize_default_door_assembly = false;
 };
 
 // Strict bounded version-1 schema remains unchanged. Only explicit atomic
-// materialization emits closed version 2 with materialize_default_door_assembly
+// materialization emits closed version 2 for overhead doors or version 3 for
+// barn/pocket/bifold doors with materialize_default_door_assembly
 // true. Every optional field is null or its canonical record; zero is admitted
 // for offset and sill.
 [[nodiscard]] nlohmann::json encode_hosted_opening_profile_edit_intent(

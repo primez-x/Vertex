@@ -54,6 +54,10 @@ struct RoomVolume {
 // Shapes are derived caches. Persist semantic parameters, never replace the
 // authoritative wall/boundary/host relationships with these solids.
 [[nodiscard]] TopoDS_Shape make_wall(const Wall& wall);
+// Exact subtraction tool for one actual opening, including its hydrated
+// partial-depth receiving pocket. Other openings/recesses are excluded.
+[[nodiscard]] TopoDS_Shape make_hosted_opening_void(
+    const Wall& wall, const HostedOpening& opening);
 // Build the derived solid for a first-class fused wall join.  Every source
 // wall remains authoritative; this result is a coordinated-view cache and
 // does not replace the individual wall entities or their quantities.
@@ -78,7 +82,8 @@ struct RoomVolume {
 struct OpeningAssemblyGeometry {
     TopoDS_Shape shape;
     std::optional<Segment> door_swing;
-    // Physical clear-leaf arcs for every hinged leaf. door_swing remains the
+    // Physical clear-leaf arcs for fixed hinges. A bifold's translating joint
+    // has no fixed swing arc. door_swing remains the
     // legacy single-hinged convenience value; sliding operations have no arcs.
     std::vector<Segment> door_swings;
 };
