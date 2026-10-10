@@ -14,6 +14,37 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 9 complete transient save-history source binding
+
+Source review found two supported boundary edit histories can produce the same
+geometry, revision and action while retaining different typed geometry-edit
+proofs. The frozen version-one authoring digest omits that proof. A replacement
+through the supported mutable Document API during an autosave could therefore
+pass the detached equality check and acknowledge the older recovery file as
+covering the replacement history.
+
+Save-queue source capture/publication and desktop workspace comparisons now use
+the existing version-two authoring digest, including every retained typed edit
+proof. Detached autosave acknowledgement and explicit Save use the matching
+transient digest. Shared immutable-history fast paths, owner/generation fences,
+full-snapshot explicit-save checks, and saved-marker behavior remain in place.
+Persisted version-one hash domains, recovery bindings and project formats are
+unchanged. Two existing prepared-save fixture callers were aligned with the
+changed transient contract; no new tests were added or executed.
+
+The bounded save audit found no separate destination rollback or Save As
+saved-state defect. Root inspected named-revision restore and copy migration:
+existing destinations are refused by ProjectStore, and the current document
+and original source are preserved. This does not qualify interrupted storage
+or live external modification behavior.
+
+Root integration review and independent source review approved the correction.
+Scoped `git diff --check` passed.
+No builds, tests, probes, scripts, native jobs, launches, packages or
+installations ran. Compilation, crash recovery and observed save behavior
+remain unverified; the installed candidate is unchanged. Production acceptance
+remains open.
+
 ### October 9 linked annotation and hosted-dimension source corrections
 
 Viewport caption ratios now use the actual rendering denominator without

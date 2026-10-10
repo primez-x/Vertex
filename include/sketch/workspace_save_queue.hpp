@@ -18,6 +18,9 @@ namespace sketch {
 class WorkspaceSaveQueue final {
 public:
     using SaveOperation = std::function<SaveReceipt()>;
+    // Transient version-two authoring equality includes every retained typed
+    // history proof while excluding saved markers and derived editability.
+    // Persisted version-one recovery receipts keep their original contract.
     class SourceProof final {
     public:
         [[nodiscard]] static SourceProof capture(const DocumentSnapshot&);

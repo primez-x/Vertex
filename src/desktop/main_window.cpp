@@ -43804,7 +43804,7 @@ private:
         for (const auto& entry : m_authoring_digests)
             if (entry && source.shares_authoring_source_with(entry->source)) return entry->digest;
         auto cached = std::make_unique<const CachedAuthoringDigest>(
-            CachedAuthoringDigest{source, document_authoring_source_digest_v1(source)});
+            CachedAuthoringDigest{source, document_authoring_source_digest_v2(source)});
         m_authoring_digests[1] = std::move(m_authoring_digests[0]);
         m_authoring_digests[0] = std::move(cached);
         return m_authoring_digests[0]->digest;
@@ -43832,7 +43832,8 @@ private:
     bool matchesWorkspaceAuthoringSource(const DocumentSnapshot& source) const {
         const auto workspace_source = m_project_workspace->snapshot();
         // Shared immutable content is a sufficient equality proof. Detached
-        // captures still use the complete frozen digest, never ID/revision alone.
+        // captures include every retained typed proof, never ID/revision alone.
+        // This transient comparison does not change persisted v1 bindings.
         return source.shares_authoring_source_with(workspace_source) ||
             authoringSourceDigest(source) == authoringSourceDigest(workspace_source);
     }
@@ -47431,7 +47432,7 @@ private:
                             auto hook = pending.input->test_hook;
                             const auto sequence = m_save_queue.enqueue_task([proof, hook] {
                                 if (hook) (*hook)("proof");
-                                proof->digest = document_authoring_source_digest_v1(proof->source);
+                                proof->digest = document_authoring_source_digest_v2(proof->source);
                             });
                             pending.proof = std::move(proof);
                             pending.sequence = sequence;
@@ -47640,7 +47641,7 @@ private:
                     capture_diagnostic_stage("autosave.source_comparison.begin");
                     auto proof = WorkspaceSaveQueue::SourceProof::capture(input->source);
                     const bool same_source = input->source.shares_authoring_source_with(input->workspace.document()) ||
-                        proof.digest() == document_authoring_source_digest_v1(input->workspace.document());
+                        proof.digest() == document_authoring_source_digest_v2(input->workspace.document());
                     capture_diagnostic_stage("autosave.source_comparison.end");
                     std::optional<PreparedProjectWorkspace> candidate;
                     if (!same_source) {
@@ -47788,7 +47789,7 @@ private:
             const auto& receipt = *completion.receipt;
             const auto acknowledgement = WorkspaceSaveCoordinator::accept(*completion.ticket, receipt,
                 m_project_workspace->capture(), binding,
-                document_authoring_source_digest_v1(m_document->snapshot()));
+                document_authoring_source_digest_v2(m_document->snapshot()));
             if (!acknowledgement.acknowledged() || source_document != m_document ||
                 document_snapshot_digest(snapshot) != document_snapshot_digest(m_document->snapshot())) {
                 setError(QStringLiteral("The file was saved, but the current workspace changed and was not marked saved."));

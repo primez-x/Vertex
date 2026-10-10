@@ -16,6 +16,15 @@ to `WorkspaceSaveCoordinator` to decide whether the current workspace may be
 acknowledged. A stale completion remains a valid file fact and is never allowed
 to acknowledge newer state.
 
+Prepared publications capture a `SourceProof` using the version-two authoring
+digest. Publication and detached owner acknowledgement compare that same
+transient digest, including every retained typed edit proof. Two operations
+that produce identical geometry still have distinct history authority; an
+autosave of one cannot acknowledge the other. Saved markers and derived
+editability remain outside this authoring comparison. Existing persisted
+version-one recovery bindings keep their original serialization and hash
+domain; this change adds no project-format migration.
+
 The queue captures operation exceptions and continues with later jobs. Normal
 destruction drains queued work; callers that are abandoning a project may call
 `shutdown(false)` to discard jobs that have not started. Filesystem ownership,

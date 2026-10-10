@@ -69,7 +69,7 @@ struct WorkspaceSaveQueue::State final {
 WorkspaceSaveQueue::SourceProof::SourceProof(DocumentSnapshot source, std::string digest) noexcept
     : source_(std::move(source)), digest_(std::move(digest)) {}
 WorkspaceSaveQueue::SourceProof WorkspaceSaveQueue::SourceProof::capture(const DocumentSnapshot& source) {
-    return SourceProof(source, document_authoring_source_digest_v1(source));
+    return SourceProof(source, document_authoring_source_digest_v2(source));
 }
 
 WorkspaceSaveQueue::PreparedSave::PreparedSave(SavePublicationTicket ticket, SaveReceipt receipt,
@@ -85,7 +85,7 @@ WorkspaceSaveQueue::PreparedSave WorkspaceSaveQueue::PreparedSave::publish(
     if (!operation) throw std::invalid_argument("save queue: empty prepared storage operation");
     auto descriptor = WorkspaceSaveCoordinator::describe(snapshot);
     if (!proof.source().shares_authoring_source_with(snapshot.document()) &&
-        proof.digest() != document_authoring_source_digest_v1(snapshot.document()))
+        proof.digest() != document_authoring_source_digest_v2(snapshot.document()))
         throw std::invalid_argument("save queue: source proof does not match publication");
     if (workspace && WorkspaceSaveCoordinator::describe(workspace->capture()) != descriptor)
         throw std::invalid_argument("save queue: prepared workspace does not match publication");

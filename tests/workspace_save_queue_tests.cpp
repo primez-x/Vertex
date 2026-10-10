@@ -163,7 +163,7 @@ void deferred_publication_and_late_proof_share_fifo() {
     require(publication.publication_valid() && !publication.adopt_workspace(),
         "valid deferred file fact refused");
     const auto descriptor = publication.descriptor();
-    const auto acknowledgement = publication.acknowledge(descriptor, binding(), document_authoring_source_digest_v1(source));
+    const auto acknowledgement = publication.acknowledge(descriptor, binding(), document_authoring_source_digest_v2(source));
     require(acknowledgement.acknowledged(), "sealed prepared publication refused");
     auto adopted = publication.adopt_workspace();
     require(adopted && WorkspaceSaveCoordinator::describe(*adopted) == descriptor &&
@@ -232,7 +232,7 @@ void malformed_prepared_receipt_cannot_install_candidate() {
     require(!publication.publication_valid() && !publication.adopt_workspace(),
         "malformed prepared receipt granted publication/adoption authority");
     require(publication.acknowledge(publication.descriptor(), binding(),
-        document_authoring_source_digest_v1(source)).status == SaveAcknowledgementStatus::invalid_receipt &&
+        document_authoring_source_digest_v2(source)).status == SaveAcknowledgementStatus::invalid_receipt &&
         !publication.adopt_workspace(), "invalid actual receipt installed its prepared candidate");
 }
 }
