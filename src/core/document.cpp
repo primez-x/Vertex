@@ -3033,7 +3033,7 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
     const bool mixed_opening_deletion=proof.at("kind")=="mixed_wall_opening_deletion";
     if ((mixed_opening_deletion && version!=40 && version!=50) || (mixed_deletion && version!=37 && version!=39 && version!=49) ||
         (grouped_deletion && version!=31 && version!=35 && version!=36 && version!=38 && version!=48) || (!grouped_deletion && !mixed_deletion && !mixed_opening_deletion &&
-        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && !ordinary_room_wall_proof_version(version)))
+        version!=1 && version!=10 && version!=17 && version!=19 && version!=21 && version!=22 && version!=23 && version!=34 && version!=43 && version!=51 && !ordinary_room_wall_proof_version(version)))
         throw std::invalid_argument("Room review cannot wrap another geometry intent");
     const auto decoded=[&]()->Command {
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
@@ -3052,6 +3052,14 @@ static Command room_review_geometry_command(const ApplyBoundaryConstraintChanges
         (ordinary && (ordinary->expected_revision!=command.expected_revision || ordinary->message!=command.message)))
         throw std::invalid_argument("Wall room review must retain the original geometry command identity");
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    if (is_physical_wall_room_mixed_clipboard_review_command(decoded)) {
+        for (const auto& encoded:room_review_intents(command))
+            if (!decode_physical_wall_room_review_intent(encoded).context_plane_selection)
+                throw std::invalid_argument("Mixed clipboard placement requires explicit context and plane room review");
+        if (command_to_json(decoded)!=proof)
+            throw std::invalid_argument("Room review must retain the canonical whole clipboard geometry proof");
+        return decoded;
+    }
     if (is_physical_wall_room_selection_geometry_review_command(decoded)) {
         if (command_to_json(decoded).dump()!=proof.dump())
             throw std::invalid_argument("Room review mixed selection must retain its complete canonical wall geometry proof");
@@ -3175,6 +3183,39 @@ static std::vector<PhaseConstraintAuthoringIntent> phase_constraint_authoring_co
     return result;
 }
 #endif
+
+static std::vector<nlohmann::json> mixed_clipboard_placement_proofs(const ApplyBoundaryConstraintChanges& command) {
+    if (!has_mixed_clipboard_placement(command) && !has_room_review_geometry_completion(command)) return {};
+    // Only the closed command and its established geometry wrappers supply
+    // authority. Decorative metadata never participates in this traversal.
+    const auto encoded=command_to_json(Command{command});
+    std::vector<nlohmann::json> result;
+    const auto visit=[&](const auto& self,const nlohmann::json& proof,unsigned depth)->void {
+        if (depth>2) throw std::invalid_argument("Clipboard proof wrapper depth is invalid");
+        if (proof.at("kind")!="apply_boundary_constraint_changes") return;
+        const auto version=proof.at("version").get<int>();
+        if (version==51) result.push_back(proof.at("clipboard_placement_intent"));
+        else if (version==45 || version==46 || version==47) return;
+        else if (version==41 || version==42) self(self,proof.at("proof"),depth);
+        else if (version==19 || version==22) self(self,proof.at("proof"),depth+1);
+        else if (proof.contains("room_review_geometry_proof"))
+            self(self,proof.at("room_review_geometry_proof"),depth+1);
+    };
+    visit(visit,encoded,0);
+    return result;
+}
+
+static bool mixed_clipboard_placement_policy(const ApplyBoundaryConstraintChanges& command) {
+    const auto proofs=mixed_clipboard_placement_proofs(command);
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+    return std::any_of(proofs.begin(),proofs.end(),[](const auto& intent) {
+        return mixed_clipboard_placement_active_phase_policy(intent);
+    });
+#else
+    if (!proofs.empty()) throw std::invalid_argument("Clipboard placement requires the production authoring engine");
+    return false;
+#endif
+}
 
 static bool phase_constraint_authoring_preserves_registries(const ApplyBoundaryConstraintChanges& command) {
     const auto proofs=phase_constraint_authoring_proofs(command);
@@ -3421,7 +3462,8 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                         result[index]=result[index] || mixed_selection_removal_active_phase_policy(command.mixed_selection_removal_intent);
 #endif
-                    } else result[index]=result[index] || !phase_constraint_authoring_proofs(command).empty();
+                    } else result[index]=result[index] || mixed_clipboard_placement_policy(command) ||
+                        !phase_constraint_authoring_proofs(command).empty();
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_history,error.what());
                 }
@@ -3434,6 +3476,9 @@ static std::vector<bool> active_constraint_history_policies(const std::vector<Re
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
 static void validate_phase_constraint_authoring_source(const DocumentSnapshot& source,
     const ApplyBoundaryConstraintChanges& command) {
+    if (!has_mixed_clipboard_placement(command))
+        for (const auto& intent:mixed_clipboard_placement_proofs(command))
+            validate_mixed_clipboard_placement_source(source,intent);
     for (const auto& encoded : phase_constraint_authoring_proofs(command)) {
         const auto intent=decode_phase_constraint_authoring_intent(encoded);
         if (intent.expected_revision!=source.revision() ||
@@ -3637,10 +3682,33 @@ static void validate_phase_constraint_fresh_lifetime(const std::map<std::string,
     const std::map<std::string,Entity,std::less<>>& candidate,
     const std::vector<RevisionRecord>& history,std::size_t preceding_records,
     const ApplyBoundaryConstraintChanges& command) {
-    if (has_mixed_clipboard_placement(command)) {
-        validate_mixed_clipboard_placement_mode(command);
-        const auto& roof=command.clipboard_placement_intent.at("roof_authoring");
-        if (!roof.is_null()) {
+    const auto clipboard_proofs=mixed_clipboard_placement_proofs(command);
+    if (!clipboard_proofs.empty()) {
+        std::vector<std::string> room_fresh_names;
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+        if (has_room_review_completion(command)) {
+            const auto append_name=[&](const std::string& id) {
+                if (room_fresh_names.size()>=4096)
+                    throw std::invalid_argument("Clipboard room suffix fresh identity budget exceeded");
+                room_fresh_names.push_back(id);
+            };
+            for (const auto& encoded:room_review_intents(command)) {
+                const auto intent=decode_physical_wall_room_review_intent(encoded);
+                for (const auto& decision:intent.fresh) {
+                    if (decision.disposition==PhysicalWallRoomFreshDisposition::unclassified) continue;
+                    if (decision.disposition==PhysicalWallRoomFreshDisposition::create) append_name(decision.room_id);
+                    for (const auto& id:decision.fresh_ids.segment_ids) append_name(id);
+                    for (const auto& id:decision.fresh_ids.vertex_ids) append_name(id);
+                }
+                for (const auto& decision:intent.retained)
+                    for (const auto& id:decision.replacement_dimension_ids) append_name(id);
+            }
+        }
+#endif
+        for (const auto& intent:clipboard_proofs) {
+            validate_mixed_clipboard_followup_identities(source,history,preceding_records,intent,room_fresh_names);
+            const auto& roof=intent.at("roof_authoring");
+            if (roof.is_null()) continue;
             ApplyBoundaryConstraintChanges child;
             child.expected_revision=command.expected_revision;
             child.message=command.message;
@@ -6223,7 +6291,8 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
         } catch (const DocumentError&) { throw; }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     }
-    const bool active_policy=active_phase_constraints || !phase_constraint_authoring_proofs(command).empty();
+    const bool active_policy=active_phase_constraints || mixed_clipboard_placement_policy(command) ||
+        !phase_constraint_authoring_proofs(command).empty();
     if (has_independent_drawing_removal(command)) {
         try {
             validate_independent_drawing_removal_mode(command);
@@ -6403,6 +6472,12 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                 if (is_physical_wall_room_profile_review_command(geometry))
                     validate_physical_wall_room_profile_review_source(source,reviewed_source,geometry);
                 const bool deletion=is_physical_wall_room_deletion_review_command(geometry);
+                const bool clipboard=is_physical_wall_room_mixed_clipboard_review_command(geometry);
+                if (clipboard) {
+                    validate_physical_wall_room_mixed_clipboard_review_source(source,reviewed_source,geometry);
+                    validate_physical_wall_room_mixed_clipboard_review_coverage(
+                        source,reviewed_source,geometry,room_review_intents(command));
+                }
                 if (deletion) validate_physical_wall_room_deletion_review_source(source,reviewed_source,geometry,
                     command.room_review_geometry_proof,active_policy);
                 (void)validate_state(reviewed_source,source_assets,active_policy);
@@ -6416,7 +6491,7 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                     if (!exact_entity_payload(entity,proposed->second)) changed_walls.insert(id);
                 }
                 for (const auto& [id,entity] : reviewed_source)
-                    if (entity.type=="wall" && (!source.contains(id) || source.at(id).type!="wall"))
+                    if (!clipboard && entity.type=="wall" && (!source.contains(id) || source.at(id).type!="wall"))
                         throw std::invalid_argument("Wall room review cannot create a physical source wall");
                 bool active_phase_scope=false;
                 for (const auto& encoded : room_review_intents(command)) {
@@ -6448,12 +6523,15 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
                     original_dimension_source ? original_dimension_source : &source) :
                 replay_physical_wall_room_review(reviewed_source,command.room_review_intent,active_policy,
                     original_dimension_source ? original_dimension_source : &source);
-            if (!phase_constraint_authoring_proofs(command).empty()) {
+            const bool coordinated_phase_geometry=!phase_constraint_authoring_proofs(command).empty();
+            const bool clipboard_geometry=!mixed_clipboard_placement_proofs(command).empty();
+            if (coordinated_phase_geometry && !clipboard_geometry)
+                validate_phase_constraint_composed_originals(source,reviewed_source,command);
+            if (coordinated_phase_geometry || clipboard_geometry) {
                 // Geometry and the separately reviewed room suffix have
                 // different authority. Compare the complete coordinated
                 // geometry with its admitted stage, then replay room decisions
                 // against that exact stage without granting physical edits.
-                validate_phase_constraint_composed_originals(source,reviewed_source,command);
                 const auto physical_owner = [](const Entity& entity) {
                     return entity.type == "wall" || entity.type == "opening" || entity.type == "corner_window" || entity.type == "wall_join" ||
                         entity.type == "roof" || entity.type == "roof_join" || entity.type == "slab" ||
@@ -9926,7 +10004,8 @@ Revision Document::apply(const Command& command) {
                     next_active_policy=source_active_policy ||
                         mixed_selection_removal_active_phase_policy(typed_command.mixed_selection_removal_intent);
 #endif
-                } else next_active_policy=source_active_policy || !phase_constraint_authoring_proofs(typed_command).empty();
+                } else next_active_policy=source_active_policy || mixed_clipboard_placement_policy(typed_command) ||
+                    !phase_constraint_authoring_proofs(typed_command).empty();
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                 validate_phase_constraint_authoring_source(snapshot(),typed_command);
 #endif
@@ -10003,7 +10082,7 @@ Revision Document::apply(const Command& command) {
                 }
                 next_unsupported_constraints = validate_state(next.entities, next.assets,next_active_policy, &receipt_cache);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                if (has_phase_selection_removal(typed_command) || has_ordinary_selection_removal(typed_command) || has_mixed_selection_removal(typed_command) || !phase_constraint_authoring_proofs(typed_command).empty() || has_complete_wall_join_deletion_proof(typed_command))
+                if (has_phase_selection_removal(typed_command) || has_ordinary_selection_removal(typed_command) || has_mixed_selection_removal(typed_command) || !phase_constraint_authoring_proofs(typed_command).empty() || !mixed_clipboard_placement_proofs(typed_command).empty() || has_complete_wall_join_deletion_proof(typed_command))
                     validate_phase_constraint_fresh_lifetime(current.entities,next.entities,history_,history_.size(),typed_command);
 #endif
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
@@ -10491,6 +10570,20 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history(),index);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
                     validate_retained_phase_constraint_authoring_source(snapshot,previous,proof,index);
+                    if (!has_mixed_clipboard_placement(proof))
+                        for (const auto& intent:mixed_clipboard_placement_proofs(proof)) {
+                            auto prefix=snapshot;
+                            prefix.history_=std::make_shared<const std::vector<RevisionRecord>>(
+                                snapshot.history().begin(),snapshot.history().begin()+index);
+                            prefix.revision_=previous.revision;
+                            prefix.saved_revision_=mixed_clipboard_placement_source_saved_revision(intent);
+                            if (prefix.saved_revision_ && *prefix.saved_revision_>prefix.revision_)
+                                throw std::invalid_argument("Clipboard room geometry save revision is outside its source prefix");
+                            prefix.named_revisions_=expected_names;
+                            prefix.editable_=true;
+                            prefix.read_only_reason_.clear();
+                            validate_mixed_clipboard_placement_source(prefix,intent);
+                        }
 #endif
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
                     if (has_phase_room_review_completion(proof)) {
@@ -10610,7 +10703,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                     } else expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, previous.assets,
                         proof,true,active_policies.at(index-1),dimension_source);
 #ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
-                    if (has_phase_selection_removal(proof) || has_ordinary_selection_removal(proof) || has_mixed_selection_removal(proof) || !phase_constraint_authoring_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
+                    if (has_phase_selection_removal(proof) || has_ordinary_selection_removal(proof) || has_mixed_selection_removal(proof) || !phase_constraint_authoring_proofs(proof).empty() || !mixed_clipboard_placement_proofs(proof).empty() || has_complete_wall_join_deletion_proof(proof))
                         validate_phase_constraint_fresh_lifetime(previous.entities,expected.entities,snapshot.history(),index,proof);
 #endif
                     if (!has_phase_selection_removal(proof) && !has_ordinary_selection_removal(proof) && !has_mixed_selection_removal(proof))

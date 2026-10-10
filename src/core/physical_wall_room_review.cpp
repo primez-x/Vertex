@@ -1940,6 +1940,35 @@ ApplyBoundaryConstraintChanges without_room_geometry_selection(ApplyBoundaryCons
     command.selection_entity_changes.clear();
     return command;
 }
+// Bound the new child before its codec or serialization can copy payloads. The
+// existing enclosing room proof has a one MiB wire limit, narrower than v51's
+// standalone placement budget. Numeric widths are conservative upper bounds.
+struct ClipboardRoomProofBudget {
+    static constexpr std::size_t limit=1024*1024;
+    std::size_t bytes{256},nodes{};
+    void add(std::size_t count) {
+        if (count>limit-bytes) invalid("clipboard room geometry exceeds its proof budget");
+        bytes+=count;
+    }
+    void text(std::string_view value) {
+        add(2);
+        for (const unsigned char c:value)
+            add(c=='"' || c=='\\' || c=='\b' || c=='\f' || c=='\n' || c=='\r' || c=='\t' ? 2 : c<0x20 ? 6 : 1);
+    }
+    void read(const Json& value,std::size_t depth=0) {
+        if (depth>64 || ++nodes>100000) invalid("clipboard room geometry exceeds its complexity budget");
+        if (value.is_binary() || value.is_discarded() ||
+            (value.is_number_float() && !std::isfinite(value.get<double>()))) invalid("nonportable clipboard room geometry");
+        if (value.is_string()) text(value.get_ref<const std::string&>());
+        else if (value.is_object()) {
+            add(2+(value.empty() ? 0 : value.size()-1));
+            for (const auto& [key,child]:value.items()) { text(key);add(1);read(child,depth+1); }
+        } else if (value.is_array()) {
+            add(2+(value.empty() ? 0 : value.size()-1));
+            for (const auto& child:value) read(child,depth+1);
+        } else add(value.is_number() ? 32 : value.is_boolean() ? 5 : 4);
+    }
+};
 Json qualified_ordinary_geometry(const Command& geometry_command) {
     const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&geometry_command);
     if (!geometry || geometry->wall_edits.empty()) invalid("review requires a direct command with explicit wall edits");
@@ -1953,6 +1982,7 @@ Json qualified_ordinary_geometry(const Command& geometry_command) {
         geometry->room_review_completion || !geometry->room_review_intent.is_null() ||
         geometry->room_review_geometry_completion || !geometry->room_review_geometry_proof.is_null() ||
         geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
+        geometry->clipboard_placement_completion || !geometry->clipboard_placement_intent.is_null() ||
         geometry->selection_completion || !geometry->selection_entity_changes.empty() ||
         geometry->dimension_placement_completion || !geometry->dimension_placement_moves.empty() ||
         geometry->wall_dimension_completion || geometry->disto_measurement_completion || geometry->disto_measurement ||
@@ -2019,6 +2049,7 @@ Json room_review_geometry_proof(const DocumentSnapshot& source,const Command& ge
     if (is_physical_wall_room_joint_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_scale_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_active_constraint_review_command(geometry_command)) return command_to_json(geometry_command);
+    if (is_physical_wall_room_mixed_clipboard_review_command(geometry_command)) return command_to_json(geometry_command);
     if (is_physical_wall_room_selection_geometry_review_command(geometry_command)) return command_to_json(geometry_command);
     return qualified_ordinary_geometry(geometry_command);
 }
@@ -2043,7 +2074,8 @@ Json plain_room_review_proof(const ApplyBoundaryConstraintChanges& command) {
         command.joint_translation_completion || command.joint_translation || command.wall_dimension_completion ||
         command.curve_construction_completion || command.disto_measurement_completion || command.disto_measurement ||
         command.selection_completion || command.room_review_geometry_completion || !command.room_review_geometry_proof.is_null() ||
-        command.room_review_batch_completion || !command.room_review_additional_intents.empty())
+        command.room_review_batch_completion || !command.room_review_additional_intents.empty() ||
+        command.clipboard_placement_completion || !command.clipboard_placement_intent.is_null())
         invalid("staged batch decisions require a plain room-only command");
     const auto proof=command_to_json(Command{command});
     keys(proof,{"version","kind","expected_revision","message","room_review_completion","room_review_intent"});
@@ -2055,6 +2087,9 @@ Json plain_room_review_proof(const ApplyBoundaryConstraintChanges& command) {
 }
 bool unwrapped_room_geometry_review_command(const Command& command) {
     try {
+        if (const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+            geometry && (geometry->clipboard_placement_completion || !geometry->clipboard_placement_intent.is_null()))
+            return is_physical_wall_room_mixed_clipboard_review_command(command);
         if (is_physical_wall_room_deletion_review_command(command) || is_physical_wall_room_profile_review_command(command) ||
             is_physical_wall_room_rigid_review_command(command) || is_physical_wall_room_joint_review_command(command) ||
             is_physical_wall_room_scale_review_command(command)) return true;
@@ -2076,6 +2111,7 @@ bool is_physical_wall_room_selection_geometry_review_command(const Command& comm
             geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
             geometry->phase_room_review_completion || !geometry->phase_room_review_intent.is_null() ||
             geometry->independent_drawing_removal_completion || !geometry->independent_drawing_removal_intent.is_null() ||
+            geometry->clipboard_placement_completion || !geometry->clipboard_placement_intent.is_null() ||
             geometry->disto_measurement_completion || geometry->disto_measurement) return false;
         std::set<std::string> targets;
         for (const auto& change:geometry->selection_entity_changes)
@@ -2196,6 +2232,144 @@ bool is_physical_wall_room_active_constraint_review_command(const Command& comma
             (proof.at("version")!=19 || proof.at("proof").at("version")!=34)) return false;
         return command_to_json(command_from_json(proof)).dump()==proof.dump();
     } catch (const std::exception&) { return false; }
+}
+
+bool is_physical_wall_room_mixed_clipboard_review_command(const Command& command) {
+    try {
+        const auto* geometry=std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!geometry || !geometry->clipboard_placement_completion || geometry->clipboard_placement_intent.is_null() ||
+            !geometry->boundary_edits.empty() || !geometry->entity_changes.empty() || !geometry->wall_edits.empty() ||
+            !geometry->physical_entity_changes.empty() || !geometry->exterior_source_edits.empty() ||
+            !geometry->supplemental_entity_changes.empty() || !geometry->supplemental_asset_changes.empty() ||
+            !geometry->measured_stroke_edits.empty() || !geometry->dimension_placement_moves.empty() ||
+            !geometry->selection_entity_changes.empty() || geometry->exterior_source_completion ||
+            geometry->supplemental_source_completion || geometry->supplemental_asset_reference_completion ||
+            geometry->rigid_wall_transform_completion || geometry->measured_source_completion ||
+            geometry->dimension_placement_completion || geometry->rigid_group_completion || geometry->rigid_group_transform ||
+            geometry->wall_split || geometry->wall_merge || geometry->exterior_corner_move ||
+            geometry->exterior_segment_resize || geometry->exterior_segment_arc ||
+            geometry->joint_translation_completion || geometry->joint_translation ||
+            geometry->wall_dimension_completion || geometry->curve_construction_completion ||
+            geometry->disto_measurement_completion || geometry->disto_measurement || geometry->selection_completion ||
+            geometry->room_review_completion || !geometry->room_review_intent.is_null() ||
+            geometry->room_review_geometry_completion || !geometry->room_review_geometry_proof.is_null() ||
+            geometry->room_review_batch_completion || !geometry->room_review_additional_intents.empty() ||
+            geometry->phase_room_review_completion || !geometry->phase_room_review_intent.is_null() ||
+            geometry->phase_constraint_authoring_completion || !geometry->phase_constraint_authoring_intent.is_null() ||
+            geometry->independent_drawing_removal_completion || !geometry->independent_drawing_removal_intent.is_null() ||
+            geometry->wall_group_scale_completion || geometry->wall_group_scale ||
+            geometry->mixed_selection_removal_completion || !geometry->mixed_selection_removal_intent.is_null() ||
+            geometry->ordinary_selection_removal_completion || !geometry->ordinary_selection_removal_intent.is_null() ||
+            geometry->phase_selection_removal_completion || !geometry->phase_selection_removal_intent.is_null()) return false;
+        ClipboardRoomProofBudget budget;
+        budget.text(geometry->message);budget.read(geometry->clipboard_placement_intent);
+        const auto proof=command_to_json(command);
+        keys(proof,{"version","kind","expected_revision","message","clipboard_placement_completion","clipboard_placement_intent"});
+        if (proof.at("version")!=51 || proof.at("kind")!="apply_boundary_constraint_changes" ||
+            proof.dump().size()>ClipboardRoomProofBudget::limit) return false;
+        // v51 itself validates its closed fresh-only additions and optional
+        // roof leaf. No legacy active-design predicate is broadened here.
+        return command_to_json(command_from_json(proof)).dump()==proof.dump();
+    } catch (const std::exception&) { return false; }
+}
+
+void validate_physical_wall_room_mixed_clipboard_review_source(const Entities& source,
+    const Entities& candidate,const Command& command) {
+    if (!is_physical_wall_room_mixed_clipboard_review_command(command))
+        invalid("clipboard room review requires its direct canonical placement proof");
+    const auto& intent=std::get<ApplyBoundaryConstraintChanges>(command).clipboard_placement_intent;
+    if (intent.at("source_entities_digest")!=entity_map_digest(source))
+        invalid("clipboard room geometry differs from the actual original map");
+    // Admission of the entire v51 stage remains Document-owned. These checks
+    // prevent room authority from changing old walls or erasing old lineage.
+    for (const auto& [owner,entity]:source) {
+        if (entity.type!="wall" && !is_physical_wall_room(entity)) continue;
+        const auto after=candidate.find(owner);
+        if (after==candidate.end() || !exact_entity(entity,after->second))
+            invalid("clipboard geometry changed an original physical wall or retained room");
+    }
+    std::set<std::string> added_walls;
+    for (const auto& row:intent.at("additions").at("entity_changes")) {
+        const auto& entity=row.at("entity");
+        if (entity.at("type")!="wall") continue;
+        const auto owner=entity.at("id").get<std::string>();
+        if (source.contains(owner) || !added_walls.insert(owner).second)
+            invalid("clipboard room geometry requires fresh distinct physical wall identities");
+        const auto after=candidate.find(owner);
+        if (after==candidate.end() || after->second.id!=owner || after->second.type!="wall" ||
+            after->second.required!=entity.at("required").get<bool>() ||
+            after->second.properties.dump()!=entity.at("properties").dump() ||
+            after->second.extensions.dump()!=entity.at("extensions").dump())
+            invalid("clipboard room geometry differs from its exact fresh wall additions");
+    }
+    for (const auto& [owner,entity]:candidate)
+        if (entity.type=="wall" && !source.contains(owner) && !added_walls.contains(owner))
+            invalid("clipboard room geometry introduced an undeclared physical wall");
+}
+
+void validate_physical_wall_room_mixed_clipboard_review_coverage(const Entities& source,
+    const Entities& geometry_stage,const Command& geometry_command,const std::vector<Json>& room_intents) {
+    validate_physical_wall_room_mixed_clipboard_review_source(source,geometry_stage,geometry_command);
+    if (room_intents.empty() || room_intents.size()>32)
+        invalid("clipboard room review requires one to thirty-two context/plane decisions");
+    const auto organization=organize_project(geometry_stage);
+    const auto scope=constraint_phase_scope(geometry_stage);
+    const bool saved_phases=std::any_of(geometry_stage.begin(),geometry_stage.end(),[](const auto& entry) {
+        return entry.second.type=="model_phases";
+    });
+    struct Plane {
+        DrawingContext context;
+        double elevation{};
+        std::set<std::string> retained;
+        bool reviewed{};
+    };
+    std::vector<Plane> planes;
+    for (const auto& [owner,entity]:geometry_stage) {
+        if (entity.type!="wall" || source.contains(owner) || scope.inactive_owner_ids.contains(owner)) continue;
+        const auto context=organization.drawing_context(owner);
+        if (!context || !context->complete()) invalid("fresh clipboard wall has unresolved room context");
+        const auto wall=resolve_vertical_placement(geometry_stage,entity);
+        const auto elevation=wall.properties.at("elevation_m").get<double>();
+        if (!std::isfinite(elevation)) invalid("fresh clipboard wall has a nonfinite effective plane");
+        const auto found=std::find_if(planes.begin(),planes.end(),[&](const auto& plane) {
+            return plane.context==*context && std::abs(plane.elevation-elevation)<=default_geometry_tolerance_metres;
+        });
+        if (found==planes.end()) {
+            if (planes.size()>=32) invalid("fresh clipboard walls exceed the room context/plane budget");
+            planes.push_back({*context,elevation,{},false});
+        }
+    }
+    for (const auto& owner:active_physical_wall_room_ids(geometry_stage)) {
+        const auto context=organization.drawing_context(owner);
+        if (!context || !context->complete()) invalid("retained clipboard room has unresolved drawing context");
+        if (std::none_of(planes.begin(),planes.end(),[&](const auto& plane){return plane.context==*context;})) continue;
+        const auto lineage=validate_retained_physical_wall_room_lineage(geometry_stage.at(owner),*context);
+        for (auto& plane:planes)
+            if (plane.context==*context &&
+                std::abs(plane.elevation-lineage.effective_elevation_m)<=default_geometry_tolerance_metres)
+                plane.retained.insert(owner);
+    }
+    for (const auto& encoded:room_intents) {
+        const auto intent=decode_physical_wall_room_review_intent(encoded);
+        if (!intent.context_plane_selection || !intent.selected_wall_id.empty() ||
+            intent.active_phase_room_scope!=saved_phases)
+            invalid("clipboard room review requires the ordinary actual context/plane scope");
+        auto found=std::find_if(planes.begin(),planes.end(),[&](const auto& plane) {
+            return plane.context==intent.context &&
+                std::abs(plane.elevation-intent.effective_elevation_m)<=default_geometry_tolerance_metres;
+        });
+        if (found==planes.end() || found->reviewed)
+            invalid("clipboard room review has an unrelated or duplicate context/plane decision");
+        std::set<std::string> retained;
+        for (const auto& decision:intent.retained)
+            if (!retained.insert(decision.room_id).second) invalid("duplicate clipboard retained room decision");
+        if (retained!=found->retained)
+            invalid("clipboard room review must cover every active retained room in its affected plane");
+        found->reviewed=true;
+    }
+    for (const auto& plane:planes)
+        if (!plane.retained.empty() && !plane.reviewed)
+            invalid("fresh clipboard walls omitted an affected physical room context/plane");
 }
 
 bool is_physical_wall_room_joint_review_command(const Command& command) {
@@ -2843,6 +3017,9 @@ DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapsh
                 invalid("wall group scale review requires actual changes to at least two selected physical walls");
         }
     }
+    const bool clipboard=is_physical_wall_room_mixed_clipboard_review_command(geometry_command);
+    if (clipboard)
+        validate_physical_wall_room_mixed_clipboard_review_source(source.entities(),derived.entities(),geometry_command);
     const bool deletion=is_physical_wall_room_deletion_review_command(geometry_command);
     if (deletion) validate_physical_wall_room_deletion_review_source(source.entities(),derived.entities(),geometry_command,proof,
         source.uses_active_phase_constraints());
@@ -2857,7 +3034,7 @@ DocumentSnapshot preview_physical_wall_room_review_geometry(const DocumentSnapsh
             invalid("wall geometry review cannot remove or replace a physical source wall");
     }
     for (const auto& [id,entity] : derived.entities())
-        if (entity.type=="wall" && (!source.entities().contains(id) || source.entities().at(id).type!="wall"))
+        if (!clipboard && entity.type=="wall" && (!source.entities().contains(id) || source.entities().at(id).type!="wall"))
             invalid("wall geometry review cannot create a physical source wall");
     return derived;
 }
@@ -2867,6 +3044,8 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_af
     const Json& retained_geometry_proof) {
     const auto derived=preview_physical_wall_room_review_geometry(source,geometry_command,retained_geometry_proof);
     const auto prepared=prepare_physical_wall_room_review(derived,report,intent,&source);
+    if (is_physical_wall_room_mixed_clipboard_review_command(geometry_command))
+        validate_physical_wall_room_mixed_clipboard_review_coverage(source.entities(),derived.entities(),geometry_command,{prepared.intent});
     auto retained_intent=decode_physical_wall_room_review_intent(prepared.intent);
     // The report was reviewed against the detached wall geometry. The final
     // single event must bind the actual original history/save state, while the
@@ -2890,9 +3069,17 @@ PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_af
 PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_batch_after_geometry(const DocumentSnapshot& source,
     const Command& geometry_command,const std::vector<ApplyBoundaryConstraintChanges>& staged_room_commands,
     const Json& retained_geometry_proof) {
-    if (staged_room_commands.size()!=1 || retained_geometry_proof.is_null())
+    const bool clipboard=is_physical_wall_room_mixed_clipboard_review_command(geometry_command);
+    if (staged_room_commands.size()!=1 || (retained_geometry_proof.is_null() && !clipboard))
         require_room_review_batch_size(staged_room_commands.size());
     auto stage=preview_physical_wall_room_review_geometry(source,geometry_command,retained_geometry_proof);
+    if (clipboard) {
+        std::vector<Json> intents;intents.reserve(staged_room_commands.size());
+        for (const auto& command:staged_room_commands) {
+            (void)plain_room_review_proof(command);intents.push_back(command.room_review_intent);
+        }
+        validate_physical_wall_room_mixed_clipboard_review_coverage(source.entities(),stage.entities(),geometry_command,intents);
+    }
     RoomReviewBatchGuard guard(stage.entities());
     std::vector<Json> retained_intents;retained_intents.reserve(staged_room_commands.size());
     const auto original_snapshot_digest=document_snapshot_digest(source);

@@ -194,6 +194,25 @@ void preflight_physical_walls_deletion_join_inference(
 // Exclusive semantic active-design authoring, independently replayed from the
 // actual source before it can lend geometry to reviewed room consequences.
 [[nodiscard]] bool is_physical_wall_room_active_constraint_review_command(const Command& command);
+// One direct canonical v51 retains its closed fresh-addition/roof authority.
+// No sibling geometry, selection, room, asset or removal lane qualifies. This
+// room-proof admission retains the existing one MiB bound; actual source,
+// history, fresh identities and phase/page enrollment remain Document-owned.
+[[nodiscard]] bool is_physical_wall_room_mixed_clipboard_review_command(const Command& command);
+// Validate the independently admitted complete clipboard geometry stage before
+// explicit room decisions: original walls and room descriptors remain exact;
+// new walls must be exact fresh additions from the retained v51 proof.
+void validate_physical_wall_room_mixed_clipboard_review_source(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& candidate,const Command& command);
+// Every fresh-wall plane containing an active retained physical room requires
+// one complete context/plane disposition. Reviewed planes must have fresh walls;
+// unrelated room authority and omitted retained owners do not qualify. Intents
+// may bind cumulative room stages; coverage uses the original geometry stage.
+void validate_physical_wall_room_mixed_clipboard_review_coverage(
+    const std::map<std::string,Entity,std::less<>>& source,
+    const std::map<std::string,Entity,std::less<>>& geometry_stage,const Command& geometry_command,
+    const std::vector<nlohmann::json>& room_intents);
 void validate_physical_wall_room_deletion_review_source(
     const std::map<std::string,Entity,std::less<>>& source,
     const std::map<std::string,Entity,std::less<>>& candidate,const Command& command,
@@ -213,6 +232,8 @@ void validate_physical_wall_room_profile_review_source(
 // source; neither preparation publishes the intermediate geometry state.
 // Full-snapshot/history/save hashes bind the original source, while the room
 // entity-map hash retains the derived geometry that was actually reviewed.
+// Mixed clipboard geometry requires explicit context/plane decisions, with no
+// selected original wall. The complete original source is still the authority.
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_after_geometry(
     const DocumentSnapshot& source,const Command& geometry_command,
     const PhysicalWallRoomCorrespondenceReport& report,const PhysicalWallRoomReviewIntent& intent,
@@ -220,7 +241,8 @@ void validate_physical_wall_room_profile_review_source(
 // Each plain envelope-eighteen/version-one or envelope-twenty-nine/version-two
 // command belongs to the preceding detached
 // snapshot, starting with the geometry preview. Two to thirty-two disjoint
-// context/plane reviews become one original-source-bound atomic command.
+// context/plane reviews become one original-source-bound atomic command. A
+// direct mixed clipboard child also permits one context/plane room-only review.
 [[nodiscard]] PreparedPhysicalWallRoomReviewAfterGeometry prepare_physical_wall_room_review_batch_after_geometry(
     const DocumentSnapshot& source,const Command& geometry_command,
     const std::vector<ApplyBoundaryConstraintChanges>& staged_room_commands,

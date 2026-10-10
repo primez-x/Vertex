@@ -37,6 +37,18 @@ child. Independent skylights can target an actual roof or an authenticated
 fresh ordinary roof; the latter changes its one fresh addition and conveys no
 edit authority over an original roof. Complete rosters are replayed together.
 
+An existing room-geometry envelope can retain one direct canonical envelope51
+as its geometry child. This new lane requires explicit context/plane review;
+it does not broaden historical ordinary wall or phase proof meanings. Original
+walls and retained room descriptors remain exact in the geometry stage. Every
+active retained room in an affected fresh-wall plane receives a disposition,
+and separately replayed room decisions cannot change the admitted physical
+objects. Newly assigned room, edge, vertex and replacement-callout identities
+reserve the complete geometry, generated aliases, raw content and retained
+canonical proofs together. Snapshot/save/history fences and active-design
+policy apply to roof-free as well as roof-bearing wrapped placements. Reader185
+and extraction183 apply when envelope51 is nested in retained room history.
+
 Desktop coordination is still in progress. This source contract does not
 establish compilation, native geometry, interaction or production acceptance.
 

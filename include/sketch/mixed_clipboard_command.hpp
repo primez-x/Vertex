@@ -21,6 +21,15 @@ namespace sketch {
 // Existing roof-leaf lifetime admission remains the enclosing Document's job.
 void validate_mixed_clipboard_placement_source(
     const DocumentSnapshot& source, const nlohmann::json& value);
+// A separately reviewed room suffix may create room/edge/vertex/callout names.
+// Reserve them jointly against the complete admitted geometry, current proof,
+// retained ancestry and its opaque content before publishing the whole edit.
+// Historical standalone room commands retain their original namespace rules.
+void validate_mixed_clipboard_followup_identities(
+    const std::map<std::string, Entity, std::less<>>& actual,
+    const std::vector<RevisionRecord>& history, std::size_t preceding_records,
+    const nlohmann::json& placement_intent,
+    const std::vector<std::string>& fresh_names);
 [[nodiscard]] bool mixed_clipboard_placement_active_phase_policy(
     const nlohmann::json& value);
 [[nodiscard]] std::optional<Revision> mixed_clipboard_placement_source_saved_revision(

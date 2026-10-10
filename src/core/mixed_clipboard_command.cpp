@@ -476,6 +476,36 @@ void validate_mixed_clipboard_placement_source(const DocumentSnapshot& source, c
     }
     (void)pages(source.entities());
 }
+void validate_mixed_clipboard_followup_identities(const Entities& actual,
+    const std::vector<RevisionRecord>& history, std::size_t preceding_records,
+    const Json& placement_intent, const std::vector<std::string>& fresh_names) {
+    validate(placement_intent);
+    if (preceding_records>history.size() || fresh_names.size()>change_limit)
+        reject("invalid room suffix identity budget or history prefix");
+    Ids fresh;
+    for (const auto& name:fresh_names) {
+        identity(name);
+        if (!fresh.insert(name).second) reject("room suffix identities overlap");
+    }
+    if (fresh.empty()) return;
+    if (placement_intent.at("source_entities_digest")!=entity_map_digest(actual))
+        reject("room suffix original map differs from clipboard source");
+    const auto geometry_stage=replay_mixed_clipboard_placement(actual,placement_intent);
+    ReservedNames occupied;
+    occupied.entities(geometry_stage);
+    occupied.json(placement_intent);
+    for (std::size_t index=0;index<preceding_records;++index) {
+        const auto& retained=history[index];
+        occupied.entities(retained.entities);
+        for (const auto& [id,asset]:retained.assets) { occupied.text(id);occupied.json(asset.metadata); }
+        if (retained.boundary_constraint_changes)
+            occupied.json(command_to_json(Command{*retained.boundary_constraint_changes}));
+        if (retained.boundary_geometry_edit)
+            occupied.json(encode_boundary_geometry_edit(*retained.boundary_geometry_edit));
+    }
+    for (const auto& name:fresh)
+        if (occupied.values.contains(name)) reject("room suffix identity is reserved by clipboard geometry or history");
+}
 Json make_mixed_clipboard_placement_intent(const DocumentSnapshot& source, const Json& roof,
     const ApplyEntityChanges& additions, std::string_view selected_registry_id, std::string_view message) {
     additions_shape(additions);

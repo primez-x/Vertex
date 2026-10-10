@@ -30,16 +30,28 @@ copying and retained proof-only lifetime reservations. The advisor then approved
 the bounded core with no remaining concrete P1/P2 finding. Root separately
 reviewed extraction-version mapping and fresh-host replay; a read-only comparison
 confirmed exact phase-helper equivalence. Source whitespace and allowlist JSON
-inspection are clean. Core source is ready for scoped backup; desktop work is
-still in progress and is not included in that checkpoint.
+inspection are clean. The bounded core is committed and pushed as c865c915,
+with exact local/remote ref verification. Desktop work is still in progress
+and is not included in that checkpoint.
 
-Mixed Copy/Cut/Paste/Duplicate is still unavailable in the desktop. Complete
-selection capture, private placement staging, preview, cancellation, source
-fencing and final routing remain required. The subsequent source implements
+Mixed Copy/Cut/Paste/Duplicate desktop source integration is not complete.
+The current source adds complete capture, private placement stages, cancellation,
+compound preview/publication and reviewed room consequences. Root review found
+required remaining placement, saved-view/Site and cohort-choice gaps; two
+exclusive workers are completing pure fresh-graph translation and desktop
+coordination. These source changes are uncommitted and runtime-unqualified.
+The subsequent source implements
 independent skylights targeting an authenticated newly copied roof: complete
 roster replay replaces its one fresh addition without granting original-roof
 edit authority. A desktop worker is implementing the private mixed session and
-complete action routing. Mixed Properties
+complete action routing. Fresh walls use explicit context/plane room coverage;
+the room suffix binds the original source and cannot change admitted physical
+owners. Independent review found roof-only comparison and suffix identity
+reservation defects; both are corrected, and bounded re-review approves the
+room integration with no remaining concrete P1/P2 finding. Root inspected
+interfaces, retained policy/restore dispatch and the whole physical suffix
+guard. Source whitespace checks are clean; runtime qualification remains open.
+Mixed Properties
 and transforms and the full consolidated scope remain required work. This is
 source implementation, not a completed user feature. No builds, tests, probes,
 native jobs, launches, packages or installations run; the installed candidate
