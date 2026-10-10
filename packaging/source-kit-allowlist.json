@@ -3775,6 +3775,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/phase_selection_removal.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/phase_slab_demolition.hpp"
     },
     {
@@ -5064,6 +5068,10 @@
     {
       "category": "source",
       "path": "src/core/phase_roof_uniform_transform.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/phase_selection_removal.cpp"
     },
     {
       "category": "source",

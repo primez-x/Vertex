@@ -14,6 +14,7 @@
 #include "sketch/mixed_wall_removal.hpp"
 #include "sketch/mixed_wall_opening_removal.hpp"
 #include "sketch/physical_wall_room_review.hpp"
+#include "sketch/phase_selection_removal.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/sheet_view_restriction_migration.hpp"
@@ -919,5 +920,23 @@ DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_deletion_r
         const auto stage=Document::preview_command(source,canonical);
         return replay(source.entities(),stage.entities(),drawing,active,&stage.entities());
     } catch (const Json::exception& error) { reject(std::string("malformed actual/deletion review source: ")+error.what()); }
+}
+DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_phase(
+    const DocumentSnapshot& source,const DrawingSelectionRemovalIntent& drawing,
+    const ArchitecturalSelectionRemovalIntent& architectural,const Command& pure_phase_deletion_command) {
+    try {
+        // Demolition and its accepted room choices activate the same phase
+        // policy as the original command, even if the captured snapshot has
+        // not yet published phase-aware authoring history.
+        (void)replay(source.entities(),source.entities(),drawing,true);
+        (void)phase_selection_removal_base_authority(source,pure_phase_deletion_command,architectural);
+        const auto wire=command_to_json(pure_phase_deletion_command);
+        const auto canonical=command_from_json(wire);
+        if (command_to_json(canonical).dump()!=wire.dump()) reject("phase deletion is not canonical");
+        const auto stage=Document::preview_command(source,canonical);
+        auto result=replay(source.entities(),stage.entities(),drawing,true,&stage.entities());
+        Document::validate_phase_drawing_removal_dependents(source.entities(),stage.entities(),result);
+        return result;
+    } catch (const Json::exception& error) { reject(std::string("malformed actual/phase deletion source: ")+error.what()); }
 }
 } // namespace sketch

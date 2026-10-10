@@ -1,4 +1,45 @@
-# Vertex project formats v1 through v178
+# Vertex project formats v1 through v179
+
+## Phase deletion with drawing and reviewed rooms (v179, source integration)
+
+Reader179 adds mixed-removal intent dialect four inside unchanged envelope45.
+Its `ordinary` is closed version one, `kind:"phase_deletion"`, with ascending
+unique `object_ids`, qualified `components` (`catalog_id`, `instance_id`) and
+`drawing:null` or the existing closed drawing-removal codec. Explicit roots and
+drawing rows count together with selected skylights against the aggregate
+selection limit. Derived dependents and allocated destinations are not roots.
+
+The original ordinary command is pure phase33, pure demolition34, or new47.
+Phase33 is admitted only for explicitly selected actual baseline walls: the
+actual wall-demolition producer must reproduce its complete retained raw
+registry command byte-for-byte, using that child command's own message. The
+full accepted room review remains intact, including every plane, disposition,
+fresh identity, fact, acknowledgement, reference and presentation decision.
+General registry edits and creation cannot borrow this deletion authority.
+Phase34 uses the existing actual-source demolition extractor; the complete
+source binding and known demolition leaf must reproduce the explicit selection.
+
+New exclusive envelope47 has exactly `version`, `kind`, `expected_revision`,
+`message`, `phase_selection_removal_completion:true` and
+`phase_selection_removal_intent`. Its closed version-one intent has `selection`,
+the complete drawing-free pure33/34 `base_command`, full source snapshot,
+authoring and entity digests, and the captured saved revision. The base revision
+and message match the outer envelope. Independently selected drawing must be
+nonempty. The base is admitted from the actual captured snapshot before narrow
+drawing composition; supplied stages cannot confer override authority. Protected
+inactive dependents and surviving local annotation rows remain exact.
+
+Direct47 and mixed45 dialect four retain one live event. Replay restores the
+admitted original history prefix and save bookkeeping; full source/canonical
+guards precede operation-local memo reuse. Lifetime-only walks reserve both
+older phase33 room destinations and phase34 declarations without borrowing
+them as the enclosing command's source authority. Historical phase33/34/42,
+mixed dialects one through three and envelope46 keep their previous meanings.
+
+Retained and undone history requires reader179/extraction177. Compilation,
+interaction, Undo/reopen, migration and performance remain unqualified. This
+does not complete corner-window mixed deletion, mixed clipboard/properties/
+transforms, raw phase-registry deletion or the remaining production scope.
 
 ## Mixed hosted-opening and reviewed wall deletion (v178, source integration)
 

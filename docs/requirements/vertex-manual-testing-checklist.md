@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty-six focused drawing and architectural checks below (496 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a), plus forty-eight focused drawing and architectural checks below (498 total). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -3430,6 +3430,18 @@ Blocked / missing until testing a candidate that contains it.
 - [ ] **SKYLIGHT-MIXED-WALL-DELETE - Delete a wall and skylight while reviewing affected rooms**
   - Steps: Select a wall and a skylight, then press Delete. Repeat with a joined wall group containing doors/windows, a separate furniture component and a drawing label. When room review appears, accept the desired room changes. Try again and cancel the review. Undo a completed deletion once, redo, save and reopen.
   - Expected: Accepted deletion removes the complete selection and applies the chosen room changes together. Attached doors/windows follow their removed wall. A cancelled review changes nothing. Unselected geometry and labels remain intact, and one Undo restores walls, openings, rooms, drawing items and skylights together.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-MIXED-REMODEL-LABEL-DELETE - Remove a wall, label and skylight in a remodeling alternative**
+  - Steps: In an active remodeling alternative, Ctrl-select an existing wall, a drawing label and a skylight on another roof. Delete them and review the affected rooms. Inspect the existing and proposed views. Repeat with doors or windows and furniture, then Undo once, redo, save and reopen.
+  - Expected: Accepted deletion applies the complete selection and reviewed room changes together. The existing baseline remains intact, unselected labels and objects keep their appearance, and one Undo restores the whole operation. Cancelling room review changes nothing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **SKYLIGHT-MIXED-ROOM-DELETE - Review rooms when removing an existing wall and a skylight**
+  - Steps: Create rooms bounded by existing walls, then create a remodeling alternative. Select an existing wall and a skylight on another roof. Delete them, make the desired room decisions, and inspect room names, classifications and dimensions. Undo once, redo, save and reopen.
+  - Expected: The wall's demolition, selected skylight removal and every accepted room decision are retained together. Existing geometry remains available in the baseline view. Unselected dimensions and labels remain attached to their correct objects, and one Undo restores the full change.
   - Result: Not tested
   - Notes: ______________________________
 

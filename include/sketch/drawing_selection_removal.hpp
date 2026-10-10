@@ -82,4 +82,12 @@ struct DrawingSelectionRemovalIntent {
     const DocumentSnapshot& source, const DrawingSelectionRemovalIntent& drawing,
     const nlohmann::json& geometry_proof, const Command& pure_room_review_command);
 
+// Independently proves explicit demolition roots and previews the complete
+// original phase deletion. Only that internally admitted stage can supply
+// exact annotation-override consequences; caller-supplied stages cannot.
+[[nodiscard]] DrawingSelectionRemovalEntities replay_drawing_selection_removal_with_phase(
+    const DocumentSnapshot& source, const DrawingSelectionRemovalIntent& drawing,
+    const ArchitecturalSelectionRemovalIntent& architectural,
+    const Command& pure_phase_deletion_command);
+
 } // namespace sketch

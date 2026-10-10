@@ -14,6 +14,62 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 10 phase/drawing and reviewed-room mixed deletion - source integration
+
+The preceding hosted-opening/wall batch is committed and pushed as 3d0581cd.
+The next source adds explicit phase-deletion selection and mixed intent dialect
+four. Historical phase33 wall-and-room deletion must independently reproduce
+the original registry producer from the actual selected baseline walls, using
+the retained raw child message. Only those explicit wall roots confer authority;
+hosted openings and room changes remain derived consequences. Complete accepted
+room planes, decisions, facts, acknowledgements, references and presentation
+choices are retained. General registry edits/creation cannot use this path.
+Known pure34 demolition independently binds its complete proof to the actual
+snapshot and must reproduce the exact roots/qualified components.
+
+Three actual ordinary phase/drawing preparation routes now use exclusive47.
+Its closed source-bound wrapper retains explicit architectural/drawing selection
+and the complete pure33/34 drawing-free base. The source-owning drawing helper
+independently admits and previews that base before composing selected rows with
+its exact override consequences. Both original-source and admitted-stage
+inactive dependents remain protected. A validation-only document API runs
+before cache admission; cache hits do not trigger another base preview.
+Historical33/34/42, older mixed dialects and ordinary46 retain their meanings.
+
+Live47 and retained-prefix replay use the same complete source/save bindings,
+bounded operation-local memoization and final document validation. Lifetime-only
+walks reserve both phase33 room declarations and phase34 destinations, including
+future retained history, without borrowing those as outer source authority.
+Mixed45 dialect four validates actual child membership and explicit roof
+dominance, then independently derives surviving skylight removal before one
+live event. Pure34 without drawing retains mixed dialect two. Site admission
+uses the explicit new selection, without promoting a child host into a root.
+Reader179/extraction177 fences direct47 and retained/undone dialect-four history.
+Both new helper files are in the source kit and CMake owns the implementation.
+
+The manual checklist retains all earlier tasks and adds two practical remodeling
+deletion tasks, for 498 task/result pairs, all Not tested. Requirement definitions
+remain unchanged; only two delivery notes describe this source addition.
+Independent bounded source review approves this integration with no concrete
+P1/P2 findings. Root reviewed the combined interfaces, retained prefix and
+lifetime paths, current controller routes, reader/extraction fences and source
+kit ownership. Static inspection confirms 277 unchanged requirement definitions,
+498 task/result pairs and one source-kit entry for each new helper; `git diff
+--check` is clean. Scoped commit, push and exact remote-ref verification back up
+this source batch without constituting runtime acceptance.
+No builds, tests/new tests, scripts, probes, native jobs, UI launches, packages
+or installations run. Compilation, interaction, history, migration and
+performance remain unqualified; serialized cache budgets do not measure exact
+allocator memory. The installed candidate is unchanged; all ten production
+gates remain open.
+
+Required implementation continues with raw phase-registry deletion,
+corner-window mixed deletion, mixed clipboard/properties/transforms and native
+directional group controls, alongside the other consolidated production scope.
+A separate source diagnosis is resolving possible child-correspondence loss
+when a boundary is redefined with an unchanged segment count; it is not yet a
+confirmed defect or implemented fix. This source batch is not complete delivery.
+
 ### October 10 hosted-opening and reviewed-wall mixed deletion - source integration
 
 The preceding mixed phase-demolition batch is committed and pushed as 8e4f2796.

@@ -492,6 +492,10 @@ struct ApplyBoundaryConstraintChanges {
     // Only the closed selection and its original typed deletion supply authority.
     nlohmann::json ordinary_selection_removal_intent=nullptr;
     bool ordinary_selection_removal_completion{};
+    // Envelope forty-seven binds phase authoring/room review and drawing
+    // retirement to one captured source; its pure base owns its own authority.
+    nlohmann::json phase_selection_removal_intent=nullptr;
+    bool phase_selection_removal_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, ImportPhaseEntities, NameRevision, TranslateBoundary,
@@ -670,6 +674,13 @@ public:
     // or source-snapshot check when committing to a live document.
     [[nodiscard]] static DocumentSnapshot preview_command(
         const DocumentSnapshot& source, const Command& command);
+    // Additional preservation checks for typed phase drawing composition.
+    // These maps supply no source or admission authority; callers must still
+    // independently reconstruct the complete base and drawing stages.
+    static void validate_phase_drawing_removal_dependents(
+        const std::map<std::string,Entity,std::less<>>& source,
+        const std::map<std::string,Entity,std::less<>>& stage,
+        const std::map<std::string,Entity,std::less<>>& result);
 
     // Owner captures source; a worker validates its full history and performs
     // ordinary typed admission on a private fork. This grants no raw snapshot

@@ -241,6 +241,16 @@ polling timeout does not permit restarting it.
    narrow producer rather than the historical generic review path. Qualify
    direct and mixed publication, retained prefix/save authority and bounded
    operation-local memoization; unchanged envelope41 keeps its old meaning.
+   The next source addition retains pure historical phase33 wall deletion and
+   complete phase/drawing deletion through new exclusive47 and mixed dialect
+   four. Explicit roots independently reproduce the actual33 registry producer
+   or the known34 demolition proof before accepted room decisions and drawing
+   rows compose. Qualify actual canvas deletion, protected inactive dependents,
+   one-step Undo, save/reopen, retained destinations and extraction under
+   reader179/extraction177. Historical42 keeps its original generic-stage
+   behavior; the current ordinary phase/drawing preparation uses47. Corner-window
+   mixed deletion, raw phase-registry deletion, mixed clipboard/properties/
+   transforms and native directional group controls remain required gaps.
 10. Implement observed native/vendor/device adapters through existing workers;
     complete declared IFC/DXF/Pinc fidelity and independently consumed output.
     Add offline OCR text regions/confidence feeding reviewed proposals. New

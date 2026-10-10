@@ -2,6 +2,7 @@
 
 #include "sketch/architectural_drawing_removal.hpp"
 #include "sketch/ordinary_selection_removal.hpp"
+#include "sketch/phase_selection_removal.hpp"
 #include "sketch/roof_opening_group_edit.hpp"
 
 namespace sketch {
@@ -62,6 +63,20 @@ public:
     const std::vector<RoofOpeningGroupMember>& members);
 [[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
     const DocumentSnapshot& source, const OrdinarySelectionRemovalIntent& ordinary,
+    const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
+    const std::optional<Command>& child_command);
+
+// Dialect four retains complete phase deletion and accepted room review,
+// with independently selected drawing rows. Historical dialect two keeps
+// its pure phase34 meaning.
+[[nodiscard]] DocumentSnapshot prepare_mixed_selection_removal_stage(
+    const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& ordinary,
+    const Command& ordinary_command);
+[[nodiscard]] std::vector<RoofOpeningGroupMember> mixed_selection_removal_remaining_children(
+    const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& ordinary,
+    const std::vector<RoofOpeningGroupMember>& members);
+[[nodiscard]] nlohmann::json make_mixed_selection_removal_intent(
+    const DocumentSnapshot& source, const PhaseSelectionRemovalIntent& ordinary,
     const Command& ordinary_command, const std::vector<RoofOpeningGroupMember>& members,
     const std::optional<Command>& child_command);
 

@@ -259,7 +259,9 @@ public:
     // preserving both original and staged phase destinations through history.
     // v178 adds complete hosted-opening and wall/room-review ordinary deletion
     // to mixed skylight commands, preserving explicit roots and typed proofs.
-    static constexpr std::uint32_t format_version = 178;
+    // v179 retains complete phase/drawing deletion and older wall-room reviews
+    // with explicit source roots, including mixed and undone history.
+    static constexpr std::uint32_t format_version = 179;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
